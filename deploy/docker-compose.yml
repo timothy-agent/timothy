@@ -1,0 +1,99 @@
+name: timothy
+
+x-service: &service
+  restart: unless-stopped
+  networks: [timothy]
+  logging: &logging
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-go-service: &go-service
+  <<: *service
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/app", "-healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+services:
+  postgres:
+    <<: *service
+    image: pgvector/pgvector:0.8.4-pg18-trixie
+    environment:
+      POSTGRES_USER: timothy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: timothy
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timothy -d timothy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  brain:
+    <<: *go-service
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args: {SERVICE: brain}
+    environment: &db-env
+      PORT: "8080"
+      DATABASE_URL: postgres://timothy:${POSTGRES_PASSWORD}@postgres:5432/timothy
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${BRAIN_PORT:-8300}:8080"
+
+  gateway:
+    <<: *go-service
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args: {SERVICE: gateway}
+    environment:
+      <<: *db-env
+      PORT: "8081"
+    # internal-only: no published ports
+
+  memoryd:
+    <<: *go-service
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args: {SERVICE: memoryd}
+    environment:
+      <<: *db-env
+      PORT: "8082"
+    # internal-only: no published ports
+
+  web:
+    <<: *service
+    image: node:24.18.0-alpine
+    working_dir: /app
+    # npm install, not ci: ci wipes node_modules first, defeating the
+    # cache volume. install syncs against the lockfile and is fast when
+    # the volume is already populated.
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
+    volumes:
+      - ../web:/app
+      - web_node_modules:/app/node_modules
+    ports:
+      - "${WEB_PORT:-3300}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  pgdata:
+  web_node_modules:
+
+networks:
+  timothy:
