@@ -58,6 +58,11 @@ services:
     environment:
       <<: *db-env
       PORT: "8081"
+      # Provider credentials, resolved by credential_ref name at call
+      # time. Values live in deploy/.env only.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
     # internal-only: no published ports
 
   memoryd:
