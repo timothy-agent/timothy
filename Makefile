@@ -8,7 +8,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
-.PHONY: build test test-integration vet lint tidy up down logs
+.PHONY: build test test-integration test-live vet lint tidy up down logs
 
 build:
 	$(GO_RUN) go build ./...
@@ -25,6 +25,16 @@ test-integration:
 		-e GOFLAGS=-buildvcs=false --network timothy_timothy \
 		-e DATABASE_URL=postgres://timothy:$(POSTGRES_PASSWORD)@postgres:5432/timothy \
 		$(GO_IMAGE) go test -race -tags integration ./internal/platform/...
+
+# Streams one real completion per provider whose credentials are in
+# the calling environment; absent providers skip.
+test-live:
+	docker run --rm -v $(CURDIR):/src -w /src \
+		-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
+		-e GOFLAGS=-buildvcs=false \
+		-e ANTHROPIC_API_KEY -e ANTHROPIC_TEST_MODEL \
+		-e OPENAICOMPAT_TEST_BASE_URL -e OPENAICOMPAT_TEST_API_KEY -e OPENAICOMPAT_TEST_MODEL \
+		$(GO_IMAGE) go test -race -tags live -v -run TestLive ./internal/gateway/provider/
 
 vet:
 	$(GO_RUN) go vet ./...
