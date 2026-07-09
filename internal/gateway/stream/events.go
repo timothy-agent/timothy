@@ -45,6 +45,9 @@ type ToolCallEvent struct {
 }
 
 // Usage is provider-reported token accounting for one request.
+// InputTokens EXCLUDES cache reads and writes (Anthropic-style split);
+// drivers for APIs that fold cached tokens into their prompt count
+// normalize before emitting.
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`
 	OutputTokens     int `json:"output_tokens"`

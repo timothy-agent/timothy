@@ -10,7 +10,7 @@ func TestBuildRegistry(t *testing.T) {
 	lookups := map[string]string{"ANTHROPIC_API_KEY": "sk-a", "XAI_API_KEY": "sk-x"}
 	r, err := Build([]Config{
 		// CredentialRef values are env var *names*, not secrets.
-		{Name: "anthropic", Kind: KindAPI, Driver: "anthropic", CredentialRef: "ANTHROPIC_API_KEY"},                              // #nosec G101
+		{Name: "anthropic", Kind: KindAPI, Driver: "anthropic", CredentialRef: "ANTHROPIC_API_KEY"},                             // #nosec G101
 		{Name: "xai-grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1", CredentialRef: "XAI_API_KEY"}, // #nosec G101
 	}, func(ref string) string { return lookups[ref] })
 	if err != nil {

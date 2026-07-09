@@ -62,3 +62,9 @@ type Provider interface {
 	Capabilities() []Capability
 	Stream(ctx context.Context, req CompletionRequest) (<-chan stream.StreamEvent, error)
 }
+
+// Embedder is implemented by providers that can embed text. Callers
+// type-assert; a provider without it is skipped by embedding routes.
+type Embedder interface {
+	Embed(ctx context.Context, model string, texts []string) ([][]float32, *stream.Usage, error)
+}

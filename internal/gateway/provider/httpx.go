@@ -36,18 +36,19 @@ func backoffFor(attempt int) time.Duration {
 
 // doWithRetry issues the request built by build, retrying 429/5xx
 // responses and network errors up to maxRetries with jittered backoff.
-// Each retry is surfaced on ch as a retry event. On success the
-// response body is open and the caller owns closing it.
-func doWithRetry(ctx context.Context, client *http.Client, build func() (*http.Request, error), ch chan<- stream.StreamEvent) (*http.Response, error) {
+// Each retry is reported through notify (return false to abort); pass
+// nil to retry silently. On success the response body is open and the
+// caller owns closing it.
+func doWithRetry(ctx context.Context, client *http.Client, build func() (*http.Request, error), notify func(stream.RetryInfo) bool) (*http.Response, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			backoff := backoffFor(attempt)
-			if !emit(ctx, ch, stream.StreamEvent{Type: stream.EventRetry, Retry: &stream.RetryInfo{
+			if notify != nil && !notify(stream.RetryInfo{
 				Attempt:   attempt,
 				BackoffMs: backoff.Milliseconds(),
 				Reason:    lastErr.Error(),
-			}}) {
+			}) {
 				return nil, ctx.Err()
 			}
 			select {
@@ -140,7 +141,9 @@ func runStream(ctx context.Context, client *http.Client, timeout time.Duration, 
 
 		resp, err := doWithRetry(callCtx, client, func() (*http.Request, error) {
 			return build(callCtx)
-		}, ch)
+		}, func(ri stream.RetryInfo) bool {
+			return emit(callCtx, ch, stream.StreamEvent{Type: stream.EventRetry, Retry: &ri})
+		})
 		if err != nil {
 			// Terminal events gate on the PARENT ctx: the per-call
 			// timeout expiring is exactly when the consumer must still

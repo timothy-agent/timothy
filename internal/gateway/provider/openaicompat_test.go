@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -55,7 +56,8 @@ func TestOpenAICompatHappyPath(t *testing.T) {
 		t.Fatalf("usage events = %d, want 1", len(usages))
 	}
 	u := usages[0].Usage
-	if u.InputTokens != 12 || u.OutputTokens != 4 || u.CacheReadTokens != 6 {
+	// prompt_tokens=12 includes cached_tokens=6: normalized input is 6.
+	if u.InputTokens != 6 || u.OutputTokens != 4 || u.CacheReadTokens != 6 {
 		t.Fatalf("usage = %+v", u)
 	}
 	if lastType(t, events) != stream.EventDone {
@@ -179,6 +181,69 @@ func TestOpenAICompatAPIError(t *testing.T) {
 	errs := eventsOfType(events, stream.EventError)
 	if len(errs) != 1 || errs[0].Err.Message != "model overloaded" {
 		t.Fatalf("want api error event: %+v", events)
+	}
+}
+
+func TestOpenAICompatEmbedRetriesTransientFailure(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0.5]},{"index":1,"embedding":[0.6]}],"usage":{"prompt_tokens":3}}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAICompat(OpenAICompatConfig{Name: "e", BaseURL: srv.URL, APIKey: "k", Timeout: 10 * time.Second})
+
+	vecs, usage, err := p.Embed(t.Context(), "m", []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2 (retry after 503)", calls.Load())
+	}
+	if len(vecs) != 2 || vecs[0][0] != 0.5 || usage.InputTokens != 3 {
+		t.Fatalf("vecs = %v usage = %+v", vecs, usage)
+	}
+}
+
+func TestOpenAICompatEmbedRejectsBadIndices(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, payload, wantErr string
+	}{
+		{
+			name:    "duplicate index",
+			payload: `{"data":[{"index":0,"embedding":[0.1]},{"index":0,"embedding":[0.2]}],"usage":{}}`,
+			wantErr: "duplicate embedding index",
+		},
+		{
+			name:    "out of range index",
+			payload: `{"data":[{"index":0,"embedding":[0.1]},{"index":5,"embedding":[0.2]}],"usage":{}}`,
+			wantErr: "out of range",
+		},
+		{
+			name:    "count mismatch",
+			payload: `{"data":[{"index":0,"embedding":[0.1]}],"usage":{}}`,
+			wantErr: "got 1 embeddings for 2 texts",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = fmt.Fprint(w, tt.payload)
+			}))
+			t.Cleanup(srv.Close)
+			p := NewOpenAICompat(OpenAICompatConfig{Name: "e", BaseURL: srv.URL, APIKey: "k", Timeout: time.Second})
+
+			_, _, err := p.Embed(t.Context(), "m", []string{"a", "b"})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Embed err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

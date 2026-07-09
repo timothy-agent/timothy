@@ -2,7 +2,6 @@ package provider
 
 import (
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -20,12 +19,11 @@ type Config struct {
 	Timeout       time.Duration
 }
 
-// Registry holds the built providers by name. The mutex guards the
-// map for the hot-reload writer that arrives with the DB-backed config
-// store (Replace on poll/reload); today Build is the only writer and
-// runs before any reader.
+// Registry holds the built providers by name. It is immutable after
+// Build: config reloads construct a whole new Registry inside a fresh
+// snapshot and swap atomically — nothing mutates a live registry, so
+// reads need no synchronization.
 type Registry struct {
-	mu        sync.RWMutex
 	providers map[string]Provider
 }
 
@@ -73,16 +71,12 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 
 // Get returns the named provider.
 func (r *Registry) Get(name string) (Provider, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	p, ok := r.providers[name]
 	return p, ok
 }
 
 // Names returns all provider names (unordered).
 func (r *Registry) Names() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	names := make([]string, 0, len(r.providers))
 	for n := range r.providers {
 		names = append(names, n)
