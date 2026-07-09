@@ -101,11 +101,20 @@ jobs:
 
   # Umbrella gate with a stable name for branch rulesets: matrix legs
   # report as "images (brain)" etc., which rulesets can't reference.
+  # ALLOWLIST, not blocklist: every needed job must report exactly
+  # "success" — failure, cancelled, skipped, and any future state all
+  # fail the gate. (A cancelled run once reported skipped needs, the
+  # old blocklist missed it, and auto-merge fired on red jobs.)
   ci-ok:
     runs-on: ubuntu-latest
     needs: [go, lint, web, images]
     if: always()
     steps:
-      - name: All jobs green
+      - name: All jobs succeeded
         run: |
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "needs results: $results"
+          [ -n "$results" ] || { echo "no results reported"; exit 1; }
+          for r in $results; do
+            [ "$r" = "success" ] || { echo "gate failed: job result '$r'"; exit 1; }
+          done
