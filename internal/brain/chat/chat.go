@@ -85,7 +85,9 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		SessionID:    sessionID,
 	})
 	if err != nil {
-		return "", nil, err
+		// Return the id with the error: the session row exists, and the
+		// client must reuse it on retry instead of orphaning it.
+		return sessionID, nil, err
 	}
 
 	out := make(chan stream.StreamEvent)

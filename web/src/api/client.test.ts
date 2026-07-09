@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
-import { createSSEParser } from './client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ChatError, chatStream, createSSEParser } from './client'
 import type { ChatEvent } from './types'
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe('createSSEParser', () => {
   it('parses complete events', () => {
@@ -46,5 +48,63 @@ describe('createSSEParser', () => {
 
     expect(onEvent).toHaveBeenCalledTimes(1)
     expect(onEvent.mock.calls[0][0]).toEqual({ type: 'chunk', text: 'tail' })
+  })
+})
+
+describe('chatStream errors', () => {
+  it('throws a structured ChatError carrying the session id', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: 'chat_failed', message: 'gateway down', session_id: 's-9' }),
+          { status: 502 },
+        ),
+      ),
+    )
+
+    const err = await chatStream({ message: 'hi' }, () => {}).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ChatError)
+    const ce = err as ChatError
+    expect(ce.status).toBe(502)
+    expect(ce.code).toBe('chat_failed')
+    expect(ce.message).toBe('gateway down')
+    expect(ce.sessionId).toBe('s-9')
+  })
+
+  it('reports the session id from headers before the body streams', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('data: {"type":"done"}\n\n', {
+          status: 200,
+          headers: { 'X-Session-Id': 's-early' },
+        }),
+      ),
+    )
+
+    const sessions: string[] = []
+    const events: ChatEvent[] = []
+    await chatStream({ message: 'hi' }, (ev) => events.push(ev), {
+      onSession: (id) => sessions.push(id),
+    })
+
+    expect(sessions).toEqual(['s-early'])
+    expect(events).toEqual([{ type: 'done' }])
+  })
+
+  it('keeps raw text for non-json error bodies', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('plain failure', { status: 500 })),
+    )
+
+    const err = (await chatStream({ message: 'hi' }, () => {}).catch((e: unknown) => e)) as ChatError
+    expect(err.status).toBe(500)
+    expect(err.message).toBe('plain failure')
+    expect(err.sessionId).toBeUndefined()
   })
 })

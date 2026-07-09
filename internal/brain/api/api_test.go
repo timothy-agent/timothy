@@ -18,14 +18,18 @@ import (
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// fakeGateway yields a canned event sequence.
+// fakeGateway yields a canned event sequence, or fails when err set.
 type fakeGateway struct {
 	events []stream.StreamEvent
+	err    error
 	got    gwclient.StreamRequest
 }
 
 func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	f.got = req
+	if f.err != nil {
+		return nil, f.err
+	}
 	ch := make(chan stream.StreamEvent, len(f.events))
 	for _, ev := range f.events {
 		ch <- ev
@@ -105,6 +109,9 @@ func TestChatRelaysEventsAndAppendsMeta(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
 	}
+	if got := w.Header().Get("X-Session-Id"); got != "s-1" {
+		t.Fatalf("X-Session-Id = %q, want s-1 (mid-stream cut safety)", got)
+	}
 	if gw.got.TaskCategory != "mini" || gw.got.SessionID != "s-1" {
 		t.Fatalf("gateway request = %+v", gw.got)
 	}
@@ -121,6 +128,25 @@ func TestChatRelaysEventsAndAppendsMeta(t *testing.T) {
 	if m.Type != "meta" || m.SessionID != "s-1" || m.Provider != "prov" ||
 		m.Model != "mod" || m.LedgerID != "led-1" || m.Usage == nil || m.Usage.InputTokens != 5 {
 		t.Fatalf("meta = %+v", m)
+	}
+}
+
+func TestChatErrorCarriesSessionID(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{err: context.DeadlineExceeded}
+	svc := chat.New(gw, pgpool.New(t.Context(), "", discard()), discard())
+	a := &API{svc: svc, token: "tok", log: discard()}
+
+	w := doChat(a, "Bearer tok", `{"session_id":"s-keep","message":"hi"}`)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("code = %d, want 502", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["session_id"] != "s-keep" {
+		t.Fatalf("session_id = %q, want s-keep (client must reuse it)", body["session_id"])
 	}
 }
 

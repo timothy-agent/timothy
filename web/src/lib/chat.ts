@@ -34,6 +34,9 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
         meta: { provider: ev.provider, model: ev.model, usage: ev.usage },
       }
     default:
+      // done (terminal marker), usage (folded into meta by brain), and
+      // tool_start/tool_end (no tool loop yet — extend here when it
+      // lands) intentionally leave the state unchanged.
       return msg
   }
 }

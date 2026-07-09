@@ -47,12 +47,39 @@ export function createSSEParser(onEvent: (ev: ChatEvent) => void) {
   }
 }
 
+// ChatError is a structured request failure: match on status/code, not
+// message text. sessionId is present when brain already created a
+// session row — reuse it on retry instead of orphaning it.
+export class ChatError extends Error {
+  readonly status: number
+  readonly code?: string
+  readonly sessionId?: string
+
+  constructor(status: number, message: string, code?: string, sessionId?: string) {
+    super(message)
+    this.name = 'ChatError'
+    this.status = status
+    this.code = code
+    this.sessionId = sessionId
+  }
+}
+
+export interface ChatStreamOptions {
+  signal?: AbortSignal
+  // Fired as soon as the response headers arrive: the session id is
+  // known before the first event, so a mid-stream cut cannot lose it.
+  onSession?: (id: string) => void
+}
+
 // chatStream posts one turn and delivers every SSE event, ending with
-// the terminal meta event. Throws on non-200 responses (auth, config).
+// the terminal meta event. Throws ChatError on non-200 responses.
+// The /v1 path is same-origin by design: the dev server proxies it to
+// brain, and production serves the SPA behind the same reverse proxy
+// as the API.
 export async function chatStream(
   req: ChatRequest,
   onEvent: (ev: ChatEvent) => void,
-  signal?: AbortSignal,
+  { signal, onSession }: ChatStreamOptions = {},
 ): Promise<void> {
   const res = await fetch('/v1/chat', {
     method: 'POST',
@@ -65,8 +92,22 @@ export async function chatStream(
   })
   if (!res.ok || !res.body) {
     const body = await res.text().catch(() => '')
-    throw new Error(`chat failed (${res.status}): ${body}`)
+    let code: string | undefined
+    let message = body
+    let sessionId: string | undefined
+    try {
+      const parsed = JSON.parse(body) as { error?: string; message?: string; session_id?: string }
+      code = parsed.error
+      message = parsed.message ?? body
+      sessionId = parsed.session_id || undefined
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `chat failed (${res.status})`, code, sessionId)
   }
+
+  const headerSession = res.headers.get('X-Session-Id')
+  if (headerSession) onSession?.(headerSession)
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()

@@ -1,12 +1,12 @@
 import { ArrowUpIcon } from '@heroicons/react/20/solid'
 import { useEffect, useRef, useState } from 'react'
-import { chatStream } from '../api/client'
+import { ChatError, chatStream } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { CategoryPicker } from '../components/CategoryPicker'
 import { AssistantMessage, UserMessage } from '../components/Message'
 import { applyEvent, categories, type AssistantState } from '../lib/chat'
 
-type Item = { role: 'user'; text: string } | ({ role: 'assistant' } & AssistantState)
+type Item = { id: string } & ({ role: 'user'; text: string } | ({ role: 'assistant' } & AssistantState))
 
 const categoryKey = 'timothy.category'
 
@@ -20,6 +20,10 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   const sessionRef = useRef<string | undefined>(undefined)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  // Cancel any in-flight stream when the page unmounts (route change).
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   // Auto-grow the composer up to a cap, then scroll inside it.
   const autogrow = () => {
@@ -42,7 +46,8 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
     setItems((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
-      if (last?.role === 'assistant') next[next.length - 1] = { role: 'assistant', ...fn(last) }
+      if (last?.role === 'assistant')
+        next[next.length - 1] = { ...fn(last), id: last.id, role: 'assistant' }
       return next
     })
 
@@ -54,10 +59,19 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
     setStreaming(true)
     setItems((prev) => [
       ...prev,
-      { role: 'user', text: message },
-      { role: 'assistant', text: '', reasoning: '', notices: [], streaming: true },
+      { id: crypto.randomUUID(), role: 'user', text: message },
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text: '',
+        reasoning: '',
+        notices: [],
+        streaming: true,
+      },
     ])
 
+    const controller = new AbortController()
+    abortRef.current = controller
     try {
       await chatStream(
         { session_id: sessionRef.current, message, task_category: category },
@@ -65,14 +79,29 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
           if (ev.type === 'meta') sessionRef.current = ev.session_id
           updateLast((m) => applyEvent(m, ev))
         },
+        {
+          signal: controller.signal,
+          onSession: (id) => {
+            sessionRef.current = id
+          },
+        },
       )
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err)
-      if (detail.includes('(401)') || detail.includes('(503)')) onNeedToken()
-      updateLast((m) => ({ ...m, streaming: false, error: detail }))
+      if (controller.signal.aborted) return // unmounted; nothing to render
+      if (err instanceof ChatError) {
+        // Brain may have created the session before failing: keep it.
+        if (err.sessionId) sessionRef.current = err.sessionId
+        if (err.status === 401 || err.status === 503) onNeedToken()
+        updateLast((m) => ({ ...m, streaming: false, error: err.message }))
+      } else {
+        updateLast((m) => ({ ...m, streaming: false, error: String(err) }))
+      }
     } finally {
-      setStreaming(false)
-      updateLast((m) => ({ ...m, streaming: false }))
+      abortRef.current = null
+      if (!controller.signal.aborted) {
+        setStreaming(false)
+        updateLast((m) => ({ ...m, streaming: false }))
+      }
     }
   }
 
@@ -89,11 +118,11 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
             </p>
           </div>
         )}
-        {items.map((item, i) =>
+        {items.map((item) =>
           item.role === 'user' ? (
-            <UserMessage key={i} text={item.text} />
+            <UserMessage key={item.id} text={item.text} />
           ) : (
-            <AssistantMessage key={i} msg={item} />
+            <AssistantMessage key={item.id} msg={item} />
           ),
         )}
         <div ref={bottomRef} />

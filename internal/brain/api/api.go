@@ -89,7 +89,13 @@ func (a *API) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, events, err := a.svc.Chat(r.Context(), req)
 	if err != nil {
-		jsonError(w, http.StatusBadGateway, "chat_failed", err.Error())
+		// session_id rides the error when a row was already created so
+		// the client reuses it on retry.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "chat_failed", "message": err.Error(), "session_id": sessionID,
+		})
 		return
 	}
 
@@ -100,6 +106,10 @@ func (a *API) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	// The session id also rides a header so a mid-stream transport cut
+	// (client never reaches the terminal meta) still can't orphan the
+	// session — headers arrive before the first byte of the body.
+	w.Header().Set("X-Session-Id", sessionID)
 
 	send := func(v any) {
 		data, err := json.Marshal(v)
