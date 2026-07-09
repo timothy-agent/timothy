@@ -5,8 +5,14 @@
 
 # Local env / secrets
 .env
+.env.*
 *.pem
 *.key
+
+# Web
+node_modules/
+web/dist/
+web/coverage/
 
 # Local-only development docs
 docs/

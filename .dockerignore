@@ -1,0 +1,11 @@
+.git
+.env
+*.env
+docs/
+web/node_modules/
+web/dist/
+*.md
+.claude/
+.cursor/
+.idea/
+.vscode/
