@@ -164,8 +164,10 @@ func (r attemptResult) failedOver() bool { return r.failed && !r.streamed }
 // (nothing emitted to the client); once content has been sent, the
 // stream is never restarted on another provider — errors after content
 // are relayed honestly instead.
-func streamAttempt(ctx context.Context, att router.Attempt, completion provider.CompletionRequest, entry ledger.Entry, send func(stream.StreamEvent)) attemptResult {
-	res := attemptResult{entry: entry}
+// The named return is load-bearing: the deferred latency stamp must
+// mutate the value the caller receives, not a dead local copy.
+func streamAttempt(ctx context.Context, att router.Attempt, completion provider.CompletionRequest, entry ledger.Entry, send func(stream.StreamEvent)) (res attemptResult) {
+	res = attemptResult{entry: entry}
 	start := time.Now()
 	defer func() { res.entry.LatencyMS = time.Since(start).Milliseconds() }()
 

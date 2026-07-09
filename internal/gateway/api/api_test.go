@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
@@ -45,10 +46,12 @@ func (m *memRecorder) all() []ledger.Entry {
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// oaiOK serves a minimal successful chat/completions SSE stream.
+// oaiOK serves a minimal successful chat/completions SSE stream. The
+// small sleep makes latency measurable for the ledger assertion.
 func oaiOK(t *testing.T, text string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(15 * time.Millisecond)
 		if strings.HasSuffix(r.URL.Path, "/embeddings") {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data":  []map[string]any{{"index": 0, "embedding": []float32{0.1, 0.2}}, {"index": 1, "embedding": []float32{0.3, 0.4}}},
@@ -165,6 +168,11 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	// priced model: 10/1e6*1 + 5/1e6*2
 	if e.CostUSD == nil || *e.CostUSD != 10.0/1e6+2*5.0/1e6 {
 		t.Fatalf("cost = %v", e.CostUSD)
+	}
+	// The fake server sleeps before responding: a zero here means the
+	// deferred latency stamp mutated a dead copy again.
+	if e.LatencyMS <= 0 {
+		t.Fatalf("latency_ms = %d, want > 0", e.LatencyMS)
 	}
 }
 

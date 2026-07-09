@@ -72,20 +72,30 @@ func TestStoreLoadsSeededConfig(t *testing.T) {
 
 func TestStoreReloadReflectsSQLChanges(t *testing.T) {
 	s := integrationStore(t)
-	db, _ := s.db.Get()
-
-	if _, err := db.Exec(t.Context(),
-		"UPDATE providers SET enabled = true WHERE name = 'zai-glm'"); err != nil {
-		t.Fatalf("enable: %v", err)
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
-	if _, err := db.Exec(t.Context(),
-		"UPDATE task_routes SET enabled = true WHERE task_category = 'coding'"); err != nil {
-		t.Fatalf("enable route: %v", err)
+
+	// Fixture rows OWNED by this test: the dev database's real
+	// providers and routes are live configuration and must never be
+	// toggled by tests.
+	var providerID string
+	if err := db.QueryRow(t.Context(), `INSERT INTO providers
+		(name, kind, driver, base_url, default_model, credential_ref, enabled)
+		VALUES ('itest-prov', 'api', 'openaicompat', 'https://itest.invalid/v1', 'itest-model', 'ITEST_KEY', true)
+		RETURNING id`).Scan(&providerID); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+	if _, err := db.Exec(t.Context(), `INSERT INTO task_routes (task_category, chain, enabled)
+		VALUES ('itest-cat', jsonb_build_array(jsonb_build_object('provider_id', $1::uuid, 'model', 'itest-model')), true)`,
+		providerID); err != nil {
+		t.Fatalf("insert route: %v", err)
 	}
 	t.Cleanup(func() {
 		// t.Context is canceled before cleanups run and the pool's
 		// watcher may already have closed it — use an independent
-		// connection so the reset cannot be lost.
+		// connection so the cleanup cannot be lost.
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
@@ -94,30 +104,24 @@ func TestStoreReloadReflectsSQLChanges(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close(ctx) }()
-		if _, err := conn.Exec(ctx, "UPDATE providers SET enabled = false WHERE name = 'zai-glm'"); err != nil {
-			t.Errorf("cleanup provider: %v", err)
-		}
-		if _, err := conn.Exec(ctx, "UPDATE task_routes SET enabled = false WHERE task_category = 'coding'"); err != nil {
+		if _, err := conn.Exec(ctx, "DELETE FROM task_routes WHERE task_category = 'itest-cat'"); err != nil {
 			t.Errorf("cleanup route: %v", err)
+		}
+		if _, err := conn.Exec(ctx, "DELETE FROM providers WHERE name = 'itest-prov'"); err != nil {
+			t.Errorf("cleanup provider: %v", err)
 		}
 	})
 
-	t.Setenv("ZAI_API_KEY", "test-key-value") // healthy via env lookup
+	t.Setenv("ITEST_KEY", "test-key-value") // healthy via env lookup
 	if err := s.Load(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 
-	attempts, err := s.Snapshot().Resolve("coding", "")
+	attempts, err := s.Snapshot().Resolve("itest-cat", "")
 	if err != nil {
-		t.Fatalf("Resolve after enable: %v", err)
+		t.Fatalf("Resolve after insert: %v", err)
 	}
-	found := false
-	for _, a := range attempts {
-		if a.ProviderName == "zai-glm" && a.Model == "glm-4.7" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("zai-glm/glm-4.7 not in attempts after enable: %+v", attempts)
+	if len(attempts) != 1 || attempts[0].ProviderName != "itest-prov" || attempts[0].Model != "itest-model" {
+		t.Fatalf("attempts = %+v, want itest-prov/itest-model", attempts)
 	}
 }
