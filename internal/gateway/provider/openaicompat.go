@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/sse"
 )
 
 // OpenAICompatConfig configures one OpenAI-compatible provider
@@ -233,8 +234,8 @@ func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stre
 	finished := false
 	truncated := false
 
-	err := readSSE(body, func(ev sseEvent) bool {
-		if ev.data == "[DONE]" {
+	err := sse.Read(body, func(ev sse.Event) bool {
+		if ev.Data == "[DONE]" {
 			finished = true
 			for _, tev := range tools.finishAll() {
 				if !emit(ctx, ch, tev) {
@@ -252,7 +253,7 @@ func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stre
 		}
 
 		var c oaiChunk
-		if err := json.Unmarshal([]byte(ev.data), &c); err != nil {
+		if err := json.Unmarshal([]byte(ev.Data), &c); err != nil {
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code: "malformed_stream", Message: fmt.Sprintf("bad SSE payload: %v", err), Retryable: true,
 			}})

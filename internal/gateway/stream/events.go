@@ -26,7 +26,8 @@ const (
 )
 
 // StreamEvent is one normalized event. Exactly the field matching Type
-// is populated.
+// is populated; Meta additionally rides the terminal done event when
+// the gateway API attributes the serving provider.
 type StreamEvent struct {
 	Type     EventType      `json:"type"`
 	Text     string         `json:"text,omitempty"`
@@ -34,6 +35,15 @@ type StreamEvent struct {
 	Usage    *Usage         `json:"usage,omitempty"`
 	Err      *StreamError   `json:"error,omitempty"`
 	Retry    *RetryInfo     `json:"retry,omitempty"`
+	Meta     *Meta          `json:"meta,omitempty"`
+}
+
+// Meta identifies who served a request — attached to the done event by
+// the gateway API so callers attribute without a second lookup.
+type Meta struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	LedgerID string `json:"ledger_id,omitempty"`
 }
 
 // ToolCallEvent identifies a tool call. Input carries the complete

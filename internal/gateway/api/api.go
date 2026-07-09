@@ -119,6 +119,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	for _, att := range attempts {
 		completion.Model = att.Model
 		res := streamAttempt(r.Context(), att, completion, ledger.Entry{
+			ID:       ledger.NewID(),
 			Provider: att.ProviderName, Model: att.Model,
 			TaskCategory: req.TaskCategory,
 			SessionID:    req.SessionID, LaneID: req.LaneID,
@@ -194,6 +195,15 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			send(ev)
 		case stream.EventChunk, stream.EventReasoningChunk, stream.EventToolStart, stream.EventToolEnd:
 			res.streamed = true
+			send(ev)
+		case stream.EventDone:
+			// Attribute the serving provider on the terminal event so
+			// callers need no second lookup.
+			ev.Meta = &stream.Meta{
+				Provider: att.ProviderName,
+				Model:    att.Model,
+				LedgerID: entry.ID,
+			}
 			send(ev)
 		default:
 			send(ev)

@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -241,53 +240,4 @@ func toolEndEvent(t *pendingTool) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventToolEnd, ToolCall: &stream.ToolCallEvent{
 		ID: t.id, Name: t.name, Input: json.RawMessage(args),
 	}}
-}
-
-// sseScanner iterates server-sent events, yielding each event's data
-// payload (the concatenated "data:" lines). The "event:" field, when
-// present, is returned alongside.
-type sseEvent struct {
-	name string
-	data string
-}
-
-func readSSE(r io.Reader, yield func(sseEvent) bool) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	var name string
-	var data bytes.Buffer
-	flush := func() bool {
-		if data.Len() == 0 {
-			name = ""
-			return true
-		}
-		ev := sseEvent{name: name, data: data.String()}
-		name = ""
-		data.Reset()
-		return yield(ev)
-	}
-
-	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case line == "":
-			if !flush() {
-				return nil
-			}
-		case strings.HasPrefix(line, "event:"):
-			name = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		case strings.HasPrefix(line, "data:"):
-			if data.Len() > 0 {
-				data.WriteByte('\n')
-			}
-			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		}
-		// comments (":") and unknown fields are ignored per the SSE spec
-	}
-	if err := sc.Err(); err != nil {
-		return err
-	}
-	_ = flush()
-	return nil
 }

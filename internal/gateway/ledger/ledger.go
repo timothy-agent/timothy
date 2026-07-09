@@ -5,6 +5,8 @@ package ledger
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -15,8 +17,11 @@ import (
 
 const writeTimeout = 5 * time.Second
 
-// Entry is one request's accounting.
+// Entry is one request's accounting. ID may be pre-generated (NewID)
+// so callers can reference the row before it is written; empty lets
+// the database assign one.
 type Entry struct {
+	ID           string
 	Provider     string
 	Model        string
 	TaskCategory string
@@ -62,15 +67,27 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 		in, out, cr, cw = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens
 	}
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
-		(provider, model, task_category, session_id, lane_id,
+		(id, provider, model, task_category, session_id, lane_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
 		 latency_ms, status, error_code, cost_usd)
-		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13)`,
-		e.Provider, e.Model, e.TaskCategory, e.SessionID, e.LaneID,
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
+		 $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14)`,
+		e.ID, e.Provider, e.Model, e.TaskCategory, e.SessionID, e.LaneID,
 		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.CostUSD)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
 	}
+}
+
+// NewID returns a random UUIDv4 for pre-assigning ledger rows.
+func NewID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "" // database assigns instead
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // Cost computes USD for usage under a price table. nil prices or nil

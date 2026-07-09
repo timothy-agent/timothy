@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/sse"
 )
 
 const (
@@ -168,9 +169,9 @@ func (a *Anthropic) relay(ctx context.Context, body io.Reader, ch chan<- stream.
 	usage := &stream.Usage{}
 	finished := false
 
-	err := readSSE(body, func(ev sseEvent) bool {
+	err := sse.Read(body, func(ev sse.Event) bool {
 		var p anthropicStreamPayload
-		if err := json.Unmarshal([]byte(ev.data), &p); err != nil {
+		if err := json.Unmarshal([]byte(ev.Data), &p); err != nil {
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code: "malformed_stream", Message: fmt.Sprintf("bad SSE payload: %v", err), Retryable: true,
 			}})
