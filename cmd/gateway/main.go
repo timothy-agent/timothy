@@ -11,6 +11,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/api"
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/migrations"
 )
@@ -36,6 +39,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	store := router.NewStore(app.DB, os.Getenv, app.Log)
+	go store.Run(ctx)
+	api.Register(app.Server, store, ledger.New(app.DB, app.Log), app.Log)
+
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
 		os.Exit(1)
