@@ -67,6 +67,21 @@ func TestAuthRejectsBadTokens(t *testing.T) {
 	}
 }
 
+func TestAuthAcceptsRobustHeaderShapes(t *testing.T) {
+	t.Parallel()
+	for name, header := range map[string]string{
+		"lowercase scheme":   "bearer secret-token",
+		"surrounding spaces": "  Bearer secret-token  ",
+		"space before token": "Bearer  secret-token",
+	} {
+		// Fresh API per case: a session buffer is per-service state.
+		a, _ := testAPI(t, "secret-token", []stream.StreamEvent{{Type: stream.EventDone}})
+		if w := doChat(a, header, `{"session_id":"s","message":"hi"}`); w.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d, want 200", name, w.Code)
+		}
+	}
+}
+
 func TestAuthFailsClosedWhenUnconfigured(t *testing.T) {
 	t.Parallel()
 	a, _ := testAPI(t, "", nil)

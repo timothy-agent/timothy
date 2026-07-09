@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -47,11 +48,12 @@ func (a *API) auth(next http.Handler) http.Handler {
 
 func bearerToken(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
-	h := r.Header.Get("Authorization")
-	if len(h) <= len(prefix) || h[:len(prefix)] != prefix {
+	h := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
 		return "", false
 	}
-	return h[len(prefix):], true
+	token := strings.TrimSpace(h[len(prefix):])
+	return token, token != ""
 }
 
 func jsonError(w http.ResponseWriter, status int, code, msg string) {
@@ -62,6 +64,13 @@ func jsonError(w http.ResponseWriter, status int, code, msg string) {
 
 // meta is brain's terminal SSE event: session identity plus whatever
 // the gateway attributed on done.
+//
+// Wire contract (deliberately different from the internal channel
+// contract): brain's /v1/chat SSE stream ALWAYS ends with exactly one
+// meta event, emitted after the relayed gateway terminal (done or
+// error). Clients must read until meta, not stop at done. Provider,
+// model, usage, and ledger_id are best-effort — absent when no
+// provider attempt succeeded.
 type meta struct {
 	Type      string        `json:"type"` // always "meta"
 	SessionID string        `json:"session_id"`

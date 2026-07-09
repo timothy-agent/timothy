@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -34,7 +35,14 @@ type Client struct {
 }
 
 func New(baseURL string) *Client {
-	return &Client{baseURL: baseURL, http: &http.Client{}}
+	return &Client{baseURL: baseURL, http: &http.Client{
+		// No overall timeout (streams run long); bound the phases that
+		// can hang before any byte arrives.
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}}
 }
 
 // Stream posts the request and yields the gateway's normalized events.
@@ -66,12 +74,16 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan stream.S
 		defer close(ch)
 		defer func() { _ = resp.Body.Close() }()
 
+		sawTerminal := false
 		err := sse.Read(resp.Body, func(ev sse.Event) bool {
 			var se stream.StreamEvent
 			if err := json.Unmarshal([]byte(ev.Data), &se); err != nil {
 				se = stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 					Code: "malformed_gateway_stream", Message: err.Error(),
 				}}
+			}
+			if se.Type == stream.EventDone || se.Type == stream.EventError {
+				sawTerminal = true
 			}
 			select {
 			case ch <- se:
@@ -80,7 +92,10 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan stream.S
 				return false
 			}
 		})
-		if err != nil && ctx.Err() == nil {
+		// A read error AFTER the gateway's own terminal is just the
+		// connection tearing down — emitting another terminal would
+		// break the exactly-one-terminal contract.
+		if err != nil && !sawTerminal && ctx.Err() == nil {
 			select {
 			case ch <- stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code: "gateway_stream_cut", Message: err.Error(), Retryable: true,
