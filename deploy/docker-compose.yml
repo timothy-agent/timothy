@@ -86,6 +86,9 @@ services:
     <<: *service
     image: node:24.18.0-alpine
     working_dir: /app
+    environment:
+      # Vite dev proxy target for /v1 (browser stays same-origin)
+      BRAIN_URL: http://brain:8080
     # npm install, not ci: ci wipes node_modules first, defeating the
     # cache volume. install syncs against the lockfile and is fast when
     # the volume is already populated.
