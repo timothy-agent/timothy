@@ -1,1 +1,6 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* Theme is user-controlled: dark mode keys on the .dark class that
+   lib/theme.ts stamps on <html> (system preference included). */
+@custom-variant dark (&:where(.dark, .dark *));
