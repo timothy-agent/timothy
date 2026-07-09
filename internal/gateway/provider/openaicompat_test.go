@@ -1,0 +1,198 @@
+package provider
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+)
+
+func oaiWrite(w http.ResponseWriter, data string) {
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+	w.(http.Flusher).Flush()
+}
+
+func oaiServer(t *testing.T, handler http.HandlerFunc) *OpenAICompat {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return NewOpenAICompat(OpenAICompatConfig{
+		Name: "oai-test", BaseURL: srv.URL, APIKey: "test-key",
+		Timeout: 10 * time.Second,
+	})
+}
+
+func TestOpenAICompatHappyPath(t *testing.T) {
+	t.Parallel()
+	var gotAuth string
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		oaiWrite(w, `{"choices":[{"delta":{"content":"Hel"}}]}`)
+		oaiWrite(w, `{"choices":[{"delta":{"content":"lo"}}]}`)
+		oaiWrite(w, `{"choices":[{"delta":{},"finish_reason":"stop"}]}`)
+		oaiWrite(w, `{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":6}}}`)
+		oaiWrite(w, "[DONE]")
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "m", System: "sys", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if gotAuth != "Bearer test-key" {
+		t.Fatalf("auth header = %q", gotAuth)
+	}
+	if got := textOf(events, stream.EventChunk); got != "Hello" {
+		t.Fatalf("chunks = %q, want Hello", got)
+	}
+	usages := eventsOfType(events, stream.EventUsage)
+	if len(usages) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usages))
+	}
+	u := usages[0].Usage
+	if u.InputTokens != 12 || u.OutputTokens != 4 || u.CacheReadTokens != 6 {
+		t.Fatalf("usage = %+v", u)
+	}
+	if lastType(t, events) != stream.EventDone {
+		t.Fatalf("last = %v, want done", lastType(t, events))
+	}
+}
+
+func TestOpenAICompatReasoning(t *testing.T) {
+	t.Parallel()
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		oaiWrite(w, `{"choices":[{"delta":{"reasoning_content":"think"}}]}`)
+		oaiWrite(w, `{"choices":[{"delta":{"content":"answer"}}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	if got := textOf(events, stream.EventReasoningChunk); got != "think" {
+		t.Fatalf("reasoning = %q", got)
+	}
+	if got := textOf(events, stream.EventChunk); got != "answer" {
+		t.Fatalf("chunks = %q", got)
+	}
+}
+
+func TestOpenAICompatToolCalls(t *testing.T) {
+	t.Parallel()
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		oaiWrite(w, `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":"{\"city"}}]}}]}`)
+		oaiWrite(w, `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":\"SF\"}"}}]}}]}`)
+		oaiWrite(w, `{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	starts := eventsOfType(events, stream.EventToolStart)
+	ends := eventsOfType(events, stream.EventToolEnd)
+	if len(starts) != 1 || len(ends) != 1 {
+		t.Fatalf("tool events %d/%d, want 1/1: %+v", len(starts), len(ends), events)
+	}
+	if starts[0].ToolCall.ID != "call_1" || starts[0].ToolCall.Name != "get_weather" {
+		t.Fatalf("tool_start = %+v", starts[0].ToolCall)
+	}
+	if got := string(ends[0].ToolCall.Input); got != `{"city":"SF"}` {
+		t.Fatalf("tool input = %q", got)
+	}
+}
+
+func TestOpenAICompatTruncationIncomplete(t *testing.T) {
+	t.Parallel()
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		oaiWrite(w, `{"choices":[{"delta":{"content":"cut"}}]}`)
+		oaiWrite(w, `{"choices":[{"delta":{},"finish_reason":"length"}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	if len(eventsOfType(events, stream.EventIncomplete)) != 1 {
+		t.Fatalf("want incomplete on finish_reason=length: %+v", events)
+	}
+	if lastType(t, events) != stream.EventDone {
+		t.Fatalf("last = %v, want done", lastType(t, events))
+	}
+}
+
+func TestOpenAICompat500ThenSuccess(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		oaiWrite(w, `{"choices":[{"delta":{"content":"ok"}}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	if len(eventsOfType(events, stream.EventRetry)) != 1 {
+		t.Fatalf("want one retry event: %+v", events)
+	}
+	if got := textOf(events, stream.EventChunk); got != "ok" {
+		t.Fatalf("chunks = %q", got)
+	}
+}
+
+func TestOpenAICompatMidStreamDisconnect(t *testing.T) {
+	t.Parallel()
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		oaiWrite(w, `{"choices":[{"delta":{"content":"par"}}]}`)
+		// no [DONE]: connection closes mid-stream
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	if len(eventsOfType(events, stream.EventIncomplete)) != 1 {
+		t.Fatalf("want one incomplete event: %+v", events)
+	}
+	if lastType(t, events) != stream.EventDone {
+		t.Fatalf("last = %v, want done", lastType(t, events))
+	}
+}
+
+func TestOpenAICompatAPIError(t *testing.T) {
+	t.Parallel()
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		oaiWrite(w, `{"error":{"message":"model overloaded","type":"server_error"}}`)
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	errs := eventsOfType(events, stream.EventError)
+	if len(errs) != 1 || errs[0].Err.Message != "model overloaded" {
+		t.Fatalf("want api error event: %+v", events)
+	}
+}
+
+func TestOpenAICompatMalformed(t *testing.T) {
+	t.Parallel()
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		oaiWrite(w, `{broken`)
+	})
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	events := collect(t, ch)
+
+	errs := eventsOfType(events, stream.EventError)
+	if len(errs) != 1 || errs[0].Err.Code != "malformed_stream" {
+		t.Fatalf("want malformed_stream error: %+v", events)
+	}
+}
