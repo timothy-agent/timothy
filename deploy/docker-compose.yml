@@ -20,6 +20,10 @@ x-go-service: &go-service
     retries: 3
     start_period: 10s
 
+x-db-env: &db-env
+  DATABASE_URL: postgres://timothy:${POSTGRES_PASSWORD}@postgres:5432/timothy
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
 services:
   postgres:
     <<: *service
@@ -42,10 +46,12 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       args: {SERVICE: brain}
-    environment: &db-env
+    environment:
+      <<: *db-env
       PORT: "8080"
-      DATABASE_URL: postgres://timothy:${POSTGRES_PASSWORD}@postgres:5432/timothy
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GATEWAY_URL: http://gateway:8081
+      # Brain-only secret: the public API bearer token.
+      TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
     ports:
       - "${BRAIN_PORT:-8300}:8080"
 
