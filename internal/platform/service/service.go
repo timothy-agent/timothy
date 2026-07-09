@@ -35,6 +35,19 @@ type App struct {
 	mu             sync.RWMutex
 	migrationsDone bool
 	migrationsErr  error
+	extraChecks    map[string]func() httpserver.Check
+}
+
+// AddCheck registers a service-specific health check merged into
+// /health beside the platform's postgres and migrations checks.
+// Register before Run.
+func (a *App) AddCheck(name string, fn func() httpserver.Check) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.extraChecks == nil {
+		a.extraChecks = map[string]func() httpserver.Check{}
+	}
+	a.extraChecks[name] = fn
 }
 
 // New loads configuration and wires logging, metrics, the database
@@ -72,6 +85,11 @@ func (a *App) health() httpserver.Health {
 		"postgres":   {Status: dbStatus, Detail: dbDetail},
 		"migrations": a.migrationsCheck(),
 	}
+	a.mu.RLock()
+	for name, fn := range a.extraChecks {
+		checks[name] = fn()
+	}
+	a.mu.RUnlock()
 
 	status := "ok"
 	for _, c := range checks {

@@ -11,6 +11,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/SumonMSelim/timothy/internal/brain/api"
+	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/migrations"
 )
@@ -36,6 +40,25 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	token := os.Getenv("TIMOTHY_API_TOKEN")
+	if token == "" {
+		app.Log.Warn("TIMOTHY_API_TOKEN not set; API requests will be rejected")
+	}
+	app.AddCheck("auth", func() httpserver.Check {
+		if token == "" {
+			return httpserver.Check{Status: "degraded", Detail: "TIMOTHY_API_TOKEN not set"}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
+
+	gatewayURL := os.Getenv("GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = "http://gateway:8081"
+	}
+	svc := chat.New(gwclient.New(gatewayURL), app.DB, app.Log)
+	api.Register(app.Server, svc, token, app.Log)
+
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
 		os.Exit(1)
