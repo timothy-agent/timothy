@@ -1,4 +1,4 @@
-import type { ChatEvent, ChatRequest } from './types'
+import type { ChatEvent, ChatRequest, SessionMeta, Transcript } from './types'
 
 const tokenKey = 'timothy.token'
 
@@ -73,6 +73,8 @@ export interface ChatStreamOptions {
 
 // chatStream posts one turn and delivers every SSE event, ending with
 // the terminal meta event. Throws ChatError on non-200 responses.
+// With a session_id it targets that session's messages endpoint;
+// without one it uses /v1/chat, which creates the session.
 // The /v1 path is same-origin by design: the dev server proxies it to
 // brain, and production serves the SPA behind the same reverse proxy
 // as the API.
@@ -81,13 +83,15 @@ export async function chatStream(
   onEvent: (ev: ChatEvent) => void,
   { signal, onSession }: ChatStreamOptions = {},
 ): Promise<void> {
-  const res = await fetch('/v1/chat', {
+  const { session_id, ...body } = req
+  const url = session_id ? `/v1/sessions/${session_id}/messages` : '/v1/chat'
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${getToken()}`,
     },
-    body: JSON.stringify(req),
+    body: JSON.stringify(session_id ? body : req),
     signal,
   })
   if (!res.ok || !res.body) {
@@ -118,4 +122,49 @@ export async function chatStream(
     parser.feed(decoder.decode(value, { stream: true }))
   }
   parser.end()
+}
+
+// request is the plain-JSON counterpart of chatStream: same auth, same
+// structured errors.
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getToken()}`,
+      ...init.headers,
+    },
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let code: string | undefined
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { error?: string; message?: string }
+      code = parsed.error
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `request failed (${res.status})`, code)
+  }
+  if (res.status === 204) return undefined as T
+  return (await res.json()) as T
+}
+
+export async function listSessions(query = ''): Promise<SessionMeta[]> {
+  const qs = query ? `?query=${encodeURIComponent(query)}` : ''
+  const { sessions } = await request<{ sessions: SessionMeta[] }>(`/v1/sessions${qs}`)
+  return sessions
+}
+
+export async function getTranscript(id: string): Promise<Transcript> {
+  return request<Transcript>(`/v1/sessions/${id}`)
+}
+
+export async function updateSession(
+  id: string,
+  patch: { title?: string; archived?: boolean },
+): Promise<void> {
+  await request<void>(`/v1/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }

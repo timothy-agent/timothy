@@ -95,6 +95,18 @@ describe('chatStream errors', () => {
     expect(events).toEqual([{ type: 'done' }])
   })
 
+  it('routes to the session messages endpoint when a session id is known', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"done"}\n\n'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await chatStream({ session_id: 's-42', message: 'hi' }, () => {})
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/sessions/s-42/messages')
+    // The id travels in the path, not the body.
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ message: 'hi' })
+  })
+
   it('keeps raw text for non-json error bodies', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
     vi.stubGlobal(

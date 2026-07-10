@@ -43,3 +43,36 @@ export interface ChatRequest {
   task_category?: string
   model_hint?: string
 }
+
+// --- session management (mirrors brain's /v1/sessions surface) ---
+
+export interface SessionMeta {
+  id: string
+  title: string
+  archived: boolean
+  last_category?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface UIBlock {
+  type: 'text' | 'reasoning'
+  text: string
+}
+
+// One renderable unit of the UI replay projection. The transcript
+// hides nothing: compactions and interrupted turns are items too.
+export interface TranscriptItem {
+  seq: number
+  kind: 'user' | 'assistant' | 'tool' | 'compaction' | 'interrupted'
+  text?: string
+  blocks?: UIBlock[]
+  provider?: string
+  model?: string
+  created_at: string
+}
+
+export interface Transcript {
+  session: SessionMeta
+  items: TranscriptItem[]
+}

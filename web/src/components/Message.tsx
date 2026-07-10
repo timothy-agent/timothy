@@ -14,6 +14,32 @@ export function UserMessage({ text }: { text: string }) {
   )
 }
 
+// CompactionDivider marks where older messages were summarized away
+// from the model's context. The UI replay still shows everything above
+// it — only the model forgets, and the divider says so.
+export function CompactionDivider({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-3" data-testid="compaction-divider">
+      <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+      <span className="text-xs text-zinc-400 dark:text-zinc-500">{text}</span>
+      <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+    </div>
+  )
+}
+
+// InterruptedMessage renders a turn that never completed: the partial
+// answer plus an honest marker.
+export function InterruptedMessage({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-start gap-2" data-testid="interrupted">
+      <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
+        <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
+      </div>
+      <Badge color="amber">interrupted</Badge>
+    </div>
+  )
+}
+
 export function AssistantMessage({ msg }: { msg: AssistantState }) {
   const tokens = msg.meta?.usage
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`

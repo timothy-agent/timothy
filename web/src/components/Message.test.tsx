@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, type AssistantState } from '../lib/chat'
-import { AssistantMessage } from './Message'
+import { AssistantMessage, CompactionDivider, InterruptedMessage } from './Message'
 
 afterEach(cleanup)
 
@@ -81,5 +81,21 @@ describe('AssistantMessage', () => {
     render(<AssistantMessage msg={msg} />)
 
     expect(screen.getByTestId('error')).toHaveTextContent('chain_exhausted: all failed')
+  })
+})
+
+describe('replay-only components', () => {
+  it('renders the compaction divider text', () => {
+    render(<CompactionDivider text="older messages summarized (through #4)" />)
+    expect(screen.getByTestId('compaction-divider')).toHaveTextContent(
+      'older messages summarized (through #4)',
+    )
+  })
+
+  it('renders an interrupted turn: the partial plus an honest marker', () => {
+    render(<InterruptedMessage text="Once upon a" />)
+    const el = screen.getByTestId('interrupted')
+    expect(el).toHaveTextContent('Once upon a')
+    expect(el).toHaveTextContent('interrupted')
   })
 })

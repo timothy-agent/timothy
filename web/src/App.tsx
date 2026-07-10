@@ -11,7 +11,7 @@ import {
   RectangleStackIcon,
   SunIcon,
 } from '@heroicons/react/20/solid'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Route, Routes, useLocation } from 'react-router'
 import { getToken } from './api/client'
 import { Navbar, NavbarItem, NavbarSection, NavbarSpacer } from './components/catalyst/navbar'
@@ -25,6 +25,8 @@ import {
   SidebarSpacer,
 } from './components/catalyst/sidebar'
 import { SidebarLayout } from './components/catalyst/sidebar-layout'
+import { SessionList } from './components/SessionList'
+import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
@@ -53,6 +55,9 @@ function App() {
     if (getToken() === '') setTokenOpen(true)
   }, [])
 
+  // Stable identity: Chat's resume effect depends on it.
+  const openToken = useCallback(() => setTokenOpen(true), [])
+
   const cycleTheme = () => {
     const t = nextTheme[theme]
     setTheme(t)
@@ -61,7 +66,7 @@ function App() {
   const ThemeIcon = themeIcon[theme]
 
   return (
-    <>
+    <SessionsProvider>
       {/* Reopen affordance when the desktop sidebar is collapsed */}
       {collapsed && (
         <button
@@ -108,12 +113,21 @@ function App() {
             <SidebarBody>
               <SidebarSection>
                 {nav.map((item) => (
-                  <SidebarItem key={item.href} href={item.href} current={pathname === item.href}>
+                  <SidebarItem
+                    key={item.href}
+                    href={item.href}
+                    current={
+                      item.href === '/'
+                        ? pathname === '/' || pathname.startsWith('/sessions')
+                        : pathname === item.href
+                    }
+                  >
                     <item.icon data-slot="icon" />
                     <SidebarLabel>{item.label}</SidebarLabel>
                   </SidebarItem>
                 ))}
               </SidebarSection>
+              <SessionList />
               <SidebarSpacer />
               <SidebarSection>
                 <SidebarItem onClick={cycleTheme}>
@@ -130,11 +144,14 @@ function App() {
         }
       >
         <Routes>
+          {/* One route pattern serves new chats and resumes: switching
+              between them must re-render, not remount, so an in-flight
+              stream survives adopting its new session URL. */}
           <Route
-            path="/"
+            path="/sessions?/:id?"
             element={
               <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col lg:h-[calc(100dvh-4.5rem)]">
-                <Chat onNeedToken={() => setTokenOpen(true)} />
+                <Chat onNeedToken={openToken} />
               </div>
             }
           />
@@ -146,7 +163,7 @@ function App() {
         </Routes>
         <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
       </SidebarLayout>
-    </>
+    </SessionsProvider>
   )
 }
 

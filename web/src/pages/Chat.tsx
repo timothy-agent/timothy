@@ -1,29 +1,71 @@
 import { ArrowUpIcon } from '@heroicons/react/20/solid'
 import { useEffect, useRef, useState } from 'react'
-import { ChatError, chatStream } from '../api/client'
+import { useNavigate, useParams } from 'react-router'
+import { ChatError, chatStream, getTranscript } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { CategoryPicker } from '../components/CategoryPicker'
-import { AssistantMessage, UserMessage } from '../components/Message'
+import {
+  AssistantMessage,
+  CompactionDivider,
+  InterruptedMessage,
+  UserMessage,
+} from '../components/Message'
 import { applyEvent, categories, type AssistantState } from '../lib/chat'
-
-type Item = { id: string } & ({ role: 'user'; text: string } | ({ role: 'assistant' } & AssistantState))
+import { useSessions } from '../lib/sessions'
+import { fromTranscript, type ChatItem } from '../lib/transcript'
 
 const categoryKey = 'timothy.category'
 
 export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
-  const [items, setItems] = useState<Item[]>([])
+  const { id: routeSession } = useParams()
+  const navigate = useNavigate()
+  const { refresh } = useSessions()
+  const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
   const [category, setCategory] = useState(
     () => localStorage.getItem(categoryKey) ?? categories[0],
   )
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
-  const sessionRef = useRef<string | undefined>(undefined)
+  const sessionRef = useRef<string | undefined>(routeSession)
+  // Session ids this page itself adopted mid-stream (via navigate):
+  // the resume effect must not clobber the live stream with a replay.
+  const adoptedRef = useRef<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   // Cancel any in-flight stream when the page unmounts (route change).
   useEffect(() => () => abortRef.current?.abort(), [])
+
+  // Resume: replay the session's transcript projection, exactly as the
+  // server recorded it, and restore its last task category.
+  useEffect(() => {
+    sessionRef.current = routeSession
+    setLoadError(null)
+    if (!routeSession) {
+      setItems([])
+      adoptedRef.current = null
+      return
+    }
+    if (adoptedRef.current === routeSession) return // live here, not a resume
+    adoptedRef.current = null
+    let stale = false
+    getTranscript(routeSession)
+      .then(({ session, items }) => {
+        if (stale) return
+        setItems(fromTranscript(items))
+        if (session.last_category) setCategory(session.last_category)
+      })
+      .catch((err: unknown) => {
+        if (stale) return
+        if (err instanceof ChatError && (err.status === 401 || err.status === 503)) onNeedToken()
+        setLoadError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      stale = true
+    }
+  }, [routeSession, onNeedToken])
 
   // Auto-grow the composer up to a cap, then scroll inside it.
   const autogrow = () => {
@@ -72,25 +114,32 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
 
     const controller = new AbortController()
     abortRef.current = controller
+    const adoptSession = (id: string) => {
+      if (sessionRef.current === id) return
+      sessionRef.current = id
+      adoptedRef.current = id
+      // Same route pattern serves / and /sessions/:id, so this only
+      // re-renders — the live stream keeps its component state.
+      navigate(`/sessions/${id}`, { replace: true })
+    }
     try {
       await chatStream(
         { session_id: sessionRef.current, message, task_category: category },
         (ev: ChatEvent) => {
-          if (ev.type === 'meta') sessionRef.current = ev.session_id
+          if (ev.type === 'meta') adoptSession(ev.session_id)
           updateLast((m) => applyEvent(m, ev))
         },
         {
           signal: controller.signal,
-          onSession: (id) => {
-            sessionRef.current = id
-          },
+          onSession: adoptSession,
         },
       )
+      refresh() // updated_at moved; the first exchange also titles it
     } catch (err) {
       if (controller.signal.aborted) return // unmounted; nothing to render
       if (err instanceof ChatError) {
         // Brain may have created the session before failing: keep it.
-        if (err.sessionId) sessionRef.current = err.sessionId
+        if (err.sessionId) adoptSession(err.sessionId)
         if (err.status === 401 || err.status === 503) onNeedToken()
         updateLast((m) => ({ ...m, streaming: false, error: err.message }))
       } else {
@@ -108,7 +157,7 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 space-y-6 overflow-y-auto py-6">
-        {items.length === 0 && (
+        {items.length === 0 && !loadError && (
           <div className="mt-24 text-center">
             <h2 className="text-xl font-semibold text-zinc-700 dark:text-zinc-200">
               What can I help with?
@@ -118,13 +167,23 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
             </p>
           </div>
         )}
-        {items.map((item) =>
-          item.role === 'user' ? (
-            <UserMessage key={item.id} text={item.text} />
-          ) : (
-            <AssistantMessage key={item.id} msg={item} />
-          ),
+        {loadError && (
+          <div className="mt-24 text-center text-sm text-red-500">
+            Could not load this session: {loadError}
+          </div>
         )}
+        {items.map((item) => {
+          switch (item.role) {
+            case 'user':
+              return <UserMessage key={item.id} text={item.text} />
+            case 'compaction':
+              return <CompactionDivider key={item.id} text={item.text} />
+            case 'interrupted':
+              return <InterruptedMessage key={item.id} text={item.text} />
+            default:
+              return <AssistantMessage key={item.id} msg={item} />
+          }
+        })}
         <div ref={bottomRef} />
       </div>
 
