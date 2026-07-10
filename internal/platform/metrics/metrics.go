@@ -48,6 +48,13 @@ func New() *Metrics {
 	return m
 }
 
+// NewCounter registers a service-specific counter on this registry.
+func (m *Metrics) NewCounter(name, help string) prometheus.Counter {
+	c := prometheus.NewCounter(prometheus.CounterOpts{Namespace: "timothy", Name: name, Help: help})
+	m.registry.MustRegister(c)
+	return c
+}
+
 // Handler serves the registry in Prometheus exposition format.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
