@@ -166,7 +166,8 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
 		       WHERE (s.updated_at, s.id) < ($2, $3::uuid)
 		         AND (s.title ILIKE '%' || $1 || '%'
-		          OR to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1))
+		          OR (e.payload IS NOT NULL
+		              AND to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1)))
 		       ORDER BY s.updated_at DESC, s.id DESC LIMIT $4`
 		args = []any{query, before, beforeID, listLimit}
 	}

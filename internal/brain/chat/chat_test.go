@@ -326,3 +326,54 @@ func TestChatValidatesMessage(t *testing.T) {
 		t.Fatal("blank message accepted")
 	}
 }
+
+// orderCompactor records whether compaction ran before the provider
+// call: the pre-send guarantee.
+type orderCompactor struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (c *orderCompactor) MaybeCompact(context.Context, string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, "compact")
+	return nil
+}
+
+func (c *orderCompactor) note(step string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, step)
+}
+
+// gwAfterCompact wraps fakeGW to record when the provider is hit.
+type gwAfterCompact struct {
+	*fakeGW
+	order *orderCompactor
+}
+
+func (g *gwAfterCompact) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	g.order.note("stream")
+	return g.fakeGW.Stream(ctx, req)
+}
+
+func TestChatCompactsBeforeSend(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	order := &orderCompactor{}
+	gw := &gwAfterCompact{fakeGW: &fakeGW{events: okEvents("hi")}, order: order}
+	svc := New(gw, log, nil, order, 60_000, discard())
+
+	_, ch, err := svc.Chat(t.Context(), Request{Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	order.mu.Lock()
+	defer order.mu.Unlock()
+	if len(order.calls) < 2 || order.calls[0] != "compact" || order.calls[1] != "stream" {
+		t.Fatalf("call order = %v, want compaction before the provider call", order.calls)
+	}
+}

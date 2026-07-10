@@ -111,6 +111,18 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}); err != nil {
 		return sessionID, nil, err
 	}
+	// Pre-send guarantee: the context actually sent to the provider
+	// stays under budget even on the turn that crosses it. The
+	// post-turn pass below keeps sessions compacted ahead of time, so
+	// this is a cheap no-op except on the crossing turn; best-effort —
+	// an oversized context beats no answer.
+	if s.compactor != nil {
+		cctx, cancel := context.WithTimeout(ctx, compactBudget)
+		if err := s.compactor.MaybeCompact(cctx, sessionID); err != nil {
+			s.logger.Warn("pre-send compaction", "session_id", sessionID, "error", err)
+		}
+		cancel()
+	}
 	events, err = s.log.Events(ctx, sessionID)
 	if err != nil {
 		return sessionID, nil, err

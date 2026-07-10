@@ -212,3 +212,23 @@ func TestListCursorStableOnTiedTimestamps(t *testing.T) {
 		t.Fatalf("cursor page = %v, want [%s %s]", restIDs, mine[1].ID, mine[2].ID)
 	}
 }
+
+// TestListQueryMatchesTitleOnlySession pins the NULL guard in the
+// search SQL: a session that has never emitted a user_message (its
+// joined payload is NULL) must still be findable by title.
+func TestListQueryMatchesTitleOnlySession(t *testing.T) {
+	s, id := integrationStore(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	got, err := s.List(ctx, "integration test session", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, m := range got {
+		if m.ID == id {
+			return
+		}
+	}
+	t.Fatalf("title-only session %s missing from query results", id)
+}
