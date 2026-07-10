@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, type AssistantState } from '../lib/chat'
@@ -130,5 +130,59 @@ describe('copy buttons', () => {
     const msg = play([{ type: 'chunk', text: 'partial' }])
     render(<AssistantMessage msg={msg} />)
     expect(screen.queryByTestId('copy-button')).toBeNull()
+  })
+
+  it('copies the interrupted partial text', () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    render(<InterruptedMessage text="Once upon a" />)
+    fireEvent.click(screen.getByTestId('copy-button'))
+    expect(writeText).toHaveBeenCalledWith('Once upon a')
+    vi.unstubAllGlobals()
+  })
+
+  it('confirms the copy then reverts after two seconds', async () => {
+    vi.useFakeTimers()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    render(<UserMessage text="hi" />)
+    const btn = screen.getByTestId('copy-button')
+    fireEvent.click(btn)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(btn).toHaveAttribute('data-copied', 'true')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(btn).toHaveAttribute('data-copied', 'false')
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('stays quiet when the clipboard rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    render(<UserMessage text="hi" />)
+    const btn = screen.getByTestId('copy-button')
+    fireEvent.click(btn)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(btn).toHaveAttribute('data-copied', 'false')
+    vi.unstubAllGlobals()
+  })
+
+  it('renders no footer for a finished turn with no text and no meta', () => {
+    const msg = play([
+      { type: 'error', error: { code: 'chain_exhausted', message: 'all failed', retryable: false } },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.queryByTestId('copy-button')).toBeNull()
+    expect(screen.queryByTestId('meta-badge')).toBeNull()
   })
 })

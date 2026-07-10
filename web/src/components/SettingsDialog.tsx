@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getToken, setToken } from '../api/client'
 import { Button } from './ui/button'
 import {
@@ -14,6 +14,12 @@ import { Label } from './ui/label'
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [value, setValue] = useState(getToken())
+
+  // The component stays mounted across opens, so discard any unsaved
+  // edits from the previous open.
+  useEffect(() => {
+    if (open) setValue(getToken())
+  }, [open])
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>

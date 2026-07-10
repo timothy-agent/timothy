@@ -1,6 +1,6 @@
 import { Copy01Icon, Tick02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Badge } from './ui/badge'
@@ -10,11 +10,14 @@ import 'highlight.js/styles/github-dark.css'
 // CopyButton copies a message's raw text; the check confirms briefly.
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
+  const timer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(timer.current), [])
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      window.clearTimeout(timer.current)
+      timer.current = window.setTimeout(() => setCopied(false), 2000)
     } catch {
       // Clipboard unavailable (permissions, insecure context): the
       // button simply does nothing rather than throwing.
@@ -25,6 +28,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       type="button"
       aria-label={label}
       data-testid="copy-button"
+      data-copied={copied}
       onClick={() => void copy()}
       className="rounded p-1 text-muted-foreground opacity-0 transition group-hover/message:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
     >
@@ -111,7 +115,7 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
           {msg.error}
         </Badge>
       )}
-      {!msg.streaming && (
+      {!msg.streaming && (Boolean(msg.meta?.provider) || msg.text !== '') && (
         <div className="flex items-center gap-1.5">
           {msg.meta?.provider && (
             <div className="flex gap-1.5" data-testid="meta-badge">
