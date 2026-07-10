@@ -37,7 +37,9 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           reasoning,
           notices: [],
           streaming: false,
-          meta: item.provider ? { provider: item.provider, model: item.model } : undefined,
+          meta: item.provider
+            ? { provider: item.provider, model: item.model, usage: item.usage }
+            : undefined,
         })
         break
       }

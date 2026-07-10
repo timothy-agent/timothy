@@ -199,6 +199,13 @@ func planCompaction(events []Event) (boundary int64, toSummarize []provider.Mess
 		switch ev.Kind {
 		case KindUserMessage, KindAssistantTurn:
 			count++
+		case KindTurnMemory:
+			// Residue projects as one message when it carries anything.
+			var tm TurnMemoryEvent
+			if decode(ev, &tm) != nil || renderTurnMemory(&tm.TurnMemory) == "" {
+				continue
+			}
+			count++
 		case KindPendingState:
 			// The live pending projects as one interrupted assistant
 			// message; superseded checkpoints and empty partials don't.
@@ -230,6 +237,7 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 	}
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
 		TaskCategory: "summarize",
+		Purpose:      "compaction",
 		System:       summarizeSystem,
 		Messages:     []provider.Message{{Role: "user", Content: b.String()}},
 		MaxTokens:    summaryMaxTokens,
@@ -243,6 +251,10 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 		switch ev.Type {
 		case stream.EventChunk:
 			out.WriteString(ev.Text)
+		case stream.EventIncomplete:
+			// A truncated summary silently loses facts — refuse it and
+			// try again next turn rather than store a lie.
+			return "", fmt.Errorf("summarize: stream incomplete")
 		case stream.EventError:
 			return "", fmt.Errorf("summarize: %s", ev.Err.Message)
 		}

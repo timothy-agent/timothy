@@ -79,6 +79,28 @@ func bearerToken(r *http.Request) (string, bool) {
 	return token, token != ""
 }
 
+// validSessionID keeps malformed path ids from reaching the driver: a
+// non-UUID is a 404, not a 500 with a raw pgx error on the wire.
+func validSessionID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i, c := range id {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			hex := c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+			if !hex {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -142,6 +164,10 @@ func (a *API) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !validSessionID(id) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
 	meta, err := a.dir.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -180,6 +206,10 @@ func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "nothing to update")
 		return
 	}
+	if !validSessionID(r.PathValue("id")) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
 	if err := a.dir.Update(r.Context(), r.PathValue("id"), req.Title, req.Archived); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
@@ -200,6 +230,10 @@ func (a *API) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.SessionID = r.PathValue("id")
+	if !validSessionID(req.SessionID) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
 	if _, err := a.dir.Get(r.Context(), req.SessionID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
@@ -246,6 +280,10 @@ type meta struct {
 func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, req chat.Request) {
 	sessionID, events, err := a.svc.Chat(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, chat.ErrBadRequest) {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		// session_id rides the error when a row was already created so
 		// the client reuses it on retry.
 		w.Header().Set("Content-Type", "application/json")

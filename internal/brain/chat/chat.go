@@ -7,6 +7,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -29,6 +30,10 @@ const (
 	compactBudget  = 90 * time.Second
 	titleTimeout   = 15 * time.Second
 )
+
+// ErrBadRequest marks caller mistakes (empty message) so the API can
+// answer 400 instead of blaming the gateway.
+var ErrBadRequest = errors.New("bad request")
 
 // Gateway is the slice of the gateway client chat needs.
 type Gateway interface {
@@ -84,7 +89,7 @@ type Request struct {
 // channel follows the stream package's terminal contract.
 func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.StreamEvent, error) {
 	if strings.TrimSpace(req.Message) == "" {
-		return "", nil, fmt.Errorf("chat: message is required")
+		return "", nil, fmt.Errorf("chat: %w: message is required", ErrBadRequest)
 	}
 	category := req.TaskCategory
 	if category == "" {
@@ -134,6 +139,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 
 	upstream, err := s.gw.Stream(ctx, gwclient.StreamRequest{
 		TaskCategory: category,
+		Purpose:      "chat",
 		ModelHint:    req.ModelHint,
 		System:       systemPrompt,
 		Messages:     msgs,
@@ -155,6 +161,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 func (s *Service) relay(ctx context.Context, sessionID, userText, category string, firstExchange bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
+	var usage *stream.Usage
 	sawDone := false
 	flushed := 0
 
@@ -183,13 +190,15 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, category strin
 			switch ev.Type {
 			case stream.EventChunk:
 				text.WriteString(ev.Text)
+			case stream.EventUsage:
+				usage = ev.Usage
 			case stream.EventDone:
 				sawDone = true
 				meta = ev.Meta
 			}
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, category, firstExchange, text.String(), reasoning.String(), meta, sawDone, flushed)
+		s.persistTurn(sessionID, userText, category, firstExchange, text.String(), reasoning.String(), meta, usage, sawDone, flushed)
 	}
 
 	ticker := time.NewTicker(s.flushEvery)
@@ -207,6 +216,8 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, category strin
 				text.WriteString(ev.Text)
 			case stream.EventReasoningChunk:
 				reasoning.WriteString(ev.Text)
+			case stream.EventUsage:
+				usage = ev.Usage
 			case stream.EventDone:
 				sawDone = true
 				meta = ev.Meta
@@ -228,7 +239,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, category strin
 	}
 }
 
-func (s *Service) persistTurn(sessionID, userText, category string, firstExchange bool, text, reasoning string, meta *stream.Meta, sawDone bool, flushed int) {
+func (s *Service) persistTurn(sessionID, userText, category string, firstExchange bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -252,21 +263,39 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 	if meta != nil {
 		turn.Provider, turn.Model, turn.LedgerID = meta.Provider, meta.Model, meta.LedgerID
 	}
-	if s.distill != nil && text != "" {
-		dctx, cancel := context.WithTimeout(context.Background(), distillBudget)
-		turn.LLM.TurnMemory = s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text)
-		cancel()
-	}
+	turn.Usage = usage
 
+	// The assistant turn must be durable the moment the stream ends: a
+	// follow-up message can arrive within seconds, and its projection
+	// must see this turn completed (not a phantom interruption from a
+	// stale checkpoint). Distillation is an LLM call — it lands later
+	// as its own turn_memory event, never on this write's clock.
 	wctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
-	if _, err := s.log.Append(wctx, sessionID, session.KindAssistantTurn, turn); err != nil {
+	turnSeq, err := s.log.Append(wctx, sessionID, session.KindAssistantTurn, turn)
+	if err != nil {
 		s.logger.Error("persist assistant turn", "session_id", sessionID, "error", err)
 		return
 	}
 	if err := s.log.SetLastCategory(wctx, sessionID, category); err != nil {
 		s.logger.Warn("persist last category", "session_id", sessionID, "error", err)
 	}
+
+	if s.distill != nil && text != "" {
+		dctx, dcancel := context.WithTimeout(context.Background(), distillBudget)
+		tm := s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text)
+		dcancel()
+		if tm != nil && (len(tm.FilesChanged) > 0 || len(tm.Failures) > 0 || len(tm.KeyFindings) > 0) {
+			mctx, mcancel := context.WithTimeout(context.Background(), persistTimeout)
+			if _, err := s.log.Append(mctx, sessionID, session.KindTurnMemory, session.TurnMemoryEvent{
+				TurnSeq: turnSeq, TurnMemory: *tm,
+			}); err != nil {
+				s.logger.Warn("persist turn memory", "session_id", sessionID, "error", err)
+			}
+			mcancel()
+		}
+	}
+
 	if s.compactor != nil {
 		cctx, cancel := context.WithTimeout(context.Background(), compactBudget)
 		if err := s.compactor.MaybeCompact(cctx, sessionID); err != nil {
@@ -286,14 +315,11 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 	defer cancel()
 
 	const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
-	input := userText
-	if len(reply) > 200 {
-		reply = reply[:200]
-	}
-	input += "\n\n" + reply
+	input := userText + "\n\n" + truncateRunes(reply, 200)
 
 	events, err := s.gw.Stream(ctx, gwclient.StreamRequest{
 		TaskCategory: "mini",
+		Purpose:      "title",
 		System:       titleSystem,
 		Messages:     []provider.Message{{Role: "user", Content: input}},
 		// Reasoning models spend hundreds of tokens thinking before
@@ -317,12 +343,23 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 		s.logger.Warn("auto-title returned no text", "session_id", sessionID)
 		return
 	}
-	if len(title) > 80 {
-		title = title[:80]
-	}
+	title = truncateRunes(title, 80)
 	if err := s.log.SetTitleIfEmpty(ctx, sessionID, title); err != nil {
 		s.logger.Warn("auto-title save", "session_id", sessionID, "error", err)
 	}
+}
+
+// truncateRunes cuts on rune boundaries: byte slicing can split a
+// UTF-8 sequence and Postgres rejects invalid text.
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
 }
 
 func hasUserMessage(events []session.Event) bool {

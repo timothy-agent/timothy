@@ -227,6 +227,9 @@ func TestUITranscript(t *testing.T) {
 
 // TestLLMContextPrefixStability pins the D-018 contract: growing a log
 // without a compaction never rewrites earlier projected messages.
+// Pending checkpoints are deliberately absent from the generator: an
+// interrupted turn's spliced partial is replaced when the turn
+// completes — the one sanctioned prefix rewrite (D-023).
 func TestLLMContextPrefixStability(t *testing.T) {
 	t.Parallel()
 	var events []Event
@@ -264,5 +267,103 @@ func TestLLMContextPrefixStability(t *testing.T) {
 			}
 		}
 		prev = cur
+	}
+}
+
+// TestPendingSurvivesNonCoveringCompaction pins the kill-test artifact
+// against pre-send compaction: a compaction that did NOT consume the
+// live pending (replaces_through_seq below it) must leave the partial
+// in both projections; one that covered it supersedes it.
+func TestPendingSurvivesNonCoveringCompaction(t *testing.T) {
+	t.Parallel()
+	base := []Event{
+		user(t, 1, "old question"),
+		assistant(t, 2, "old answer", nil),
+		user(t, 3, "tell me a story"),
+		ev(t, 4, KindPendingState, PendingState{Partial: "Once upon a"}),
+		// Summarized only the first exchange — the partial is NOT covered.
+		ev(t, 5, KindCompactionApplied, CompactionApplied{Summary: "old exchange summarized", ReplacesThroughSeq: 2}),
+	}
+
+	msgs, err := LLMContext(base, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	if !strings.Contains(fmt.Sprint(msgs), "Once upon a") {
+		t.Fatalf("uncovered partial vanished from LLM context: %+v", msgs)
+	}
+	items, err := UITranscript(base)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	found := false
+	for _, it := range items {
+		if it.Kind == "interrupted" && strings.Contains(it.Text, "Once upon a") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("uncovered partial vanished from UI transcript: %+v", items)
+	}
+
+	// A compaction that consumed the pending DOES supersede it.
+	covered := append(append([]Event(nil), base[:4]...),
+		ev(t, 5, KindCompactionApplied, CompactionApplied{Summary: "everything incl. the partial", ReplacesThroughSeq: 4}))
+	msgs, err = LLMContext(covered, 0)
+	if err != nil {
+		t.Fatalf("LLMContext covered: %v", err)
+	}
+	if strings.Contains(fmt.Sprint(msgs), "Once upon a") {
+		t.Fatalf("consumed partial leaked past its compaction: %+v", msgs)
+	}
+}
+
+// TestTurnMemoryEventProjectsAsOwnMessage pins the late-residue
+// contract: a turn_memory event appends a NEW message at its own
+// position — the assistant turn it describes is never rewritten, so
+// the projected prefix stays byte-stable when residue lands late.
+func TestTurnMemoryEventProjectsAsOwnMessage(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		user(t, 1, "fix the bug"),
+		assistant(t, 2, "done", nil),
+	}
+	before, err := LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+
+	withMemory := append(append([]Event(nil), events...),
+		ev(t, 3, KindTurnMemory, TurnMemoryEvent{TurnSeq: 2, TurnMemory: TurnMemory{
+			FilesChanged: []string{"main.go"}, KeyFindings: []string{"nil map"},
+		}}))
+	after, err := LLMContext(withMemory, 0)
+	if err != nil {
+		t.Fatalf("LLMContext with memory: %v", err)
+	}
+
+	if len(after) != len(before)+1 {
+		t.Fatalf("messages = %d, want %d (residue as its own message)", len(after), len(before)+1)
+	}
+	for i := range before {
+		if after[i] != before[i] {
+			t.Fatalf("late residue rewrote the prefix at %d:\n before %+v\n after  %+v", i, before[i], after[i])
+		}
+	}
+	tail := after[len(after)-1]
+	if tail.Role != "assistant" || !strings.Contains(tail.Content, "[turn memory]") ||
+		!strings.Contains(tail.Content, "files changed: main.go") {
+		t.Fatalf("residue message = %+v", tail)
+	}
+
+	// The UI replay does not render residue.
+	items, err := UITranscript(withMemory)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	for _, it := range items {
+		if strings.Contains(it.Text, "turn memory") {
+			t.Fatalf("residue leaked into UI transcript: %+v", it)
+		}
 	}
 }

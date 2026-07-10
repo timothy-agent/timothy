@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 // Event kinds. The log is append-only: kinds are added, never changed.
@@ -18,6 +20,7 @@ const (
 	KindToolExecution     = "tool_execution"
 	KindCompactionApplied = "compaction_applied"
 	KindPendingState      = "pending_state"
+	KindTurnMemory        = "turn_memory"
 )
 
 // Event is one row of a session's log.
@@ -62,6 +65,17 @@ type Failure struct {
 	Why  string `json:"why"`
 }
 
+// TurnMemoryEvent carries a turn's distilled residue as its own
+// appended event. Distillation is an LLM call that finishes seconds
+// after the turn is visible — persisting the assistant_turn first and
+// the residue later keeps completed turns durable immediately and the
+// projected prefix stable (the residue projects as a NEW message at
+// its own position, never a rewrite of the turn it describes).
+type TurnMemoryEvent struct {
+	TurnSeq int64 `json:"turn_seq"` // the assistant_turn this distills
+	TurnMemory
+}
+
 // AssistantTurn carries both projections' source material: the UI
 // blocks for replay and the LLM-facing message + residue.
 type AssistantTurn struct {
@@ -72,9 +86,10 @@ type AssistantTurn struct {
 		Message    string      `json:"message"`
 		TurnMemory *TurnMemory `json:"turn_memory,omitempty"`
 	} `json:"llm"`
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
-	LedgerID string `json:"ledger_id,omitempty"`
+	Provider string        `json:"provider,omitempty"`
+	Model    string        `json:"model,omitempty"`
+	LedgerID string        `json:"ledger_id,omitempty"`
+	Usage    *stream.Usage `json:"usage,omitempty"`
 }
 
 // ToolExecution stores a digest only; full results are transient.

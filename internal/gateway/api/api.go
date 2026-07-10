@@ -45,6 +45,7 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 
 type streamRequest struct {
 	TaskCategory string             `json:"task_category"`
+	Purpose      string             `json:"purpose,omitempty"` // why: chat|distill|title|compaction|...
 	ModelHint    string             `json:"model_hint,omitempty"`
 	System       string             `json:"system,omitempty"`
 	Messages     []provider.Message `json:"messages"`
@@ -121,8 +122,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		res := streamAttempt(r.Context(), att, completion, ledger.Entry{
 			ID:       ledger.NewID(),
 			Provider: att.ProviderName, Model: att.Model,
-			TaskCategory: req.TaskCategory,
-			SessionID:    req.SessionID, LaneID: req.LaneID,
+			TaskCategory: req.TaskCategory, Purpose: req.Purpose,
+			SessionID: req.SessionID, LaneID: req.LaneID,
 		}, send)
 
 		if res.failedOver() {

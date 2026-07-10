@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 // summaryPrefix marks a compaction summary inside the LLM context.
@@ -89,22 +90,39 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			if p.Partial != "" {
 				msgs = append(msgs, provider.Message{Role: "assistant", Content: p.Partial + interruptedNote})
 			}
+		case KindTurnMemory:
+			var tm TurnMemoryEvent
+			if err := decode(ev, &tm); err != nil {
+				return nil, err
+			}
+			if block := renderTurnMemory(&tm.TurnMemory); block != "" {
+				msgs = append(msgs, provider.Message{Role: "assistant", Content: block})
+			}
 		}
 	}
 	return msgs, nil
 }
 
 // livePendingSeq returns the seq of the pending_state still in play:
-// the newest one, unless an assistant_turn or compaction landed after
-// it. Returns -1 when none is live.
+// the newest one, unless an assistant_turn landed after it or a
+// compaction actually CONSUMED it (replaces_through_seq covers its
+// seq). A compaction that summarized older turns but left the partial
+// outside its boundary must not erase it — the partial is the one
+// artifact the kill-test contract protects. Returns -1 when none is
+// live.
 func livePendingSeq(events []Event) int64 {
 	var lastPending, lastSuperseder int64 = -1, -1
 	for _, ev := range events {
 		switch ev.Kind {
 		case KindPendingState:
 			lastPending = ev.Seq
-		case KindAssistantTurn, KindCompactionApplied:
+		case KindAssistantTurn:
 			lastSuperseder = ev.Seq
+		case KindCompactionApplied:
+			var c CompactionApplied
+			if decode(ev, &c) == nil && c.ReplacesThroughSeq >= lastPending {
+				lastSuperseder = ev.Seq
+			}
 		}
 	}
 	if lastPending > lastSuperseder {
@@ -113,16 +131,25 @@ func livePendingSeq(events []Event) int64 {
 	return -1
 }
 
-// renderAssistant serializes a turn for the LLM: the message plus a
-// compact deterministic turn-memory block.
+// renderAssistant serializes a turn for the LLM: the message plus,
+// for events written before turn_memory became its own kind, the
+// embedded residue block.
 func renderAssistant(t AssistantTurn) string {
-	tm := t.LLM.TurnMemory
-	if tm == nil || (len(tm.FilesChanged) == 0 && len(tm.Failures) == 0 && len(tm.KeyFindings) == 0) {
+	block := renderTurnMemory(t.LLM.TurnMemory)
+	if block == "" {
 		return t.LLM.Message
 	}
+	return t.LLM.Message + "\n\n" + block
+}
+
+// renderTurnMemory serializes residue into its compact deterministic
+// block; empty when there is nothing worth carrying.
+func renderTurnMemory(tm *TurnMemory) string {
+	if tm == nil || (len(tm.FilesChanged) == 0 && len(tm.Failures) == 0 && len(tm.KeyFindings) == 0) {
+		return ""
+	}
 	var b strings.Builder
-	b.WriteString(t.LLM.Message)
-	b.WriteString("\n\n[turn memory]")
+	b.WriteString("[turn memory]")
 	if len(tm.FilesChanged) > 0 {
 		b.WriteString("\nfiles changed: " + strings.Join(tm.FilesChanged, ", "))
 	}
@@ -143,6 +170,7 @@ type TranscriptItem struct {
 	Blocks    []UIBlock      `json:"blocks,omitempty"`
 	Provider  string         `json:"provider,omitempty"`
 	Model     string         `json:"model,omitempty"`
+	Usage     *stream.Usage  `json:"usage,omitempty"`
 	Tool      *ToolExecution `json:"tool,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 }
@@ -171,6 +199,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			item.Kind = "assistant"
 			item.Blocks = t.UI.Blocks
 			item.Provider, item.Model = t.Provider, t.Model
+			item.Usage = t.Usage
 		case KindToolExecution:
 			var te ToolExecution
 			if err := decode(ev, &te); err != nil {

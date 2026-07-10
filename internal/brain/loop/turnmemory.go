@@ -57,6 +57,7 @@ func distillOnce(ctx context.Context, gw Gateway, sessionID, turnText string) (*
 
 	events, err := gw.Stream(ctx, gwclient.StreamRequest{
 		TaskCategory: "mini",
+		Purpose:      "distill",
 		System:       distillSystem,
 		Messages:     []provider.Message{{Role: "user", Content: turnText}},
 		MaxTokens:    500,

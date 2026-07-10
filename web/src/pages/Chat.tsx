@@ -41,6 +41,17 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   // Resume: replay the session's transcript projection, exactly as the
   // server recorded it, and restore its last task category.
   useEffect(() => {
+    if (adoptedRef.current !== null && adoptedRef.current === routeSession) {
+      sessionRef.current = routeSession
+      return // our own mid-stream URL adoption, not a navigation
+    }
+    // Real navigation: a stream still running belongs to the previous
+    // session — kill it before it writes into this one's transcript.
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+      setStreaming(false)
+    }
     sessionRef.current = routeSession
     setLoadError(null)
     if (!routeSession) {
@@ -48,7 +59,6 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
       adoptedRef.current = null
       return
     }
-    if (adoptedRef.current === routeSession) return // live here, not a resume
     adoptedRef.current = null
     let stale = false
     getTranscript(routeSession)

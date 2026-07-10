@@ -435,3 +435,66 @@ func TestChatSendsCompactedContext(t *testing.T) {
 		t.Fatalf("new user message not last on the wire: %+v", msgs[1])
 	}
 }
+
+// TestFollowUpSeesCompletedTurnWhileDistillRuns pins turn durability:
+// the assistant turn must be in the log the moment the client stream
+// ends, even while distillation is still running — a fast follow-up
+// projects the completed answer, never a phantom interruption.
+func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("the full answer")}
+	distillStarted := make(chan struct{})
+	distillRelease := make(chan struct{})
+	var startedOnce sync.Once
+	distill := func(ctx context.Context, sessionID, turnText string) *session.TurnMemory {
+		startedOnce.Do(func() { close(distillStarted) })
+		select {
+		case <-distillRelease:
+		case <-ctx.Done():
+		}
+		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
+	}
+	defer close(distillRelease)
+	svc := New(gw, log, distill, nil, 60_000, discard())
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	// Distill is now blocked mid-flight; the turn must already be durable.
+	select {
+	case <-distillStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("distill never started")
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		if k := log.kinds("s1"); len(k) > 0 && k[len(k)-1] == session.KindAssistantTurn {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("assistant_turn not durable while distill runs: %v", log.kinds("s1"))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Follow-up inside the distill window: full answer on the wire, no
+	// phantom interruption.
+	_, ch2, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second question"})
+	if err != nil {
+		t.Fatalf("Chat 2: %v", err)
+	}
+	drain(t, ch2)
+
+	msgs := fmt.Sprint(gw.lastRequest().Messages)
+	if !strings.Contains(msgs, "the full answer") {
+		t.Fatalf("completed answer missing from follow-up context: %s", msgs)
+	}
+	if strings.Contains(msgs, "interrupted") {
+		t.Fatalf("phantom interruption in follow-up context: %s", msgs)
+	}
+}

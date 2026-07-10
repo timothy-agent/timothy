@@ -25,6 +25,7 @@ type Entry struct {
 	Provider     string
 	Model        string
 	TaskCategory string
+	Purpose      string // optional: why the call happened (chat|distill|title|compaction|...)
 	SessionID    string // optional
 	LaneID       string // optional
 	Usage        *stream.Usage
@@ -67,12 +68,12 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 		in, out, cr, cw = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens
 	}
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
-		(id, provider, model, task_category, session_id, lane_id,
+		(id, provider, model, task_category, purpose, session_id, lane_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
 		 latency_ms, status, error_code, cost_usd)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
-		 $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14)`,
-		e.ID, e.Provider, e.Model, e.TaskCategory, e.SessionID, e.LaneID,
+		 $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), $8, $9, $10, $11, $12, $13, NULLIF($14, ''), $15)`,
+		e.ID, e.Provider, e.Model, e.TaskCategory, e.Purpose, e.SessionID, e.LaneID,
 		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.CostUSD)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)

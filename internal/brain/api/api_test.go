@@ -40,7 +40,7 @@ func (d *memDir) Create(_ context.Context, title string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.nextID++
-	id := fmt.Sprintf("sess-%d", d.nextID)
+	id := fmt.Sprintf("00000000-0000-4000-8000-%012d", d.nextID)
 	d.metas[id] = session.Meta{ID: id, Title: title}
 	d.events[id] = []session.Event{{SessionID: id, Seq: 1, Kind: session.KindSessionStarted, Payload: []byte(`{}`)}}
 	return id, nil
@@ -367,8 +367,8 @@ func TestChatValidation(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 
-	if w := doMux(a, http.MethodPost, "/v1/chat", `{"message":"  "}`); w.Code != http.StatusBadGateway {
-		t.Fatalf("blank message: code = %d", w.Code)
+	if w := doMux(a, http.MethodPost, "/v1/chat", `{"message":"  "}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("blank message: code = %d, want 400 (caller bug, not gateway failure)", w.Code)
 	}
 	if w := doMux(a, http.MethodPost, "/v1/chat", `{not json`); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad json: code = %d", w.Code)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -161,15 +162,17 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 		       ORDER BY updated_at DESC, id DESC LIMIT $3`
 		args = []any{before, beforeID, listLimit}
 	} else {
+		// ILIKE wildcards in the user's query are literals, not patterns.
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
 		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_category, s.created_at, s.updated_at
 		       FROM sessions s
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
 		       WHERE (s.updated_at, s.id) < ($2, $3::uuid)
-		         AND (s.title ILIKE '%' || $1 || '%'
+		         AND (s.title ILIKE '%' || $4 || '%'
 		          OR (e.payload IS NOT NULL
 		              AND to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1)))
-		       ORDER BY s.updated_at DESC, s.id DESC LIMIT $4`
-		args = []any{query, before, beforeID, listLimit}
+		       ORDER BY s.updated_at DESC, s.id DESC LIMIT $5`
+		args = []any{query, before, beforeID, escaped, listLimit}
 	}
 
 	rows, err := db.Query(ctx, sql, args...)

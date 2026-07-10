@@ -69,6 +69,7 @@ export interface TranscriptItem {
   blocks?: UIBlock[]
   provider?: string
   model?: string
+  usage?: Usage
   created_at: string
 }
 

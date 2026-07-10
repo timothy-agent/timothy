@@ -22,6 +22,7 @@ import (
 // StreamRequest mirrors the gateway's /v1/stream request contract.
 type StreamRequest struct {
 	TaskCategory string             `json:"task_category"`
+	Purpose      string             `json:"purpose,omitempty"` // ledger tag: why this call happened
 	ModelHint    string             `json:"model_hint,omitempty"`
 	System       string             `json:"system,omitempty"`
 	Messages     []provider.Message `json:"messages"`

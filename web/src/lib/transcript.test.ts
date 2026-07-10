@@ -17,6 +17,7 @@ describe('fromTranscript', () => {
         ],
         provider: 'zai-glm',
         model: 'glm-4.7',
+        usage: { input_tokens: 81, output_tokens: 396 },
         created_at: at,
       },
       { seq: 4, kind: 'compaction', text: 'older messages summarized (through #3)', created_at: at },
@@ -39,7 +40,7 @@ describe('fromTranscript', () => {
       text: 'hi **there**',
       reasoning: 'thinking about it',
       streaming: false,
-      meta: { provider: 'zai-glm', model: 'glm-4.7' },
+      meta: { provider: 'zai-glm', model: 'glm-4.7', usage: { input_tokens: 81, output_tokens: 396 } },
     })
     expect(items[2]).toMatchObject({ role: 'compaction', text: 'older messages summarized (through #3)' })
     expect(items[4]).toMatchObject({ role: 'interrupted', text: 'Once upon a' })
