@@ -46,12 +46,18 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       args: {SERVICE: brain}
+      # brain gets the alpine stage: the shell tool needs /bin/sh
+      target: runtime-shell
     environment:
       <<: *db-env
       PORT: "8080"
       GATEWAY_URL: http://gateway:8081
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
+      # Where the shell tool runs; the only tree tools may touch.
+      WORKSPACE_ROOT: /workspace
+    volumes:
+      - workspace:/workspace
     ports:
       - "${BRAIN_PORT:-8300}:8080"
 
@@ -111,6 +117,7 @@ services:
 volumes:
   pgdata:
   web_node_modules:
+  workspace:
 
 networks:
   timothy:
