@@ -307,9 +307,11 @@ func (a *API) handleProviders(w http.ResponseWriter, r *http.Request) {
 	rows, healthy := snap.Providers()
 	list := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		models := make([]string, 0, len(row.Models))
+		models := make([]map[string]any, 0, len(row.Models))
 		for _, m := range row.Models {
-			models = append(models, m.ID)
+			models = append(models, map[string]any{
+				"id": m.ID, "context_window": m.ContextWindow,
+			})
 		}
 		list = append(list, map[string]any{
 			"name":           row.Name,

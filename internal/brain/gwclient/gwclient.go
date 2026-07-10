@@ -45,6 +45,46 @@ func New(baseURL string) *Client {
 	}}
 }
 
+// ModelWindows fetches the gateway's provider listing and returns the
+// context window per model id (entries without a window are omitted).
+// The compactor uses it to size token budgets to the model in use.
+func (c *Client) ModelWindows(ctx context.Context) (map[string]int, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/providers", nil)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+
+	var listing struct {
+		Providers []struct {
+			Models []struct {
+				ID            string `json:"id"`
+				ContextWindow int    `json:"context_window"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listing); err != nil {
+		return nil, fmt.Errorf("gwclient: decode providers: %w", err)
+	}
+	windows := make(map[string]int)
+	for _, p := range listing.Providers {
+		for _, m := range p.Models {
+			if m.ContextWindow > 0 {
+				windows[m.ID] = m.ContextWindow
+			}
+		}
+	}
+	return windows, nil
+}
+
 // Stream posts the request and yields the gateway's normalized events.
 // The channel closes when the gateway stream ends; a transport failure
 // mid-stream surfaces as a terminal error event.

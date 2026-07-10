@@ -26,6 +26,12 @@ type Log interface {
 	Append(ctx context.Context, sessionID, kind string, payload any) (int64, error)
 }
 
+// Windows resolves model context windows from the gateway;
+// *gwclient.Client satisfies it. May be nil (static budget only).
+type Windows interface {
+	ModelWindows(ctx context.Context) (map[string]int, error)
+}
+
 const (
 	compactTimeout   = 60 * time.Second
 	summaryMaxTokens = 1200
@@ -42,13 +48,50 @@ const summarizeSystem = `Summarize this conversation excerpt for an AI assistant
 type Compactor struct {
 	log      Log
 	gw       Gateway
-	budget   int
+	windows  Windows // nil-safe: static budget only
+	budget   int     // fallback when no model window is resolvable
 	logger   *slog.Logger
 	compacts prometheus.Counter // nil-safe: may be unset in tests
 }
 
-func NewCompactor(log Log, gw Gateway, budget int, logger *slog.Logger, compacts prometheus.Counter) *Compactor {
-	return &Compactor{log: log, gw: gw, budget: budget, logger: logger, compacts: compacts}
+func NewCompactor(log Log, gw Gateway, windows Windows, budget int, logger *slog.Logger, compacts prometheus.Counter) *Compactor {
+	return &Compactor{log: log, gw: gw, windows: windows, budget: budget, logger: logger, compacts: compacts}
+}
+
+// budgetFor sizes the token budget to the model that served the
+// session's last turn: 60% of its context window per the gateway's
+// provider info. Falls back to the configured static budget when the
+// session has no completed turn yet, the lookup fails, or the model
+// declares no window.
+func (c *Compactor) budgetFor(ctx context.Context, sessionID string, events []Event) int {
+	model := lastModel(events)
+	if c.windows == nil || model == "" {
+		return c.budget
+	}
+	ws, err := c.windows.ModelWindows(ctx)
+	if err != nil {
+		c.logger.Warn("model windows lookup, using static budget", "session_id", sessionID, "error", err)
+		return c.budget
+	}
+	if w := ws[model]; w > 0 {
+		return w * 60 / 100
+	}
+	return c.budget
+}
+
+// lastModel returns the model of the newest assistant_turn, or "".
+func lastModel(events []Event) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != KindAssistantTurn {
+			continue
+		}
+		var t AssistantTurn
+		if decode(events[i], &t) == nil {
+			return t.Model
+		}
+		return ""
+	}
+	return ""
 }
 
 // MaybeCompact measures the session's projected context and compacts
@@ -59,7 +102,8 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	msgs, err := LLMContext(events, c.budget)
+	budget := c.budgetFor(ctx, sessionID, events)
+	msgs, err := LLMContext(events, budget)
 	if err != nil {
 		return err
 	}
@@ -67,7 +111,7 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	if tokens <= c.budget {
+	if tokens <= budget {
 		return nil
 	}
 
@@ -118,9 +162,9 @@ func planCompaction(events []Event) (boundary int64, toSummarize []provider.Mess
 
 	// Map the cut back to an event boundary. Past the latest
 	// compaction, projected messages correspond 1:1, in order, to
-	// user_message/assistant_turn events (a summary head projects from
-	// the compaction event itself; a trailing pending_state is always
-	// the final message and cut < len(msgs) keeps it live). The
+	// user_message/assistant_turn events plus the one live pending
+	// (a summary head projects from the compaction event itself;
+	// superseded checkpoints and empty pendings project nothing). The
 	// boundary is the seq of the last message event the summary
 	// consumes; invisible events (tool digests) between boundary and
 	// the next message simply stay outside the replaced range.
@@ -144,15 +188,29 @@ func planCompaction(events []Event) (boundary int64, toSummarize []provider.Mess
 			}
 		}
 	}
+	livePending := livePendingSeq(events)
 	count := 0
 	for _, ev := range events {
 		if ev.Seq <= replacedThrough {
 			continue
 		}
-		if ev.Kind != KindUserMessage && ev.Kind != KindAssistantTurn {
+		switch ev.Kind {
+		case KindUserMessage, KindAssistantTurn:
+			count++
+		case KindPendingState:
+			// The live pending projects as one interrupted assistant
+			// message; superseded checkpoints and empty partials don't.
+			if ev.Seq != livePending {
+				continue
+			}
+			var p PendingState
+			if decode(ev, &p) != nil || p.Partial == "" {
+				continue
+			}
+			count++
+		default:
 			continue
 		}
-		count++
 		if count == need {
 			return ev.Seq, toSummarize, true
 		}

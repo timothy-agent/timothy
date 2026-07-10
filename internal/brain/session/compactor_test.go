@@ -37,14 +37,16 @@ func (m *memLog) Append(_ context.Context, id, kind string, payload any) (int64,
 
 // summarizerGW returns a fixed short summary and records its input.
 type summarizerGW struct {
-	summary string
-	sawText string
-	calls   int
+	summary   string
+	sawText   string
+	sawSystem string
+	calls     int
 }
 
 func (g *summarizerGW) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	g.calls++
 	g.sawText = req.Messages[0].Content
+	g.sawSystem = req.System
 	ch := make(chan stream.StreamEvent, 2)
 	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: g.summary}
 	ch <- stream.StreamEvent{Type: stream.EventDone}
@@ -76,7 +78,7 @@ func TestMaybeCompactUnderBudgetIsNoop(t *testing.T) {
 	t.Parallel()
 	log, gw := newMemLog(), &summarizerGW{summary: "s"}
 	seedConversation(t, log, "s1", 3)
-	c := NewCompactor(log, gw, 1_000_000, discardLogger(), nil)
+	c := NewCompactor(log, gw, nil, 1_000_000, discardLogger(), nil)
 
 	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -91,7 +93,7 @@ func TestMaybeCompactSummarizesOldestHalf(t *testing.T) {
 	log := newMemLog()
 	gw := &summarizerGW{summary: "compact summary: topics 0 through N discussed"}
 	seedConversation(t, log, "s1", 10)
-	c := NewCompactor(log, gw, 500, discardLogger(), nil) // force compaction
+	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil) // force compaction
 
 	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -133,7 +135,7 @@ func TestCompactionConverges(t *testing.T) {
 			id := fmt.Sprintf("s-%d", turns)
 			seedConversation(t, log, id, turns)
 			budget := 800
-			c := NewCompactor(log, gw, budget, discardLogger(), nil)
+			c := NewCompactor(log, gw, nil, budget, discardLogger(), nil)
 
 			for i := 0; i < 12; i++ { // bounded iterations must suffice
 				events, _ := log.Events(t.Context(), id)
@@ -194,6 +196,170 @@ func TestPlanCompactionNeverEndsOnUserMessage(t *testing.T) {
 	}
 	if toSummarize[len(toSummarize)-1].Role == "user" {
 		t.Fatalf("summarized half ends on a user message (boundary %d)", boundary)
+	}
+}
+
+// fakeWindows is an in-memory Windows lookup.
+type fakeWindows struct {
+	windows map[string]int
+	err     error
+}
+
+func (f *fakeWindows) ModelWindows(context.Context) (map[string]int, error) {
+	return f.windows, f.err
+}
+
+// TestBudgetFollowsModelWindow pins the budget contract: 60% of the
+// context window of the model that served the last turn, static
+// fallback when the lookup fails or the model is unknown.
+func TestBudgetFollowsModelWindow(t *testing.T) {
+	t.Parallel()
+	seed := func(t *testing.T, log *memLog) {
+		seedConversation(t, log, "s1", 10) // thousands of tokens
+		var turn AssistantTurn
+		turn.LLM.Message = "closing answer"
+		turn.Model = "narrow-model"
+		if _, err := log.Append(context.Background(), "s1", KindAssistantTurn, turn); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("window shrinks budget below static default", func(t *testing.T) {
+		t.Parallel()
+		log, gw := newMemLog(), &summarizerGW{summary: "s"}
+		seed(t, log)
+		windows := &fakeWindows{windows: map[string]int{"narrow-model": 1000}} // budget 600
+		c := NewCompactor(log, gw, windows, 1_000_000, discardLogger(), nil)
+		if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+			t.Fatalf("MaybeCompact: %v", err)
+		}
+		if gw.calls != 1 {
+			t.Fatalf("summarizer calls = %d, want 1 (model window must override static budget)", gw.calls)
+		}
+	})
+
+	t.Run("lookup failure falls back to static budget", func(t *testing.T) {
+		t.Parallel()
+		log, gw := newMemLog(), &summarizerGW{summary: "s"}
+		seed(t, log)
+		windows := &fakeWindows{err: fmt.Errorf("gateway down")}
+		c := NewCompactor(log, gw, windows, 1_000_000, discardLogger(), nil)
+		if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+			t.Fatalf("MaybeCompact: %v", err)
+		}
+		if gw.calls != 0 {
+			t.Fatal("compacted against a failed window lookup instead of the static budget")
+		}
+	})
+
+	t.Run("unknown model falls back to static budget", func(t *testing.T) {
+		t.Parallel()
+		log, gw := newMemLog(), &summarizerGW{summary: "s"}
+		seed(t, log)
+		windows := &fakeWindows{windows: map[string]int{"other-model": 1000}}
+		c := NewCompactor(log, gw, windows, 1_000_000, discardLogger(), nil)
+		if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+			t.Fatalf("MaybeCompact: %v", err)
+		}
+		if gw.calls != 0 {
+			t.Fatal("compacted with an unknown model instead of the static budget")
+		}
+	})
+}
+
+// TestPlanCompactionCountsLivePending pins the cut→seq mapping when a
+// live pending_state projects inside the summarized half (possible
+// when user messages pile up after an interruption): the boundary must
+// account for the pending's projected message, not skip past it.
+func TestPlanCompactionCountsLivePending(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	ctx := context.Background()
+	pad := strings.Repeat("pad ", 20)
+	if _, err := log.Append(ctx, "s1", KindUserMessage, UserMessage{Text: "start " + pad}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Append(ctx, "s1", KindPendingState, PendingState{Partial: "interrupted answer " + pad}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		if _, err := log.Append(ctx, "s1", KindUserMessage, UserMessage{Text: fmt.Sprintf("nudge %d %s", i, pad)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, _ := log.Events(ctx, "s1")
+	before, err := LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	boundary, toSummarize, ok := planCompaction(events)
+	if !ok {
+		t.Fatal("planCompaction refused a session with a live pending in the summarized half")
+	}
+
+	// Apply the plan and check the live tail is exactly the messages
+	// the summary did not consume — a mis-mapped boundary would swallow
+	// or duplicate a message.
+	if _, err := log.Append(ctx, "s1", KindCompactionApplied, CompactionApplied{
+		Summary: "sum", ReplacesThroughSeq: boundary,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = log.Events(ctx, "s1")
+	after, err := LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext after: %v", err)
+	}
+	tail, want := after[1:], before[len(toSummarize):]
+	if len(tail) != len(want) {
+		t.Fatalf("live tail = %d messages, want %d\n after: %+v\n want tail: %+v", len(tail), len(want), after, want)
+	}
+	for i := range want {
+		if tail[i] != want[i] {
+			t.Fatalf("tail[%d] = %+v, want %+v", i, tail[i], want[i])
+		}
+	}
+}
+
+// TestSummarizeInputPreservesFacts pins the fidelity pipeline: the
+// facts a summary must keep (names, dates, numbers, commitments) reach
+// the summarizer verbatim, under a system prompt that demands their
+// preservation.
+func TestSummarizeInputPreservesFacts(t *testing.T) {
+	t.Parallel()
+	log, gw := newMemLog(), &summarizerGW{summary: "s"}
+	ctx := context.Background()
+	pad := strings.Repeat("lorem ipsum dolor sit amet ", 30)
+	facts := []string{"Dr. Ada Marlowe", "2026-08-14", "invoice #4471", "$3,250"}
+	if _, err := log.Append(ctx, "s1", KindUserMessage, UserMessage{
+		Text: "Meet " + facts[0] + " on " + facts[1] + " about " + facts[2] + " for " + facts[3] + " " + pad,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var turn AssistantTurn
+	turn.LLM.Message = "noted, meeting confirmed " + pad
+	if _, err := log.Append(ctx, "s1", KindAssistantTurn, turn); err != nil {
+		t.Fatal(err)
+	}
+	seedConversation(t, log, "s1", 6) // push the facts into the oldest half
+
+	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil)
+	if err := c.MaybeCompact(ctx, "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if gw.calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1", gw.calls)
+	}
+	for _, f := range facts {
+		if !strings.Contains(gw.sawText, f) {
+			t.Fatalf("fact %q never reached the summarizer:\n%s", f, gw.sawText)
+		}
+	}
+	for _, demand := range []string{"preserve", "name", "date", "number", "commitment"} {
+		if !strings.Contains(gw.sawSystem, demand) {
+			t.Fatalf("summarize system prompt missing %q: %s", demand, gw.sawSystem)
+		}
 	}
 }
 

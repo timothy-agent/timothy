@@ -122,3 +122,39 @@ func TestStreamRejectsGatewayErrorStatus(t *testing.T) {
 		t.Fatal("Stream() = nil error for 502 gateway response")
 	}
 }
+
+func TestModelWindows(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/providers" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"providers":[
+			{"name":"a","models":[{"id":"big","context_window":200000},{"id":"unsized"}]},
+			{"name":"b","models":[{"id":"small","context_window":1000}]}
+		]}`)
+	})
+
+	windows, err := c.ModelWindows(t.Context())
+	if err != nil {
+		t.Fatalf("ModelWindows: %v", err)
+	}
+	if windows["big"] != 200000 || windows["small"] != 1000 {
+		t.Fatalf("windows = %+v", windows)
+	}
+	if _, ok := windows["unsized"]; ok {
+		t.Fatal("model without a context window must be omitted")
+	}
+}
+
+func TestModelWindowsGatewayError(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"config_unavailable"}`, http.StatusServiceUnavailable)
+	})
+
+	if _, err := c.ModelWindows(t.Context()); err == nil {
+		t.Fatal("ModelWindows() = nil error for 503 gateway response")
+	}
+}
