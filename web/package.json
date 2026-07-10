@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
+    "@hugeicons-pro/core-stroke-rounded": "^4.2.2",
+    "@hugeicons/react": "^1.1.9",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.2",
     "class-variance-authority": "^0.7.1",

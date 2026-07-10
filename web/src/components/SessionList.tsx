@@ -1,4 +1,12 @@
-import { Archive, ArchiveRestore, MoreHorizontal, Pencil, Plus, Search } from 'lucide-react'
+import {
+  Add01Icon,
+  Archive02Icon,
+  MoreHorizontalIcon,
+  PencilEdit01Icon,
+  Search01Icon,
+  Unarchive03Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { updateSession } from '../api/client'
@@ -72,14 +80,14 @@ export function SessionList() {
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={pathname === '/'}>
                 <Link to="/">
-                  <Plus />
+                  <HugeiconsIcon icon={Add01Icon} />
                   <span>New chat</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
           <div className="relative mt-1 px-1">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <HugeiconsIcon icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               aria-label="Search sessions"
               value={query}
@@ -107,7 +115,7 @@ export function SessionList() {
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <SidebarMenuAction showOnHover aria-label={`Actions for ${s.title || 'session'}`}>
-                        <MoreHorizontal />
+                        <HugeiconsIcon icon={MoreHorizontalIcon} />
                       </SidebarMenuAction>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="right" align="start">
@@ -117,11 +125,11 @@ export function SessionList() {
                           setRenaming(s)
                         }}
                       >
-                        <Pencil />
+                        <HugeiconsIcon icon={PencilEdit01Icon} />
                         Rename
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => void archive(s)}>
-                        {s.archived ? <ArchiveRestore /> : <Archive />}
+                        <HugeiconsIcon icon={s.archived ? Unarchive03Icon : Archive02Icon} />
                         {s.archived ? 'Unarchive' : 'Archive'}
                       </DropdownMenuItem>
                     </DropdownMenuContent>

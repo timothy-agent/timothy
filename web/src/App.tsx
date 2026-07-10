@@ -1,15 +1,16 @@
 import {
-  BarChart3,
-  Image,
-  Inbox,
-  KeyRound,
-  Layers,
-  MessageSquare,
-  Monitor,
-  Moon,
-  Settings as SettingsIcon,
-  Sun,
-} from 'lucide-react'
+  Analytics01Icon,
+  BubbleChatIcon,
+  ComputerIcon,
+  Image01Icon,
+  InboxIcon,
+  Key01Icon,
+  Layers01Icon,
+  Moon02Icon,
+  Settings02Icon,
+  Sun03Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Route, Routes, useLocation } from 'react-router'
 import { getToken } from './api/client'
@@ -36,15 +37,15 @@ import { Dashboard } from './pages/Dashboard'
 import { Lanes, Library, Queues, Settings } from './pages/Stubs'
 
 const nav = [
-  { label: 'Chat', href: '/', icon: MessageSquare },
-  { label: 'Dashboard', href: '/dashboard', icon: BarChart3 },
-  { label: 'Lanes', href: '/lanes', icon: Layers },
-  { label: 'Library', href: '/library', icon: Image },
-  { label: 'Queues', href: '/queues', icon: Inbox },
-  { label: 'Settings', href: '/settings', icon: SettingsIcon },
+  { label: 'Chat', href: '/', icon: BubbleChatIcon },
+  { label: 'Dashboard', href: '/dashboard', icon: Analytics01Icon },
+  { label: 'Lanes', href: '/lanes', icon: Layers01Icon },
+  { label: 'Library', href: '/library', icon: Image01Icon },
+  { label: 'Queues', href: '/queues', icon: InboxIcon },
+  { label: 'Settings', href: '/settings', icon: Settings02Icon },
 ]
 
-const themeIcon = { system: Monitor, light: Sun, dark: Moon }
+const themeIcon = { system: ComputerIcon, light: Sun03Icon, dark: Moon02Icon }
 const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' }
 
 function App() {
@@ -64,7 +65,6 @@ function App() {
     setTheme(t)
     setThemeState(t)
   }
-  const ThemeIcon = themeIcon[theme]
 
   return (
     <SessionsProvider>
@@ -91,7 +91,7 @@ function App() {
                         }
                       >
                         <Link to={item.href}>
-                          <item.icon />
+                          <HugeiconsIcon icon={item.icon} />
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
@@ -106,13 +106,13 @@ function App() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={cycleTheme}>
-                  <ThemeIcon />
+                  <HugeiconsIcon icon={themeIcon[theme]} />
                   <span>{themeLabel[theme]}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={() => setTokenOpen(true)}>
-                  <KeyRound />
+                  <HugeiconsIcon icon={Key01Icon} />
                   <span>API token</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>

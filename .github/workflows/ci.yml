@@ -62,6 +62,9 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    env:
+      # HugeIcons Pro registry auth (web/.npmrc references it by name)
+      HUGEICONS_TOKEN: ${{ secrets.HUGEICONS_TOKEN }}
     defaults:
       run:
         working-directory: web
