@@ -136,35 +136,39 @@ type Meta struct {
 
 const listLimit = 100
 
-// List returns sessions newest-first, one page at a time. A non-empty
-// query matches the title or full-text over user messages; archived
-// sessions appear only in query results. A non-zero before returns
-// sessions updated strictly earlier — the cursor for the next page.
-func (s *Store) List(ctx context.Context, query string, before time.Time) ([]Meta, error) {
+// List returns sessions newest-first, one page at a time, ordered by
+// (updated_at, id) descending. A non-empty query matches the title or
+// full-text over user messages; archived sessions appear only in query
+// results. A non-zero cursor (before, beforeID — the last row of the
+// previous page) returns rows strictly earlier in that ordering: the
+// id tiebreaker keeps pages stable when timestamps collide.
+func (s *Store) List(ctx context.Context, query string, before time.Time, beforeID string) ([]Meta, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("session: list: %w", err)
 	}
 	if before.IsZero() {
-		before = time.Now().Add(24 * time.Hour) // first page: everything
+		// First page: a cursor no real row can reach.
+		before = time.Now().Add(24 * time.Hour)
+		beforeID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 	}
 
 	var sql string
 	var args []any
 	if query == "" {
 		sql = `SELECT id, COALESCE(title, ''), archived, last_category, created_at, updated_at
-		       FROM sessions WHERE NOT archived AND updated_at < $1
-		       ORDER BY updated_at DESC LIMIT $2`
-		args = []any{before, listLimit}
+		       FROM sessions WHERE NOT archived AND (updated_at, id) < ($1, $2::uuid)
+		       ORDER BY updated_at DESC, id DESC LIMIT $3`
+		args = []any{before, beforeID, listLimit}
 	} else {
 		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_category, s.created_at, s.updated_at
 		       FROM sessions s
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
-		       WHERE s.updated_at < $2
+		       WHERE (s.updated_at, s.id) < ($2, $3::uuid)
 		         AND (s.title ILIKE '%' || $1 || '%'
 		          OR to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1))
-		       ORDER BY s.updated_at DESC LIMIT $3`
-		args = []any{query, before, listLimit}
+		       ORDER BY s.updated_at DESC, s.id DESC LIMIT $4`
+		args = []any{query, before, beforeID, listLimit}
 	}
 
 	rows, err := db.Query(ctx, sql, args...)

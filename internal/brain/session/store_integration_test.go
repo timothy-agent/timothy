@@ -127,3 +127,88 @@ func TestEventsRoundTripProjection(t *testing.T) {
 		t.Fatalf("round-trip projection = %+v", msgs)
 	}
 }
+
+// TestListCursorStableOnTiedTimestamps pins the composite-cursor SQL:
+// rows sharing an updated_at page without duplicates or gaps because
+// the id breaks the tie.
+func TestListCursorStableOnTiedTimestamps(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewStore(pool)
+
+	const marker = "cursor-tie-test"
+	var ids []string
+	for i := 0; i < 3; i++ {
+		id, err := s.Create(ctx, marker)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		for _, id := range ids {
+			_, _ = conn.Exec(cctx, "DELETE FROM session_events WHERE session_id = $1", id)
+			_, _ = conn.Exec(cctx, "DELETE FROM sessions WHERE id = $1", id)
+		}
+	})
+	// Force an exact timestamp collision.
+	tied := time.Date(2020, 1, 2, 3, 4, 5, 123456000, time.UTC)
+	if _, err := db.Exec(ctx,
+		"UPDATE sessions SET updated_at = $1 WHERE title = $2", tied, marker); err != nil {
+		t.Fatalf("tie timestamps: %v", err)
+	}
+
+	page, err := s.List(ctx, marker, time.Time{}, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var mine []Meta
+	for _, m := range page {
+		if m.Title == marker {
+			mine = append(mine, m)
+		}
+	}
+	if len(mine) != 3 {
+		t.Fatalf("full page has %d marker rows, want 3", len(mine))
+	}
+
+	// Resume from the FIRST tied row: the remaining two must follow,
+	// no duplicate of the cursor row, no skips.
+	rest, err := s.List(ctx, marker, mine[0].UpdatedAt, mine[0].ID)
+	if err != nil {
+		t.Fatalf("List cursor: %v", err)
+	}
+	var restIDs []string
+	for _, m := range rest {
+		if m.Title == marker {
+			restIDs = append(restIDs, m.ID)
+		}
+	}
+	if len(restIDs) != 2 || restIDs[0] != mine[1].ID || restIDs[1] != mine[2].ID {
+		t.Fatalf("cursor page = %v, want [%s %s]", restIDs, mine[1].ID, mine[2].ID)
+	}
+}

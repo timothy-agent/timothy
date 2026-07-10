@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -45,18 +46,28 @@ func (d *memDir) Create(_ context.Context, title string) (string, error) {
 	return id, nil
 }
 
-func (d *memDir) List(_ context.Context, query string, before time.Time) ([]session.Meta, error) {
+func (d *memDir) List(_ context.Context, query string, before time.Time, beforeID string) ([]session.Meta, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []session.Meta
 	for _, m := range d.metas {
-		if !before.IsZero() && !m.UpdatedAt.Before(before) {
-			continue
+		// Mirror the store's (updated_at, id) cursor: strictly earlier
+		// in the descending ordering.
+		if !before.IsZero() {
+			if m.UpdatedAt.After(before) || (m.UpdatedAt.Equal(before) && m.ID >= beforeID) {
+				continue
+			}
 		}
 		if query == "" && !m.Archived || query != "" && strings.Contains(m.Title, query) {
 			out = append(out, m)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
 	return out, nil
 }
 
@@ -361,5 +372,52 @@ func TestChatValidation(t *testing.T) {
 	}
 	if w := doMux(a, http.MethodPost, "/v1/chat", `{not json`); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad json: code = %d", w.Code)
+	}
+}
+
+// TestListCursorPaging pins the composite cursor contract: pages split
+// on (updated_at, id) so tied timestamps never drop or repeat rows,
+// and half a cursor is rejected.
+func TestListCursorPaging(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	ts := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	dir.mu.Lock()
+	for _, id := range []string{"sess-a", "sess-b", "sess-c"} {
+		dir.metas[id] = session.Meta{ID: id, Title: id, UpdatedAt: ts} // all tied
+	}
+	dir.metas["sess-old"] = session.Meta{ID: "sess-old", Title: "sess-old", UpdatedAt: ts.Add(-time.Hour)}
+	dir.mu.Unlock()
+
+	page1 := doMux(a, http.MethodGet, "/v1/sessions", "")
+	var got struct{ Sessions []session.Meta }
+	if err := json.Unmarshal(page1.Body.Bytes(), &got); err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(got.Sessions) != 4 || got.Sessions[0].ID != "sess-c" {
+		t.Fatalf("page1 = %+v", got.Sessions)
+	}
+
+	// Resume from the middle of the tie: strictly-after rows only.
+	cursor := got.Sessions[1] // sess-b
+	page2 := doMux(a, http.MethodGet,
+		"/v1/sessions?before="+cursor.UpdatedAt.Format(time.RFC3339Nano)+"&before_id="+cursor.ID, "")
+	if err := json.Unmarshal(page2.Body.Bytes(), &got); err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	ids := make([]string, len(got.Sessions))
+	for i, m := range got.Sessions {
+		ids[i] = m.ID
+	}
+	if strings.Join(ids, ",") != "sess-a,sess-old" {
+		t.Fatalf("page2 ids = %v, want [sess-a sess-old] (no dup, no skip)", ids)
+	}
+
+	// Half a cursor is a client bug, not a guess.
+	if w := doMux(a, http.MethodGet, "/v1/sessions?before_id=sess-b", ""); w.Code != http.StatusBadRequest {
+		t.Fatalf("before_id alone: code = %d, want 400", w.Code)
+	}
+	if w := doMux(a, http.MethodGet, "/v1/sessions?before=2026-07-10T12:00:00Z", ""); w.Code != http.StatusBadRequest {
+		t.Fatalf("before alone: code = %d, want 400", w.Code)
 	}
 }

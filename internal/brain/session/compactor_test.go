@@ -363,6 +363,71 @@ func TestSummarizeInputPreservesFacts(t *testing.T) {
 	}
 }
 
+// TestHundredTurnSessionPreservesReference is the acceptance harness
+// in miniature: a 100-turn session compacts (possibly repeatedly)
+// under a tight budget, and afterwards a commitment stated in turn 3
+// is still present in the projected LLM context — via the summary
+// head — so a follow-up question can reference it.
+func TestHundredTurnSessionPreservesReference(t *testing.T) {
+	t.Parallel()
+	const fact = "the launch review is committed for 2026-08-14"
+	log := newMemLog()
+	// The fake summarizer behaves like the real prompt demands: it
+	// carries the commitment through every pass.
+	gw := &summarizerGW{summary: "Earlier discussion; " + fact + "."}
+	ctx := context.Background()
+	pad := strings.Repeat("lorem ipsum dolor sit amet ", 10)
+
+	budget := 2000
+	c := NewCompactor(log, gw, nil, budget, discardLogger(), nil)
+	for i := 0; i < 100; i++ {
+		text := fmt.Sprintf("question %d %s", i, pad)
+		if i == 2 {
+			text = "Remember: " + fact + ". " + pad
+		}
+		if _, err := log.Append(ctx, "s1", KindUserMessage, UserMessage{Text: text}); err != nil {
+			t.Fatal(err)
+		}
+		var turn AssistantTurn
+		turn.LLM.Message = fmt.Sprintf("answer %d %s", i, pad)
+		if _, err := log.Append(ctx, "s1", KindAssistantTurn, turn); err != nil {
+			t.Fatal(err)
+		}
+		// As in production: compaction runs after every completed turn.
+		if err := c.MaybeCompact(ctx, "s1"); err != nil {
+			t.Fatalf("MaybeCompact turn %d: %v", i, err)
+		}
+	}
+
+	events, _ := log.Events(ctx, "s1")
+	msgs, err := LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	tokens, err := EstimateTokens(msgs)
+	if err != nil {
+		t.Fatalf("EstimateTokens: %v", err)
+	}
+	if tokens > budget {
+		t.Fatalf("projection = %d tokens after 100 turns, budget %d", tokens, budget)
+	}
+	if gw.calls == 0 {
+		t.Fatal("no compaction ever fired — the test proved nothing")
+	}
+	// The commitment from turn 3 must be visible to the model NOW.
+	var all strings.Builder
+	for _, m := range msgs {
+		all.WriteString(m.Content + "\n")
+	}
+	if !strings.Contains(all.String(), fact) {
+		t.Fatalf("turn-3 commitment lost from projected context:\n%s", all.String())
+	}
+	// And the newest turn survives verbatim next to it.
+	if !strings.Contains(all.String(), "answer 99") {
+		t.Fatal("newest turn missing from projected context")
+	}
+}
+
 func jsonMarshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }

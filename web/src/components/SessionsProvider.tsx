@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { listSessions } from '../api/client'
+import { listSessions, type SessionCursor } from '../api/client'
 import type { SessionMeta } from '../api/types'
 import { SessionsContext } from '../lib/sessions'
 
@@ -11,16 +11,28 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
   const [query, setQuery] = useState('')
   const [hasMore, setHasMore] = useState(false)
   const titleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // One page fetch at a time: the observer can fire repeatedly and a
+  // refresh can race a scroll — later requests wait for the next tick.
+  const loading = useRef(false)
 
-  const load = useCallback((q: string, before = '') => {
-    listSessions(q, before)
+  const load = useCallback((q: string, cursor?: SessionCursor) => {
+    if (loading.current) return
+    loading.current = true
+    listSessions(q, cursor)
       .then((page) => {
-        setSessions((prev) => (before ? [...prev, ...page] : page))
+        setSessions((prev) => {
+          if (!cursor) return page
+          const seen = new Set(prev.map((s) => s.id))
+          return [...prev, ...page.filter((s) => !seen.has(s.id))]
+        })
         setHasMore(page.length === pageSize)
       })
       .catch(() => {
         // No token yet or brain unreachable: an empty sidebar is the
         // honest render; the chat page surfaces the actual error.
+      })
+      .finally(() => {
+        loading.current = false
       })
   }, [])
 
@@ -33,12 +45,9 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
   }, [load, query])
 
   const loadMore = useCallback(() => {
-    setSessions((prev) => {
-      const last = prev[prev.length - 1]
-      if (last) load(query, last.updated_at)
-      return prev
-    })
-  }, [load, query])
+    const last = sessions[sessions.length - 1]
+    if (last) load(query, { before: last.updated_at, beforeId: last.id })
+  }, [sessions, load, query])
 
   // Debounced: typing in the search box fires one request per pause,
   // not one per keystroke.

@@ -107,17 +107,17 @@ describe('chatStream errors', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ message: 'hi' })
   })
 
-  it('pages the session list with a before cursor', async () => {
+  it('pages the session list with a composite cursor', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ sessions: [] }), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await listSessions('light', '2026-07-10T12:00:00Z')
+    await listSessions('light', { before: '2026-07-10T12:00:00Z', beforeId: 's-42' })
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      '/v1/sessions?query=light&before=2026-07-10T12%3A00%3A00Z',
+      '/v1/sessions?query=light&before=2026-07-10T12%3A00%3A00Z&before_id=s-42',
     )
   })
 

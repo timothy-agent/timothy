@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -115,4 +116,59 @@ func TestRunShutsDownOnContextCancel(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return after cancel")
 	}
+}
+
+// TestRunCancelPropagatesToRequests pins the kill-test wiring:
+// http.Server.Shutdown alone never cancels in-flight request contexts,
+// so Run derives them from its own ctx — a SIGTERM must reach a
+// long-lived streaming handler immediately.
+func TestRunCancelPropagatesToRequests(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(func() Health { return Health{Status: "ok"} })
+	s.srv.Addr = "127.0.0.1:0"
+
+	requestCanceled := make(chan struct{})
+	inHandler := make(chan struct{})
+	s.Handle("GET /hang", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(inHandler)
+		select {
+		case <-r.Context().Done():
+			close(requestCanceled)
+		case <-time.After(5 * time.Second):
+		}
+	}))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s.srv.Addr = ln.Addr().String()
+	_ = ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	time.Sleep(100 * time.Millisecond) // let the listener start
+
+	go func() {
+		resp, err := http.Get("http://" + s.srv.Addr + "/hang")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	select {
+	case <-inHandler:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request never reached the handler")
+	}
+	cancel() // the SIGTERM path
+
+	select {
+	case <-requestCanceled:
+		// in-flight request context observed the shutdown
+	case <-time.After(5 * time.Second):
+		t.Fatal("in-flight request context never canceled on shutdown")
+	}
+	<-done
 }

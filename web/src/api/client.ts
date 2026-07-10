@@ -152,12 +152,22 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T
 }
 
-// listSessions returns one page (newest first). Pass the last row's
-// updated_at as `before` to fetch the next page.
-export async function listSessions(query = '', before = ''): Promise<SessionMeta[]> {
+// SessionCursor is the last row of the previous page: both halves
+// travel together so ties on updated_at cannot drop or repeat rows.
+export interface SessionCursor {
+  before: string
+  beforeId: string
+}
+
+// listSessions returns one page (newest first). Pass the previous
+// page's last row as the cursor to fetch the next page.
+export async function listSessions(query = '', cursor?: SessionCursor): Promise<SessionMeta[]> {
   const params = new URLSearchParams()
   if (query) params.set('query', query)
-  if (before) params.set('before', before)
+  if (cursor) {
+    params.set('before', cursor.before)
+    params.set('before_id', cursor.beforeId)
+  }
   const qs = params.size > 0 ? `?${params.toString()}` : ''
   const { sessions } = await request<{ sessions: SessionMeta[] }>(`/v1/sessions${qs}`)
   return sessions
