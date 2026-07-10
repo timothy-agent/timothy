@@ -136,29 +136,35 @@ type Meta struct {
 
 const listLimit = 100
 
-// List returns sessions newest-first. A non-empty query matches the
-// title or full-text over user messages; archived sessions appear only
-// in query results.
-func (s *Store) List(ctx context.Context, query string) ([]Meta, error) {
+// List returns sessions newest-first, one page at a time. A non-empty
+// query matches the title or full-text over user messages; archived
+// sessions appear only in query results. A non-zero before returns
+// sessions updated strictly earlier — the cursor for the next page.
+func (s *Store) List(ctx context.Context, query string, before time.Time) ([]Meta, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("session: list: %w", err)
+	}
+	if before.IsZero() {
+		before = time.Now().Add(24 * time.Hour) // first page: everything
 	}
 
 	var sql string
 	var args []any
 	if query == "" {
 		sql = `SELECT id, COALESCE(title, ''), archived, last_category, created_at, updated_at
-		       FROM sessions WHERE NOT archived ORDER BY updated_at DESC LIMIT $1`
-		args = []any{listLimit}
+		       FROM sessions WHERE NOT archived AND updated_at < $1
+		       ORDER BY updated_at DESC LIMIT $2`
+		args = []any{before, listLimit}
 	} else {
 		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_category, s.created_at, s.updated_at
 		       FROM sessions s
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
-		       WHERE s.title ILIKE '%' || $1 || '%'
-		          OR to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1)
-		       ORDER BY s.updated_at DESC LIMIT $2`
-		args = []any{query, listLimit}
+		       WHERE s.updated_at < $2
+		         AND (s.title ILIKE '%' || $1 || '%'
+		          OR to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1))
+		       ORDER BY s.updated_at DESC LIMIT $3`
+		args = []any{query, before, listLimit}
 	}
 
 	rows, err := db.Query(ctx, sql, args...)

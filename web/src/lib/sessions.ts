@@ -1,15 +1,17 @@
 import { createContext, useContext } from 'react'
 import type { SessionMeta } from '../api/types'
 
-// SessionsContext holds the sidebar's session directory: the list,
-// the active search query, and a refresh shared with the chat page
-// (a finished turn changes updated_at and, on the first exchange, the
-// auto-title — the sidebar must follow).
+// SessionsContext holds the sidebar's session directory: the paged
+// list, the active search query, and a refresh shared with the chat
+// page (a finished turn changes updated_at and, on the first exchange,
+// the auto-title — the sidebar must follow).
 export interface SessionsState {
   sessions: SessionMeta[]
   query: string
   setQuery: (q: string) => void
   refresh: () => void
+  hasMore: boolean
+  loadMore: () => void
 }
 
 export const SessionsContext = createContext<SessionsState>({
@@ -17,6 +19,8 @@ export const SessionsContext = createContext<SessionsState>({
   query: '',
   setQuery: () => {},
   refresh: () => {},
+  hasMore: false,
+  loadMore: () => {},
 })
 
 export function useSessions() {

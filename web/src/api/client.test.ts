@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ChatError, chatStream, createSSEParser } from './client'
+import { ChatError, chatStream, createSSEParser, listSessions } from './client'
 import type { ChatEvent } from './types'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -105,6 +105,20 @@ describe('chatStream errors', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/v1/sessions/s-42/messages')
     // The id travels in the path, not the body.
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ message: 'hi' })
+  })
+
+  it('pages the session list with a before cursor', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ sessions: [] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listSessions('light', '2026-07-10T12:00:00Z')
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/v1/sessions?query=light&before=2026-07-10T12%3A00%3A00Z',
+    )
   })
 
   it('keeps raw text for non-json error bodies', async () => {

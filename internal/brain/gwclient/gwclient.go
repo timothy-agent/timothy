@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
@@ -28,10 +29,18 @@ type StreamRequest struct {
 	SessionID    string             `json:"session_id,omitempty"`
 }
 
+// windowsTTL matches the gateway's own config poll cadence: a fresher
+// read couldn't observe anything newer.
+const windowsTTL = 30 * time.Second
+
 // Client talks to one gateway base URL.
 type Client struct {
 	baseURL string
 	http    *http.Client
+
+	mu         sync.Mutex
+	windows    map[string]int
+	windowsExp time.Time
 }
 
 func New(baseURL string) *Client {
@@ -48,7 +57,17 @@ func New(baseURL string) *Client {
 // ModelWindows fetches the gateway's provider listing and returns the
 // context window per model id (entries without a window are omitted).
 // The compactor uses it to size token budgets to the model in use.
+// Results are memoized for the gateway's reload cadence; errors are
+// never cached.
 func (c *Client) ModelWindows(ctx context.Context) (map[string]int, error) {
+	c.mu.Lock()
+	if c.windows != nil && time.Now().Before(c.windowsExp) {
+		w := c.windows
+		c.mu.Unlock()
+		return w, nil
+	}
+	c.mu.Unlock()
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/providers", nil)
 	if err != nil {
 		return nil, fmt.Errorf("gwclient: request: %w", err)
@@ -82,6 +101,9 @@ func (c *Client) ModelWindows(ctx context.Context) (map[string]int, error) {
 			}
 		}
 	}
+	c.mu.Lock()
+	c.windows, c.windowsExp = windows, time.Now().Add(windowsTTL)
+	c.mu.Unlock()
 	return windows, nil
 }
 

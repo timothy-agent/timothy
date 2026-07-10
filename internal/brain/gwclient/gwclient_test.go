@@ -125,11 +125,13 @@ func TestStreamRejectsGatewayErrorStatus(t *testing.T) {
 
 func TestModelWindows(t *testing.T) {
 	t.Parallel()
+	hits := 0
 	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/providers" {
 			http.NotFound(w, r)
 			return
 		}
+		hits++
 		_, _ = fmt.Fprint(w, `{"providers":[
 			{"name":"a","models":[{"id":"big","context_window":200000},{"id":"unsized"}]},
 			{"name":"b","models":[{"id":"small","context_window":1000}]}
@@ -145,6 +147,14 @@ func TestModelWindows(t *testing.T) {
 	}
 	if _, ok := windows["unsized"]; ok {
 		t.Fatal("model without a context window must be omitted")
+	}
+
+	// A second read inside the TTL serves from the memo.
+	if _, err := c.ModelWindows(t.Context()); err != nil {
+		t.Fatalf("ModelWindows (cached): %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("gateway hits = %d, want 1 (TTL memo)", hits)
 	}
 }
 

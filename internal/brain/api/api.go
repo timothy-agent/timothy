@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -25,7 +26,7 @@ import (
 // it, *session.Store satisfies it.
 type Directory interface {
 	Create(ctx context.Context, title string) (string, error)
-	List(ctx context.Context, query string) ([]session.Meta, error)
+	List(ctx context.Context, query string, before time.Time) ([]session.Meta, error)
 	Get(ctx context.Context, id string) (session.Meta, error)
 	Events(ctx context.Context, id string) ([]session.Event, error)
 	Update(ctx context.Context, id string, title *string, archived *bool) error
@@ -93,7 +94,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // --- session management ---
 
 func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
-	sessions, err := a.dir.List(r.Context(), r.URL.Query().Get("query"))
+	var before time.Time
+	if v := r.URL.Query().Get("before"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", "before must be RFC3339")
+			return
+		}
+		before = t
+	}
+	sessions, err := a.dir.List(r.Context(), r.URL.Query().Get("query"), before)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return

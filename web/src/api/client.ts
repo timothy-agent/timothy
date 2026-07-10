@@ -152,8 +152,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T
 }
 
-export async function listSessions(query = ''): Promise<SessionMeta[]> {
-  const qs = query ? `?query=${encodeURIComponent(query)}` : ''
+// listSessions returns one page (newest first). Pass the last row's
+// updated_at as `before` to fetch the next page.
+export async function listSessions(query = '', before = ''): Promise<SessionMeta[]> {
+  const params = new URLSearchParams()
+  if (query) params.set('query', query)
+  if (before) params.set('before', before)
+  const qs = params.size > 0 ? `?${params.toString()}` : ''
   const { sessions } = await request<{ sessions: SessionMeta[] }>(`/v1/sessions${qs}`)
   return sessions
 }

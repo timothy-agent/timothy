@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -44,11 +45,14 @@ func (d *memDir) Create(_ context.Context, title string) (string, error) {
 	return id, nil
 }
 
-func (d *memDir) List(_ context.Context, query string) ([]session.Meta, error) {
+func (d *memDir) List(_ context.Context, query string, before time.Time) ([]session.Meta, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []session.Meta
 	for _, m := range d.metas {
+		if !before.IsZero() && !m.UpdatedAt.Before(before) {
+			continue
+		}
 		if query == "" && !m.Archived || query != "" && strings.Contains(m.Title, query) {
 			out = append(out, m)
 		}
