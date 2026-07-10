@@ -1,8 +1,8 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, type AssistantState } from '../lib/chat'
-import { AssistantMessage, CompactionDivider, InterruptedMessage } from './Message'
+import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from './Message'
 
 afterEach(cleanup)
 
@@ -97,5 +97,38 @@ describe('replay-only components', () => {
     const el = screen.getByTestId('interrupted')
     expect(el).toHaveTextContent('Once upon a')
     expect(el).toHaveTextContent('interrupted')
+  })
+})
+
+describe('copy buttons', () => {
+  it('copies the assistant reply text', () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const msg = play([
+      { type: 'chunk', text: 'the answer' },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    fireEvent.click(screen.getByTestId('copy-button'))
+    expect(writeText).toHaveBeenCalledWith('the answer')
+    vi.unstubAllGlobals()
+  })
+
+  it('copies the user message text', () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    render(<UserMessage text="my question" />)
+    fireEvent.click(screen.getByTestId('copy-button'))
+    expect(writeText).toHaveBeenCalledWith('my question')
+    vi.unstubAllGlobals()
+  })
+
+  it('hides the copy button while streaming', () => {
+    const msg = play([{ type: 'chunk', text: 'partial' }])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.queryByTestId('copy-button')).toBeNull()
   })
 })

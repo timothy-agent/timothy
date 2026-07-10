@@ -1,12 +1,42 @@
+import { Copy01Icon, Tick02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Badge } from './ui/badge'
 import type { AssistantState } from '../lib/chat'
 import 'highlight.js/styles/github-dark.css'
 
+// CopyButton copies a message's raw text; the check confirms briefly.
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard unavailable (permissions, insecure context): the
+      // button simply does nothing rather than throwing.
+    }
+  }
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      data-testid="copy-button"
+      onClick={() => void copy()}
+      className="rounded p-1 text-muted-foreground opacity-0 transition group-hover/message:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
+    >
+      <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} className="size-3.5" />
+    </button>
+  )
+}
+
 export function UserMessage({ text }: { text: string }) {
   return (
-    <div className="flex justify-end">
+    <div className="group/message flex items-end justify-end gap-1">
+      <CopyButton text={text} label="Copy message" />
       <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 whitespace-pre-wrap text-white">
         {text}
       </div>
@@ -31,16 +61,19 @@ export function CompactionDivider({ text }: { text: string }) {
 // answer plus an honest marker.
 export function InterruptedMessage({ text }: { text: string }) {
   return (
-    <div className="flex flex-col items-start gap-2" data-testid="interrupted">
+    <div className="group/message flex flex-col items-start gap-2" data-testid="interrupted">
       <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
         <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
       </div>
-      <Badge
-        variant="outline"
-        className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-      >
-        interrupted
-      </Badge>
+      <div className="flex items-center gap-1.5">
+        <Badge
+          variant="outline"
+          className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+        >
+          interrupted
+        </Badge>
+        <CopyButton text={text} label="Copy partial message" />
+      </div>
     </div>
   )
 }
@@ -50,7 +83,7 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
     : null
   return (
-    <div className="flex flex-col items-start gap-2">
+    <div className="group/message flex flex-col items-start gap-2">
       {msg.reasoning !== '' && (
         <details className="w-full max-w-3xl rounded-lg border border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
           <summary className="cursor-pointer select-none">Reasoning</summary>
@@ -78,11 +111,16 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
           {msg.error}
         </Badge>
       )}
-      {!msg.streaming && msg.meta?.provider && (
-        <div className="flex gap-1.5" data-testid="meta-badge">
-          <Badge variant="secondary">{msg.meta.provider}</Badge>
-          <Badge variant="secondary">{msg.meta.model}</Badge>
-          {tokens && <Badge variant="secondary">{tokens}</Badge>}
+      {!msg.streaming && (
+        <div className="flex items-center gap-1.5">
+          {msg.meta?.provider && (
+            <div className="flex gap-1.5" data-testid="meta-badge">
+              <Badge variant="secondary">{msg.meta.provider}</Badge>
+              <Badge variant="secondary">{msg.meta.model}</Badge>
+              {tokens && <Badge variant="secondary">{tokens}</Badge>}
+            </div>
+          )}
+          {msg.text !== '' && <CopyButton text={msg.text} label="Copy reply" />}
         </div>
       )}
     </div>
