@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -98,8 +99,11 @@ func newTraceID() string {
 }
 
 // Run serves until ctx is canceled, then shuts down gracefully within
-// shutdownTimeout. It returns nil on clean shutdown.
+// shutdownTimeout. It returns nil on clean shutdown. In-flight request
+// contexts descend from ctx, so long-lived streams learn about
+// shutdown immediately and can persist state inside the grace window.
 func (s *Server) Run(ctx context.Context) error {
+	s.srv.BaseContext = func(net.Listener) context.Context { return ctx }
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.srv.ListenAndServe() }()
 

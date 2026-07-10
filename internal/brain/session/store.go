@@ -133,3 +133,110 @@ type Meta struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
+
+const listLimit = 100
+
+// List returns sessions newest-first. A non-empty query matches the
+// title or full-text over user messages; archived sessions appear only
+// in query results.
+func (s *Store) List(ctx context.Context, query string) ([]Meta, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("session: list: %w", err)
+	}
+
+	var sql string
+	var args []any
+	if query == "" {
+		sql = `SELECT id, COALESCE(title, ''), archived, last_category, created_at, updated_at
+		       FROM sessions WHERE NOT archived ORDER BY updated_at DESC LIMIT $1`
+		args = []any{listLimit}
+	} else {
+		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_category, s.created_at, s.updated_at
+		       FROM sessions s
+		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
+		       WHERE s.title ILIKE '%' || $1 || '%'
+		          OR to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1)
+		       ORDER BY s.updated_at DESC LIMIT $2`
+		args = []any{query, listLimit}
+	}
+
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("session: list query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Meta
+	for rows.Next() {
+		var m Meta
+		if err := rows.Scan(&m.ID, &m.Title, &m.Archived, &m.LastCategory, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("session: list scan: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// Get returns one session's metadata.
+func (s *Store) Get(ctx context.Context, id string) (Meta, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return Meta{}, fmt.Errorf("session: get: %w", err)
+	}
+	var m Meta
+	err = db.QueryRow(ctx,
+		`SELECT id, COALESCE(title, ''), archived, last_category, created_at, updated_at
+		 FROM sessions WHERE id = $1`, id,
+	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastCategory, &m.CreatedAt, &m.UpdatedAt)
+	if err != nil {
+		return Meta{}, fmt.Errorf("session: get %s: %w", id, err)
+	}
+	return m, nil
+}
+
+// Update patches title and/or archived; nil means unchanged.
+func (s *Store) Update(ctx context.Context, id string, title *string, archived *bool) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("session: update: %w", err)
+	}
+	tag, err := db.Exec(ctx,
+		`UPDATE sessions SET
+		   title = COALESCE($2, title),
+		   archived = COALESCE($3, archived),
+		   updated_at = now()
+		 WHERE id = $1`, id, title, archived)
+	if err != nil {
+		return fmt.Errorf("session: update %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session: update %s: not found", id)
+	}
+	return nil
+}
+
+// SetTitleIfEmpty writes an auto-generated title without clobbering a
+// user-chosen one.
+func (s *Store) SetTitleIfEmpty(ctx context.Context, id, title string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("session: set title: %w", err)
+	}
+	_, err = db.Exec(ctx,
+		"UPDATE sessions SET title = $2, updated_at = now() WHERE id = $1 AND (title IS NULL OR title = '')",
+		id, title)
+	return err
+}
+
+// SetLastCategory remembers the session's most recent task category so
+// the UI composer can restore it.
+func (s *Store) SetLastCategory(ctx context.Context, id, category string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("session: set category: %w", err)
+	}
+	_, err = db.Exec(ctx,
+		"UPDATE sessions SET last_category = $2 WHERE id = $1", id, category)
+	return err
+}

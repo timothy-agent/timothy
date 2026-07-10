@@ -9,15 +9,22 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/SumonMSelim/timothy/internal/brain/api"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/loop"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/migrations"
 )
+
+// defaultTokenBudget bounds the projected context; provider-window
+// driven budgets arrive when model rows carry context windows.
+const defaultTokenBudget = 60_000
 
 const (
 	serviceName = "brain"
@@ -56,8 +63,22 @@ func main() {
 	if gatewayURL == "" {
 		gatewayURL = "http://gateway:8081"
 	}
-	svc := chat.New(gwclient.New(gatewayURL), app.DB, app.Log)
-	api.Register(app.Server, svc, token, app.Log)
+	budget := defaultTokenBudget
+	if v := os.Getenv("SESSION_TOKEN_BUDGET"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			budget = n
+		}
+	}
+
+	gwc := gwclient.New(gatewayURL)
+	store := session.NewStore(app.DB)
+	compactor := session.NewCompactor(store, gwc, budget, app.Log,
+		app.Metrics.NewCounter("session_compactions_total", "Sessions compacted to stay under the context budget."))
+	distill := func(ctx context.Context, sessionID, turnText string) *session.TurnMemory {
+		return loop.DistillTurn(ctx, gwc, sessionID, turnText)
+	}
+	svc := chat.New(gwc, store, distill, compactor, budget, app.Log)
+	api.Register(app.Server, svc, store, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

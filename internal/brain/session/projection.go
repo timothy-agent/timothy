@@ -21,9 +21,12 @@ const interruptedNote = "\n[this response was interrupted mid-stream; continue f
 //     (llm.message plus serialized turn memory).
 //   - compaction_applied replaces everything ≤ replaces_through_seq
 //     with one summary message.
-//   - a pending_state that is the FINAL event splices in as an
-//     interrupted assistant message; earlier pending states are
-//     superseded and ignored.
+//   - the newest pending_state splices in as an interrupted assistant
+//     message at its position, unless a later assistant_turn or
+//     compaction superseded it. User messages do NOT supersede a
+//     pending — the question after an interruption must still see the
+//     partial. Older pendings (periodic checkpoints) are superseded by
+//     newer ones.
 //   - tool_execution events never enter the LLM context (turn memory
 //     carries their residue).
 //
@@ -51,12 +54,14 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 		}
 	}
 
+	livePending := livePendingSeq(events)
+
 	var msgs []provider.Message
 	if summary != "" {
 		msgs = append(msgs, provider.Message{Role: "user", Content: summaryPrefix + summary})
 	}
 
-	for i, ev := range events {
+	for _, ev := range events {
 		if ev.Seq <= replacedThrough {
 			continue
 		}
@@ -74,8 +79,8 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			}
 			msgs = append(msgs, provider.Message{Role: "assistant", Content: renderAssistant(t)})
 		case KindPendingState:
-			if i != len(events)-1 {
-				continue // superseded: a later event exists
+			if ev.Seq != livePending {
+				continue // superseded checkpoint
 			}
 			var p PendingState
 			if err := decode(ev, &p); err != nil {
@@ -87,6 +92,25 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 		}
 	}
 	return msgs, nil
+}
+
+// livePendingSeq returns the seq of the pending_state still in play:
+// the newest one, unless an assistant_turn or compaction landed after
+// it. Returns -1 when none is live.
+func livePendingSeq(events []Event) int64 {
+	var lastPending, lastSuperseder int64 = -1, -1
+	for _, ev := range events {
+		switch ev.Kind {
+		case KindPendingState:
+			lastPending = ev.Seq
+		case KindAssistantTurn, KindCompactionApplied:
+			lastSuperseder = ev.Seq
+		}
+	}
+	if lastPending > lastSuperseder {
+		return lastPending
+	}
+	return -1
 }
 
 // renderAssistant serializes a turn for the LLM: the message plus a
@@ -128,8 +152,9 @@ type TranscriptItem struct {
 // executions as digest blocks, and a trailing pending state as an
 // interrupted turn.
 func UITranscript(events []Event) ([]TranscriptItem, error) {
+	livePending := livePendingSeq(events)
 	var items []TranscriptItem
-	for i, ev := range events {
+	for _, ev := range events {
 		item := TranscriptItem{Seq: ev.Seq, CreatedAt: ev.CreatedAt}
 		switch ev.Kind {
 		case KindUserMessage:
@@ -160,7 +185,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			item.Kind = "compaction"
 			item.Text = fmt.Sprintf("older messages summarized (through #%d)", c.ReplacesThroughSeq)
 		case KindPendingState:
-			if i != len(events)-1 {
+			if ev.Seq != livePending {
 				continue
 			}
 			var p PendingState

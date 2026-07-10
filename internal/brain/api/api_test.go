@@ -3,30 +3,120 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
-	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// memDir is an in-memory Directory + chat.SessionLog.
+type memDir struct {
+	mu     sync.Mutex
+	metas  map[string]session.Meta
+	events map[string][]session.Event
+	nextID int
+}
+
+func newMemDir() *memDir {
+	return &memDir{metas: map[string]session.Meta{}, events: map[string][]session.Event{}}
+}
+
+func (d *memDir) Create(_ context.Context, title string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.nextID++
+	id := fmt.Sprintf("sess-%d", d.nextID)
+	d.metas[id] = session.Meta{ID: id, Title: title}
+	d.events[id] = []session.Event{{SessionID: id, Seq: 1, Kind: session.KindSessionStarted, Payload: []byte(`{}`)}}
+	return id, nil
+}
+
+func (d *memDir) List(_ context.Context, query string) ([]session.Meta, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []session.Meta
+	for _, m := range d.metas {
+		if query == "" && !m.Archived || query != "" && strings.Contains(m.Title, query) {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func (d *memDir) Get(_ context.Context, id string) (session.Meta, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m, ok := d.metas[id]
+	if !ok {
+		return session.Meta{}, fmt.Errorf("session: get %s: %w", id, pgx.ErrNoRows)
+	}
+	return m, nil
+}
+
+func (d *memDir) Events(_ context.Context, id string) ([]session.Event, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]session.Event(nil), d.events[id]...), nil
+}
+
+func (d *memDir) Update(_ context.Context, id string, title *string, archived *bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m, ok := d.metas[id]
+	if !ok {
+		return fmt.Errorf("session: update %s: not found", id)
+	}
+	if title != nil {
+		m.Title = *title
+	}
+	if archived != nil {
+		m.Archived = *archived
+	}
+	d.metas[id] = m
+	return nil
+}
+
+func (d *memDir) Append(_ context.Context, id, kind string, payload any) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	seq := int64(len(d.events[id]) + 1)
+	d.events[id] = append(d.events[id], session.Event{SessionID: id, Seq: seq, Kind: kind, Payload: data})
+	return seq, nil
+}
+
+func (d *memDir) SetTitleIfEmpty(context.Context, string, string) error { return nil }
+func (d *memDir) SetLastCategory(context.Context, string, string) error { return nil }
 
 // fakeGateway yields a canned event sequence, or fails when err set.
 type fakeGateway struct {
 	events []stream.StreamEvent
 	err    error
 	got    gwclient.StreamRequest
+	calls  int
 }
 
-func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
-	f.got = req
+func (f *fakeGateway) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	f.calls++
+	if f.calls == 1 { // record the chat call, not the title call
+		f.got = req
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -38,26 +128,58 @@ func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<
 	return ch, nil
 }
 
-func testAPI(t *testing.T, token string, events []stream.StreamEvent) (*API, *fakeGateway) {
+func testAPI(t *testing.T, token string, events []stream.StreamEvent) (*API, *memDir, *fakeGateway) {
 	t.Helper()
+	dir := newMemDir()
 	gw := &fakeGateway{events: events}
-	svc := chat.New(gw, pgpool.New(t.Context(), "", discard()), discard())
-	return &API{svc: svc, token: token, log: discard()}, gw
+	svc := chat.New(gw, dir, nil, nil, 60_000, discard())
+	return &API{svc: svc, dir: dir, token: token, log: discard()}, dir, gw
 }
 
-func doChat(a *API, authHeader, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(body))
+func do(a *API, h http.HandlerFunc, method, path, authHeader, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
 	w := httptest.NewRecorder()
-	a.auth(http.HandlerFunc(a.handleChat)).ServeHTTP(w, req)
+	a.auth(h).ServeHTTP(w, req)
 	return w
 }
 
+// mux builds the real route table so path values resolve.
+func mux(a *API) *http.ServeMux {
+	m := http.NewServeMux()
+	m.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
+	m.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
+	m.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
+	m.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
+	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
+	m.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
+	return m
+}
+
+func doMux(a *API, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	mux(a).ServeHTTP(w, req)
+	return w
+}
+
+func okEvents() []stream.StreamEvent {
+	return []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: "hi "},
+		{Type: stream.EventChunk, Text: "there"},
+		{Type: stream.EventUsage, Usage: &stream.Usage{InputTokens: 5, OutputTokens: 2}},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led-1"}},
+	}
+}
+
+// --- auth ---
+
 func TestAuthRejectsBadTokens(t *testing.T) {
 	t.Parallel()
-	a, _ := testAPI(t, "secret-token", nil)
+	a, _, _ := testAPI(t, "secret-token", nil)
 
 	for name, header := range map[string]string{
 		"missing":      "",
@@ -65,7 +187,7 @@ func TestAuthRejectsBadTokens(t *testing.T) {
 		"wrong token":  "Bearer nope",
 		"empty bearer": "Bearer ",
 	} {
-		if w := doChat(a, header, `{}`); w.Code != http.StatusUnauthorized {
+		if w := do(a, a.handleList, http.MethodGet, "/v1/sessions", header, ""); w.Code != http.StatusUnauthorized {
 			t.Fatalf("%s: code = %d, want 401", name, w.Code)
 		}
 	}
@@ -78,9 +200,8 @@ func TestAuthAcceptsRobustHeaderShapes(t *testing.T) {
 		"surrounding spaces": "  Bearer secret-token  ",
 		"space before token": "Bearer  secret-token",
 	} {
-		// Fresh API per case: a session buffer is per-service state.
-		a, _ := testAPI(t, "secret-token", []stream.StreamEvent{{Type: stream.EventDone}})
-		if w := doChat(a, header, `{"session_id":"s","message":"hi"}`); w.Code != http.StatusOK {
+		a, _, _ := testAPI(t, "secret-token", nil)
+		if w := do(a, a.handleList, http.MethodGet, "/v1/sessions", header, ""); w.Code != http.StatusOK {
 			t.Fatalf("%s: code = %d, want 200", name, w.Code)
 		}
 	}
@@ -88,76 +209,153 @@ func TestAuthAcceptsRobustHeaderShapes(t *testing.T) {
 
 func TestAuthFailsClosedWhenUnconfigured(t *testing.T) {
 	t.Parallel()
-	a, _ := testAPI(t, "", nil)
-
-	w := doChat(a, "Bearer anything", `{}`)
-	if w.Code != http.StatusServiceUnavailable {
+	a, _, _ := testAPI(t, "", nil)
+	if w := do(a, a.handleList, http.MethodGet, "/v1/sessions", "Bearer anything", ""); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code = %d, want 503 (fail closed)", w.Code)
 	}
 }
 
-func TestChatRelaysEventsAndAppendsMeta(t *testing.T) {
-	t.Parallel()
-	a, gw := testAPI(t, "tok", []stream.StreamEvent{
-		{Type: stream.EventChunk, Text: "hi "},
-		{Type: stream.EventChunk, Text: "there"},
-		{Type: stream.EventUsage, Usage: &stream.Usage{InputTokens: 5, OutputTokens: 2}},
-		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led-1"}},
-	})
+// --- session management ---
 
-	w := doChat(a, "Bearer tok", `{"session_id":"s-1","message":"hello","task_category":"mini"}`)
+func TestSessionCRUD(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+
+	// create
+	w := doMux(a, http.MethodPost, "/v1/sessions", `{"title":"my session"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var created struct{ ID string }
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+
+	// list
+	w = doMux(a, http.MethodGet, "/v1/sessions", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), created.ID) {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+
+	// rename + archive
+	w = doMux(a, http.MethodPatch, "/v1/sessions/"+created.ID, `{"title":"renamed","archived":true}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("patch: %d %s", w.Code, w.Body.String())
+	}
+	if m, _ := dir.Get(t.Context(), created.ID); m.Title != "renamed" || !m.Archived {
+		t.Fatalf("meta after patch = %+v", m)
+	}
+
+	// patch nothing
+	if w = doMux(a, http.MethodPatch, "/v1/sessions/"+created.ID, `{}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("empty patch: %d", w.Code)
+	}
+	// patch missing
+	if w = doMux(a, http.MethodPatch, "/v1/sessions/nope", `{"archived":true}`); w.Code != http.StatusNotFound {
+		t.Fatalf("patch missing: %d", w.Code)
+	}
+}
+
+func TestTranscriptEndpoint(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "t")
+	_, _ = dir.Append(t.Context(), id, session.KindUserMessage, session.UserMessage{Text: "hello"})
+
+	w := doMux(a, http.MethodGet, "/v1/sessions/"+id, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("transcript: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Session session.Meta             `json:"session"`
+		Items   []session.TranscriptItem `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Session.ID != id || len(resp.Items) != 1 || resp.Items[0].Text != "hello" {
+		t.Fatalf("resp = %+v", resp)
+	}
+
+	if w = doMux(a, http.MethodGet, "/v1/sessions/missing", ""); w.Code != http.StatusNotFound {
+		t.Fatalf("missing session: %d", w.Code)
+	}
+}
+
+// --- chat ---
+
+func TestMessagesEndpointStreamsAndPersists(t *testing.T) {
+	t.Parallel()
+	a, dir, gw := testAPI(t, "tok", okEvents())
+	id, _ := dir.Create(t.Context(), "t")
+
+	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hello","task_category":"mini"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
 	}
-	if got := w.Header().Get("X-Session-Id"); got != "s-1" {
-		t.Fatalf("X-Session-Id = %q, want s-1 (mid-stream cut safety)", got)
+	if got := w.Header().Get("X-Session-Id"); got != id {
+		t.Fatalf("X-Session-Id = %q, want %s", got, id)
 	}
-	if gw.got.TaskCategory != "mini" || gw.got.SessionID != "s-1" {
+	if gw.got.TaskCategory != "mini" || !strings.Contains(gw.got.System, "Timothy") {
 		t.Fatalf("gateway request = %+v", gw.got)
-	}
-	if gw.got.System == "" || !strings.Contains(gw.got.System, "Timothy") {
-		t.Fatal("system prompt missing from gateway request")
 	}
 
 	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n\n")
 	last := strings.TrimPrefix(lines[len(lines)-1], "data: ")
 	var m meta
 	if err := json.Unmarshal([]byte(last), &m); err != nil {
-		t.Fatalf("terminal event not meta JSON: %v (%s)", err, last)
+		t.Fatalf("terminal not meta: %v (%s)", err, last)
 	}
-	if m.Type != "meta" || m.SessionID != "s-1" || m.Provider != "prov" ||
-		m.Model != "mod" || m.LedgerID != "led-1" || m.Usage == nil || m.Usage.InputTokens != 5 {
+	if m.Type != "meta" || m.SessionID != id || m.Provider != "prov" || m.Usage == nil {
 		t.Fatalf("meta = %+v", m)
+	}
+
+	if w = doMux(a, http.MethodPost, "/v1/sessions/missing/messages", `{"message":"x"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("missing session message: %d", w.Code)
+	}
+}
+
+func TestChatShimCreatesSessionAndDeprecates(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", okEvents())
+
+	w := doMux(a, http.MethodPost, "/v1/chat", `{"message":"hello"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("Deprecation") != "true" {
+		t.Fatal("deprecation header missing")
+	}
+	if w.Header().Get("X-Session-Id") == "" {
+		t.Fatal("created session id missing from header")
 	}
 }
 
 func TestChatErrorCarriesSessionID(t *testing.T) {
 	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "t")
+	// gateway with error
 	gw := &fakeGateway{err: context.DeadlineExceeded}
-	svc := chat.New(gw, pgpool.New(t.Context(), "", discard()), discard())
-	a := &API{svc: svc, token: "tok", log: discard()}
+	a.svc = chat.New(gw, dir, nil, nil, 60_000, discard())
 
-	w := doChat(a, "Bearer tok", `{"session_id":"s-keep","message":"hi"}`)
+	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hi"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("code = %d, want 502", w.Code)
 	}
 	var body map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body["session_id"] != "s-keep" {
-		t.Fatalf("session_id = %q, want s-keep (client must reuse it)", body["session_id"])
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["session_id"] != id {
+		t.Fatalf("session_id = %q, want %s", body["session_id"], id)
 	}
 }
 
 func TestChatValidation(t *testing.T) {
 	t.Parallel()
-	a, _ := testAPI(t, "tok", nil)
+	a, _, _ := testAPI(t, "tok", nil)
 
-	if w := doChat(a, "Bearer tok", `{"session_id":"s-1","message":"  "}`); w.Code != http.StatusBadGateway {
+	if w := doMux(a, http.MethodPost, "/v1/chat", `{"message":"  "}`); w.Code != http.StatusBadGateway {
 		t.Fatalf("blank message: code = %d", w.Code)
 	}
-	if w := doChat(a, "Bearer tok", `{not json`); w.Code != http.StatusBadRequest {
+	if w := doMux(a, http.MethodPost, "/v1/chat", `{not json`); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad json: code = %d", w.Code)
 	}
 }

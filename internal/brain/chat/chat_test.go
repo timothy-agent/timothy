@@ -2,129 +2,327 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
-	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-type scriptedGateway struct {
-	requests []gwclient.StreamRequest
-	reply    string
+// fakeLog is an in-memory SessionLog.
+type fakeLog struct {
+	mu       sync.Mutex
+	events   map[string][]session.Event
+	titles   map[string]string
+	category map[string]string
+	createdN int
 }
 
-func (g *scriptedGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+func newFakeLog() *fakeLog {
+	return &fakeLog{events: map[string][]session.Event{}, titles: map[string]string{}, category: map[string]string{}}
+}
+
+func (f *fakeLog) Create(_ context.Context, title string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createdN++
+	id := "sess-created"
+	f.events[id] = []session.Event{{SessionID: id, Seq: 1, Kind: session.KindSessionStarted, Payload: []byte(`{}`)}}
+	return id, nil
+}
+
+func (f *fakeLog) Events(_ context.Context, id string) ([]session.Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.events[id]; !ok {
+		f.events[id] = []session.Event{{SessionID: id, Seq: 1, Kind: session.KindSessionStarted, Payload: []byte(`{}`)}}
+	}
+	return append([]session.Event(nil), f.events[id]...), nil
+}
+
+func (f *fakeLog) Append(_ context.Context, id, kind string, payload any) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	seq := int64(len(f.events[id]) + 1)
+	f.events[id] = append(f.events[id], session.Event{SessionID: id, Seq: seq, Kind: kind, Payload: data})
+	return seq, nil
+}
+
+func (f *fakeLog) SetTitleIfEmpty(_ context.Context, id, title string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.titles[id] == "" {
+		f.titles[id] = title
+	}
+	return nil
+}
+
+func (f *fakeLog) SetLastCategory(_ context.Context, id, category string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.category[id] = category
+	return nil
+}
+
+func (f *fakeLog) lastCategory(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.category[id]
+}
+
+func (f *fakeLog) kinds(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, ev := range f.events[id] {
+		out = append(out, ev.Kind)
+	}
+	return out
+}
+
+// fakeGW streams canned events and records requests. blockCh, when
+// set, delays the stream until closed (for cancellation tests).
+type fakeGW struct {
+	mu       sync.Mutex
+	requests []gwclient.StreamRequest
+	events   []stream.StreamEvent
+	blockCh  chan struct{}
+}
+
+func (g *fakeGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	g.mu.Lock()
 	g.requests = append(g.requests, req)
-	ch := make(chan stream.StreamEvent, 3)
-	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: g.reply}
-	ch <- stream.StreamEvent{Type: stream.EventDone}
-	close(ch)
+	block := g.blockCh
+	events := append([]stream.StreamEvent(nil), g.events...)
+	g.mu.Unlock()
+
+	ch := make(chan stream.StreamEvent)
+	go func() {
+		defer close(ch)
+		if block != nil {
+			<-block
+		}
+		for _, ev := range events {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	return ch, nil
 }
 
-func drain(t *testing.T, ch <-chan stream.StreamEvent) {
-	t.Helper()
-	for range ch {
+func (g *fakeGW) lastRequest() gwclient.StreamRequest {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.requests[len(g.requests)-1]
+}
+
+func okEvents(text string) []stream.StreamEvent {
+	return []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: text},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led"}},
 	}
 }
 
-func newTestService(t *testing.T, gw Gateway) *Service {
-	t.Helper()
-	return New(gw, pgpool.New(t.Context(), "", discard()), discard())
+func newService(gw Gateway, log SessionLog) *Service {
+	return New(gw, log, nil, nil, 60_000, discard())
 }
 
-func TestChatBuffersHistoryAcrossTurns(t *testing.T) {
+func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
+	t.Helper()
+	var out []stream.StreamEvent
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return out
+			}
+			out = append(out, ev)
+		case <-deadline:
+			t.Fatal("stream did not close")
+		}
+	}
+}
+
+// waitFor polls until cond or timeout — persistence runs after the
+// client channel closes.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not met in time")
+}
+
+func TestChatPersistsTurnAsEvents(t *testing.T) {
 	t.Parallel()
-	gw := &scriptedGateway{reply: "first answer"}
-	s := newTestService(t, gw)
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("the answer")}
+	s := newService(gw, log)
 
-	id, ch, err := s.Chat(t.Context(), Request{SessionID: "sess", Message: "question one"})
+	id, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question", TaskCategory: "mini"})
 	if err != nil {
-		t.Fatalf("Chat 1: %v", err)
+		t.Fatalf("Chat: %v", err)
 	}
-	if id != "sess" {
+	if id != "s1" {
 		t.Fatalf("session id = %q", id)
 	}
 	drain(t, ch)
 
-	gw.reply = "second answer"
-	_, ch, err = s.Chat(t.Context(), Request{SessionID: "sess", Message: "question two"})
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	kinds := log.kinds("s1")
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindAssistantTurn}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
+	}
+	waitFor(t, func() bool { return log.lastCategory("s1") == "mini" })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var turn session.AssistantTurn
+	if err := json.Unmarshal(events[2].Payload, &turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if turn.LLM.Message != "the answer" || turn.Provider != "prov" || turn.LedgerID != "led" {
+		t.Fatalf("turn = %+v", turn)
+	}
+}
+
+func TestChatHistoryComesFromProjection(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("first answer")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
+	if err != nil {
+		t.Fatalf("Chat 1: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	gw.mu.Lock()
+	gw.events = okEvents("second answer")
+	gw.mu.Unlock()
+	_, ch, err = s.Chat(t.Context(), Request{SessionID: "s1", Message: "second question"})
 	if err != nil {
 		t.Fatalf("Chat 2: %v", err)
 	}
 	drain(t, ch)
 
-	second := gw.requests[1]
-	if len(second.Messages) != 3 {
-		t.Fatalf("second request messages = %d, want 3 (q1, a1, q2): %+v", len(second.Messages), second.Messages)
+	msgs := gw.lastRequest().Messages
+	if len(msgs) != 3 {
+		t.Fatalf("second request messages = %d, want 3: %+v", len(msgs), msgs)
 	}
-	if second.Messages[0].Content != "question one" ||
-		second.Messages[1].Role != "assistant" || second.Messages[1].Content != "first answer" ||
-		second.Messages[2].Content != "question two" {
-		t.Fatalf("history wrong: %+v", second.Messages)
+	if msgs[0].Content != "first question" || msgs[1].Content != "first answer" || msgs[2].Content != "second question" {
+		t.Fatalf("projected history wrong: %+v", msgs)
 	}
 }
 
-func TestChatSessionsAreIsolated(t *testing.T) {
+func TestChatWritesPendingStateOnCancel(t *testing.T) {
 	t.Parallel()
-	gw := &scriptedGateway{reply: "a"}
-	s := newTestService(t, gw)
+	log := newFakeLog()
+	block := make(chan struct{})
+	gw := &fakeGW{blockCh: block, events: []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: "partial answer that never finishes"},
+		// no terminal: the connection "dies" after the chunk
+	}}
+	s := newService(gw, log)
 
-	_, ch, _ := s.Chat(t.Context(), Request{SessionID: "one", Message: "in session one"})
-	drain(t, ch)
-	_, ch, _ = s.Chat(t.Context(), Request{SessionID: "two", Message: "in session two"})
-	drain(t, ch)
-
-	if len(gw.requests[1].Messages) != 1 {
-		t.Fatalf("session two saw session one's history: %+v", gw.requests[1].Messages)
+	ctx, cancel := context.WithCancel(t.Context())
+	_, ch, err := s.Chat(ctx, Request{SessionID: "s1", Message: "long question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
 	}
-}
+	close(block) // let the chunk flow
+	<-ch         // receive the chunk
+	cancel()     // client disconnects mid-stream
+	drain(t, ch)
 
-func TestChatBufferIsBounded(t *testing.T) {
-	t.Parallel()
-	gw := &scriptedGateway{reply: "r"}
-	s := newTestService(t, gw)
-
-	for range maxBufferedMessages { // each turn adds 2 buffered messages
-		_, ch, err := s.Chat(t.Context(), Request{SessionID: "sess", Message: "m"})
-		if err != nil {
-			t.Fatalf("Chat: %v", err)
+	waitFor(t, func() bool {
+		for _, k := range log.kinds("s1") {
+			if k == session.KindPendingState {
+				return true
+			}
 		}
-		drain(t, ch)
-	}
+		return false
+	})
 
-	last := gw.requests[len(gw.requests)-1]
-	if got := len(last.Messages); got > maxBufferedMessages+1 {
-		t.Fatalf("request messages = %d, exceeds bound %d", got, maxBufferedMessages+1)
+	// The next turn's projection must splice the partial in.
+	events, _ := log.Events(t.Context(), "s1")
+	msgs, err := session.LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "assistant" || !strings.Contains(last.Content, "partial answer") {
+		t.Fatalf("pending state not spliced: %+v", last)
 	}
 }
 
-func TestChatDefaultsCategory(t *testing.T) {
+func TestChatAutoTitlesFirstExchange(t *testing.T) {
 	t.Parallel()
-	gw := &scriptedGateway{reply: "r"}
-	s := newTestService(t, gw)
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("hello there")}
+	s := newService(gw, log)
 
-	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s", Message: "hi"})
+	// Titles come from a second gateway call; the fake returns the
+	// same canned events, whose chunk becomes the title.
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
 	drain(t, ch)
 
-	if gw.requests[0].TaskCategory != defaultCategory {
-		t.Fatalf("category = %q, want %q", gw.requests[0].TaskCategory, defaultCategory)
+	waitFor(t, func() bool {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		return log.titles["s1"] != ""
+	})
+	log.mu.Lock()
+	title := log.titles["s1"]
+	log.mu.Unlock()
+	if title != "hello there" {
+		t.Fatalf("title = %q", title)
+	}
+
+	// Second exchange must NOT retitle.
+	gw.mu.Lock()
+	nCalls := len(gw.requests)
+	gw.mu.Unlock()
+	_, ch, _ = s.Chat(t.Context(), Request{SessionID: "s1", Message: "again"})
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) >= 5 })
+	gw.mu.Lock()
+	calls := len(gw.requests) - nCalls
+	gw.mu.Unlock()
+	if calls != 1 { // chat only, no title call
+		t.Fatalf("second exchange made %d gateway calls, want 1", calls)
 	}
 }
 
-func TestChatNewSessionRequiresDatabase(t *testing.T) {
+func TestChatValidatesMessage(t *testing.T) {
 	t.Parallel()
-	s := newTestService(t, &scriptedGateway{reply: "r"}) // degraded pool
-
-	if _, _, err := s.Chat(t.Context(), Request{Message: "hi"}); err == nil {
-		t.Fatal("Chat without session id and without database: want error")
+	s := newService(&fakeGW{}, newFakeLog())
+	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "   "}); err == nil {
+		t.Fatal("blank message accepted")
 	}
 }

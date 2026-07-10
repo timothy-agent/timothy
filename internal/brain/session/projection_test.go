@@ -130,8 +130,40 @@ func TestLLMContextPendingStateSplice(t *testing.T) {
 		t.Fatalf("trailing pending state not spliced: %+v", last)
 	}
 
-	// A superseded pending state (later events exist) must vanish.
-	superseded := append(base, assistant(t, 3, "Once upon a time, the end.", nil))
+	// A user message after the pending does NOT supersede it: the
+	// follow-up question must still see the partial, in order.
+	withQuestion := append(append([]Event(nil), base...), user(t, 3, "you were cut off — continue"))
+	msgs, err = LLMContext(withQuestion, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	if len(msgs) != 3 || !strings.Contains(msgs[1].Content, "Once upon a") || msgs[2].Content != "you were cut off — continue" {
+		t.Fatalf("pending not spliced before follow-up question: %+v", msgs)
+	}
+
+	// Newer checkpoints supersede older ones: only the last partial
+	// appears.
+	checkpoints := append(append([]Event(nil), base...),
+		ev(t, 3, KindPendingState, PendingState{Partial: "Once upon a time, in a"}))
+	msgs, err = LLMContext(checkpoints, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	count := 0
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "Once upon a") {
+			count++
+			if !strings.Contains(m.Content, "in a") {
+				t.Fatalf("older checkpoint won: %+v", m)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("checkpoint messages = %d, want 1: %+v", count, msgs)
+	}
+
+	// An assistant turn supersedes every pending.
+	superseded := append(append([]Event(nil), base...), assistant(t, 3, "Once upon a time, the end.", nil))
 	msgs, err = LLMContext(superseded, 0)
 	if err != nil {
 		t.Fatalf("LLMContext: %v", err)
