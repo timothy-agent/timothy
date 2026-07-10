@@ -95,8 +95,10 @@ func lastModel(events []Event) string {
 }
 
 // MaybeCompact measures the session's projected context and compacts
-// once when it exceeds the budget. Callers run it after each turn;
-// repeated turns converge because each pass halves the live prefix.
+// once when it exceeds the budget. Chat runs it after each completed
+// turn (proactive) and again before each send (the wire-level
+// guarantee on the crossing turn); repeated passes converge because
+// each one halves the live prefix.
 func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 	events, err := c.log.Events(ctx, sessionID)
 	if err != nil {

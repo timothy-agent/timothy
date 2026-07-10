@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -375,5 +376,62 @@ func TestChatCompactsBeforeSend(t *testing.T) {
 	defer order.mu.Unlock()
 	if len(order.calls) < 2 || order.calls[0] != "compact" || order.calls[1] != "stream" {
 		t.Fatalf("call order = %v, want compaction before the provider call", order.calls)
+	}
+}
+
+// compactingLog is a Compactor that actually rewrites the log the way
+// the real one does: it appends a compaction_applied event replacing
+// everything before the newest user message.
+type compactingLog struct {
+	log *fakeLog
+}
+
+func (c *compactingLog) MaybeCompact(ctx context.Context, sessionID string) error {
+	events, _ := c.log.Events(ctx, sessionID)
+	// Replace everything before the just-appended user message.
+	boundary := events[len(events)-1].Seq - 1
+	_, err := c.log.Append(ctx, sessionID, session.KindCompactionApplied, session.CompactionApplied{
+		Summary: "everything before was condensed", ReplacesThroughSeq: boundary,
+	})
+	return err
+}
+
+// TestChatSendsCompactedContext pins what actually goes on the wire
+// when pre-send compaction fires: the provider sees the summary head
+// plus the new user message, never the summarized-away content.
+func TestChatSendsCompactedContext(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	ctx := context.Background()
+	if _, err := log.Append(ctx, "s1", session.KindUserMessage, session.UserMessage{Text: "old question"}); err != nil {
+		t.Fatal(err)
+	}
+	var turn session.AssistantTurn
+	turn.LLM.Message = "old answer"
+	if _, err := log.Append(ctx, "s1", session.KindAssistantTurn, turn); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := &fakeGW{events: okEvents("fresh reply")}
+	svc := New(gw, log, nil, &compactingLog{log: log}, 60_000, discard())
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "new question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	msgs := gw.lastRequest().Messages
+	if len(msgs) != 2 {
+		t.Fatalf("wire messages = %+v, want [summary, new question]", msgs)
+	}
+	if !strings.Contains(msgs[0].Content, "everything before was condensed") {
+		t.Fatalf("summary head missing from wire context: %+v", msgs[0])
+	}
+	if strings.Contains(fmt.Sprint(msgs), "old question") || strings.Contains(fmt.Sprint(msgs), "old answer") {
+		t.Fatalf("summarized-away content leaked onto the wire: %+v", msgs)
+	}
+	if msgs[1].Content != "new question" {
+		t.Fatalf("new user message not last on the wire: %+v", msgs[1])
 	}
 }
