@@ -284,8 +284,11 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 		TaskCategory: "mini",
 		System:       titleSystem,
 		Messages:     []provider.Message{{Role: "user", Content: input}},
-		MaxTokens:    30,
-		SessionID:    sessionID,
+		// Reasoning models spend hundreds of tokens thinking before
+		// the first answer token; a tight cap truncates the stream
+		// mid-reasoning and yields an empty title.
+		MaxTokens: 1000,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		s.logger.Warn("auto-title", "session_id", sessionID, "error", err)
@@ -299,6 +302,7 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 	}
 	title := strings.TrimSpace(strings.Trim(strings.TrimSpace(b.String()), `"'`))
 	if title == "" {
+		s.logger.Warn("auto-title returned no text", "session_id", sessionID)
 		return
 	}
 	if len(title) > 80 {
