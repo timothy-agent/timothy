@@ -1,5 +1,5 @@
 import { categories } from '../lib/chat'
-import { Listbox, ListboxLabel, ListboxOption } from './catalyst/listbox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
 export function CategoryPicker({
   value,
@@ -9,18 +9,17 @@ export function CategoryPicker({
   onChange: (v: string) => void
 }) {
   return (
-    <Listbox
-      aria-label="Task category"
-      name="category"
-      value={value}
-      onChange={onChange}
-      className="w-40"
-    >
-      {categories.map((c) => (
-        <ListboxOption key={c} value={c}>
-          <ListboxLabel>{c}</ListboxLabel>
-        </ListboxOption>
-      ))}
-    </Listbox>
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger aria-label="Task category" size="sm" className="w-40">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {categories.map((c) => (
+          <SelectItem key={c} value={c}>
+            {c}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }

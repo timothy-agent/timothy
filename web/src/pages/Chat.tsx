@@ -1,4 +1,4 @@
-import { ArrowUpIcon } from '@heroicons/react/20/solid'
+import { ArrowUp } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { ChatError, chatStream, getTranscript } from '../api/client'
@@ -231,7 +231,7 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
               disabled={streaming || draft.trim() === ''}
               className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-500"
             >
-              <ArrowUpIcon className="size-4" />
+              <ArrowUp className="size-4" />
             </button>
           </div>
         </div>

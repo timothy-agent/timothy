@@ -1,6 +1,3 @@
-import { Heading } from './catalyst/heading'
-import { Text } from './catalyst/text'
-
 // PagePlaceholder reserves a surface a later phase fills in. It keeps
 // navigation honest today without pretending features exist.
 export function PagePlaceholder({
@@ -14,10 +11,10 @@ export function PagePlaceholder({
 }) {
   return (
     <div className="mx-auto max-w-5xl py-8">
-      <Heading>{title}</Heading>
-      <Text className="mt-2">{description}</Text>
+      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">{description}</p>
       {children ?? (
-        <div className="mt-8 rounded-xl border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-400 dark:border-zinc-700">
+        <div className="mt-8 rounded-xl border border-dashed p-12 text-center text-sm text-muted-foreground">
           Nothing here yet.
         </div>
       )}

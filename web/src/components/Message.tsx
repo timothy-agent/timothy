@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
-import { Badge } from './catalyst/badge'
+import { Badge } from './ui/badge'
 import type { AssistantState } from '../lib/chat'
 import 'highlight.js/styles/github-dark.css'
 
@@ -35,7 +35,12 @@ export function InterruptedMessage({ text }: { text: string }) {
       <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
         <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
       </div>
-      <Badge color="amber">interrupted</Badge>
+      <Badge
+        variant="outline"
+        className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+      >
+        interrupted
+      </Badge>
     </div>
   )
 }
@@ -59,20 +64,25 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
       </div>
 
       {msg.notices.map((n, i) => (
-        <Badge key={i} color="amber" data-testid="notice">
+        <Badge
+          key={i}
+          variant="outline"
+          className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          data-testid="notice"
+        >
           {n}
         </Badge>
       ))}
       {msg.error && (
-        <Badge color="red" data-testid="error">
+        <Badge variant="destructive" data-testid="error">
           {msg.error}
         </Badge>
       )}
       {!msg.streaming && msg.meta?.provider && (
         <div className="flex gap-1.5" data-testid="meta-badge">
-          <Badge color="zinc">{msg.meta.provider}</Badge>
-          <Badge color="zinc">{msg.meta.model}</Badge>
-          {tokens && <Badge color="zinc">{tokens}</Badge>}
+          <Badge variant="secondary">{msg.meta.provider}</Badge>
+          <Badge variant="secondary">{msg.meta.model}</Badge>
+          {tokens && <Badge variant="secondary">{tokens}</Badge>}
         </div>
       )}
     </div>

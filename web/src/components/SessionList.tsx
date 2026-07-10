@@ -1,14 +1,34 @@
-import { ArchiveBoxIcon, MagnifyingGlassIcon, PencilIcon, PlusIcon } from '@heroicons/react/20/solid'
+import { Archive, ArchiveRestore, MoreHorizontal, Pencil, Plus, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { updateSession } from '../api/client'
 import type { SessionMeta } from '../api/types'
 import { groupByDay, useSessions } from '../lib/sessions'
-import { Badge } from './catalyst/badge'
-import { Button } from './catalyst/button'
-import { Dialog, DialogActions, DialogBody, DialogTitle } from './catalyst/dialog'
-import { Input } from './catalyst/input'
-import { SidebarHeading, SidebarItem, SidebarLabel, SidebarSection } from './catalyst/sidebar'
+import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
+import { Input } from './ui/input'
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from './ui/sidebar'
 
 export function SessionList() {
   const { sessions, query, setQuery, refresh, hasMore, loadMore } = useSessions()
@@ -46,64 +66,83 @@ export function SessionList() {
 
   return (
     <>
-      <SidebarSection>
-        <SidebarItem href="/" current={pathname === '/'}>
-          <PlusIcon data-slot="icon" />
-          <SidebarLabel>New chat</SidebarLabel>
-        </SidebarItem>
-        <div className="relative mt-1 px-0.5">
-          <MagnifyingGlassIcon className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-zinc-400" />
-          <input
-            aria-label="Search sessions"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search…"
-            className="w-full rounded-lg border border-zinc-950/10 bg-transparent py-1.5 pr-2 pl-8 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-blue-500/50 dark:border-white/10 dark:text-white"
-          />
-        </div>
-      </SidebarSection>
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname === '/'}>
+                <Link to="/">
+                  <Plus />
+                  <span>New chat</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <div className="relative mt-1 px-1">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              aria-label="Search sessions"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search…"
+              className="h-8 pl-8"
+            />
+          </div>
+        </SidebarGroupContent>
+      </SidebarGroup>
 
       {groupByDay(sessions).map((group) => (
-        <SidebarSection key={group.label}>
-          <SidebarHeading>{group.label}</SidebarHeading>
-          {group.sessions.map((s) => (
-            <div key={s.id} className="group/session relative">
-              <SidebarItem href={`/sessions/${s.id}`} current={pathname === `/sessions/${s.id}`}>
-                <SidebarLabel className="truncate pr-10">{s.title || 'New session'}</SidebarLabel>
-                {s.archived && <Badge color="zinc">archived</Badge>}
-              </SidebarItem>
-              <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5 opacity-0 group-hover/session:opacity-100">
-                <button
-                  aria-label={`Rename ${s.title || 'session'}`}
-                  onClick={() => {
-                    setTitle(s.title)
-                    setRenaming(s)
-                  }}
-                  className="rounded p-1 text-zinc-400 hover:bg-zinc-950/5 hover:text-zinc-600 dark:hover:bg-white/10 dark:hover:text-zinc-300"
-                >
-                  <PencilIcon className="size-3.5" />
-                </button>
-                <button
-                  aria-label={`${s.archived ? 'Unarchive' : 'Archive'} ${s.title || 'session'}`}
-                  onClick={() => void archive(s)}
-                  className="rounded p-1 text-zinc-400 hover:bg-zinc-950/5 hover:text-zinc-600 dark:hover:bg-white/10 dark:hover:text-zinc-300"
-                >
-                  <ArchiveBoxIcon className="size-3.5" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </SidebarSection>
+        <SidebarGroup key={group.label}>
+          <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {group.sessions.map((s) => (
+                <SidebarMenuItem key={s.id}>
+                  <SidebarMenuButton asChild isActive={pathname === `/sessions/${s.id}`}>
+                    <Link to={`/sessions/${s.id}`}>
+                      <span className="truncate">{s.title || 'New session'}</span>
+                      {s.archived && <Badge variant="outline">archived</Badge>}
+                    </Link>
+                  </SidebarMenuButton>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <SidebarMenuAction showOnHover aria-label={`Actions for ${s.title || 'session'}`}>
+                        <MoreHorizontal />
+                      </SidebarMenuAction>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="right" align="start">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setTitle(s.title)
+                          setRenaming(s)
+                        }}
+                      >
+                        <Pencil />
+                        Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void archive(s)}>
+                        {s.archived ? <ArchiveRestore /> : <Archive />}
+                        {s.archived ? 'Unarchive' : 'Archive'}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       ))}
 
       {sessions.length === 0 && query !== '' && (
-        <p className="px-2 py-1 text-xs text-zinc-400 dark:text-zinc-500">No sessions match.</p>
+        <p className="px-4 py-1 text-xs text-muted-foreground">No sessions match.</p>
       )}
       {hasMore && <div ref={sentinelRef} className="h-px" data-testid="sessions-sentinel" />}
 
-      <Dialog open={renaming !== null} onClose={() => setRenaming(null)}>
-        <DialogTitle>Rename session</DialogTitle>
-        <DialogBody>
+      <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename session</DialogTitle>
+          </DialogHeader>
           <Input
             aria-label="Session title"
             value={title}
@@ -113,13 +152,13 @@ export function SessionList() {
             }}
             autoFocus
           />
-        </DialogBody>
-        <DialogActions>
-          <Button plain onClick={() => setRenaming(null)}>
-            Cancel
-          </Button>
-          <Button onClick={() => void rename()}>Save</Button>
-        </DialogActions>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRenaming(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void rename()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
     </>
   )
