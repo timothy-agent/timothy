@@ -71,6 +71,10 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			"web_fetch":       true,
 			"retrieve_output": true,
 			"load_skill":      true,
+			// remember fires only on the user's explicit ask — a
+			// prompt would demand consent for consent. The write is
+			// visible and reversible in the memory browser.
+			"remember": true,
 		},
 	}
 }
