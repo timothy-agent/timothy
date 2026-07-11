@@ -40,6 +40,15 @@ services:
       timeout: 3s
       retries: 10
 
+  searxng:
+    <<: *service
+    image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ../deploy/searxng:/etc/searxng:ro
+    # internal-only: no published ports; brain is the sole caller
+
   brain:
     <<: *go-service
     build:
@@ -60,10 +69,17 @@ services:
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
       # Where the shell tool runs; the only tree tools may touch.
       WORKSPACE_ROOT: /workspace
+      # Compose-internal only: the model never sees this address.
+      SEARXNG_URL: http://searxng:8080
     volumes:
       - workspace:/workspace
     ports:
       - "${BRAIN_PORT:-8300}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_started
 
   gateway:
     <<: *go-service

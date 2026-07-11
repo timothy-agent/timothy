@@ -69,6 +69,7 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			"convert_time":    true,
 			"calculate":       true,
 			"web_fetch":       true,
+			"web_search":      true,
 			"retrieve_output": true,
 			"load_skill":      true,
 			// remember fires only on the user's explicit ask — a

@@ -469,6 +469,45 @@ func TestAgentOffloadsBigResults(t *testing.T) {
 	}
 }
 
+// TestAgentRetrieveOutputBetweenThresholdAndCap reproduces a live crash:
+// retrieve_output's own result can land between the default offload
+// threshold (8KB) and its inline cap (32KB) — bigger than the
+// threshold but smaller than what the truncation branch tries to
+// slice off. offloadIfBig must not slice past the content's length.
+func TestAgentRetrieveOutputBetweenThresholdAndCap(t *testing.T) {
+	t.Parallel()
+	const size = 13081 // between 8KB and 32KB, the exact failing size seen live
+	mid := &tools.Tool{
+		Name:        "retrieve_output",
+		Description: "stands in for the real tool",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			return strings.Repeat("x", size), nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"retrieve_output", `{}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw, mid)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch) // must not panic
+
+	var content string
+	for _, m := range gw.requests[1].Messages {
+		if m.ToolResult != nil {
+			content = m.ToolResult.Content
+		}
+	}
+	if len(content) != size {
+		t.Fatalf("content length = %d, want the untouched %d-byte result (no truncation should apply)", len(content), size)
+	}
+}
+
 func TestAgentPermissionDenyBecomesFeedback(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{

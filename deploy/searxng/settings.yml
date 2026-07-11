@@ -1,0 +1,17 @@
+use_default_settings: true
+
+general:
+  # No telemetry to the SearXNG project; this instance serves one tool.
+  enable_metrics: false
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  # No published port and a single internal caller (brain): this key
+  # only signs session cookies nothing outside the compose network can
+  # reach, so a static value is fine here.
+  secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
+  limiter: false

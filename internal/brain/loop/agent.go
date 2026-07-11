@@ -418,7 +418,13 @@ func (a *Agent) offloadIfBig(ctx context.Context, sessionID, tool, content strin
 	}
 	// retrieve_output must not re-offload what it just retrieved;
 	// truncate with an honest note instead (retrieval pages by size).
+	// The offload threshold can be smaller than the inline cap, so a
+	// result can land here already shorter than retrieveInlineCap —
+	// that's not truncation, just an oversized-but-not-huge output.
 	if tool == "retrieve_output" {
+		if len(content) <= retrieveInlineCap {
+			return content, nil
+		}
 		return fmt.Sprintf("%s\n[truncated at %d bytes: the stored output is %d bytes]",
 			content[:retrieveInlineCap], retrieveInlineCap, len(content)), nil
 	}

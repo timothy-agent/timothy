@@ -128,7 +128,9 @@ func main() {
 	}
 	mc := memclient.New(memorydURL)
 
-	agent, broker, outputs, buildErr := buildAgent(gwc, store, app.DB, workspace, packs, mc.Add, app.Log)
+	searxngURL := os.Getenv("SEARXNG_URL")
+
+	agent, broker, outputs, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, packs, mc.Add, app.Log)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -269,7 +271,7 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010).
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace string, packs []skills.Skill, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL string, packs []skills.Skill, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, error) {
 	outputs := tools.NewOutputs(db)
 	reg := tools.NewRegistry()
 	set := []*tools.Tool{
@@ -280,6 +282,11 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 		builtin.Shell(builtin.ShellConfig{WorkspaceRoot: workspace}),
 		builtin.RetrieveOutput(outputs),
 		builtin.Remember(remember),
+	}
+	// Search is optional infra: only registered when a backend is
+	// configured, so an environment without SearXNG still runs clean.
+	if searxngURL != "" {
+		set = append(set, builtin.WebSearch(searxngURL))
 	}
 	if len(packs) > 0 {
 		set = append(set, skills.LoadSkillTool(packs))
