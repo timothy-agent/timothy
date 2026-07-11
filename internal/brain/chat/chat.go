@@ -16,6 +16,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
@@ -78,16 +79,17 @@ type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
 
 // Service orchestrates turns against the event store.
 type Service struct {
-	gw         Gateway
-	log        SessionLog
-	distill    Distill
-	compactor  Compactor
-	memory     MemoryExtract  // nil: long-term memory off
-	recall     MemoryRetrieve // nil: no memory injection
-	budget     int
-	system     string
-	flushEvery time.Duration // pending-state flush cadence mid-stream
-	logger     *slog.Logger
+	gw          Gateway
+	log         SessionLog
+	distill     Distill
+	compactor   Compactor
+	memory      MemoryExtract  // nil: long-term memory off
+	recall      MemoryRetrieve // nil: no memory injection
+	budget      int
+	system      string
+	skillBodies map[string]string // name -> full pack body, for skill_hint
+	flushEvery  time.Duration     // pending-state flush cadence mid-stream
+	logger      *slog.Logger
 }
 
 // SetMemoryExtract wires the memoryd hook. Optional — nil leaves
@@ -97,14 +99,20 @@ func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
 // SetMemoryRetrieve wires per-turn memory recall. Optional.
 func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 
-// New builds the service. skillsIndex is the one-line-per-skill
-// section appended to the system prompt (empty = no skills).
-func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget int, skillsIndex string, logger *slog.Logger) *Service {
+// New builds the service. packs are the loaded skill definitions: their
+// one-line index goes into the system prompt, and their bodies back
+// skill_hint (nil/empty = no skills).
+func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget int, packs []skills.Skill, logger *slog.Logger) *Service {
 	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion, "token_budget", budget)
+	bodies := make(map[string]string, len(packs))
+	for _, p := range packs {
+		bodies[p.Name] = p.Body
+	}
 	return &Service{
 		gw: gw, log: log, distill: distill, compactor: compactor, budget: budget,
-		system:     assembleSystem(skillsIndex),
-		flushEvery: 2 * time.Second, logger: logger,
+		system:      assembleSystem(skills.Index(packs)),
+		skillBodies: bodies,
+		flushEvery:  2 * time.Second, logger: logger,
 	}
 }
 
@@ -114,6 +122,12 @@ type Request struct {
 	Message      string `json:"message"`
 	TaskCategory string `json:"task_category,omitempty"`
 	ModelHint    string `json:"model_hint,omitempty"`
+	// SkillHint names a skill pack to force-load for this turn — set
+	// when the user picked one explicitly (a UI chip, not parsed
+	// text). Unlike load_skill, this is not a choice the model can
+	// skip: the pack's body is in the system prompt before the first
+	// token streams.
+	SkillHint string `json:"skill_hint,omitempty"`
 }
 
 // Chat streams one turn. The user message is durably appended before
@@ -123,6 +137,14 @@ type Request struct {
 func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.StreamEvent, error) {
 	if strings.TrimSpace(req.Message) == "" {
 		return "", nil, fmt.Errorf("chat: %w: message is required", ErrBadRequest)
+	}
+	var skillBody string
+	if req.SkillHint != "" {
+		body, ok := s.skillBodies[req.SkillHint]
+		if !ok {
+			return "", nil, fmt.Errorf("chat: %w: unknown skill %q", ErrBadRequest, req.SkillHint)
+		}
+		skillBody = body
 	}
 	category := req.TaskCategory
 	if category == "" {
@@ -170,11 +192,17 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		return sessionID, nil, err
 	}
 
-	// Retrieved memory rides the system prompt's TAIL: the stable
-	// prefix stays byte-identical for provider prompt caches (D-018)
-	// while the per-turn block varies after it. The block is fenced
-	// DATA, never instructions (D-011 poisoning defense).
+	// Retrieved memory and a hinted skill both ride the system
+	// prompt's TAIL: the stable prefix stays byte-identical for
+	// provider prompt caches (D-018) while the per-turn additions vary
+	// after it. The memory block is fenced DATA, never instructions
+	// (D-011 poisoning defense); the skill body is instructions the
+	// user explicitly selected, deterministically loaded rather than
+	// left to the model's load_skill judgment.
 	system := s.system
+	if skillBody != "" {
+		system += "\n\n# Skill: " + req.SkillHint + "\n\n" + skillBody
+	}
 	if s.recall != nil {
 		if block := s.recall(ctx, sessionID, req.Message); block != "" {
 			system += "\n\n" + block

@@ -13,6 +13,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -140,7 +141,7 @@ func okEvents(text string) []stream.StreamEvent {
 }
 
 func newService(gw Gateway, log SessionLog) *Service {
-	return New(gw, log, nil, nil, 60_000, "", discard())
+	return New(gw, log, nil, nil, 60_000, nil, discard())
 }
 
 func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
@@ -328,6 +329,43 @@ func TestChatValidatesMessage(t *testing.T) {
 	}
 }
 
+// TestChatSkillHintInjectsBodyDeterministically proves skill_hint does
+// not depend on the model choosing to call load_skill: the pack body
+// lands in the system prompt sent to the provider before any tokens
+// stream, on the very first request.
+func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("planned")}
+	s := New(gw, newFakeLog(), nil, nil, 60_000, []skills.Skill{
+		{Name: "travel-planning", Description: "Use when planning a trip", Body: "Ask about dates, budget, destination."},
+	}, discard())
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "Tokyo, 5 days", SkillHint: "travel-planning"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	// The first request is the chat turn itself; a first-exchange
+	// autoTitle call may follow on its own goroutine, so index by
+	// position rather than "last".
+	gw.mu.Lock()
+	sys := gw.requests[0].System
+	gw.mu.Unlock()
+	if !strings.Contains(sys, "travel-planning") || !strings.Contains(sys, "Ask about dates, budget, destination.") {
+		t.Fatalf("system prompt missing the hinted skill body:\n%s", sys)
+	}
+}
+
+func TestChatSkillHintRefusesUnknownSkill(t *testing.T) {
+	t.Parallel()
+	s := newService(&fakeGW{}, newFakeLog())
+	_, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "no-such-skill"})
+	if err == nil {
+		t.Fatal("unknown skill_hint accepted")
+	}
+}
+
 // orderCompactor records whether compaction ran before the provider
 // call: the pre-send guarantee.
 type orderCompactor struct {
@@ -364,7 +402,7 @@ func TestChatCompactsBeforeSend(t *testing.T) {
 	log := newFakeLog()
 	order := &orderCompactor{}
 	gw := &gwAfterCompact{fakeGW: &fakeGW{events: okEvents("hi")}, order: order}
-	svc := New(gw, log, nil, order, 60_000, "", discard())
+	svc := New(gw, log, nil, order, 60_000, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{Message: "hello"})
 	if err != nil {
@@ -413,7 +451,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 
 	gw := &fakeGW{events: okEvents("fresh reply")}
-	svc := New(gw, log, nil, &compactingLog{log: log}, 60_000, "", discard())
+	svc := New(gw, log, nil, &compactingLog{log: log}, 60_000, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "new question"})
 	if err != nil {
@@ -456,7 +494,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
 	defer close(distillRelease)
-	svc := New(gw, log, distill, nil, 60_000, "", discard())
+	svc := New(gw, log, distill, nil, 60_000, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
 	if err != nil {
@@ -506,7 +544,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 	distill := func(context.Context, string, string) *session.TurnMemory {
 		return &session.TurnMemory{KeyFindings: []string{"user moved to Porto"}}
 	}
-	svc := New(gw, log, distill, nil, 60_000, "", discard())
+	svc := New(gw, log, distill, nil, 60_000, nil, discard())
 
 	type call struct {
 		sessionID string

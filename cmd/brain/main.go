@@ -138,7 +138,7 @@ func main() {
 	go runOutputGC(ctx, outputs, app.Log)
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
-		gatedCompactor{inner: compactor, flags: flags}, budget, skills.Index(packs), app.Log)
+		gatedCompactor{inner: compactor, flags: flags}, budget, packs, app.Log)
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
