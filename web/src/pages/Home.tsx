@@ -18,11 +18,13 @@ import { usePendingMemories } from '../lib/memory'
 const categoryKey = 'timothy.category'
 
 // ChatIntent carries a home-screen action into the chat page: `send`
-// fires immediately, `draft` only prefills the composer.
+// fires immediately, `draft` only prefills the composer, `skillHint`
+// pins a skill chip (deterministic — never text the user can mangle).
 export interface ChatIntent {
   send?: string
   draft?: string
   category?: string
+  skillHint?: string
 }
 
 interface Tile {
@@ -74,34 +76,22 @@ export function Home() {
         {
           label: 'Research',
           icon: SearchList01Icon,
-          intent: {
-            draft: 'Use the research-brief skill. Question: ',
-            category: 'research',
-          },
+          intent: { skillHint: 'research-brief', category: 'research' },
         },
         {
           label: 'Markets',
           icon: ChartLineData01Icon,
-          intent: {
-            draft: 'Use the markets-digest skill. My watchlist: ',
-            category: 'research',
-          },
+          intent: { skillHint: 'markets-digest', category: 'research' },
         },
         {
           label: 'Travel',
           icon: AirplaneTakeOff01Icon,
-          intent: {
-            draft: 'Use the travel-planning skill. Trip: ',
-            category: 'research',
-          },
+          intent: { skillHint: 'travel-planning', category: 'research' },
         },
         {
           label: 'Coding',
           icon: CodeIcon,
-          intent: {
-            draft: 'Use the coding-task skill. Task: ',
-            category: 'coding',
-          },
+          intent: { skillHint: 'coding-task', category: 'coding' },
         },
       ],
     },

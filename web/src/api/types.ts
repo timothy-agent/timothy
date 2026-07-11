@@ -70,6 +70,7 @@ export interface ChatRequest {
   message: string
   task_category?: string
   model_hint?: string
+  skill_hint?: string
 }
 
 // --- session management (mirrors brain's /v1/sessions surface) ---

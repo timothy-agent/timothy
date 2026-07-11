@@ -65,11 +65,11 @@ describe('Home', () => {
     expect(landed).toBeNull()
   })
 
-  it('skill tiles carry a prefill intent into chat', () => {
+  it('skill tiles carry a deterministic skill hint into chat', () => {
     renderHome()
     fireEvent.click(screen.getByRole('button', { name: /Travel/ }))
     expect(landed?.pathname).toBe('/chat')
-    expect(landed?.state?.draft).toContain('travel-planning skill')
+    expect(landed?.state?.skillHint).toBe('travel-planning')
     expect(landed?.state?.send).toBeUndefined()
   })
 

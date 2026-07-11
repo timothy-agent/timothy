@@ -34,6 +34,9 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   const [category, setCategory] = useState(
     () => localStorage.getItem(categoryKey) ?? categories[0],
   )
+  // A skill picked from the home screen: pinned, not text the user
+  // can accidentally mangle. Rides every turn until removed.
+  const [skillHint, setSkillHint] = useState<string | undefined>(undefined)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
   const sessionRef = useRef<string | undefined>(routeSession)
@@ -104,7 +107,7 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
       return next
     })
 
-  const sendMessage = async (text: string, cat: string) => {
+  const sendMessage = async (text: string, cat: string, hint = skillHint) => {
     const message = text.trim()
     if (!message || streaming) return
     setDraft('')
@@ -127,7 +130,7 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
     }
     try {
       await chatStream(
-        { session_id: sessionRef.current, message, task_category: cat },
+        { session_id: sessionRef.current, message, task_category: cat, skill_hint: hint },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
           updateLast((m) => applyEvent(m, ev))
@@ -160,16 +163,20 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   const send = () => void sendMessage(draft, category)
 
   // Consume a home-screen intent exactly once: `send` fires the
-  // message immediately, `draft` prefills the composer.
+  // message immediately, `draft` prefills the composer, `skillHint`
+  // pins the chip. sendMessage takes hint explicitly here rather than
+  // relying on the skillHint state landing before the call — setState
+  // doesn't take effect until the next render.
   useEffect(() => {
     if (intentConsumedRef.current) return
     const intent = location.state as ChatIntent | null
-    if (!intent || (!intent.send && !intent.draft && !intent.category)) return
+    if (!intent || (!intent.send && !intent.draft && !intent.category && !intent.skillHint)) return
     intentConsumedRef.current = true
     window.history.replaceState(null, '') // don't refire on back/refresh
     const cat = intent.category ?? category
     if (intent.category) pickCategory(intent.category)
-    if (intent.send) void sendMessage(intent.send, cat)
+    if (intent.skillHint) setSkillHint(intent.skillHint)
+    if (intent.send) void sendMessage(intent.send, cat, intent.skillHint)
     else if (intent.draft) setDraft(intent.draft)
     // Mount-time only by design: the intent rides the navigation that
     // created this page instance; the ref guards strict-mode replays.
@@ -237,6 +244,8 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
           onSend={send}
           category={category}
           onCategory={pickCategory}
+          skillHint={skillHint}
+          onRemoveSkillHint={() => setSkillHint(undefined)}
           disabled={streaming}
         />
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
