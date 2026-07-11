@@ -32,15 +32,13 @@ func encoder() (*tiktoken.Tiktoken, error) {
 	return enc, encErr
 }
 
-// perItemOverhead approximates the list framing ("- " and newline)
-// around each memory in the rendered block.
-const perItemOverhead = 3
-
 // Pack selects the highest-scored memories that fit budgetTokens and
 // orders them for mid-context attention loss: the best item leads,
 // the runner-up closes, the rest fill the middle best-first
 // (serial-position effect). Input must be sorted best-first (Fuse's
-// contract).
+// contract). The budget bounds the FINAL injected block: each item is
+// costed in its rendered, escaped form and the fence + preamble are
+// reserved up front — not just the raw contents.
 func Pack(scored []Scored, budgetTokens int) ([]Scored, int, error) {
 	e, err := encoder()
 	if err != nil {
@@ -51,14 +49,17 @@ func Pack(scored []Scored, budgetTokens int) ([]Scored, int, error) {
 	}
 
 	var picked []Scored
-	used := 0
+	used := len(e.Encode(BlockOpen+BlockClose, nil, nil))
 	for _, s := range scored {
-		cost := len(e.Encode(s.Content, nil, nil)) + perItemOverhead
+		cost := len(e.Encode(RenderItem(string(s.Type), s.Content), nil, nil))
 		if used+cost > budgetTokens {
 			continue // a smaller later item may still fit
 		}
 		picked = append(picked, s)
 		used += cost
+	}
+	if len(picked) == 0 {
+		return nil, 0, nil // nothing fits: no block, no framing cost
 	}
 	return positionForAttention(picked), used, nil
 }

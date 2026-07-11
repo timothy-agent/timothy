@@ -37,15 +37,25 @@ func TestPackNeverExceedsBudget(t *testing.T) {
 		if used > budget {
 			t.Fatalf("round %d: used %d > budget %d (%d items)", round, used, budget, len(picked))
 		}
-		// Recount independently: the reported figure must match the
-		// tokenizer's own arithmetic.
+		// Recount independently against the RENDERED block — framing,
+		// escaping and all — because that is what lands in the prompt.
 		e, _ := encoder()
 		total := 0
-		for _, s := range picked {
-			total += len(e.Encode(s.Content, nil, nil)) + perItemOverhead
+		if len(picked) > 0 {
+			rendered := BlockOpen
+			for _, s := range picked {
+				rendered += RenderItem(string(s.Type), s.Content)
+			}
+			rendered += BlockClose
+			total = len(e.Encode(rendered, nil, nil))
 		}
-		if total != used {
-			t.Fatalf("round %d: reported %d != recount %d", round, used, total)
+		if total > budget {
+			t.Fatalf("round %d: rendered block %d tokens > budget %d", round, total, budget)
+		}
+		// Per-part accounting must never under-report the whole: BPE
+		// merges across boundaries only shrink the concatenation.
+		if total > used {
+			t.Fatalf("round %d: reported %d < rendered recount %d", round, used, total)
 		}
 	}
 }
@@ -57,8 +67,8 @@ func TestPackPrefersHighScores(t *testing.T) {
 		scoredItem("mid", 100, 0.5),
 		scoredItem("worst", 100, 0.1),
 	}
-	// Budget fits roughly two 100-word items.
-	picked, _, err := Pack(scored, 250)
+	// Budget fits the block framing plus roughly two 100-word items.
+	picked, _, err := Pack(scored, 300)
 	if err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
@@ -111,6 +121,19 @@ func TestPackSkipsOversizedButKeepsSmaller(t *testing.T) {
 	}
 	if len(picked) != 1 || picked[0].ID != "small" {
 		t.Fatalf("picked = %+v, want just small", picked)
+	}
+}
+
+func TestPackNothingFitsMeansNoBlock(t *testing.T) {
+	t.Parallel()
+	// A budget below even the fence framing must yield an empty pick
+	// and report zero tokens — no block gets injected at all.
+	picked, used, err := Pack([]Scored{scoredItem("a", 200, 0.9)}, 10)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	if len(picked) != 0 || used != 0 {
+		t.Fatalf("picked=%d used=%d, want 0/0", len(picked), used)
 	}
 }
 
