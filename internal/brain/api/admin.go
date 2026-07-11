@@ -7,6 +7,14 @@ import "net/http"
 // from outside. Tests pin this scope like the memory proxy's.
 var adminRoutePatterns = []string{
 	"GET /v1/admin/usage/{rest...}",
+	"GET /v1/admin/providers",
+	"POST /v1/admin/providers",
+	"PATCH /v1/admin/providers/{id}",
+	"DELETE /v1/admin/providers/{id}",
+	"POST /v1/admin/providers/{id}/test",
+	"GET /v1/admin/providers/health",
+	"GET /v1/admin/routes",
+	"PATCH /v1/admin/routes/{category}",
 }
 
 // registerAdmin mounts the admin proxy behind bearer auth. nil leaves

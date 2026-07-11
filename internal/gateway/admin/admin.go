@@ -1,0 +1,470 @@
+// Package admin is the gateway's control plane: provider and route
+// CRUD over the same tables the router loads (D-004 — providers are
+// data), every mutation audited and followed by an in-process snapshot
+// reload so changes serve without restarts.
+package admin
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"time"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
+)
+
+// drivers whitelists what the gateway can actually construct. CLI
+// drivers arrive in a later phase; the panel shows them disabled.
+var drivers = map[string]bool{"anthropic": true, "openaicompat": true, "bedrock": true}
+
+// credentialRefPattern accepts names and paths (env var names, Vault
+// paths, AWS profile names) and rejects anything that could be a
+// pasted secret: no spaces, no long opaque blobs.
+var credentialRefPattern = regexp.MustCompile(`^[A-Za-z0-9_./-]{0,128}$`)
+
+const testTimeout = 20 * time.Second
+
+// Admin mutates routing configuration. store reloads the serving
+// snapshot after every write; rec books test-connection probes under
+// purpose='test' so they never pollute usage.
+type Admin struct {
+	db    *pgpool.Pool
+	store *router.Store
+	rec   ledger.Recorder
+	log   *slog.Logger
+}
+
+func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, log *slog.Logger) *Admin {
+	return &Admin{db: db, store: store, rec: rec, log: log}
+}
+
+// Provider is the API shape of one providers row. credential_ref is a
+// NAME (env var / Vault path / AWS profile) — secret values are never
+// stored or returned anywhere in this system.
+type Provider struct {
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	Kind          string             `json:"kind"`
+	Driver        string             `json:"driver"`
+	BaseURL       string             `json:"base_url"`
+	DefaultModel  string             `json:"default_model"`
+	Models        []router.ModelInfo `json:"models"`
+	CredentialRef string             `json:"credential_ref"`
+	Headers       map[string]string  `json:"headers"`
+	Enabled       bool               `json:"enabled"`
+}
+
+func validateProvider(p Provider) error {
+	if p.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if p.Kind != "api" && p.Kind != "cli" {
+		return fmt.Errorf("kind must be api or cli")
+	}
+	if p.Kind == "cli" {
+		return fmt.Errorf("cli providers arrive in a later phase")
+	}
+	if !drivers[p.Driver] {
+		return fmt.Errorf("unknown driver %q", p.Driver)
+	}
+	if !credentialRefPattern.MatchString(p.CredentialRef) {
+		return fmt.Errorf("credential_ref must be a name or path (env var, Vault path, AWS profile), never a secret value")
+	}
+	return nil
+}
+
+// List returns every provider row, config order by name.
+func (a *Admin) List(ctx context.Context) ([]Provider, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("admin providers: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT id, name, kind, driver, base_url, default_model,
+		models, credential_ref, headers, enabled FROM providers ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("admin providers: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Provider{}
+	for rows.Next() {
+		var (
+			p            Provider
+			models, hdrs []byte
+		)
+		if err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL,
+			&p.DefaultModel, &models, &p.CredentialRef, &hdrs, &p.Enabled); err != nil {
+			return nil, fmt.Errorf("admin providers: %w", err)
+		}
+		if err := json.Unmarshal(models, &p.Models); err != nil {
+			return nil, fmt.Errorf("admin providers: models: %w", err)
+		}
+		if err := json.Unmarshal(hdrs, &p.Headers); err != nil {
+			return nil, fmt.Errorf("admin providers: headers: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Create inserts a provider (disabled by default is the caller's
+// choice), audits, and reloads the snapshot.
+func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
+	if err := validateProvider(p); err != nil {
+		return "", err
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("admin create: %w", err)
+	}
+	models, hdrs := jsonOr(p.Models, "[]"), jsonOr(p.Headers, "{}")
+	var id string
+	err = db.QueryRow(ctx, `INSERT INTO providers
+			(name, kind, driver, base_url, default_model, models, credential_ref, headers, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		p.Name, p.Kind, p.Driver, p.BaseURL, p.DefaultModel, models, p.CredentialRef, hdrs, p.Enabled).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("admin create: %w", err)
+	}
+	a.audit(ctx, "create", "provider", id, nil, p)
+	a.reload(ctx)
+	return id, nil
+}
+
+// Patch applies a partial update. Only fields present in the request
+// change; before/after land in the audit row.
+type ProviderPatch struct {
+	BaseURL       *string             `json:"base_url"`
+	DefaultModel  *string             `json:"default_model"`
+	Models        *[]router.ModelInfo `json:"models"`
+	CredentialRef *string             `json:"credential_ref"`
+	Headers       *map[string]string  `json:"headers"`
+	Enabled       *bool               `json:"enabled"`
+}
+
+func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error {
+	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
+		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
+	}
+	before, err := a.get(ctx, id)
+	if err != nil {
+		return err
+	}
+	after := before
+	if patch.BaseURL != nil {
+		after.BaseURL = *patch.BaseURL
+	}
+	if patch.DefaultModel != nil {
+		after.DefaultModel = *patch.DefaultModel
+	}
+	if patch.Models != nil {
+		after.Models = *patch.Models
+	}
+	if patch.CredentialRef != nil {
+		after.CredentialRef = *patch.CredentialRef
+	}
+	if patch.Headers != nil {
+		after.Headers = *patch.Headers
+	}
+	if patch.Enabled != nil {
+		after.Enabled = *patch.Enabled
+	}
+
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin patch: %w", err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE providers SET base_url = $2, default_model = $3,
+			models = $4, credential_ref = $5, headers = $6, enabled = $7, updated_at = now()
+		WHERE id = $1`,
+		id, after.BaseURL, after.DefaultModel, jsonOr(after.Models, "[]"),
+		after.CredentialRef, jsonOr(after.Headers, "{}"), after.Enabled)
+	if err != nil {
+		return fmt.Errorf("admin patch: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("provider %s: %w", id, ErrNotFound)
+	}
+	a.audit(ctx, "update", "provider", id, before, after)
+	a.reload(ctx)
+	return nil
+}
+
+// Delete removes a provider unless an enabled route still points at
+// it — silent black holes in serving chains are worse than an error.
+func (a *Admin) Delete(ctx context.Context, id string) error {
+	before, err := a.get(ctx, id)
+	if err != nil {
+		return err
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin delete: %w", err)
+	}
+	var refs int
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM task_routes
+		WHERE enabled AND chain @> $1::jsonb`,
+		fmt.Sprintf(`[{"provider_id": %q}]`, id)).Scan(&refs); err != nil {
+		return fmt.Errorf("admin delete: %w", err)
+	}
+	if refs > 0 {
+		return fmt.Errorf("provider %s is referenced by %d enabled route(s): %w", before.Name, refs, ErrInUse)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM providers WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("admin delete: %w", err)
+	}
+	a.audit(ctx, "delete", "provider", id, before, nil)
+	a.reload(ctx)
+	return nil
+}
+
+// Route is the API shape of one task_routes row.
+type Route struct {
+	TaskCategory string              `json:"task_category"`
+	Chain        []router.ChainEntry `json:"chain"`
+	Enabled      bool                `json:"enabled"`
+}
+
+func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("admin routes: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT task_category, chain, enabled FROM task_routes ORDER BY task_category`)
+	if err != nil {
+		return nil, fmt.Errorf("admin routes: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Route{}
+	for rows.Next() {
+		var (
+			r     Route
+			chain []byte
+		)
+		if err := rows.Scan(&r.TaskCategory, &chain, &r.Enabled); err != nil {
+			return nil, fmt.Errorf("admin routes: %w", err)
+		}
+		if err := json.Unmarshal(chain, &r.Chain); err != nil {
+			return nil, fmt.Errorf("admin routes: chain: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RoutePatch reorders/replaces a category's chain and/or flips it.
+type RoutePatch struct {
+	Chain   *[]router.ChainEntry `json:"chain"`
+	Enabled *bool                `json:"enabled"`
+}
+
+func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatch) error {
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin route patch: %w", err)
+	}
+	var (
+		before    Route
+		chainJSON []byte
+	)
+	err = db.QueryRow(ctx, `SELECT task_category, chain, enabled FROM task_routes WHERE task_category = $1`,
+		category).Scan(&before.TaskCategory, &chainJSON, &before.Enabled)
+	if err != nil {
+		return fmt.Errorf("route %s: %w", category, ErrNotFound)
+	}
+	_ = json.Unmarshal(chainJSON, &before.Chain)
+
+	after := before
+	if patch.Chain != nil {
+		// Every entry must reference an existing provider — a typo'd id
+		// becomes a silent skip at resolve time otherwise.
+		for _, e := range *patch.Chain {
+			var exists bool
+			if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM providers WHERE id = $1)`, e.ProviderID).Scan(&exists); err != nil {
+				return fmt.Errorf("admin route patch: %w", err)
+			}
+			if !exists {
+				return fmt.Errorf("chain entry references unknown provider %s", e.ProviderID)
+			}
+		}
+		after.Chain = *patch.Chain
+	}
+	if patch.Enabled != nil {
+		after.Enabled = *patch.Enabled
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE task_routes SET chain = $2, enabled = $3, updated_at = now()
+		WHERE task_category = $1`, category, jsonOr(after.Chain, "[]"), after.Enabled); err != nil {
+		return fmt.Errorf("admin route patch: %w", err)
+	}
+	a.audit(ctx, "update", "route", category, before, after)
+	a.reload(ctx)
+	return nil
+}
+
+// HealthRow is one provider's operational status: does its credential
+// resolve, and when did it last succeed or fail in the ledger.
+type HealthRow struct {
+	Name        string     `json:"name"`
+	Enabled     bool       `json:"enabled"`
+	Healthy     bool       `json:"healthy"`
+	LastSuccess *time.Time `json:"last_success,omitempty"`
+	LastError   *time.Time `json:"last_error,omitempty"`
+}
+
+func (a *Admin) Health(ctx context.Context) ([]HealthRow, error) {
+	snap := a.store.Snapshot()
+	if snap == nil {
+		return nil, fmt.Errorf("routing configuration not loaded yet")
+	}
+	rows, healthy := snap.Providers()
+
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("admin health: %w", err)
+	}
+	out := make([]HealthRow, 0, len(rows))
+	for _, row := range rows {
+		h := HealthRow{Name: row.Name, Enabled: row.Enabled, Healthy: healthy[row.Name]}
+		_ = db.QueryRow(ctx, `SELECT MAX(ts) FILTER (WHERE status = 'ok'),
+				MAX(ts) FILTER (WHERE status = 'error')
+			FROM cost_ledger WHERE provider = $1`, row.Name).Scan(&h.LastSuccess, &h.LastError)
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+// TestResult reports one live connection probe.
+type TestResult struct {
+	OK        bool   `json:"ok"`
+	LatencyMS int64  `json:"latency_ms"`
+	Model     string `json:"model"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// Test runs a one-token completion against the provider and books it
+// under purpose='test' — visible in the audit trail, invisible to
+// usage charts.
+func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) {
+	p, err := a.get(ctx, id)
+	if err != nil {
+		return TestResult{}, err
+	}
+	snap := a.store.Snapshot()
+	if snap == nil {
+		return TestResult{}, fmt.Errorf("routing configuration not loaded yet")
+	}
+	drv, ok := snap.Provider(p.Name)
+	if !ok {
+		return TestResult{}, fmt.Errorf("provider %s not in the serving snapshot (disabled providers still test after a reload)", p.Name)
+	}
+	if model == "" {
+		model = p.DefaultModel
+	}
+	if model == "" {
+		return TestResult{}, fmt.Errorf("provider %s has no default model; pass one", p.Name)
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+	start := time.Now()
+	ch, err := drv.Stream(tctx, provider.CompletionRequest{
+		Model:     model,
+		Messages:  []provider.Message{{Role: "user", Content: "ping"}},
+		MaxTokens: 1,
+	})
+	res := TestResult{Model: model}
+	entry := ledger.Entry{Provider: p.Name, Model: model, TaskCategory: "admin", Purpose: "test"}
+	if err != nil {
+		res.Detail = err.Error()
+		entry.Status, entry.ErrorCode = "error", "invalid_request"
+	} else {
+		for ev := range ch {
+			switch ev.Type {
+			case stream.EventError:
+				res.Detail = ev.Err.Message
+			case stream.EventUsage:
+				entry.Usage = ev.Usage
+			case stream.EventChunk, stream.EventDone, stream.EventIncomplete:
+				res.OK = true
+			}
+		}
+		if res.OK {
+			entry.Status = "ok"
+		} else {
+			entry.Status, entry.ErrorCode = "error", "provider_error"
+		}
+	}
+	res.LatencyMS = time.Since(start).Milliseconds()
+	entry.LatencyMS = res.LatencyMS
+	a.rec.Record(ctx, entry)
+	a.audit(ctx, "test", "provider", id, nil, res)
+	return res, nil
+}
+
+// Sentinel errors the HTTP layer maps onto status codes.
+var (
+	ErrNotFound = fmt.Errorf("not found")
+	ErrInUse    = fmt.Errorf("in use")
+)
+
+func (a *Admin) get(ctx context.Context, id string) (Provider, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return Provider{}, fmt.Errorf("admin get: %w", err)
+	}
+	var (
+		p            Provider
+		models, hdrs []byte
+	)
+	err = db.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
+			models, credential_ref, headers, enabled FROM providers WHERE id = $1`, id).
+		Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL, &p.DefaultModel,
+			&models, &p.CredentialRef, &hdrs, &p.Enabled)
+	if err != nil {
+		return Provider{}, fmt.Errorf("provider %s: %w", id, ErrNotFound)
+	}
+	_ = json.Unmarshal(models, &p.Models)
+	_ = json.Unmarshal(hdrs, &p.Headers)
+	return p, nil
+}
+
+// audit records who-did-what; failures log — an audit hiccup must not
+// roll back a successful mutation, but it must never be silent.
+func (a *Admin) audit(ctx context.Context, action, entity, entityID string, before, after any) {
+	db, err := a.db.Get()
+	if err != nil {
+		a.log.Warn("admin audit skipped", "action", action, "entity", entity, "error", err)
+		return
+	}
+	b, _ := json.Marshal(before)
+	aft, _ := json.Marshal(after)
+	if _, err := db.Exec(ctx, `INSERT INTO admin_audit (action, entity, entity_id, before, after)
+		VALUES ($1, $2, $3, $4, $5)`, action, entity, entityID, b, aft); err != nil {
+		a.log.Warn("admin audit failed", "action", action, "entity", entity, "error", err)
+	}
+}
+
+// reload swaps the serving snapshot; a failure keeps the last good one
+// (the poll retries in 30s) and is logged, never returned — the
+// mutation itself already committed.
+func (a *Admin) reload(ctx context.Context) {
+	if err := a.store.Load(ctx); err != nil {
+		a.log.Warn("admin reload failed; poll will retry", "error", err)
+	}
+}
+
+func jsonOr(v any, empty string) []byte {
+	b, err := json.Marshal(v)
+	if err != nil || v == nil {
+		return []byte(empty)
+	}
+	return b
+}

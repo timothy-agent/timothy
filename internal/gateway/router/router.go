@@ -258,6 +258,12 @@ func (s *Snapshot) findModel(model string) (ProviderRow, string, bool) {
 
 // Prices returns the price table for a provider's model, nil when
 // unpriced.
+// Provider returns the built driver for a provider name — the admin
+// test-connection path needs the instance, not an Attempt.
+func (s *Snapshot) Provider(name string) (provider.Provider, bool) {
+	return s.registry.Get(name)
+}
+
 func (s *Snapshot) Prices(providerName, model string) *ModelPrices {
 	row, ok := s.byName[providerName]
 	if !ok {

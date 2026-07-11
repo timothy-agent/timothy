@@ -15,11 +15,11 @@ import (
 // behind its bearer as /v1/admin/usage/*.
 func RegisterUsage(srv *httpserver.Server, agg *ledger.Aggregator) {
 	u := &usageAPI{agg: agg}
-	srv.Handle("GET /internal/usage/summary", http.HandlerFunc(u.handleSummary))
-	srv.Handle("GET /internal/usage/series", http.HandlerFunc(u.handleSeries))
-	srv.Handle("GET /internal/usage/sessions", http.HandlerFunc(u.handleSessions))
-	srv.Handle("GET /internal/usage/latency", http.HandlerFunc(u.handleLatency))
-	srv.Handle("GET /internal/usage/cache", http.HandlerFunc(u.handleCache))
+	srv.Handle("GET /internal/admin/usage/summary", http.HandlerFunc(u.handleSummary))
+	srv.Handle("GET /internal/admin/usage/series", http.HandlerFunc(u.handleSeries))
+	srv.Handle("GET /internal/admin/usage/sessions", http.HandlerFunc(u.handleSessions))
+	srv.Handle("GET /internal/admin/usage/latency", http.HandlerFunc(u.handleLatency))
+	srv.Handle("GET /internal/admin/usage/cache", http.HandlerFunc(u.handleCache))
 }
 
 type usageAPI struct {

@@ -210,7 +210,7 @@ func adminProxy(gatewayURL string, log *slog.Logger) http.Handler {
 	return &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
-			r.Out.URL.Path = "/internal/usage/" + strings.TrimPrefix(r.In.URL.Path, "/v1/admin/usage/")
+			r.Out.URL.Path = "/internal/admin/" + strings.TrimPrefix(r.In.URL.Path, "/v1/admin/")
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Warn("gateway admin proxy error", "path", r.URL.Path, "error", err)
