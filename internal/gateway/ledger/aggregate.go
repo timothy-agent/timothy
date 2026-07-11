@@ -155,8 +155,9 @@ func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit 
 	return out, rows.Err()
 }
 
-// LatencyRow is a provider's latency profile. Error rows are excluded:
-// fast failures would flatter the percentiles.
+// LatencyRow is a provider's latency profile. Only status='ok' rows
+// count: errors would flatter percentiles with fast failures, and
+// incomplete (truncated) streams skew them the other way.
 type LatencyRow struct {
 	Provider string  `json:"provider"`
 	P50      float64 `json:"p50_ms"`
@@ -176,7 +177,7 @@ func (a *Aggregator) Latency(ctx context.Context, from, to time.Time) ([]Latency
 			percentile_cont(0.99) WITHIN GROUP (ORDER BY latency_ms),
 			COUNT(*)
 		FROM cost_ledger
-		WHERE ts >= $1 AND ts < $2 AND status <> 'error' AND `+notTest+`
+		WHERE ts >= $1 AND ts < $2 AND status = 'ok' AND `+notTest+`
 		GROUP BY provider ORDER BY provider`, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("usage latency: %w", err)

@@ -12,12 +12,20 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
+
+// pgxQuerier is satisfied by both *pgxpool.Pool and pgx.Tx: scanProvider
+// runs the same query whether or not it's inside a locking transaction.
+type pgxQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // drivers whitelists what the gateway can actually construct. CLI
 // drivers arrive in a later phase; the panel shows them disabled.
@@ -152,7 +160,21 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
 	}
-	before, err := a.get(ctx, id)
+
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin patch: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin patch: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// FOR UPDATE holds the row for the whole read-modify-write: a
+	// concurrent Patch blocks until this one commits, instead of both
+	// reading the same before and one silently clobbering the other.
+	before, err := a.getForUpdate(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -176,11 +198,7 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 		after.Enabled = *patch.Enabled
 	}
 
-	db, err := a.db.Get()
-	if err != nil {
-		return fmt.Errorf("admin patch: %w", err)
-	}
-	tag, err := db.Exec(ctx, `UPDATE providers SET base_url = $2, default_model = $3,
+	tag, err := tx.Exec(ctx, `UPDATE providers SET base_url = $2, default_model = $3,
 			models = $4, credential_ref = $5, headers = $6, enabled = $7, updated_at = now()
 		WHERE id = $1`,
 		id, after.BaseURL, after.DefaultModel, jsonOr(after.Models, "[]"),
@@ -191,6 +209,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("provider %s: %w", id, ErrNotFound)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin patch: %w", err)
+	}
 	a.audit(ctx, "update", "provider", id, before, after)
 	a.reload(ctx)
 	return nil
@@ -199,16 +220,30 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 // Delete removes a provider unless an enabled route still points at
 // it — silent black holes in serving chains are worse than an error.
 func (a *Admin) Delete(ctx context.Context, id string) error {
-	before, err := a.get(ctx, id)
-	if err != nil {
-		return err
-	}
 	db, err := a.db.Get()
 	if err != nil {
 		return fmt.Errorf("admin delete: %w", err)
 	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	before, err := a.getForUpdate(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+
+	// task_routes isn't locked here, so a concurrent PatchRoute could
+	// still commit a fresh reference right after this check reads zero.
+	// PatchRoute's own provider-existence check runs inside its own
+	// FOR UPDATE-guarded tx against this same row, so the two race
+	// safely: whichever commits first wins, the other sees the updated
+	// state and fails cleanly (delete finds a ref, or the route patch
+	// finds the provider gone).
 	var refs int
-	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM task_routes
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM task_routes
 		WHERE enabled AND chain @> $1::jsonb`,
 		fmt.Sprintf(`[{"provider_id": %q}]`, id)).Scan(&refs); err != nil {
 		return fmt.Errorf("admin delete: %w", err)
@@ -216,7 +251,10 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 	if refs > 0 {
 		return fmt.Errorf("provider %s is referenced by %d enabled route(s): %w", before.Name, refs, ErrInUse)
 	}
-	if _, err := db.Exec(ctx, `DELETE FROM providers WHERE id = $1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM providers WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("admin delete: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("admin delete: %w", err)
 	}
 	a.audit(ctx, "delete", "provider", id, before, nil)
@@ -270,11 +308,17 @@ func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatc
 	if err != nil {
 		return fmt.Errorf("admin route patch: %w", err)
 	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin route patch: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var (
 		before    Route
 		chainJSON []byte
 	)
-	err = db.QueryRow(ctx, `SELECT task_category, chain, enabled FROM task_routes WHERE task_category = $1`,
+	err = tx.QueryRow(ctx, `SELECT task_category, chain, enabled FROM task_routes WHERE task_category = $1`,
 		category).Scan(&before.TaskCategory, &chainJSON, &before.Enabled)
 	if err != nil {
 		return fmt.Errorf("route %s: %w", category, ErrNotFound)
@@ -284,13 +328,13 @@ func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatc
 	after := before
 	if patch.Chain != nil {
 		// Every entry must reference an existing provider — a typo'd id
-		// becomes a silent skip at resolve time otherwise.
+		// becomes a silent skip at resolve time otherwise. FOR UPDATE
+		// locks the referenced provider row against a concurrent Delete
+		// racing to remove it after this check passes.
 		for _, e := range *patch.Chain {
-			var exists bool
-			if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM providers WHERE id = $1)`, e.ProviderID).Scan(&exists); err != nil {
-				return fmt.Errorf("admin route patch: %w", err)
-			}
-			if !exists {
+			var found string
+			err := tx.QueryRow(ctx, `SELECT id FROM providers WHERE id = $1 FOR UPDATE`, e.ProviderID).Scan(&found)
+			if err != nil {
 				return fmt.Errorf("chain entry references unknown provider %s", e.ProviderID)
 			}
 		}
@@ -300,8 +344,11 @@ func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatc
 		after.Enabled = *patch.Enabled
 	}
 
-	if _, err := db.Exec(ctx, `UPDATE task_routes SET chain = $2, enabled = $3, updated_at = now()
+	if _, err := tx.Exec(ctx, `UPDATE task_routes SET chain = $2, enabled = $3, updated_at = now()
 		WHERE task_category = $1`, category, jsonOr(after.Chain, "[]"), after.Enabled); err != nil {
+		return fmt.Errorf("admin route patch: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("admin route patch: %w", err)
 	}
 	a.audit(ctx, "update", "route", category, before, after)
@@ -335,7 +382,7 @@ func (a *Admin) Health(ctx context.Context) ([]HealthRow, error) {
 		h := HealthRow{Name: row.Name, Enabled: row.Enabled, Healthy: healthy[row.Name]}
 		_ = db.QueryRow(ctx, `SELECT MAX(ts) FILTER (WHERE status = 'ok'),
 				MAX(ts) FILTER (WHERE status = 'error')
-			FROM cost_ledger WHERE provider = $1`, row.Name).Scan(&h.LastSuccess, &h.LastError)
+			FROM cost_ledger WHERE provider = $1 AND purpose IS DISTINCT FROM 'test'`, row.Name).Scan(&h.LastSuccess, &h.LastError)
 		out = append(out, h)
 	}
 	return out, nil
@@ -363,7 +410,7 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 	}
 	drv, ok := snap.Provider(p.Name)
 	if !ok {
-		return TestResult{}, fmt.Errorf("provider %s not in the serving snapshot (disabled providers still test after a reload)", p.Name)
+		return TestResult{}, fmt.Errorf("provider %s not in the serving snapshot; wait for the next reload", p.Name)
 	}
 	if model == "" {
 		model = p.DefaultModel
@@ -420,12 +467,23 @@ func (a *Admin) get(ctx context.Context, id string) (Provider, error) {
 	if err != nil {
 		return Provider{}, fmt.Errorf("admin get: %w", err)
 	}
+	return scanProvider(ctx, db, id, "")
+}
+
+// getForUpdate reads a provider row locked FOR UPDATE within tx: the
+// lock is held until the caller commits or rolls back, so a concurrent
+// Patch/Delete on the same row blocks instead of racing on a stale read.
+func (a *Admin) getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Provider, error) {
+	return scanProvider(ctx, tx, id, "FOR UPDATE")
+}
+
+func scanProvider(ctx context.Context, q pgxQuerier, id, lock string) (Provider, error) {
 	var (
 		p            Provider
 		models, hdrs []byte
 	)
-	err = db.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-			models, credential_ref, headers, enabled FROM providers WHERE id = $1`, id).
+	err := q.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
+			models, credential_ref, headers, enabled FROM providers WHERE id = $1 `+lock, id).
 		Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL, &p.DefaultModel,
 			&models, &p.CredentialRef, &hdrs, &p.Enabled)
 	if err != nil {
