@@ -338,15 +338,18 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 	}
 
 	// Long-term memory extraction rides the same residue (D-007): the
-	// user's words plus the distilled turn, never the raw trace.
-	// Detached context — the turn is already over.
-	if s.memory != nil && text != "" {
+	// user's words plus the distilled turn, never the raw trace. It
+	// runs on every COMPLETED turn even when the assistant produced no
+	// text (some providers end tool turns without a message) — the
+	// user's words alone can carry facts. Detached context — the turn
+	// is already over.
+	if s.memory != nil {
 		mtext := "user: " + userText
 		if tm != nil {
 			if residue, err := json.Marshal(tm); err == nil {
 				mtext += "\n\nturn residue: " + string(residue)
 			}
-		} else {
+		} else if text != "" {
 			mtext += "\n\nassistant: " + text
 		}
 		go s.memory(context.Background(), sessionID, turnSeq, mtext)

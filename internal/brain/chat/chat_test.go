@@ -630,3 +630,33 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, svc.system)
 	}
 }
+
+func TestMemoryExtractFiresOnTextlessTurn(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	// Provider quirk: turn completes with reasoning/tool traffic but
+	// no text. The user's words still carry facts.
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	svc := newService(gw, log)
+	got := make(chan string, 1)
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text string) {
+		got <- text
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "I moved to Porto in June 2026"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case text := <-got:
+		if !strings.Contains(text, "I moved to Porto") {
+			t.Fatalf("text = %q", text)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("memory extract skipped on textless turn")
+	}
+}
