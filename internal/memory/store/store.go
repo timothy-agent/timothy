@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -161,6 +163,46 @@ func (s *Store) Chain(ctx context.Context, id string) ([]Memory, error) {
 		id = m.SupersededBy
 	}
 	return chain, nil
+}
+
+// UpsertEntity returns the id for a (type, name) entity, creating it
+// on first sight.
+func (s *Store) UpsertEntity(ctx context.Context, typ, name string) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("upsert entity: %w", err)
+	}
+	var id string
+	// DO UPDATE (not DO NOTHING) so RETURNING always yields the row.
+	err = db.QueryRow(ctx, `INSERT INTO entities (type, name) VALUES ($1, $2)
+		ON CONFLICT (type, name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING id`, typ, name).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("upsert entity %s/%s: %w", typ, name, err)
+	}
+	return id, nil
+}
+
+// NearestActive returns the closest active memory to the embedding by
+// cosine similarity, or ok=false when no active memory has an
+// embedding. Extraction uses it for near-duplicate detection.
+func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string, similarity float64, ok bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", 0, false, fmt.Errorf("nearest active: %w", err)
+	}
+	err = db.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector)
+		FROM memories
+		WHERE status = $2 AND embedding IS NOT NULL
+		ORDER BY embedding <=> $1::vector
+		LIMIT 1`, embedding.String(), StatusActive).Scan(&id, &similarity)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("nearest active: %w", err)
+	}
+	return id, similarity, true, nil
 }
 
 type rowScanner interface {

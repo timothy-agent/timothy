@@ -252,6 +252,78 @@ func TestSupersedeChain(t *testing.T) {
 	}
 }
 
+func TestUpsertEntityIdempotent(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	name := "itest-entity-" + t.Name()
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM entities WHERE name = $1", name)
+	})
+
+	first, err := s.UpsertEntity(ctx, "project", name)
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	second, err := s.UpsertEntity(ctx, "project", name)
+	if err != nil {
+		t.Fatalf("UpsertEntity again: %v", err)
+	}
+	if first != second {
+		t.Fatalf("upsert returned different ids: %s vs %s", first, second)
+	}
+	// Same name, different type = a different entity.
+	other, err := s.UpsertEntity(ctx, "topic", name)
+	if err != nil {
+		t.Fatalf("UpsertEntity other type: %v", err)
+	}
+	if other == first {
+		t.Fatal("distinct (type, name) collapsed to one entity")
+	}
+}
+
+func TestNearestActive(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	// No active embedded rows that match closely → still returns the
+	// nearest, so assert with a known-identical vector instead.
+	base := make(Vector, 1536)
+	base[0], base[1] = 0.6, 0.8
+
+	m := mem("nearest target fact")
+	m.Embedding = base
+	id, err := s.Insert(ctx, m)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	// Pending rows are invisible to dedup.
+	if gotID, _, ok, err := s.NearestActive(ctx, base); err != nil {
+		t.Fatalf("NearestActive: %v", err)
+	} else if ok && gotID == id {
+		t.Fatal("pending row surfaced in NearestActive")
+	}
+
+	if err := s.Promote(ctx, id); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	gotID, sim, ok, err := s.NearestActive(ctx, base)
+	if err != nil {
+		t.Fatalf("NearestActive: %v", err)
+	}
+	if !ok || gotID != id {
+		t.Fatalf("NearestActive = (%s, ok=%v), want %s", gotID, ok, id)
+	}
+	if sim < 0.999 {
+		t.Fatalf("identical vector similarity = %f, want ~1", sim)
+	}
+}
+
 func TestListByStatusFiltersTypes(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
