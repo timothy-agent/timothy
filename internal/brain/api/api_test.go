@@ -237,6 +237,50 @@ func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
 	}
 }
 
+func TestAdminProxyScopedToUsageRoutes(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	proxied := 0
+	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied++
+		w.WriteHeader(http.StatusOK)
+	})
+	m := mux(a)
+	a.registerAdmin(m.Handle, stub)
+
+	call := func(method, path, auth string) int {
+		req := httptest.NewRequest(method, path, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	for _, path := range []string{
+		"/v1/admin/usage/summary",
+		"/v1/admin/usage/series",
+		"/v1/admin/usage/latency",
+	} {
+		if code := call(http.MethodGet, path, "Bearer tok"); code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, code)
+		}
+	}
+	if proxied != 3 {
+		t.Fatalf("proxied = %d, want 3", proxied)
+	}
+
+	// Only the admin usage surface is mounted; the gateway's other
+	// internal routes and unauthenticated calls stay out.
+	if code := call(http.MethodPost, "/internal/reload", "Bearer tok"); code == http.StatusOK {
+		t.Fatal("internal reload must be unreachable through brain")
+	}
+	if code := call(http.MethodGet, "/v1/admin/usage/summary", ""); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated = %d, want 401", code)
+	}
+}
+
 type fakeResolver struct{ known map[string]string }
 
 func (f *fakeResolver) Resolve(id, decision string) bool {

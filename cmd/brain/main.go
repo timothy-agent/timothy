@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -163,7 +164,8 @@ func main() {
 		return memclient.RenderBlock(memories)
 	})
 
-	api.Register(app.Server, svc, store, broker, memoryProxy(memorydURL, app.Log), token, app.Log)
+	api.Register(app.Server, svc, store, broker,
+		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -192,6 +194,29 @@ func memoryProxy(memorydURL string, log *slog.Logger) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte(`{"error":{"code":"memoryd_unreachable","message":"memory service unavailable"}}`))
+		},
+	}
+}
+
+// adminProxy forwards the browser's control-plane reads to the
+// gateway's internal API: /v1/admin/usage/* maps onto
+// /internal/usage/*. Brain adds only the bearer gate.
+func adminProxy(gatewayURL string, log *slog.Logger) http.Handler {
+	target, err := url.Parse(gatewayURL)
+	if err != nil {
+		log.Error("invalid GATEWAY_URL; admin routes disabled", "error", err)
+		return nil
+	}
+	return &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			r.Out.URL.Path = "/internal/usage/" + strings.TrimPrefix(r.In.URL.Path, "/v1/admin/usage/")
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Warn("gateway admin proxy error", "path", r.URL.Path, "error", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"code":"gateway_unreachable","message":"gateway unavailable"}}`))
 		},
 	}
 }

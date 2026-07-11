@@ -43,6 +43,7 @@ func main() {
 	store := router.NewStore(app.DB, os.Getenv, app.Log)
 	go store.Run(ctx)
 	api.Register(app.Server, store, ledger.New(app.DB, app.Log), app.Log)
+	api.RegisterUsage(app.Server, ledger.NewAggregator(app.DB))
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
