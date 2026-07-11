@@ -1,4 +1,4 @@
-import type { ChatEvent, ChatRequest, SessionMeta, Transcript } from './types'
+import type { ChatEvent, ChatRequest, MemoryItem, RetrievedMemory, SessionMeta, Transcript } from './types'
 
 const tokenKey = 'timothy.token'
 
@@ -193,4 +193,49 @@ export async function updateSession(
   patch: { title?: string; archived?: boolean },
 ): Promise<void> {
   await request<void>(`/v1/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// --- Long-term memory (queue + browser) ---
+
+export async function listMemories(
+  status: MemoryItem['status'],
+  types?: string[],
+): Promise<MemoryItem[]> {
+  const params = new URLSearchParams({ status })
+  if (types && types.length > 0) params.set('types', types.join(','))
+  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/memories?${params}`)
+  return memories ?? []
+}
+
+export async function addMemory(content: string, type = 'semantic'): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/memories', {
+    method: 'POST',
+    body: JSON.stringify({ content, type }),
+  })
+  return id
+}
+
+// resolveMemory answers a queue card. Pass content to edit-then-confirm.
+export async function resolveMemory(
+  id: string,
+  action: 'confirm' | 'reject',
+  content?: string,
+): Promise<void> {
+  await request<void>(`/v1/memories/${id}`, {
+    method: 'POST',
+    body: JSON.stringify(content ? { action, content } : { action }),
+  })
+}
+
+export async function memoryChain(id: string): Promise<MemoryItem[]> {
+  const { chain } = await request<{ chain: MemoryItem[] }>(`/v1/memories/${id}/chain`)
+  return chain ?? []
+}
+
+export async function searchMemories(query: string): Promise<RetrievedMemory[]> {
+  const { memories } = await request<{ memories: RetrievedMemory[] }>('/v1/memories/search', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  })
+  return memories ?? []
 }

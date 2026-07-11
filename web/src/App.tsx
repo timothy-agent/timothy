@@ -1,5 +1,6 @@
 import {
   Analytics01Icon,
+  Brain02Icon,
   BubbleChatIcon,
   ComputerIcon,
   Image01Icon,
@@ -13,7 +14,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Route, Routes, useLocation } from 'react-router'
-import { getToken } from './api/client'
+import { getToken, listMemories } from './api/client'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -26,24 +27,51 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
 } from './components/ui/sidebar'
+import { memoryChangedEvent } from './lib/memory'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
 import { Dashboard } from './pages/Dashboard'
+import { Memory } from './pages/Memory'
 import { Lanes, Library, Queues, Settings } from './pages/Stubs'
 
 const nav = [
   { label: 'Chat', href: '/', icon: BubbleChatIcon },
   { label: 'Dashboard', href: '/dashboard', icon: Analytics01Icon },
+  { label: 'Memory', href: '/memory', icon: Brain02Icon },
   { label: 'Lanes', href: '/lanes', icon: Layers01Icon },
   { label: 'Library', href: '/library', icon: Image01Icon },
   { label: 'Queues', href: '/queues', icon: InboxIcon },
   { label: 'Settings', href: '/settings', icon: Settings02Icon },
 ]
+
+// usePendingMemories keeps the sidebar badge current: initial fetch,
+// a slow poll, and an instant refresh when the Memory page acts.
+function usePendingMemories(): number {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    let live = true
+    const refresh = () => {
+      listMemories('pending')
+        .then((pending) => live && setCount(pending.length))
+        .catch(() => {})
+    }
+    refresh()
+    const timer = setInterval(refresh, 60_000)
+    window.addEventListener(memoryChangedEvent, refresh)
+    return () => {
+      live = false
+      clearInterval(timer)
+      window.removeEventListener(memoryChangedEvent, refresh)
+    }
+  }, [])
+  return count
+}
 
 const themeIcon = { system: ComputerIcon, light: Sun03Icon, dark: Moon02Icon }
 const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' }
@@ -52,6 +80,7 @@ function App() {
   const [tokenOpen, setTokenOpen] = useState(false)
   const [theme, setThemeState] = useState<Theme>(() => getTheme())
   const { pathname } = useLocation()
+  const pendingMemories = usePendingMemories()
 
   useEffect(() => {
     if (getToken() === '') setTokenOpen(true)
@@ -95,6 +124,11 @@ function App() {
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {item.href === '/memory' && pendingMemories > 0 && (
+                        <SidebarMenuBadge data-testid="memory-badge">
+                          {pendingMemories}
+                        </SidebarMenuBadge>
+                      )}
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>
@@ -138,6 +172,7 @@ function App() {
                 }
               />
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/memory" element={<Memory />} />
               <Route path="/lanes" element={<Lanes />} />
               <Route path="/library" element={<Library />} />
               <Route path="/queues" element={<Queues />} />

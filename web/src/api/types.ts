@@ -116,3 +116,24 @@ export interface Transcript {
   session: SessionMeta
   items: TranscriptItem[]
 }
+
+// One long-term memory row as served by the management API.
+export interface MemoryItem {
+  id: string
+  type: 'episodic' | 'semantic' | 'procedural'
+  content: string
+  status: 'pending' | 'active' | 'rejected' | 'archived'
+  confidence: number
+  actor: string
+  source_session?: string
+  created_at: string
+  superseded_by?: string
+}
+
+// One hybrid-retrieval hit (memory browser search).
+export interface RetrievedMemory {
+  id: string
+  type: string
+  content: string
+  score: number
+}

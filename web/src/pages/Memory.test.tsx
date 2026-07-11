@@ -1,0 +1,120 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MemoryItem } from '../api/types'
+import { Memory } from './Memory'
+
+vi.mock('../api/client', () => ({
+  listMemories: vi.fn(),
+  addMemory: vi.fn(),
+  resolveMemory: vi.fn(),
+  memoryChain: vi.fn(),
+  searchMemories: vi.fn(),
+}))
+
+import {
+  listMemories,
+  resolveMemory,
+  searchMemories,
+} from '../api/client'
+
+const pendingMemory: MemoryItem = {
+  id: 'm1',
+  type: 'semantic',
+  content: 'User prefers aisle seats.',
+  status: 'pending',
+  confidence: 0.7,
+  actor: 'agent',
+  source_session: '11111111-1111-1111-1111-111111111111',
+  created_at: '2026-07-11T10:00:00Z',
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <Memory />
+    </MemoryRouter>,
+  )
+}
+
+afterEach(cleanup)
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(listMemories).mockResolvedValue([pendingMemory])
+  vi.mocked(resolveMemory).mockResolvedValue(undefined)
+  vi.mocked(searchMemories).mockResolvedValue([])
+})
+
+describe('Memory queue', () => {
+  it('renders pending cards with type, confidence, and source link', async () => {
+    renderPage()
+    const card = await screen.findByTestId('queue-card')
+    expect(card).toHaveTextContent('User prefers aisle seats.')
+    expect(card).toHaveTextContent('semantic')
+    expect(card).toHaveTextContent('confidence 70%')
+    expect(screen.getByRole('link', { name: /source session/ })).toHaveAttribute(
+      'href',
+      '/sessions/11111111-1111-1111-1111-111111111111',
+    )
+  })
+
+  it('confirm resolves the card', async () => {
+    renderPage()
+    await screen.findByTestId('queue-card')
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(resolveMemory).toHaveBeenCalledWith('m1', 'confirm', undefined))
+  })
+
+  it('reject resolves the card', async () => {
+    renderPage()
+    await screen.findByTestId('queue-card')
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    await waitFor(() => expect(resolveMemory).toHaveBeenCalledWith('m1', 'reject', undefined))
+  })
+
+  it('edit-then-confirm sends the corrected content', async () => {
+    renderPage()
+    await screen.findByTestId('queue-card')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByTestId('edit-content'), {
+      target: { value: 'User prefers window seats.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & confirm' }))
+    await waitFor(() =>
+      expect(resolveMemory).toHaveBeenCalledWith('m1', 'confirm', 'User prefers window seats.'),
+    )
+  })
+
+  it('bulk confirm resolves every pending card', async () => {
+    vi.mocked(listMemories).mockResolvedValue([
+      pendingMemory,
+      { ...pendingMemory, id: 'm2', content: 'Second fact.' },
+    ])
+    renderPage()
+    await screen.findAllByTestId('queue-card')
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm all' }))
+    await waitFor(() => expect(resolveMemory).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows the empty state when nothing is pending', async () => {
+    vi.mocked(listMemories).mockResolvedValue([])
+    renderPage()
+    expect(await screen.findByText(/Queue is empty/)).toBeInTheDocument()
+  })
+})
+
+describe('Memory browser', () => {
+  it('searches through the retrieval endpoint', async () => {
+    vi.mocked(searchMemories).mockResolvedValue([
+      { id: 'r1', type: 'semantic', content: 'User lives in Porto.', score: 0.02 },
+    ])
+    renderPage()
+    fireEvent.click(await screen.findByTestId('tab-browser'))
+    fireEvent.change(screen.getByTestId('memory-search'), {
+      target: { value: 'where does the user live' },
+    })
+    fireEvent.keyDown(screen.getByTestId('memory-search'), { key: 'Enter' })
+    await waitFor(() => expect(searchMemories).toHaveBeenCalledWith('where does the user live'))
+    expect(await screen.findByTestId('search-results')).toHaveTextContent('User lives in Porto.')
+  })
+})
