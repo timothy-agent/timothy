@@ -139,13 +139,16 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 
 		var currentToolID, currentToolName string
 		var toolInput []byte
+		splitter := &thinkTagSplitter{}
 
 		for event := range events.Events() {
 			switch v := event.(type) {
 			case *types.ConverseStreamOutputMemberContentBlockDelta:
 				if delta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
-					if !emit(sctx, outCh, stream.StreamEvent{Type: stream.EventChunk, Text: delta.Value}) {
-						return
+					for _, ev := range splitter.Feed(delta.Value) {
+						if !emit(sctx, outCh, ev) {
+							return
+						}
 					}
 				}
 				if toolDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberToolUse); ok {
@@ -171,6 +174,11 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 				}
 
 			case *types.ConverseStreamOutputMemberContentBlockStop:
+				for _, ev := range splitter.Flush() {
+					if !emit(sctx, outCh, ev) {
+						return
+					}
+				}
 				if currentToolID != "" && currentToolName != "" {
 					if len(toolInput) == 0 {
 						// Zero-argument calls still need valid JSON downstream.
@@ -217,6 +225,11 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 			}
 		}
 
+		for _, ev := range splitter.Flush() {
+			if !emit(sctx, outCh, ev) {
+				return
+			}
+		}
 		// A closed event channel is not success: a mid-stream failure
 		// surfaces only via Err(). Without this check a dropped
 		// connection would masquerade as a clean EventDone.
