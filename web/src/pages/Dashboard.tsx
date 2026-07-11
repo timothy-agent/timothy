@@ -109,9 +109,19 @@ export function Dashboard() {
     startOfMonth.setDate(1)
     startOfMonth.setHours(0, 0, 0, 0)
 
+    const emptySummary: UsageSummary = {
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      requests: 0,
+      errors: 0,
+    }
+
     let live = true
     setError(null)
-    Promise.all([
+    Promise.allSettled([
       usageSummary(from, to),
       usageSummary(startOfMonth, to),
       usageSummary(startOfToday, to),
@@ -121,16 +131,25 @@ export function Dashboard() {
       usageSessions(from, to, 10),
       usageLatency(from, to),
       usageCache(from, to),
-    ])
-      .then(
-        ([summary, month, today, byProvider, byModel, byCategory, sessions, latency, cache]) => {
-          if (live)
-            setData({ summary, month, today, byProvider, byModel, byCategory, sessions, latency, cache })
-        },
-      )
-      .catch((err: unknown) => {
-        if (live) setError(err instanceof Error ? err.message : String(err))
+    ]).then((results) => {
+      if (!live) return
+      const failed = results.filter((r) => r.status === 'rejected').length
+      setError(failed > 0 ? `${failed} of ${results.length} widgets failed to load` : null)
+      function val<T>(r: PromiseSettledResult<T>, fallback: T): T {
+        return r.status === 'fulfilled' ? r.value : fallback
+      }
+      setData({
+        summary: val(results[0], emptySummary),
+        month: val(results[1], emptySummary),
+        today: val(results[2], emptySummary),
+        byProvider: val(results[3], []),
+        byModel: val(results[4], []),
+        byCategory: val(results[5], []),
+        sessions: val(results[6], []),
+        latency: val(results[7], []),
+        cache: val(results[8], []),
       })
+    })
     return () => {
       live = false
     }

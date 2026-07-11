@@ -181,9 +181,12 @@ function ProviderCard({
 
   const saveRef = () => {
     if (ref === provider.credential_ref) return
-    patchProvider(provider.id, { credential_ref: ref }).then(onChanged, (err: unknown) =>
-      onError(err instanceof Error ? err.message : String(err)),
-    )
+    patchProvider(provider.id, { credential_ref: ref }).then(onChanged, (err: unknown) => {
+      // Revert on rejection: a mistakenly pasted secret must not linger
+      // in this field's state after the server refuses it.
+      setRef(provider.credential_ref)
+      onError(err instanceof Error ? err.message : String(err))
+    })
   }
 
   const runTest = async () => {
