@@ -37,7 +37,13 @@ func main() {
 	}
 
 	if gw := os.Getenv("GATEWAY_URL"); gw != "" {
-		if err := embeddingCollisions(gw, packs); err != nil {
+		switch err := embeddingCollisions(gw, packs); {
+		case err == nil:
+		case strings.Contains(err.Error(), "no_route"):
+			// No embedding provider is enabled in this deployment;
+			// the lexical check above still ran.
+			fmt.Println("note: no embedding route configured; similarity check skipped")
+		default:
 			fmt.Fprintln(os.Stderr, "FAIL:", err)
 			os.Exit(1)
 		}
