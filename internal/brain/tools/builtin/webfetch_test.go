@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -114,6 +115,27 @@ func TestFetchReadableTruncatesLongText(t *testing.T) {
 	}
 	if len(got) > webFetchMaxResult+100 {
 		t.Fatalf("result length %d exceeds cap", len(got))
+	}
+}
+
+func TestFetchReadableStripsUserinfo(t *testing.T) {
+	t.Parallel()
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Inject credentials into the URL; they must not become a header.
+	u, _ := url.Parse(srv.URL)
+	authed := u.Scheme + "://user:secret@" + u.Host + "/"
+	if _, err := fetchReadable(context.Background(), srv.Client(), authed); err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization header leaked: %q", gotAuth)
 	}
 }
 

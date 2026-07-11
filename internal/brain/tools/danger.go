@@ -79,7 +79,11 @@ var opaqueForms = []struct {
 }{
 	{name: "command-substitution", pattern: regexp.MustCompile("\\$\\(|`")},
 	{name: "process-substitution", pattern: regexp.MustCompile(`<\(|>\(`)},
-	{name: "variable-command", pattern: regexp.MustCompile(`\$\{?[A-Za-z_]`)},
+	// A variable used AS the command — at the start or right after a
+	// separator (VAR=rm; $VAR -rf) — hides what runs. A $VAR in an
+	// argument position (ls $HOME/logs) is a plain expansion and stays
+	// classifiable, so it is NOT flagged here.
+	{name: "variable-command", pattern: regexp.MustCompile(`(^|[;|&(]|&&|\|\|)\s*\$\{?[A-Za-z_]`)},
 	{name: "eval-exec", pattern: regexp.MustCompile(`(^|[\s;|&(])(eval|exec|source)(\s|$)`)},
 	{name: "dot-source", pattern: regexp.MustCompile(`(^|[\s;|&(])\.\s+\S`)},
 	{name: "interpreter-c", pattern: regexp.MustCompile(`(^|[\s;|&(])(/[\w./-]*/)?(ba|z|da)?sh\s+-c|(python[23]?|perl|ruby|node)\s+-e?c?`)},

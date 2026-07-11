@@ -62,6 +62,14 @@ func TestClassifyCommand(t *testing.T) {
 		// Legitimate reads still safe — no false alarms on plain use.
 		{command: "cat notes.md", want: DangerSafe},
 		{command: "grep -rn TODO src/ | head", want: DangerSafe},
+		// $VAR in an ARGUMENT position is a plain expansion — safe.
+		{command: "ls -la $HOME/logs", want: DangerSafe},
+		{command: `grep -rn TODO "$SRC" | head`, want: DangerSafe},
+		{command: `cp file "$OUT"/x`, want: DangerSafe},
+		{command: "echo $PATH", want: DangerSafe},
+		// $VAR AS the command still hides what runs — destructive.
+		{command: "$CMD -rf /workspace", want: DangerDestructive},
+		{command: "ls; $X foo", want: DangerDestructive},
 	}
 	for _, tc := range tests {
 		t.Run(tc.command, func(t *testing.T) {
