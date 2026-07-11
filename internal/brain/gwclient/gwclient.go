@@ -111,9 +111,9 @@ func (c *Client) ModelWindows(ctx context.Context) (map[string]int, error) {
 }
 
 // Embed returns one vector per input text via the gateway's
-// embedding route.
-func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	body, err := json.Marshal(map[string]any{"texts": texts})
+// embedding route. purpose tags the ledger row.
+func (c *Client) Embed(ctx context.Context, texts []string, purpose string) ([][]float32, error) {
+	body, err := json.Marshal(map[string]any{"texts": texts, "purpose": purpose})
 	if err != nil {
 		return nil, fmt.Errorf("gwclient: marshal embed: %w", err)
 	}

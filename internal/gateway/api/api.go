@@ -234,6 +234,7 @@ func finalStatus(res attemptResult) string {
 type embedRequest struct {
 	Texts     []string `json:"texts"`
 	ModelHint string   `json:"model_hint,omitempty"`
+	Purpose   string   `json:"purpose,omitempty"` // ledger tag: why this call happened
 	SessionID string   `json:"session_id,omitempty"`
 }
 
@@ -272,7 +273,7 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		entry := ledger.Entry{
 			Provider: att.ProviderName, Model: att.Model,
-			TaskCategory: "embedding", SessionID: req.SessionID,
+			TaskCategory: "embedding", Purpose: req.Purpose, SessionID: req.SessionID,
 		}
 
 		vecs, usage, err := emb.Embed(r.Context(), att.Model, req.Texts)
