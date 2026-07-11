@@ -1,0 +1,409 @@
+package loop
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+)
+
+// Executor runs one constrained tool call; tools.Constrained
+// satisfies it.
+type Executor interface {
+	Execute(ctx context.Context, name string, args json.RawMessage) (string, error)
+}
+
+// Permissioner resolves the permission chain; tools.Permissions
+// satisfies it.
+type Permissioner interface {
+	Resolve(ctx context.Context, sessionID, tool string, args json.RawMessage) (tools.Resolution, error)
+	Grant(ctx context.Context, sessionID, tool, pattern string, ttl time.Duration) error
+}
+
+// OutputSink stores offloaded results; tools.Outputs satisfies it.
+type OutputSink interface {
+	Put(ctx context.Context, sessionID, tool, content string) (string, error)
+}
+
+// AuditSink records execution audit rows; tools.Audit satisfies it.
+type AuditSink interface {
+	Record(ctx context.Context, e tools.AuditEntry) error
+}
+
+// EventAppender writes session events; session.Store satisfies it.
+type EventAppender interface {
+	Append(ctx context.Context, sessionID, kind string, payload any) (int64, error)
+}
+
+const (
+	permissionTimeout = 10 * time.Minute
+	maxParallelTools  = 4
+	persistTimeout    = 10 * time.Second
+	sessionGrantTTL   = 12 * time.Hour
+	// retrieveInlineCap bounds what retrieve_output returns inline;
+	// re-offloading a retrieval would chase its own tail, so it
+	// truncates with an honest note instead.
+	retrieveInlineCap = 32 << 10
+)
+
+const finalizeWarning = "[system] You have one tool step left before the limit. Finish gathering and produce your final answer on the next step."
+
+const coercionMessage = "[system] This task category requires consulting your tools before answering. Make the relevant tool call(s), then answer."
+
+// Agent runs the think→act loop for one turn (D-003): stream with
+// tool definitions, execute what the model calls through constraints
+// and permissions, feed results back, repeat until a final answer or
+// the step ceiling.
+type Agent struct {
+	gw        Gateway
+	exec      Executor
+	perms     Permissioner
+	outputs   OutputSink
+	audit     AuditSink
+	events    EventAppender
+	broker    *PermBroker
+	defs      []provider.ToolDef
+	maxSteps  int
+	offloadAt int
+	logger    *slog.Logger
+}
+
+func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
+	return &Agent{
+		gw: gw, exec: exec, perms: perms, outputs: outputs, audit: audit,
+		events: events, broker: broker, defs: defs,
+		maxSteps:  tools.DefaultMaxSteps,
+		offloadAt: tools.DefaultOffloadThreshold,
+		logger:    logger,
+	}
+}
+
+// Request is one turn's loop input.
+type Request struct {
+	SessionID    string
+	TaskCategory string
+	ModelHint    string
+	System       string
+	Messages     []provider.Message
+}
+
+// Start launches the loop and returns its event stream. The channel
+// follows the stream package's terminal contract: exactly one done,
+// error, or incomplete event ends it. Usage on the terminal path is
+// the sum over all steps.
+func (a *Agent) Start(ctx context.Context, req Request) (<-chan stream.StreamEvent, error) {
+	out := make(chan stream.StreamEvent)
+	go func() {
+		defer close(out)
+		a.run(ctx, req, out)
+	}()
+	return out, nil
+}
+
+func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEvent) {
+	var emitMu sync.Mutex
+	emit := func(ev stream.StreamEvent) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
+		select {
+		case out <- ev:
+		case <-ctx.Done():
+		}
+	}
+
+	msgs := append([]provider.Message(nil), req.Messages...)
+	total := stream.Usage{}
+	var lastMeta *stream.Meta
+	effort := ""
+	toolCallCount := 0
+	coerced := false
+
+	for step := 1; ; step++ {
+		directive := tools.CeilingFor(step, a.maxSteps)
+		sreq := gwclient.StreamRequest{
+			TaskCategory: req.TaskCategory,
+			Purpose:      "chat",
+			ModelHint:    req.ModelHint,
+			System:       req.System,
+			Messages:     msgs,
+			Tools:        a.defs,
+			Effort:       effort,
+			SessionID:    req.SessionID,
+		}
+		switch directive {
+		case tools.StepWarnFinalize:
+			sreq.Messages = append(sreq.Messages, provider.Message{Role: "user", Content: finalizeWarning})
+			msgs = sreq.Messages
+		case tools.StepForceSynthesis:
+			// Drop the schemas: the model must answer with what it has.
+			sreq.Tools = nil
+		}
+
+		upstream, err := a.gw.Stream(ctx, sreq)
+		if err != nil {
+			emit(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
+				Code: "gateway_unavailable", Message: err.Error(), Retryable: true,
+			}})
+			return
+		}
+
+		var text strings.Builder
+		var calls []provider.ToolCall
+		terminal := stream.StreamEvent{}
+		for ev := range upstream {
+			switch ev.Type {
+			case stream.EventChunk:
+				text.WriteString(ev.Text)
+				emit(ev)
+			case stream.EventReasoningChunk, stream.EventRetry, stream.EventToolStart:
+				emit(ev)
+			case stream.EventToolEnd:
+				if ev.ToolCall != nil {
+					calls = append(calls, provider.ToolCall{
+						ID: ev.ToolCall.ID, Name: ev.ToolCall.Name, Input: ev.ToolCall.Input,
+					})
+				}
+				emit(ev)
+			case stream.EventUsage:
+				if ev.Usage != nil {
+					total.InputTokens += ev.Usage.InputTokens
+					total.OutputTokens += ev.Usage.OutputTokens
+					total.CacheReadTokens += ev.Usage.CacheReadTokens
+					total.CacheWriteTokens += ev.Usage.CacheWriteTokens
+				}
+			case stream.EventDone:
+				terminal = ev
+				if ev.Meta != nil {
+					lastMeta = ev.Meta
+				}
+			case stream.EventIncomplete, stream.EventError:
+				terminal = ev
+			}
+		}
+
+		// Abnormal step end: surface it and stop — the relay persists
+		// the partial exactly as before.
+		if terminal.Type != stream.EventDone {
+			if terminal.Type == "" {
+				terminal = stream.StreamEvent{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"}
+			}
+			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emit(terminal)
+			return
+		}
+
+		if len(calls) == 0 {
+			if directive == tools.StepProceed &&
+				tools.NeedsRetrievalCoercion(req.TaskCategory, toolCallCount, coerced) {
+				coerced = true
+				msgs = append(msgs,
+					provider.Message{Role: "assistant", Content: text.String()},
+					provider.Message{Role: "user", Content: coercionMessage},
+				)
+				continue
+			}
+			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emit(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
+			return
+		}
+
+		toolCallCount += len(calls)
+		results := a.executeAll(ctx, req.SessionID, calls, emit)
+
+		msgs = append(msgs, provider.Message{
+			Role: "assistant", Content: text.String(), ToolCalls: calls,
+		})
+		for i := range results {
+			msgs = append(msgs, provider.Message{Role: "tool", ToolResult: &results[i]})
+		}
+		effort = EffortFor(results)
+	}
+}
+
+// EffortFor implements the D-020 dial as a pure function: a
+// continuation after uniformly successful tool results runs at low
+// effort; any error or denial keeps full effort.
+func EffortFor(results []provider.ToolResult) string {
+	for _, r := range results {
+		if r.IsError {
+			return ""
+		}
+	}
+	if len(results) == 0 {
+		return ""
+	}
+	return "low"
+}
+
+// executeAll runs a step's tool calls concurrently (bounded) and
+// returns results in call order.
+func (a *Agent) executeAll(ctx context.Context, sessionID string, calls []provider.ToolCall, emit func(stream.StreamEvent)) []provider.ToolResult {
+	results := make([]provider.ToolResult, len(calls))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxParallelTools)
+	for i, call := range calls {
+		g.Go(func() error {
+			results[i] = a.executeOne(gctx, sessionID, call, emit)
+			return nil
+		})
+	}
+	_ = g.Wait() // workers never return errors; failures live in results
+	return results
+}
+
+func (a *Agent) executeOne(ctx context.Context, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) provider.ToolResult {
+	start := time.Now()
+	content, status := a.resolveAndRun(ctx, sessionID, call, emit)
+	isError := status != "ok"
+
+	if status == "ok" {
+		offloaded, err := a.offloadIfBig(ctx, sessionID, call.Name, content)
+		if err != nil {
+			a.logger.Warn("offload failed; result kept inline", "tool", call.Name, "error", err)
+		} else {
+			content = offloaded
+		}
+	}
+
+	duration := time.Since(start)
+	digest := content
+	if len(digest) > 1000 {
+		digest = digest[:1000] + "…"
+	}
+
+	// Bookkeeping uses a detached context: a client disconnect must
+	// not lose the audit trail (same discipline as chat persistence).
+	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+	defer cancel()
+	if _, err := a.events.Append(bctx, sessionID, session.KindToolExecution, session.ToolExecution{
+		CallID: call.ID, Name: call.Name,
+		Args:         string(call.Input),
+		ResultDigest: digest,
+		Status:       status,
+		DurationMs:   duration.Milliseconds(),
+	}); err != nil {
+		a.logger.Error("persist tool_execution", "session_id", sessionID, "tool", call.Name, "error", err)
+	}
+	auditErr := ""
+	if isError {
+		auditErr = firstLine(content)
+	}
+	if err := a.audit.Record(bctx, tools.AuditEntry{
+		SessionID: sessionID, Tool: call.Name,
+		ArgsDigest: tools.ArgsDigest(call.Input),
+		Status:     status, Duration: duration, Error: auditErr,
+	}); err != nil {
+		a.logger.Error("audit tool execution", "session_id", sessionID, "tool", call.Name, "error", err)
+	}
+
+	emit(stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
+		ID: call.ID, Name: call.Name, Status: status,
+		Digest: digest, DurationMs: duration.Milliseconds(),
+	}})
+
+	return provider.ToolResult{ID: call.ID, Content: content, IsError: isError}
+}
+
+// resolveAndRun walks the permission chain, parks on Ask, and executes
+// on allow. It returns the content the model sees plus a status of
+// ok, denied, or error — denials and failures come back as feedback
+// text, never as a broken turn (D-009).
+func (a *Agent) resolveAndRun(ctx context.Context, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) (content, status string) {
+	res, err := a.perms.Resolve(ctx, sessionID, call.Name, call.Input)
+	if err != nil {
+		return "permission check failed: " + err.Error(), "error"
+	}
+
+	switch res.Decision {
+	case tools.DecisionDeny:
+		return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied"
+	case tools.DecisionAsk:
+		decision := a.askUser(ctx, call, res, emit)
+		switch decision {
+		case DecideSession:
+			if err := a.perms.Grant(ctx, sessionID, call.Name, res.Subject, sessionGrantTTL); err != nil {
+				a.logger.Warn("record session grant", "session_id", sessionID, "error", err)
+			}
+		case DecideOnce:
+			// proceed
+		default: // deny or timeout
+			return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied"
+		}
+	}
+
+	out, err := a.exec.Execute(ctx, call.Name, call.Input)
+	if err != nil {
+		if tools.IsViolation(err) {
+			return err.Error(), "error"
+		}
+		if out != "" {
+			// e.g. shell timeout with partial output.
+			return err.Error() + "\n" + out, "error"
+		}
+		return "tool failed: " + err.Error(), "error"
+	}
+	return out, "ok"
+}
+
+// askUser parks the call: emits a permission_request and blocks for
+// the decision (timeout = deny, D-010). Turn durability while parked
+// comes from the relay's periodic pending_state flushes; the prompt
+// itself is in-memory only — a restart drops it, which resolves as a
+// deny.
+func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.Resolution, emit func(stream.StreamEvent)) string {
+	id, answer := a.broker.Create()
+	defer a.broker.Forget(id)
+
+	emit(stream.StreamEvent{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{
+		ID: id, Tool: call.Name,
+		Args:      string(call.Input),
+		Danger:    res.Danger.String(),
+		Rationale: res.Rationale,
+	}})
+
+	timer := time.NewTimer(permissionTimeout)
+	defer timer.Stop()
+	select {
+	case d := <-answer:
+		return d
+	case <-timer.C:
+		return DecideDeny
+	case <-ctx.Done():
+		return DecideDeny
+	}
+}
+
+func (a *Agent) offloadIfBig(ctx context.Context, sessionID, tool, content string) (string, error) {
+	if len(content) <= a.offloadAt {
+		return content, nil
+	}
+	// retrieve_output must not re-offload what it just retrieved;
+	// truncate with an honest note instead (retrieval pages by size).
+	if tool == "retrieve_output" {
+		return fmt.Sprintf("%s\n[truncated at %d bytes: the stored output is %d bytes]",
+			content[:retrieveInlineCap], retrieveInlineCap, len(content)), nil
+	}
+	ref, err := a.outputs.Put(ctx, sessionID, tool, content)
+	if err != nil {
+		return content, err
+	}
+	return tools.Digest(content, tool, ref), nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
