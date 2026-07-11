@@ -287,3 +287,32 @@ func TestExtractSurfacesLLMError(t *testing.T) {
 		t.Fatalf("err = %v, want boom", err)
 	}
 }
+
+// embedlessGateway fails Embed but streams facts fine.
+type embedlessGateway struct{ fakeGateway }
+
+func (g *embedlessGateway) Embed(context.Context, []string, string) ([][]float32, error) {
+	return nil, fmt.Errorf("no route for task category embedding")
+}
+
+func TestExtractDegradesWithoutEmbeddings(t *testing.T) {
+	t.Parallel()
+	gw := &embedlessGateway{fakeGateway{replies: []string{
+		`[{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[],"confidence":0.9}]`,
+	}}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract must degrade, not fail: %v", err)
+	}
+	if len(ids) != 1 || len(st.inserted) != 1 {
+		t.Fatalf("fact not stored: ids=%v", ids)
+	}
+	if len(st.inserted[0].Embedding) != 0 {
+		t.Fatal("phantom embedding attached")
+	}
+	// Promotion policy still applies in degraded mode.
+	if len(st.promoted) != 1 {
+		t.Fatalf("promoted = %v", st.promoted)
+	}
+}

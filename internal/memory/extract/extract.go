@@ -94,27 +94,34 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 	for i, f := range facts {
 		texts[i] = f.Content
 	}
+	// No embedding route is a degraded mode, not a failure: facts
+	// store without vectors (text and entity legs still retrieve
+	// them) and near-dup detection skips. Mirrors retrieval's
+	// partial-recall-beats-none stance.
 	vecs, err := e.gw.Embed(ctx, texts, "memory-extract")
 	if err != nil {
-		return nil, fmt.Errorf("extract: embed: %w", err)
+		e.log.Warn("embedding failed; storing facts without vectors", "error", err, "session_id", req.SessionID)
+		vecs = make([][]float32, len(facts))
 	}
 
 	var ids []string
 	for i, f := range facts {
 		emb := store.Vector(vecs[i])
-		dupID, sim, found, err := e.store.NearestActive(ctx, emb)
-		if err != nil {
-			return ids, fmt.Errorf("extract: dedup: %w", err)
-		}
-		if found && sim >= nearDupSimilarity {
-			if sim >= exactDupSimilarity {
+		if len(emb) > 0 {
+			dupID, sim, found, err := e.store.NearestActive(ctx, emb)
+			if err != nil {
+				return ids, fmt.Errorf("extract: dedup: %w", err)
+			}
+			if found && sim >= exactDupSimilarity {
 				e.log.Info("memory dropped as exact duplicate",
 					"of", dupID, "similarity", sim, "session_id", req.SessionID)
 				continue
 			}
-			// Near-dup: keep it, consolidation merges the group later.
-			e.log.Info("memory near-duplicate kept for consolidation",
-				"of", dupID, "similarity", sim, "session_id", req.SessionID)
+			if found && sim >= nearDupSimilarity {
+				// Near-dup: keep it, consolidation merges the group later.
+				e.log.Info("memory near-duplicate kept for consolidation",
+					"of", dupID, "similarity", sim, "session_id", req.SessionID)
+			}
 		}
 
 		refs := make([]string, 0, len(f.Entities))
