@@ -74,12 +74,23 @@ const (
 		ORDER BY embedding <=> $1::vector
 		LIMIT ` + limitLit
 
-	textSQL = `SELECT id, type, content, last_confirmed_at
-		FROM memories
+	// The query's normalized lexemes OR together: a question spanning
+	// several topics ("what seat do I prefer and when is my birthday")
+	// must match each fact that answers PART of it — websearch/plainto
+	// AND-semantics return nothing for multi-topic questions. ts_rank
+	// orders by how much of the question a memory answers. Lexemes are
+	// quoted (with '' doubling) so none can break the tsquery syntax.
+	textSQL = `WITH q AS (
+			SELECT to_tsquery('english',
+				string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
+			FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme
+		)
+		SELECT id, type, content, last_confirmed_at
+		FROM memories, q
 		WHERE status = 'active'
-		  AND tsv @@ websearch_to_tsquery('english', $1)
+		  AND tsv @@ q.query
 		  AND (cardinality($2::text[]) = 0 OR type = ANY($2))
-		ORDER BY ts_rank(tsv, websearch_to_tsquery('english', $1)) DESC
+		ORDER BY ts_rank(tsv, q.query) DESC
 		LIMIT ` + limitLit
 
 	// Entities literally named in the query pull in every memory that

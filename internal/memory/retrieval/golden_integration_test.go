@@ -104,6 +104,11 @@ var goldens = []golden{
 	{text: "encrypted tarballs backups", dim: 905, want: "t-backup"},
 	{text: "connection pool homelab postgres", dim: 906, want: "t-pool"},
 
+	// multi-topic questions: AND-semantics would return nothing; each
+	// fact answering PART of the question must still surface.
+	{text: "what is the postgres pool size and where do backups upload?", dim: 907, want: "t-pool"},
+	{text: "what is the postgres pool size and where do backups upload?", dim: 908, want: "t-backup"},
+
 	// entity group — the name appears only via entity_refs
 	{text: "when is Marta's birthday?", dim: 910, want: "e-marta"},
 	{text: "what is the Atlas milestone date?", dim: 911, want: "e-atlas"},
