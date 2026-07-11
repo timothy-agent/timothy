@@ -99,6 +99,7 @@ type ToolExecution struct {
 	Args         string `json:"args,omitempty"`
 	ResultDigest string `json:"result_digest,omitempty"`
 	Status       string `json:"status"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
 }
 
 // CompactionApplied replaces every event up to and including

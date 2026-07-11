@@ -23,19 +23,45 @@ const (
 	EventIncomplete     EventType = "incomplete"      // stream cut off before finish
 	EventDone           EventType = "done"            // terminal: success
 	EventError          EventType = "error"           // terminal: failure
+
+	// Agent-loop events (brain-side; never emitted by providers).
+	EventToolResult        EventType = "tool_result"        // a tool execution finished
+	EventPermissionRequest EventType = "permission_request" // the turn parked awaiting approval
 )
 
 // StreamEvent is one normalized event. Exactly the field matching Type
 // is populated; Meta additionally rides the terminal done event when
 // the gateway API attributes the serving provider.
 type StreamEvent struct {
-	Type     EventType      `json:"type"`
-	Text     string         `json:"text,omitempty"`
-	ToolCall *ToolCallEvent `json:"tool_call,omitempty"`
-	Usage    *Usage         `json:"usage,omitempty"`
-	Err      *StreamError   `json:"error,omitempty"`
-	Retry    *RetryInfo     `json:"retry,omitempty"`
-	Meta     *Meta          `json:"meta,omitempty"`
+	Type       EventType               `json:"type"`
+	Text       string                  `json:"text,omitempty"`
+	ToolCall   *ToolCallEvent          `json:"tool_call,omitempty"`
+	ToolResult *ToolResultEvent        `json:"tool_result,omitempty"`
+	Permission *PermissionRequestEvent `json:"permission,omitempty"`
+	Usage      *Usage                  `json:"usage,omitempty"`
+	Err        *StreamError            `json:"error,omitempty"`
+	Retry      *RetryInfo              `json:"retry,omitempty"`
+	Meta       *Meta                   `json:"meta,omitempty"`
+}
+
+// ToolResultEvent reports a finished tool execution to the client:
+// status ok|error|denied, a digest (never the raw result), and timing.
+type ToolResultEvent struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Digest     string `json:"digest,omitempty"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// PermissionRequestEvent tells the client the turn parked waiting for
+// the user's decision on a tool call (D-010).
+type PermissionRequestEvent struct {
+	ID        string `json:"id"`
+	Tool      string `json:"tool"`
+	Args      string `json:"args"`
+	Danger    string `json:"danger_level"`
+	Rationale string `json:"rationale"`
 }
 
 // Meta identifies who served a request — attached to the done event by
