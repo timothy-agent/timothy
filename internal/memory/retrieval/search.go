@@ -7,13 +7,12 @@ package retrieval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -47,18 +46,45 @@ func NewSearcher(db *pgpool.Pool, log *slog.Logger) *Searcher {
 
 // Search runs all legs in parallel and merges their hits into one
 // candidate set. embedding may be empty (vector leg skipped — the
-// other legs still answer); types narrows the corpus.
+// other legs still answer); types narrows the corpus. One leg failing
+// must not sink the others — partial recall beats none — so per-leg
+// errors only log and Search errors only when EVERY leg failed.
 func (s *Searcher) Search(ctx context.Context, query string, embedding store.Vector, types []store.MemoryType) (map[string]*Candidate, error) {
 	m := &merger{into: make(map[string]*Candidate)}
 
-	g, gctx := errgroup.WithContext(ctx)
-	if len(embedding) > 0 {
-		g.Go(func() error { return s.leg(gctx, "vector", vectorSQL, []any{embedding.String()}, types, m) })
+	type legRun struct {
+		name string
+		sql  string
+		args []any
 	}
-	g.Go(func() error { return s.leg(gctx, "text", textSQL, []any{query}, types, m) })
-	g.Go(func() error { return s.leg(gctx, "entity", entitySQL, []any{query}, types, m) })
-	if err := g.Wait(); err != nil {
-		return nil, err
+	legs := []legRun{
+		{"text", textSQL, []any{query}},
+		{"entity", entitySQL, []any{query}},
+	}
+	if len(embedding) > 0 {
+		legs = append(legs, legRun{"vector", vectorSQL, []any{embedding.String()}})
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(legs))
+	for i, l := range legs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = s.leg(ctx, l.name, l.sql, l.args, types, m)
+		}()
+	}
+	wg.Wait()
+
+	failed := 0
+	for _, err := range errs {
+		if err != nil {
+			failed++
+			s.log.Warn("retrieval leg failed; continuing with the others", "error", err)
+		}
+	}
+	if failed == len(legs) {
+		return nil, errors.Join(errs...)
 	}
 	return m.into, nil
 }

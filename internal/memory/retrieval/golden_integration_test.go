@@ -258,3 +258,28 @@ func TestMarkRetrievedStampsOnlyRetrievalTime(t *testing.T) {
 	}
 }
 
+func TestSearchSurvivesDegenerateQueries(t *testing.T) {
+	s, _ := seedGolden(t)
+	// Queries that produce zero lexemes (punctuation, stopwords) or
+	// carry quote characters must degrade to empty/partial results,
+	// never to an error — partial recall beats none.
+	for _, q := range []string{
+		"?!,.;:—…",
+		"the and of a is",
+		`it's "quoted" 'weird' O''Brien`,
+		"   ",
+	} {
+		if _, err := s.Search(t.Context(), q, nil, nil); err != nil {
+			t.Fatalf("Search(%q): %v", q, err)
+		}
+	}
+}
+
+func TestSearchErrorsOnlyWhenEveryLegFails(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // every leg's query now fails
+	if _, err := s.Search(ctx, "anything at all", nil, nil); err == nil {
+		t.Fatal("want error when all legs fail")
+	}
+}
