@@ -14,6 +14,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/memory/api"
 	"github.com/SumonMSelim/timothy/internal/memory/extract"
+	"github.com/SumonMSelim/timothy/internal/memory/retrieval"
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -48,7 +49,8 @@ func main() {
 	gwc := gwclient.New(gatewayURL)
 	st := store.New(app.DB, app.Log)
 	extractor := extract.New(gwc, st, app.Log)
-	api.Register(app.Server, extractor, app.Log)
+	searcher := retrieval.NewSearcher(app.DB, app.Log)
+	api.Register(app.Server, extractor, searcher, gwc, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

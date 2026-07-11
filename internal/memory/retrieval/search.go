@@ -29,6 +29,12 @@ type Candidate struct {
 	ranks map[string]int
 }
 
+// NewCandidate assembles a candidate with explicit leg ranks — for
+// tests and callers that don't go through Search.
+func NewCandidate(id string, typ store.MemoryType, content string, lastConfirmed time.Time, ranks map[string]int) *Candidate {
+	return &Candidate{ID: id, Type: typ, Content: content, LastConfirmedAt: lastConfirmed, ranks: ranks}
+}
+
 // Searcher runs the three legs.
 type Searcher struct {
 	db  *pgpool.Pool

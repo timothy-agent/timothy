@@ -10,8 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/memory/extract"
+	"github.com/SumonMSelim/timothy/internal/memory/retrieval"
+	"github.com/SumonMSelim/timothy/internal/memory/store"
 )
 
 type fakeExtractor struct {
@@ -93,5 +96,113 @@ func TestExtractFailureIs502(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "extraction_failed") {
 		t.Fatalf("body = %s", rec.Body)
+	}
+}
+
+type fakeSearcher struct {
+	cands      map[string]*retrieval.Candidate
+	sawEmb     store.Vector
+	sawTypes   []store.MemoryType
+	marked     []string
+	failSearch error
+}
+
+func (f *fakeSearcher) Search(_ context.Context, _ string, emb store.Vector, types []store.MemoryType) (map[string]*retrieval.Candidate, error) {
+	f.sawEmb, f.sawTypes = emb, types
+	return f.cands, f.failSearch
+}
+
+func (f *fakeSearcher) MarkRetrieved(_ context.Context, ids []string) { f.marked = ids }
+
+type fakeEmbedder struct{ err error }
+
+func (f *fakeEmbedder) Embed(_ context.Context, texts []string, _ string) ([][]float32, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{1, 0}
+	}
+	return out, nil
+}
+
+func postRetrieve(t *testing.T, a *API, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/retrieve", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	a.handleRetrieve(rec, req)
+	return rec
+}
+
+func retrieveAPI(s Searcher, e Embedder) *API {
+	return &API{search: s, embed: e, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+func TestRetrieveReturnsPackedMemories(t *testing.T) {
+	t.Parallel()
+	s := &fakeSearcher{cands: map[string]*retrieval.Candidate{
+		"m1": retrieval.NewCandidate("m1", store.TypeSemantic, "user lives in Porto", time.Now(), map[string]int{"vector": 1, "text": 1}),
+	}}
+	rec := postRetrieve(t, retrieveAPI(s, &fakeEmbedder{}), `{"query":"where does the user live?"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Memories []retrievedMemory `json:"memories"`
+		Tokens   int               `json:"tokens"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Memories) != 1 || out.Memories[0].ID != "m1" || out.Tokens <= 0 {
+		t.Fatalf("out = %+v", out)
+	}
+	if len(s.marked) != 1 || s.marked[0] != "m1" {
+		t.Fatalf("marked = %v, want [m1]", s.marked)
+	}
+	if len(s.sawEmb) == 0 {
+		t.Fatal("query embedding not passed to search")
+	}
+}
+
+func TestRetrieveDegradesWithoutEmbedding(t *testing.T) {
+	t.Parallel()
+	s := &fakeSearcher{cands: map[string]*retrieval.Candidate{}}
+	rec := postRetrieve(t, retrieveAPI(s, &fakeEmbedder{err: errors.New("no embedding route")}), `{"query":"anything"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded)", rec.Code)
+	}
+	if s.sawEmb != nil {
+		t.Fatal("embedding should be nil when embed fails")
+	}
+}
+
+func TestRetrieveValidatesQuery(t *testing.T) {
+	t.Parallel()
+	rec := postRetrieve(t, retrieveAPI(&fakeSearcher{}, &fakeEmbedder{}), `{"query":" "}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRetrievePassesTypesFilter(t *testing.T) {
+	t.Parallel()
+	s := &fakeSearcher{cands: map[string]*retrieval.Candidate{}}
+	rec := postRetrieve(t, retrieveAPI(s, &fakeEmbedder{}), `{"query":"x","types":["semantic","procedural"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if len(s.sawTypes) != 2 || s.sawTypes[0] != store.TypeSemantic {
+		t.Fatalf("types = %v", s.sawTypes)
+	}
+}
+
+func TestRetrieveSearchFailureIs500(t *testing.T) {
+	t.Parallel()
+	s := &fakeSearcher{failSearch: errors.New("db down")}
+	rec := postRetrieve(t, retrieveAPI(s, &fakeEmbedder{}), `{"query":"x"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
