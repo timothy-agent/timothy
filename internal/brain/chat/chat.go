@@ -7,6 +7,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,17 +60,28 @@ type Compactor interface {
 	MaybeCompact(ctx context.Context, sessionID string) error
 }
 
+// MemoryExtract posts one turn's text to memoryd for long-term memory
+// extraction. Fire-and-forget from chat's view: chat invokes it on a
+// goroutine, the wrapper owns timeout and error logging, and no
+// failure may touch the user-facing turn.
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string)
+
 // Service orchestrates turns against the event store.
 type Service struct {
 	gw         Gateway
 	log        SessionLog
 	distill    Distill
 	compactor  Compactor
+	memory     MemoryExtract // nil: long-term memory off
 	budget     int
 	system     string
 	flushEvery time.Duration // pending-state flush cadence mid-stream
 	logger     *slog.Logger
 }
+
+// SetMemoryExtract wires the memoryd hook. Optional — nil leaves
+// long-term memory off.
+func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
 
 // New builds the service. skillsIndex is the one-line-per-skill
 // section appended to the system prompt (empty = no skills).
@@ -288,9 +300,10 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 		s.logger.Warn("persist last category", "session_id", sessionID, "error", err)
 	}
 
+	var tm *session.TurnMemory
 	if s.distill != nil && text != "" {
 		dctx, dcancel := context.WithTimeout(context.Background(), distillBudget)
-		tm := s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text)
+		tm = s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text)
 		dcancel()
 		if tm != nil && (len(tm.FilesChanged) > 0 || len(tm.Failures) > 0 || len(tm.KeyFindings) > 0) {
 			mctx, mcancel := context.WithTimeout(context.Background(), persistTimeout)
@@ -301,6 +314,21 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 			}
 			mcancel()
 		}
+	}
+
+	// Long-term memory extraction rides the same residue (D-007): the
+	// user's words plus the distilled turn, never the raw trace.
+	// Detached context — the turn is already over.
+	if s.memory != nil && text != "" {
+		mtext := "user: " + userText
+		if tm != nil {
+			if residue, err := json.Marshal(tm); err == nil {
+				mtext += "\n\nturn residue: " + string(residue)
+			}
+		} else {
+			mtext += "\n\nassistant: " + text
+		}
+		go s.memory(context.Background(), sessionID, turnSeq, mtext)
 	}
 
 	if s.compactor != nil {

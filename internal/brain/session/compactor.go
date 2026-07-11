@@ -50,13 +50,24 @@ type Compactor struct {
 	gw       Gateway
 	windows  Windows // nil-safe: static budget only
 	budget   int     // fallback when no model window is resolvable
+	extract  MemoryExtract
 	logger   *slog.Logger
 	compacts prometheus.Counter // nil-safe: may be unset in tests
 }
 
+// MemoryExtract sends turns about to be summarized to memoryd and
+// returns the extracted memory ids. Runs BEFORE summarization so
+// names, dates, and commitments survive the summary (D-011). Failures
+// return nil — extraction must never block compaction.
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string) []string
+
 func NewCompactor(log Log, gw Gateway, windows Windows, budget int, logger *slog.Logger, compacts prometheus.Counter) *Compactor {
 	return &Compactor{log: log, gw: gw, windows: windows, budget: budget, logger: logger, compacts: compacts}
 }
+
+// SetMemoryExtract wires the memoryd hook. Optional — nil skips
+// pre-compaction extraction.
+func (c *Compactor) SetMemoryExtract(fn MemoryExtract) { c.extract = fn }
 
 // budgetFor sizes the token budget to the model that served the
 // session's last turn: 60% of its context window per the gateway's
@@ -122,6 +133,19 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 		return nil // nothing safely summarizable (e.g. one giant turn)
 	}
 
+	// Extract BEFORE summarizing: once the summary replaces these
+	// turns, whatever it dropped is gone for good (D-011).
+	facts := []string{}
+	if c.extract != nil {
+		var b strings.Builder
+		for _, m := range toSummarize {
+			b.WriteString(m.Role + ": " + m.Content + "\n\n")
+		}
+		if ids := c.extract(ctx, sessionID, boundary, b.String()); ids != nil {
+			facts = ids
+		}
+	}
+
 	summary, err := c.summarize(ctx, sessionID, toSummarize)
 	if err != nil {
 		return fmt.Errorf("session: compact %s: %w", sessionID, err)
@@ -129,7 +153,7 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 	if _, err := c.log.Append(ctx, sessionID, KindCompactionApplied, CompactionApplied{
 		Summary:            summary,
 		ReplacesThroughSeq: boundary,
-		FactsExtracted:     []string{}, // memory extraction wires in with memoryd
+		FactsExtracted:     facts,
 	}); err != nil {
 		return err
 	}

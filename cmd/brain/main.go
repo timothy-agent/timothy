@@ -18,6 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
+	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -37,6 +38,9 @@ const defaultTokenBudget = 60_000
 const (
 	serviceName = "brain"
 	defaultPort = 8080
+	// extractBudget bounds the fire-and-forget turn-end extraction:
+	// one memoryd round trip (LLM + embed) plus slack.
+	extractBudget = 90 * time.Second
 )
 
 func main() {
@@ -114,6 +118,28 @@ func main() {
 	go runOutputGC(ctx, outputs, app.Log)
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc}, store, distill, compactor, budget, skills.Index(packs), app.Log)
+
+	memorydURL := os.Getenv("MEMORYD_URL")
+	if memorydURL == "" {
+		memorydURL = "http://memoryd:8082"
+	}
+	mc := memclient.New(memorydURL)
+	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
+		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
+		defer cancel()
+		if _, err := mc.Extract(ectx, sessionID, seq, text); err != nil {
+			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
+		}
+	})
+	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) []string {
+		ids, err := mc.Extract(ctx, sessionID, seq, text)
+		if err != nil {
+			app.Log.Warn("pre-compaction extraction failed", "session_id", sessionID, "error", err)
+			return nil
+		}
+		return ids
+	})
+
 	api.Register(app.Server, svc, store, broker, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {

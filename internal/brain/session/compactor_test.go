@@ -432,3 +432,77 @@ func TestHundredTurnSessionPreservesReference(t *testing.T) {
 func jsonMarshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
+
+func TestCompactionExtractsBeforeSummarizing(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	gw := &summarizerGW{summary: "short summary"}
+	seedConversation(t, log, "s1", 10)
+	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil)
+
+	var sawText string
+	var extractedAtCall int
+	c.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text string) []string {
+		sawText = text
+		extractedAtCall = gw.calls // 0 = before the summarizer ran
+		if sessionID != "s1" || seq == 0 {
+			t.Errorf("extract got sessionID=%s seq=%d", sessionID, seq)
+		}
+		return []string{"mem-1", "mem-2"}
+	})
+
+	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if extractedAtCall != 0 {
+		t.Fatal("extraction ran after summarization; facts may already be lost")
+	}
+	if !strings.Contains(sawText, "question 0") {
+		t.Fatalf("extractor did not see the summarized turns: %q", sawText[:80])
+	}
+
+	events, _ := log.Events(t.Context(), "s1")
+	var applied CompactionApplied
+	for _, ev := range events {
+		if ev.Kind == KindCompactionApplied {
+			if err := decode(ev, &applied); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+		}
+	}
+	if len(applied.FactsExtracted) != 2 || applied.FactsExtracted[0] != "mem-1" {
+		t.Fatalf("facts_extracted = %v, want [mem-1 mem-2]", applied.FactsExtracted)
+	}
+}
+
+func TestCompactionSurvivesExtractionFailure(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	gw := &summarizerGW{summary: "short summary"}
+	seedConversation(t, log, "s1", 10)
+	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil)
+	c.SetMemoryExtract(func(context.Context, string, int64, string) []string {
+		return nil // extraction failed upstream; hook contract returns nil
+	})
+
+	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	events, _ := log.Events(t.Context(), "s1")
+	found := false
+	for _, ev := range events {
+		if ev.Kind == KindCompactionApplied {
+			found = true
+			var applied CompactionApplied
+			if err := decode(ev, &applied); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if applied.FactsExtracted == nil || len(applied.FactsExtracted) != 0 {
+				t.Fatalf("facts_extracted = %#v, want empty non-nil", applied.FactsExtracted)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("compaction did not happen despite extraction failure")
+	}
+}
