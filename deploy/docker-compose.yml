@@ -86,6 +86,7 @@ services:
     environment:
       <<: *db-env
       PORT: "8082"
+      GATEWAY_URL: http://gateway:8081
     # internal-only: no published ports
 
   web:
