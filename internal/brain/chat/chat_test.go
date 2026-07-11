@@ -566,3 +566,67 @@ func TestMemoryExtractWithoutDistillSendsAssistantText(t *testing.T) {
 		t.Fatal("memory extract never invoked")
 	}
 }
+
+func TestMemoryRetrieveInjectsIntoSystemTail(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("answer")}
+	svc := newService(gw, log)
+	block := "<memory source=\"timothy-memory\" trust=\"data\">\n- [semantic] user lives in Porto\n</memory>"
+	svc.SetMemoryRetrieve(func(_ context.Context, sessionID, query string) string {
+		if sessionID != "s1" || !strings.Contains(query, "where do I live") {
+			t.Errorf("retrieve got sessionID=%s query=%q", sessionID, query)
+		}
+		return block
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "where do I live?"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := chatRequest(t, gw)
+	if !strings.HasSuffix(sent.System, block) {
+		t.Fatalf("memory block not at system tail:\n%s", sent.System)
+	}
+	// The stable prefix stays byte-identical (D-018).
+	base := newService(gw, log)
+	if !strings.HasPrefix(sent.System, base.system) {
+		t.Fatal("system prefix changed by memory injection")
+	}
+}
+
+// chatRequest returns the turn's actual chat call (auto-title fires a
+// second, purposeless mini request on first exchanges).
+func chatRequest(t *testing.T, gw *fakeGW) gwclient.StreamRequest {
+	t.Helper()
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	for _, r := range gw.requests {
+		if r.Purpose == "chat" {
+			return r
+		}
+	}
+	t.Fatal("no chat request recorded")
+	return gwclient.StreamRequest{}
+}
+
+func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("answer")}
+	svc := newService(gw, log)
+	svc.SetMemoryRetrieve(func(context.Context, string, string) string { return "" })
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	got := chatRequest(t, gw).System
+	if got != svc.system {
+		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, svc.system)
+	}
+}

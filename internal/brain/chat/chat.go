@@ -66,13 +66,20 @@ type Compactor interface {
 // failure may touch the user-facing turn.
 type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string)
 
+// MemoryRetrieve returns the rendered long-term memory block for a
+// user message, or "" for nothing relevant. The wrapper owns timeout
+// and error handling; a failure returns "" — a turn without memories
+// beats no turn.
+type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
+
 // Service orchestrates turns against the event store.
 type Service struct {
 	gw         Gateway
 	log        SessionLog
 	distill    Distill
 	compactor  Compactor
-	memory     MemoryExtract // nil: long-term memory off
+	memory     MemoryExtract  // nil: long-term memory off
+	recall     MemoryRetrieve // nil: no memory injection
 	budget     int
 	system     string
 	flushEvery time.Duration // pending-state flush cadence mid-stream
@@ -82,6 +89,9 @@ type Service struct {
 // SetMemoryExtract wires the memoryd hook. Optional — nil leaves
 // long-term memory off.
 func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
+
+// SetMemoryRetrieve wires per-turn memory recall. Optional.
+func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 
 // New builds the service. skillsIndex is the one-line-per-skill
 // section appended to the system prompt (empty = no skills).
@@ -156,11 +166,22 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		return sessionID, nil, err
 	}
 
+	// Retrieved memory rides the system prompt's TAIL: the stable
+	// prefix stays byte-identical for provider prompt caches (D-018)
+	// while the per-turn block varies after it. The block is fenced
+	// DATA, never instructions (D-011 poisoning defense).
+	system := s.system
+	if s.recall != nil {
+		if block := s.recall(ctx, sessionID, req.Message); block != "" {
+			system += "\n\n" + block
+		}
+	}
+
 	upstream, err := s.gw.Stream(ctx, gwclient.StreamRequest{
 		TaskCategory: category,
 		Purpose:      "chat",
 		ModelHint:    req.ModelHint,
-		System:       s.system,
+		System:       system,
 		Messages:     msgs,
 		SessionID:    sessionID,
 	})

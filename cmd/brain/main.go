@@ -41,6 +41,9 @@ const (
 	// extractBudget bounds the fire-and-forget turn-end extraction:
 	// one memoryd round trip (LLM + embed) plus slack.
 	extractBudget = 90 * time.Second
+	// retrieveBudget sits ON the turn's critical path — one embed +
+	// three SQL legs, so tight.
+	retrieveBudget = 10 * time.Second
 )
 
 func main() {
@@ -138,6 +141,16 @@ func main() {
 			return nil
 		}
 		return ids
+	})
+	svc.SetMemoryRetrieve(func(ctx context.Context, sessionID, query string) string {
+		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
+		defer cancel()
+		memories, err := mc.Retrieve(rctx, sessionID, query)
+		if err != nil {
+			app.Log.Warn("memory retrieval failed; turn continues without", "session_id", sessionID, "error", err)
+			return ""
+		}
+		return memclient.RenderBlock(memories)
 	})
 
 	api.Register(app.Server, svc, store, broker, token, app.Log)
