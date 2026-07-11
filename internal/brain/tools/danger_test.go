@@ -70,6 +70,8 @@ func TestClassifyCommand(t *testing.T) {
 		// $VAR AS the command still hides what runs — destructive.
 		{command: "$CMD -rf /workspace", want: DangerDestructive},
 		{command: "ls; $X foo", want: DangerDestructive},
+		{command: "ls -la\n$CMD -rf /workspace", want: DangerDestructive}, // newline separator
+		{command: "true &&\n  $X purge", want: DangerDestructive},
 	}
 	for _, tc := range tests {
 		t.Run(tc.command, func(t *testing.T) {
