@@ -41,11 +41,11 @@ beforeEach(() => {
 describe('Home', () => {
   it('shows the capability groups', () => {
     renderHome()
-    for (const title of ['Chat', 'Memory', 'Tools', 'Workspace']) {
+    for (const title of ['Chat', 'Memory', 'Skills', 'Workspace']) {
       expect(screen.getByRole('heading', { name: title })).toBeTruthy()
     }
     expect(screen.getByRole('button', { name: /New chat/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Calculator/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Markets/ })).toBeTruthy()
   })
 
   it('submitting the composer starts a chat with the message', () => {
@@ -65,11 +65,11 @@ describe('Home', () => {
     expect(landed).toBeNull()
   })
 
-  it('tool tiles carry a prefill or send intent into chat', () => {
+  it('skill tiles carry a prefill intent into chat', () => {
     renderHome()
-    fireEvent.click(screen.getByRole('button', { name: /Web fetch/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Travel/ }))
     expect(landed?.pathname).toBe('/chat')
-    expect(landed?.state?.draft).toContain('Fetch')
+    expect(landed?.state?.draft).toContain('travel-planning skill')
     expect(landed?.state?.send).toBeUndefined()
   })
 

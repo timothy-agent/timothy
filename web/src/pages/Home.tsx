@@ -1,15 +1,14 @@
 import {
+  AirplaneTakeOff01Icon,
   Analytics01Icon,
   Brain02Icon,
   BubbleChatIcon,
-  CalculatorIcon,
-  Clock01Icon,
-  CommandLineIcon,
-  GlobeIcon,
+  ChartLineData01Icon,
+  CodeIcon,
   Image01Icon,
   InboxIcon,
   Layers01Icon,
-  PencilEdit01Icon,
+  SearchList01Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
@@ -71,38 +70,41 @@ export function Home() {
       ],
     },
     {
-      title: 'Tools',
+      // Skill packs are prompt-focused personas the agent loads on
+      // demand; each tile opens a chat pre-aimed at one of them.
+      title: 'Skills',
       tiles: [
         {
-          label: 'Time',
-          icon: Clock01Icon,
-          intent: { send: 'What time is it in Nairobi right now?', category: 'mini' },
-        },
-        {
-          label: 'Calculator',
-          icon: CalculatorIcon,
-          intent: { send: "What's 19 × 23 − 47?", category: 'mini' },
-        },
-        {
-          label: 'Web fetch',
-          icon: GlobeIcon,
+          label: 'Research',
+          icon: SearchList01Icon,
           intent: {
-            draft: 'Fetch https://example.com and summarize what it says.',
+            draft: 'Use the research-brief skill. Question: ',
             category: 'research',
           },
         },
         {
-          label: 'Shell',
-          icon: CommandLineIcon,
+          label: 'Markets',
+          icon: ChartLineData01Icon,
           intent: {
-            draft: 'List the files in the workspace and describe what is there.',
-            category: 'coding',
+            draft: 'Use the markets-digest skill. My watchlist: ',
+            category: 'research',
           },
         },
         {
-          label: 'Remember',
-          icon: PencilEdit01Icon,
-          intent: { draft: 'Please remember that ', category: 'mini' },
+          label: 'Travel',
+          icon: AirplaneTakeOff01Icon,
+          intent: {
+            draft: 'Use the travel-planning skill. Trip: ',
+            category: 'research',
+          },
+        },
+        {
+          label: 'Coding',
+          icon: CodeIcon,
+          intent: {
+            draft: 'Use the coding-task skill. Task: ',
+            category: 'coding',
+          },
         },
       ],
     },
