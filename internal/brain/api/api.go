@@ -47,19 +47,24 @@ type API struct {
 	log   *slog.Logger
 }
 
+// memoryRoutePatterns is the EXHAUSTIVE list of memoryd routes brain
+// exposes; everything else on memoryd (extract, retrieve, internals)
+// stays unreachable from outside. Tests pin this scope.
+var memoryRoutePatterns = []string{
+	"GET /v1/memories",
+	"POST /v1/memories",
+	"POST /v1/memories/{id}",
+	"GET /v1/memories/{id}/chain",
+	"POST /v1/memories/search",
+}
+
 // Register mounts the routes, each wrapped in bearer auth. memories
 // is the reverse proxy to memoryd's management routes (nil leaves
 // them unmounted).
 func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories http.Handler, token string, log *slog.Logger) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
 	if memories != nil {
-		for _, pattern := range []string{
-			"GET /v1/memories",
-			"POST /v1/memories",
-			"POST /v1/memories/{id}",
-			"GET /v1/memories/{id}/chain",
-			"POST /v1/memories/search",
-		} {
+		for _, pattern := range memoryRoutePatterns {
 			srv.Handle(pattern, a.auth(memories))
 		}
 	}

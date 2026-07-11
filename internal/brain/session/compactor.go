@@ -33,7 +33,7 @@ type Windows interface {
 }
 
 const (
-	compactTimeout   = 60 * time.Second
+	compactTimeout = 60 * time.Second
 	// Reasoning-forward models (GLM) spend output tokens thinking
 	// before writing; a tight cap gets consumed entirely by hidden
 	// reasoning and yields an empty summary. The summary itself stays

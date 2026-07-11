@@ -174,6 +174,69 @@ func mux(a *API) *http.ServeMux {
 	return m
 }
 
+func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	proxied := 0
+	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied++
+		w.WriteHeader(http.StatusOK)
+	})
+	m := mux(a)
+	// Mount exactly what Register mounts — same pattern list, so this
+	// test drifts with the real scope, never away from it.
+	for _, pattern := range memoryRoutePatterns {
+		m.Handle(pattern, a.auth(stub))
+	}
+
+	call := func(method, path, auth string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// Every documented pattern reaches the proxy behind the bearer.
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/v1/memories"},
+		{http.MethodPost, "/v1/memories"},
+		{http.MethodPost, "/v1/memories/abc"},
+		{http.MethodGet, "/v1/memories/abc/chain"},
+		{http.MethodPost, "/v1/memories/search"},
+	} {
+		if code := call(c.method, c.path, "Bearer tok"); code != http.StatusOK {
+			t.Fatalf("%s %s = %d, want 200", c.method, c.path, code)
+		}
+	}
+	if proxied != 5 {
+		t.Fatalf("proxied = %d, want 5", proxied)
+	}
+
+	// memoryd-internal routes must never be reachable through brain —
+	// not directly and not via traversal through a proxied prefix.
+	proxied = 0
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/v1/extract"},
+		{http.MethodPost, "/v1/retrieve"},
+		{http.MethodPost, "/v1/memories/../extract"},
+	} {
+		if code := call(c.method, c.path, "Bearer tok"); code == http.StatusOK {
+			t.Fatalf("%s %s = 200, want unreachable", c.method, c.path)
+		}
+	}
+	if proxied != 0 {
+		t.Fatalf("internal route reached the proxy %d times", proxied)
+	}
+
+	// And the proxied patterns stay behind auth.
+	if code := call(http.MethodGet, "/v1/memories", ""); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated = %d, want 401", code)
+	}
+}
+
 type fakeResolver struct{ known map[string]string }
 
 func (f *fakeResolver) Resolve(id, decision string) bool {

@@ -56,7 +56,7 @@ const (
 // dates, no pronouns that need surrounding context.
 const system = `You extract durable facts from a conversation excerpt for an AI assistant's long-term memory. Reply with ONLY a JSON array — no prose, no markdown fences:
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0}]
-Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. confidence in [0,1] reflects how certain the excerpt makes the fact. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
+Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic — even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
 
 // Request is one extraction job: text from a completed turn or from
 // turns about to be compacted away.
@@ -266,8 +266,16 @@ func ParseFacts(raw string) ([]Fact, error) {
 
 // sensitive marks content that must never skip the confirmation queue
 // regardless of type or confidence: credentials-adjacent topics and
-// standing-instruction phrasing.
-var sensitive = regexp.MustCompile(`(?i)password|passphrase|token|secret|credential|api.?key|private.?key|ssh|always |never |prefer|instruct`)
+// standing-instruction phrasing. The list is deliberately broad in
+// the directive direction — a false positive only queues an innocent
+// fact for confirmation, a false negative activates an instruction
+// without review. Keyword matching can never be complete; the fence
+// (D-011 trust="data") is the containment for what slips through.
+var sensitive = regexp.MustCompile(`(?i)` +
+	`password|passphrase|token|secret|credential|api.?key|private.?key|ssh|vault|` +
+	`always |never |prefer|instruct|direct(ed|s|ive)|require|rule|policy|` +
+	`must |shall |should |do not |don't |ensure |make sure |` +
+	`from now on|going forward|all future`)
 
 // AutoPromote is the promotion policy — code, not LLM (D-011).
 // Episodic observations with high confidence activate directly;

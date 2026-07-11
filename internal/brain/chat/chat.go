@@ -32,8 +32,8 @@ const (
 	// reasoning providers; a tight budget starves the summarize and
 	// compaction never converges. Post-turn passes are off the user's
 	// clock; the rare pre-send pass accepts the latency.
-	compactBudget  = 150 * time.Second
-	titleTimeout   = 15 * time.Second
+	compactBudget = 150 * time.Second
+	titleTimeout  = 15 * time.Second
 )
 
 // ErrBadRequest marks caller mistakes (empty message) so the API can

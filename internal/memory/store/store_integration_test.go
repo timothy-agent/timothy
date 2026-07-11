@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -486,5 +488,94 @@ func TestDecayStaleSemantic(t *testing.T) {
 	}
 	if got.Status != StatusActive {
 		t.Fatalf("decayed fact = %s, must stay active (still retrievable)", got.Status)
+	}
+}
+
+// rawDB opens a direct connection for tests that must corrupt state in
+// ways the store API forbids.
+func rawDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	return db
+}
+
+func TestSupersedeIsSingleShot(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	a, err := s.Insert(ctx, mem("original diet fact"))
+	if err != nil {
+		t.Fatalf("insert a: %v", err)
+	}
+	b, err := s.Insert(ctx, mem("corrected diet fact"))
+	if err != nil {
+		t.Fatalf("insert b: %v", err)
+	}
+	c, err := s.Insert(ctx, mem("competing correction"))
+	if err != nil {
+		t.Fatalf("insert c: %v", err)
+	}
+
+	if err := s.Supersede(ctx, a, b); err != nil {
+		t.Fatalf("first supersede: %v", err)
+	}
+	// A superseded memory is settled history: a second link attempt
+	// must refuse instead of silently rewriting the chain.
+	if err := s.Supersede(ctx, a, c); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("double supersede = %v, want ErrNotFound", err)
+	}
+
+	chain, err := s.Chain(ctx, a)
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	if len(chain) != 2 || chain[0].ID != a || chain[1].ID != b {
+		t.Fatalf("chain = %d entries, want [a b]", len(chain))
+	}
+}
+
+func TestChainTerminatesOnCycle(t *testing.T) {
+	s := testStore(t)
+	db := rawDB(t)
+	ctx := t.Context()
+
+	a, err := s.Insert(ctx, mem("cycle head"))
+	if err != nil {
+		t.Fatalf("insert a: %v", err)
+	}
+	b, err := s.Insert(ctx, mem("cycle tail"))
+	if err != nil {
+		t.Fatalf("insert b: %v", err)
+	}
+	if err := s.Supersede(ctx, a, b); err != nil {
+		t.Fatalf("supersede: %v", err)
+	}
+	// No store API can produce a cycle (Supersede refuses re-linking),
+	// so corrupt the row directly and prove the walk still terminates.
+	if _, err := db.Exec(ctx,
+		`UPDATE memories SET superseded_by = $2 WHERE id = $1`, b, a); err != nil {
+		t.Fatalf("forge cycle: %v", err)
+	}
+
+	chain, err := s.Chain(ctx, a)
+	if err != nil {
+		t.Fatalf("chain on cycle: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("cycle chain = %d entries, want 2 (each node once)", len(chain))
 	}
 }

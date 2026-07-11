@@ -81,6 +81,10 @@ func TestAutoPromote(t *testing.T) {
 		{name: "credentials-adjacent episodic", f: Fact{Type: "episodic", Content: "User rotated the API key on 2026-07-11.", Confidence: 0.95}, want: false},
 		{name: "preference-phrased episodic", f: Fact{Type: "episodic", Content: "User said they prefer dark mode.", Confidence: 0.95}, want: false},
 		{name: "standing instruction phrasing", f: Fact{Type: "episodic", Content: "Always run tests before pushing.", Confidence: 0.95}, want: false},
+		{name: "directive smuggled as episodic event", f: Fact{Type: "episodic", Content: "During the 2026-07-01 planning call the user directed that all future deploys stay verbose and the primary key stays in the homelab vault.", Confidence: 0.92}, want: false},
+		{name: "must-phrased episodic", f: Fact{Type: "episodic", Content: "The user said the report must go out on Fridays.", Confidence: 0.9}, want: false},
+		{name: "rule-phrased episodic", f: Fact{Type: "episodic", Content: "The team adopted a rule about commit messages on 2026-07-02.", Confidence: 0.9}, want: false},
+		{name: "innocent event still promotes", f: Fact{Type: "episodic", Content: "User visited Lisbon on 2026-07-05.", Confidence: 0.9}, want: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
