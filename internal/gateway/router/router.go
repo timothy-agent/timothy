@@ -162,8 +162,8 @@ func (s *Snapshot) Resolve(category, hint string) ([]Attempt, error) {
 			skipped = append(skipped, fmt.Sprintf("%s (unhealthy: credential %s unresolved, %s)", row.Name, row.CredentialRef, source))
 		case !inRegistry:
 			skipped = append(skipped, fmt.Sprintf("%s (not in registry, %s)", row.Name, source))
-		case !hasCapability(p, required):
-			skipped = append(skipped, fmt.Sprintf("%s (driver lacks %s capability, %s)", row.Name, required, source))
+		case !attemptCapable(p, row, model, required):
+			skipped = append(skipped, fmt.Sprintf("%s/%s (lacks %s capability, %s)", row.Name, model, required, source))
 		default:
 			key := row.Name + "/" + model
 			if !seen[key] {
@@ -200,6 +200,34 @@ func (s *Snapshot) Resolve(category, hint string) ([]Attempt, error) {
 		return nil, &NoRouteError{Category: category, Hint: hint, Skipped: skipped}
 	}
 	return attempts, nil
+}
+
+// attemptCapable gates one provider+model candidate on the required
+// capability: the DRIVER must implement it (the integration code) AND
+// the model's own declaration in the models jsonb, when present, must
+// list it — so an embeddings-only model in a chat chain is skipped
+// before any wire call even though its driver can chat. Models with
+// no declaration (or unlisted models, e.g. a hint for something not
+// yet in the table) are judged by the driver alone (D-005).
+func attemptCapable(p provider.Provider, row ProviderRow, model string, want provider.Capability) bool {
+	if !hasCapability(p, want) {
+		return false
+	}
+	for _, m := range row.Models {
+		if m.ID != model {
+			continue
+		}
+		if len(m.Capabilities) == 0 {
+			return true // listed but silent on capabilities: driver decides
+		}
+		for _, c := range m.Capabilities {
+			if c == string(want) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func hasCapability(p provider.Provider, want provider.Capability) bool {
