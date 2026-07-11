@@ -106,7 +106,12 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 	for _, row := range provRows {
 		s.rows[row.ID] = row
 		s.byName[row.Name] = row
-		s.healthy[row.Name] = row.CredentialRef == "" || lookup(row.CredentialRef) != ""
+		// credential_ref names an env var for API-key drivers, but the
+		// bedrock driver reuses it as an AWS profile name that the SDK
+		// resolves itself — an unresolved env lookup must not mark it
+		// unhealthy.
+		s.healthy[row.Name] = row.Driver == "bedrock" ||
+			row.CredentialRef == "" || lookup(row.CredentialRef) != ""
 		cfgs = append(cfgs, provider.Config{
 			Name:          row.Name,
 			Kind:          provider.Kind(row.Kind),

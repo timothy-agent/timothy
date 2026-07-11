@@ -296,3 +296,31 @@ func TestRoutesListing(t *testing.T) {
 		t.Fatal("disabled route listed")
 	}
 }
+
+func TestBedrockHealthyWithoutEnvCredential(t *testing.T) {
+	t.Parallel()
+	// bedrock's credential_ref is an AWS profile name, not an env var:
+	// the SDK resolves it, so an unresolvable lookup must not sideline
+	// the provider.
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		BaseURL: "us-east-1", DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "some-aws-profile", Enabled: true,
+		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
+	}}
+	routeRows := []RouteRow{{TaskCategory: "embedding", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "titan-embed"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("embedding", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(attempts) != 1 || attempts[0].ProviderName != "bedrock" {
+		t.Fatalf("attempts = %v, want bedrock", attempts)
+	}
+}
