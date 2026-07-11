@@ -352,7 +352,7 @@ func TestTurnMemoryEventProjectsAsOwnMessage(t *testing.T) {
 		}
 	}
 	tail := after[len(after)-1]
-	if tail.Role != "assistant" || !strings.Contains(tail.Content, "[turn memory]") ||
+	if tail.Role != "user" || !strings.Contains(tail.Content, "[turn memory]") ||
 		!strings.Contains(tail.Content, "files changed: main.go") {
 		t.Fatalf("residue message = %+v", tail)
 	}

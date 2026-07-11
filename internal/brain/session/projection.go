@@ -19,7 +19,8 @@ const interruptedNote = "\n[this response was interrupted mid-stream; continue f
 //
 // Rules (D-006/D-007/D-018):
 //   - user_message → user message; assistant_turn → assistant message
-//     (llm.message plus serialized turn memory).
+//     (llm.message plus serialized turn memory). Standalone turn_memory
+//     events ride as user-role notes.
 //   - compaction_applied replaces everything ≤ replaces_through_seq
 //     with one summary message.
 //   - the newest pending_state splices in as an interrupted assistant
@@ -95,8 +96,12 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			if err := decode(ev, &tm); err != nil {
 				return nil, err
 			}
+			// Residue rides as a user-role note, never assistant: models
+			// imitate assistant-authored conventions, and a weak model
+			// echoing "[turn memory] finding: ..." into its live answer
+			// feeds the distiller its own junk back — a feedback loop.
 			if block := renderTurnMemory(&tm.TurnMemory); block != "" {
-				msgs = append(msgs, provider.Message{Role: "assistant", Content: block})
+				msgs = append(msgs, provider.Message{Role: "user", Content: block})
 			}
 		}
 	}
