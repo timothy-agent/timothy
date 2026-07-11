@@ -82,11 +82,12 @@ services:
     # Bedrock (driver 'bedrock') reads the AWS default credential
     # chain. Local dev: run `aws sso login --profile <name>` on the
     # host and set the bedrock provider's credential_ref to that
-    # profile; the read-only mount exposes the shared config and SSO
-    # token cache. An expired SSO session is refreshed on the HOST,
-    # never by the container.
+    # profile. Config and credentials mount read-only; the SDK rotates
+    # SSO access tokens itself and must write them back, so the token
+    # cache alone is writable.
     volumes:
       - ${HOME}/.aws:/home/nonroot/.aws:ro
+      - ${HOME}/.aws/sso/cache:/home/nonroot/.aws/sso/cache
     # internal-only: no published ports
 
   memoryd:
