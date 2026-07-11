@@ -265,7 +265,11 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 		System:       summarizeSystem,
 		Messages:     []provider.Message{{Role: "user", Content: b.String()}},
 		MaxTokens:    summaryMaxTokens,
-		SessionID:    sessionID,
+		// Summaries are transcription, not reasoning. Low effort also
+		// keeps reasoning-forward models (GLM) answering in the text
+		// channel instead of burning the budget on hidden thinking.
+		Effort:    "low",
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return "", err
