@@ -69,7 +69,7 @@ export function SessionList() {
     await updateSession(s.id, { archived: !s.archived }).catch(() => {})
     refresh()
     // Archiving the open session sends you back to a fresh chat.
-    if (!s.archived && pathname === `/sessions/${s.id}`) navigate('/')
+    if (!s.archived && pathname === `/chat/${s.id}`) navigate('/chat')
   }
 
   return (
@@ -78,8 +78,8 @@ export function SessionList() {
         <SidebarGroupContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={pathname === '/'}>
-                <Link to="/">
+              <SidebarMenuButton asChild isActive={pathname === '/chat'}>
+                <Link to="/chat">
                   <HugeiconsIcon icon={Add01Icon} />
                   <span>New chat</span>
                 </Link>
@@ -106,8 +106,8 @@ export function SessionList() {
             <SidebarMenu>
               {group.sessions.map((s) => (
                 <SidebarMenuItem key={s.id}>
-                  <SidebarMenuButton asChild isActive={pathname === `/sessions/${s.id}`}>
-                    <Link to={`/sessions/${s.id}`}>
+                  <SidebarMenuButton asChild isActive={pathname === `/chat/${s.id}`}>
+                    <Link to={`/chat/${s.id}`}>
                       <span className="truncate">{s.title || 'New session'}</span>
                       {s.archived && <Badge variant="outline">archived</Badge>}
                     </Link>

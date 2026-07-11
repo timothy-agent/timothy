@@ -1,10 +1,8 @@
-import { ArrowUp01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useLocation, useNavigate, useParams } from 'react-router'
 import { answerPermission, ChatError, chatStream, getTranscript } from '../api/client'
 import type { ChatEvent } from '../api/types'
-import { CategoryPicker } from '../components/CategoryPicker'
+import { Composer } from '../components/Composer'
 import {
   AssistantMessage,
   CompactionDivider,
@@ -22,12 +20,14 @@ import {
 } from '../lib/chat'
 import { useSessions } from '../lib/sessions'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
+import type { ChatIntent } from './Home'
 
 const categoryKey = 'timothy.category'
 
 export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   const { id: routeSession } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const { refresh } = useSessions()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
@@ -40,8 +40,8 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   // Session ids this page itself adopted mid-stream (via navigate):
   // the resume effect must not clobber the live stream with a replay.
   const adoptedRef = useRef<string | null>(null)
+  const intentConsumedRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   // Cancel any in-flight stream when the page unmounts (route change).
@@ -86,14 +86,6 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
     }
   }, [routeSession, onNeedToken])
 
-  // Auto-grow the composer up to a cap, then scroll inside it.
-  const autogrow = () => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [items])
@@ -112,11 +104,10 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
       return next
     })
 
-  const send = async () => {
-    const message = draft.trim()
+  const sendMessage = async (text: string, cat: string) => {
+    const message = text.trim()
     if (!message || streaming) return
     setDraft('')
-    requestAnimationFrame(autogrow)
     setStreaming(true)
     setItems((prev) => [
       ...prev,
@@ -130,13 +121,13 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
       if (sessionRef.current === id) return
       sessionRef.current = id
       adoptedRef.current = id
-      // Same route pattern serves / and /sessions/:id, so this only
+      // Same route pattern serves /chat and /chat/:id, so this only
       // re-renders — the live stream keeps its component state.
-      navigate(`/sessions/${id}`, { replace: true })
+      navigate(`/chat/${id}`, { replace: true })
     }
     try {
       await chatStream(
-        { session_id: sessionRef.current, message, task_category: category },
+        { session_id: sessionRef.current, message, task_category: cat },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
           updateLast((m) => applyEvent(m, ev))
@@ -165,6 +156,25 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
       }
     }
   }
+
+  const send = () => void sendMessage(draft, category)
+
+  // Consume a home-screen intent exactly once: `send` fires the
+  // message immediately, `draft` prefills the composer.
+  useEffect(() => {
+    if (intentConsumedRef.current) return
+    const intent = location.state as ChatIntent | null
+    if (!intent || (!intent.send && !intent.draft && !intent.category)) return
+    intentConsumedRef.current = true
+    window.history.replaceState(null, '') // don't refire on back/refresh
+    const cat = intent.category ?? category
+    if (intent.category) pickCategory(intent.category)
+    if (intent.send) void sendMessage(intent.send, cat)
+    else if (intent.draft) setDraft(intent.draft)
+    // Mount-time only by design: the intent rides the navigation that
+    // created this page instance; the ref guards strict-mode replays.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // The permission modal shows the oldest unanswered prompt of the
   // live turn; answering posts the decision and drops it locally.
@@ -218,40 +228,17 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
         className="pb-3"
         onSubmit={(e) => {
           e.preventDefault()
-          void send()
+          send()
         }}
       >
-        <div className="rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40">
-          <textarea
-            ref={inputRef}
-            aria-label="Message"
-            rows={1}
-            value={draft}
-            placeholder="Message Timothy…"
-            className="max-h-50 w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-base/6 text-zinc-900 outline-none placeholder:text-zinc-400 sm:text-sm/6 dark:text-white dark:placeholder:text-zinc-500"
-            onChange={(e) => {
-              setDraft(e.target.value)
-              autogrow()
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void send()
-              }
-            }}
-          />
-          <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
-            <CategoryPicker value={category} onChange={pickCategory} />
-            <button
-              type="submit"
-              aria-label="Send"
-              disabled={streaming || draft.trim() === ''}
-              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-500"
-            >
-              <HugeiconsIcon icon={ArrowUp01Icon} className="size-4" />
-            </button>
-          </div>
-        </div>
+        <Composer
+          draft={draft}
+          onDraft={setDraft}
+          onSend={send}
+          category={category}
+          onCategory={pickCategory}
+          disabled={streaming}
+        />
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
           Enter to send · Shift+Enter for a new line
         </p>
