@@ -25,6 +25,7 @@
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
     "react-router": "^8.2.0",
+    "recharts": "^3.9.2",
     "rehype-highlight": "^7.0.2",
     "shadcn": "^4.13.0",
     "tailwind-merge": "^3.6.0",

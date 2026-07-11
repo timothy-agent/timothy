@@ -137,3 +137,48 @@ export interface RetrievedMemory {
   content: string
   score: number
 }
+
+// Usage aggregates served by /v1/admin/usage/* — chart-ready, never
+// raw ledger rows.
+export interface UsageSummary {
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  requests: number
+  errors: number
+}
+
+export interface UsagePoint {
+  bucket: string
+  group: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+  errors: number
+}
+
+export interface SessionUsage {
+  session_id: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+}
+
+export interface LatencyRow {
+  provider: string
+  p50_ms: number
+  p95_ms: number
+  p99_ms: number
+  requests: number
+}
+
+export interface CacheRow {
+  provider: string
+  cache_read_tokens: number
+  input_tokens: number
+  hit_ratio: number
+}

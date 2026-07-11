@@ -1,4 +1,16 @@
-import type { ChatEvent, ChatRequest, MemoryItem, RetrievedMemory, SessionMeta, Transcript } from './types'
+import type {
+  CacheRow,
+  ChatEvent,
+  ChatRequest,
+  LatencyRow,
+  MemoryItem,
+  RetrievedMemory,
+  SessionMeta,
+  SessionUsage,
+  Transcript,
+  UsagePoint,
+  UsageSummary,
+} from './types'
 
 const tokenKey = 'timothy.token'
 
@@ -238,4 +250,52 @@ export async function searchMemories(query: string): Promise<RetrievedMemory[]> 
     body: JSON.stringify({ query }),
   })
   return memories ?? []
+}
+
+// --- admin usage (dashboard) ---
+
+function rangeParams(from: Date, to: Date, extra: Record<string, string> = {}): string {
+  const params = new URLSearchParams({
+    from: from.toISOString(),
+    to: to.toISOString(),
+    ...extra,
+  })
+  return params.toString()
+}
+
+export async function usageSummary(from: Date, to: Date): Promise<UsageSummary> {
+  return request<UsageSummary>(`/v1/admin/usage/summary?${rangeParams(from, to)}`)
+}
+
+export async function usageSeries(
+  from: Date,
+  to: Date,
+  bucket: 'hour' | 'day' | 'week',
+  group: 'provider' | 'model' | 'category',
+): Promise<UsagePoint[]> {
+  const { points } = await request<{ points: UsagePoint[] }>(
+    `/v1/admin/usage/series?${rangeParams(from, to, { bucket, group })}`,
+  )
+  return points ?? []
+}
+
+export async function usageSessions(from: Date, to: Date, limit = 10): Promise<SessionUsage[]> {
+  const { sessions } = await request<{ sessions: SessionUsage[] }>(
+    `/v1/admin/usage/sessions?${rangeParams(from, to, { limit: String(limit) })}`,
+  )
+  return sessions ?? []
+}
+
+export async function usageLatency(from: Date, to: Date): Promise<LatencyRow[]> {
+  const { providers } = await request<{ providers: LatencyRow[] }>(
+    `/v1/admin/usage/latency?${rangeParams(from, to)}`,
+  )
+  return providers ?? []
+}
+
+export async function usageCache(from: Date, to: Date): Promise<CacheRow[]> {
+  const { providers } = await request<{ providers: CacheRow[] }>(
+    `/v1/admin/usage/cache?${rangeParams(from, to)}`,
+  )
+  return providers ?? []
 }
