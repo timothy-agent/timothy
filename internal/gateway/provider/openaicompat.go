@@ -121,8 +121,19 @@ func (o *OpenAICompat) Embed(ctx context.Context, model string, texts []string) 
 // wire types (request)
 
 type oaiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string        `json:"role"`
+	Content    string        `json:"content"`
+	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
+}
+
+type oaiToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 type oaiTool struct {
@@ -143,6 +154,9 @@ type oaiRequest struct {
 	} `json:"stream_options"`
 	Tools     []oaiTool `json:"tools,omitempty"`
 	MaxTokens int       `json:"max_tokens,omitempty"`
+	// ReasoningEffort is the D-020 dial; providers that don't know
+	// the field ignore it.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // wire types (stream chunks; only the fields we read)
@@ -209,11 +223,37 @@ func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 		MaxTokens: req.MaxTokens,
 	}
 	out.StreamOptions.IncludeUsage = true
+	if req.Effort == "low" {
+		out.ReasoningEffort = "low"
+	}
 	if req.System != "" {
 		out.Messages = append(out.Messages, oaiMessage{Role: "system", Content: req.System})
 	}
 	for _, m := range req.Messages {
-		out.Messages = append(out.Messages, oaiMessage(m))
+		om := oaiMessage{Role: m.Role, Content: m.Content}
+		switch {
+		case m.Role == "tool" && m.ToolResult != nil:
+			om.ToolCallID = m.ToolResult.ID
+			om.Content = m.ToolResult.Content
+			if m.ToolResult.IsError {
+				// The chat/completions shape has no is_error flag;
+				// the marker keeps the failure visible to the model.
+				om.Content = "ERROR: " + om.Content
+			}
+		case len(m.ToolCalls) > 0:
+			for _, tc := range m.ToolCalls {
+				var oc oaiToolCall
+				oc.ID = tc.ID
+				oc.Type = "function"
+				oc.Function.Name = tc.Name
+				oc.Function.Arguments = string(tc.Input)
+				if oc.Function.Arguments == "" {
+					oc.Function.Arguments = "{}"
+				}
+				om.ToolCalls = append(om.ToolCalls, oc)
+			}
+		}
+		out.Messages = append(out.Messages, om)
 	}
 	for _, t := range req.Tools {
 		var ot oaiTool

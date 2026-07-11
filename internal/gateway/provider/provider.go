@@ -29,10 +29,28 @@ const (
 	CapEmbeddings Capability = "embeddings"
 )
 
-// Message is one conversation turn.
+// Message is one conversation turn. The tool fields ride only on
+// agent-loop round-trips: an assistant message carries the calls it
+// made, and a "tool" role message carries one call's result.
 type Message struct {
-	Role    string `json:"role"` // "user" | "assistant"
+	Role       string      `json:"role"` // "user" | "assistant" | "tool"
+	Content    string      `json:"content"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolResult *ToolResult `json:"tool_result,omitempty"`
+}
+
+// ToolCall is one tool invocation the model made.
+type ToolCall struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// ToolResult is the outcome of one tool call, keyed by the call id.
+type ToolResult struct {
+	ID      string `json:"id"`
 	Content string `json:"content"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // ToolDef describes a tool offered to the model.
@@ -50,6 +68,11 @@ type CompletionRequest struct {
 	Messages  []Message
 	Tools     []ToolDef
 	MaxTokens int
+	// Effort is the D-020 dial: "low" on routine post-tool
+	// continuations, "" or "normal" otherwise. Drivers map it to
+	// their provider's reasoning-effort control where one exists and
+	// ignore it otherwise.
+	Effort string
 }
 
 // Provider is one configured LLM provider. Stream returns quickly; all

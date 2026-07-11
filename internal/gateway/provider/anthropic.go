@@ -73,8 +73,71 @@ type anthropicRequest struct {
 	MaxTokens int                  `json:"max_tokens"`
 	Stream    bool                 `json:"stream"`
 	System    []anthropicTextBlock `json:"system,omitempty"`
-	Messages  []Message            `json:"messages"`
+	Messages  []anthropicMessage   `json:"messages"`
 	Tools     []anthropicTool      `json:"tools,omitempty"`
+}
+
+// anthropicMessage carries either a plain string or content blocks
+// (tool_use / tool_result round-trips need blocks).
+type anthropicMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+type anthropicContentBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+}
+
+// anthropicMessages translates normalized messages to the wire shape:
+// tool calls become tool_use blocks on the assistant message,
+// "tool" role results become tool_result blocks on a user message,
+// and consecutive results merge into one user message (the API
+// requires all results for a turn's calls in the next user turn).
+func anthropicMessages(msgs []Message) []anthropicMessage {
+	out := make([]anthropicMessage, 0, len(msgs))
+	for _, m := range msgs {
+		switch {
+		case m.Role == "tool" && m.ToolResult != nil:
+			block := anthropicContentBlock{
+				Type:      "tool_result",
+				ToolUseID: m.ToolResult.ID,
+				Content:   m.ToolResult.Content,
+				IsError:   m.ToolResult.IsError,
+			}
+			if n := len(out) - 1; n >= 0 && out[n].Role == "user" {
+				if blocks, ok := out[n].Content.([]anthropicContentBlock); ok && blocks[0].Type == "tool_result" {
+					out[n].Content = append(blocks, block)
+					continue
+				}
+			}
+			out = append(out, anthropicMessage{Role: "user", Content: []anthropicContentBlock{block}})
+		case len(m.ToolCalls) > 0:
+			blocks := make([]anthropicContentBlock, 0, len(m.ToolCalls)+1)
+			if m.Content != "" {
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				input := tc.Input
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, anthropicContentBlock{
+					Type: "tool_use", ID: tc.ID, Name: tc.Name, Input: input,
+				})
+			}
+			out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
+		default:
+			out = append(out, anthropicMessage{Role: m.Role, Content: m.Content})
+		}
+	}
+	return out
 }
 
 // anthropic wire types (SSE payloads; only the fields we read)
@@ -146,8 +209,10 @@ func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
 		Model:     req.Model,
 		MaxTokens: maxTokens,
 		Stream:    true,
-		Messages:  req.Messages,
+		Messages:  anthropicMessages(req.Messages),
 	}
+	// req.Effort: no thinking control is wired for this driver yet, so
+	// the hint is ignored per D-020.
 	if req.System != "" {
 		// cache_control on the system block enables prompt caching for
 		// the stable prefix (D-018).

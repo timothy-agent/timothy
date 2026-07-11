@@ -1,6 +1,7 @@
 package session
 
 import (
+	"reflect"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -53,7 +54,7 @@ func TestLLMContextBasicConversation(t *testing.T) {
 		t.Fatalf("messages = %+v, want %+v", msgs, want)
 	}
 	for i := range want {
-		if msgs[i] != want[i] {
+		if !reflect.DeepEqual(msgs[i], want[i]) {
 			t.Fatalf("msg[%d] = %+v, want %+v", i, msgs[i], want[i])
 		}
 	}
@@ -262,7 +263,7 @@ func TestLLMContextPrefixStability(t *testing.T) {
 			t.Fatalf("projection shrank at %d: %d -> %d", n, len(prev), len(cur))
 		}
 		for i := range prev {
-			if cur[i] != prev[i] {
+			if !reflect.DeepEqual(cur[i], prev[i]) {
 				t.Fatalf("prefix rewritten at event %d, message %d:\n prev %+v\n cur  %+v", n, i, prev[i], cur[i])
 			}
 		}
@@ -346,7 +347,7 @@ func TestTurnMemoryEventProjectsAsOwnMessage(t *testing.T) {
 		t.Fatalf("messages = %d, want %d (residue as its own message)", len(after), len(before)+1)
 	}
 	for i := range before {
-		if after[i] != before[i] {
+		if !reflect.DeepEqual(after[i], before[i]) {
 			t.Fatalf("late residue rewrote the prefix at %d:\n before %+v\n after  %+v", i, before[i], after[i])
 		}
 	}

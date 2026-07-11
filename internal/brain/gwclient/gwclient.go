@@ -26,7 +26,9 @@ type StreamRequest struct {
 	ModelHint    string             `json:"model_hint,omitempty"`
 	System       string             `json:"system,omitempty"`
 	Messages     []provider.Message `json:"messages"`
+	Tools        []provider.ToolDef `json:"tools,omitempty"`
 	MaxTokens    int                `json:"max_tokens,omitempty"`
+	Effort       string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
 	SessionID    string             `json:"session_id,omitempty"`
 }
 

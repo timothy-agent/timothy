@@ -51,6 +51,7 @@ type streamRequest struct {
 	Messages     []provider.Message `json:"messages"`
 	Tools        []provider.ToolDef `json:"tools,omitempty"`
 	MaxTokens    int                `json:"max_tokens,omitempty"`
+	Effort       string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
 	SessionID    string             `json:"session_id,omitempty"`
 	LaneID       string             `json:"lane_id,omitempty"`
 }
@@ -114,6 +115,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		Messages:  req.Messages,
 		Tools:     req.Tools,
 		MaxTokens: req.MaxTokens,
+		Effort:    req.Effort,
 	}
 
 	var failed []string

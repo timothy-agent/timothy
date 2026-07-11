@@ -1,6 +1,7 @@
 package session
 
 import (
+	"reflect"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -316,7 +317,7 @@ func TestPlanCompactionCountsLivePending(t *testing.T) {
 		t.Fatalf("live tail = %d messages, want %d\n after: %+v\n want tail: %+v", len(tail), len(want), after, want)
 	}
 	for i := range want {
-		if tail[i] != want[i] {
+		if !reflect.DeepEqual(tail[i], want[i]) {
 			t.Fatalf("tail[%d] = %+v, want %+v", i, tail[i], want[i])
 		}
 	}
