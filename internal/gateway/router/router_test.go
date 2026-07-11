@@ -185,6 +185,77 @@ func TestResolveCapabilityExhaustionNamesReason(t *testing.T) {
 	}
 }
 
+func TestResolveModelLevelCapabilities(t *testing.T) {
+	t.Parallel()
+	// One provider whose driver can chat AND embed, with per-model
+	// declarations that disagree: routing must judge each chain entry
+	// by the model's own list, falling back to the driver only for
+	// models that declare nothing.
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://x.example/v1", DefaultModel: "nova",
+		CredentialRef: "B_KEY", Enabled: true,
+		Models: []ModelInfo{
+			{ID: "nova", Capabilities: []string{"chat", "streaming", "tools"}},
+			{ID: "titan-embed", Capabilities: []string{"embeddings"}},
+			{ID: "undeclared"},
+		},
+	}}
+	routeRows := []RouteRow{
+		{TaskCategory: "coding", Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "titan-embed"}, // embeddings-only: skip
+			{ProviderID: "p1", Model: "nova"},
+			{ProviderID: "p1", Model: "undeclared"}, // driver decides: keep
+		}, Enabled: true},
+		{TaskCategory: "embedding", Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "nova"}, // chat-only model: skip
+			{ProviderID: "p1", Model: "titan-embed"},
+		}, Enabled: true},
+	}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("coding", "")
+	if err != nil {
+		t.Fatalf("Resolve coding: %v", err)
+	}
+	if got := attemptNames(attempts); got != "bedrock/nova,bedrock/undeclared" {
+		t.Fatalf("coding attempts = %s", got)
+	}
+
+	attempts, err = snap.Resolve("embedding", "")
+	if err != nil {
+		t.Fatalf("Resolve embedding: %v", err)
+	}
+	if got := attemptNames(attempts); got != "bedrock/titan-embed" {
+		t.Fatalf("embedding attempts = %s", got)
+	}
+}
+
+func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://x.example/v1", DefaultModel: "titan-embed",
+		CredentialRef: "B_KEY", Enabled: true,
+		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
+	}}
+	routeRows := []RouteRow{{TaskCategory: "coding", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "titan-embed"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	_, err = snap.Resolve("coding", "")
+	if err == nil || !strings.Contains(err.Error(), "bedrock/titan-embed (lacks chat capability") {
+		t.Fatalf("err = %v, want model-naming capability reason", err)
+	}
+}
+
 func TestProvidersSortedByName(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())

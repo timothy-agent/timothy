@@ -79,6 +79,14 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ZAI_API_KEY: ${ZAI_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
+    # Bedrock (driver 'bedrock') reads the AWS default credential
+    # chain. Local dev: run `aws sso login --profile <name>` on the
+    # host and set the bedrock provider's credential_ref to that
+    # profile; the read-only mount exposes the shared config and SSO
+    # token cache. An expired SSO session is refreshed on the HOST,
+    # never by the container.
+    volumes:
+      - ${HOME}/.aws:/home/nonroot/.aws:ro
     # internal-only: no published ports
 
   memoryd:

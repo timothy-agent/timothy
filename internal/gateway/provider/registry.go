@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Name          string
 	Kind          Kind
-	Driver        string // "anthropic" | "openaicompat"
+	Driver        string // "anthropic" | "openaicompat" | "bedrock"
 	BaseURL       string
 	CredentialRef string
 	Headers       map[string]string
@@ -60,6 +60,16 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 			p = NewOpenAICompat(OpenAICompatConfig{
 				Name: c.Name, BaseURL: c.BaseURL, APIKey: key,
 				Headers: c.Headers, Timeout: c.Timeout,
+			})
+		case "bedrock":
+			// base_url holds the AWS region; credential_ref names a local
+			// AWS profile (SSO dev) and must be EMPTY when an IAM role
+			// supplies credentials — a missing profile fails client setup.
+			p = NewBedrock(BedrockConfig{
+				Name:    c.Name,
+				Region:  c.BaseURL,
+				Profile: c.CredentialRef,
+				Timeout: c.Timeout,
 			})
 		default:
 			return nil, fmt.Errorf("registry: provider %q: unknown driver %q", c.Name, c.Driver)
