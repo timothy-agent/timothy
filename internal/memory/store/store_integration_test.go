@@ -355,3 +355,136 @@ func TestListByStatusFiltersTypes(t *testing.T) {
 		t.Fatalf("unfiltered list has %d rows, want >= 2", len(all))
 	}
 }
+
+func TestNearDupPairs(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	near := func(dim int, delta float32) Vector {
+		v := make(Vector, 1536)
+		v[dim] = 1
+		v[dim+1] = delta // small off-axis component
+		return v
+	}
+	a := mem("dup group member one")
+	a.Embedding = near(100, 0)
+	b := mem("dup group member two")
+	b.Embedding = near(100, 0.1) // cosine ~0.995 with a
+	c := mem("unrelated fact")
+	c.Embedding = near(200, 0)
+
+	var ids []string
+	for _, m := range []Memory{a, b, c} {
+		id, err := s.Insert(ctx, m)
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		if err := s.Promote(ctx, id); err != nil {
+			t.Fatalf("Promote: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	pairs, err := s.NearDupPairs(ctx, 0.95)
+	if err != nil {
+		t.Fatalf("NearDupPairs: %v", err)
+	}
+	found := false
+	for _, p := range pairs {
+		if (p[0] == ids[0] && p[1] == ids[1]) || (p[0] == ids[1] && p[1] == ids[0]) {
+			found = true
+		}
+		if p[0] == ids[2] || p[1] == ids[2] {
+			t.Fatalf("unrelated memory in a pair: %v", p)
+		}
+	}
+	if !found {
+		t.Fatalf("near-dup pair not found in %v", pairs)
+	}
+}
+
+func TestArchiveStaleEpisodic(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	old := mem("old unretrieved episodic")
+	old.Type = TypeEpisodic
+	oldID, _ := s.Insert(ctx, old)
+	_ = s.Promote(ctx, oldID)
+	// Backdate creation past the window; never retrieved.
+	if _, err := db.Exec(ctx,
+		"UPDATE memories SET created_at = now() - interval '200 days' WHERE id = $1", oldID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	used := mem("old but recently retrieved episodic")
+	used.Type = TypeEpisodic
+	usedID, _ := s.Insert(ctx, used)
+	_ = s.Promote(ctx, usedID)
+	if _, err := db.Exec(ctx,
+		"UPDATE memories SET created_at = now() - interval '200 days', last_retrieved_at = now() WHERE id = $1", usedID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	n, err := s.ArchiveStaleEpisodic(ctx, time.Now().Add(-180*24*time.Hour))
+	if err != nil {
+		t.Fatalf("ArchiveStaleEpisodic: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("archived %d, want >= 1", n)
+	}
+	if got, _ := s.Get(ctx, oldID); got.Status != StatusArchived {
+		t.Fatalf("old unretrieved = %s, want archived", got.Status)
+	}
+	if got, _ := s.Get(ctx, usedID); got.Status != StatusActive {
+		t.Fatalf("recently retrieved = %s, want still active", got.Status)
+	}
+}
+
+func TestDecayStaleSemantic(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	stale := mem("stale semantic fact")
+	staleID, _ := s.Insert(ctx, stale)
+	_ = s.Promote(ctx, staleID)
+	if _, err := db.Exec(ctx,
+		"UPDATE memories SET last_confirmed_at = now() - interval '400 days' WHERE id = $1", staleID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	fresh := mem("fresh semantic fact")
+	freshID, _ := s.Insert(ctx, fresh)
+	_ = s.Promote(ctx, freshID)
+
+	ids, err := s.DecayStaleSemantic(ctx, time.Now().Add(-365*24*time.Hour), 0.8, 10)
+	if err != nil {
+		t.Fatalf("DecayStaleSemantic: %v", err)
+	}
+	decayed := false
+	for _, id := range ids {
+		if id == freshID {
+			t.Fatal("fresh fact decayed")
+		}
+		if id == staleID {
+			decayed = true
+		}
+	}
+	if !decayed {
+		t.Fatalf("stale fact not in decay queue %v", ids)
+	}
+	got, _ := s.Get(ctx, staleID)
+	if got.Confidence >= 0.9 {
+		t.Fatalf("confidence = %v, want decayed below 0.9", got.Confidence)
+	}
+	if got.Status != StatusActive {
+		t.Fatalf("decayed fact = %s, must stay active (still retrievable)", got.Status)
+	}
+}

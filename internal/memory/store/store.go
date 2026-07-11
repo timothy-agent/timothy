@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -203,6 +204,87 @@ func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string,
 		return "", 0, false, fmt.Errorf("nearest active: %w", err)
 	}
 	return id, similarity, true, nil
+}
+
+// NearDupPairs returns every pair of active embedded memories whose
+// cosine similarity meets the threshold. The consolidation job builds
+// merge groups from these edges. O(n²) join — fine for a single-user
+// corpus; revisit if the active set grows past tens of thousands.
+func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("near-dup pairs: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT a.id, b.id
+		FROM memories a
+		JOIN memories b ON a.id < b.id
+		WHERE a.status = $1 AND b.status = $1
+		  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+		  AND 1 - (a.embedding <=> b.embedding) >= $2`,
+		StatusActive, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("near-dup pairs: %w", err)
+	}
+	defer rows.Close()
+	var pairs [][2]string
+	for rows.Next() {
+		var p [2]string
+		if err := rows.Scan(&p[0], &p[1]); err != nil {
+			return nil, fmt.Errorf("near-dup pairs: %w", err)
+		}
+		pairs = append(pairs, p)
+	}
+	return pairs, rows.Err()
+}
+
+// ArchiveStaleEpisodic retires active episodic memories neither
+// retrieved nor created within the window. Returns how many.
+func (s *Store) ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("archive stale: %w", err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE memories SET status = $1
+		WHERE status = $2 AND type = $3
+		  AND created_at < $4
+		  AND (last_retrieved_at IS NULL OR last_retrieved_at < $4)`,
+		StatusArchived, StatusActive, TypeEpisodic, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("archive stale: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DecayStaleSemantic multiplies confidence by factor for active
+// semantic memories unconfirmed since the cutoff and returns their
+// ids, stalest first (capped) — the reconfirmation queue. Confidence
+// is lifecycle metadata; decaying it is not a fact UPDATE (D-011).
+func (s *Store) DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("decay stale: %w", err)
+	}
+	rows, err := db.Query(ctx, `UPDATE memories SET confidence = confidence * $4
+		WHERE id IN (
+			SELECT id FROM memories
+			WHERE status = $1 AND type = $2 AND last_confirmed_at < $3
+			ORDER BY last_confirmed_at
+			LIMIT $5)
+		RETURNING id`,
+		StatusActive, TypeSemantic, olderThan, factor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("decay stale: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("decay stale: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 type rowScanner interface {

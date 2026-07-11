@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/memory/api"
@@ -23,6 +24,9 @@ import (
 const (
 	serviceName = "memoryd"
 	defaultPort = 8082
+	// consolidateEvery paces the lifecycle job (D-011): merge
+	// near-dups, archive stale episodic, decay unconfirmed semantic.
+	consolidateEvery = 24 * time.Hour
 )
 
 func main() {
@@ -51,6 +55,13 @@ func main() {
 	extractor := extract.New(gwc, st, app.Log)
 	searcher := retrieval.NewSearcher(app.DB, app.Log)
 	api.Register(app.Server, extractor, searcher, gwc, app.Log)
+
+	consolidator := extract.NewConsolidator(gwc, st, app.Log, extract.Metrics{
+		Merges:   app.Metrics.NewCounter("memory_merges_total", "Near-duplicate memory groups merged."),
+		Archived: app.Metrics.NewCounter("memory_archived_total", "Stale episodic memories archived."),
+		Decayed:  app.Metrics.NewCounter("memory_decayed_total", "Stale semantic facts decayed and queued for reconfirmation."),
+	})
+	go consolidator.RunLoop(ctx, consolidateEvery)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
