@@ -5,9 +5,7 @@ import {
   BubbleChatIcon,
   ChartLineData01Icon,
   CodeIcon,
-  Image01Icon,
   InboxIcon,
-  Layers01Icon,
   SearchList01Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -33,7 +31,6 @@ interface Tile {
   to?: string
   intent?: ChatIntent
   badge?: number
-  soon?: boolean
 }
 
 // Home is the workspace launcher: a hero composer that starts a chat,
@@ -110,11 +107,7 @@ export function Home() {
     },
     {
       title: 'Workspace',
-      tiles: [
-        { label: 'Dashboard', icon: Analytics01Icon, to: '/dashboard' },
-        { label: 'Lanes', icon: Layers01Icon, to: '/lanes', soon: true },
-        { label: 'Library', icon: Image01Icon, to: '/library', soon: true },
-      ],
+      tiles: [{ label: 'Dashboard', icon: Analytics01Icon, to: '/dashboard' }],
     },
   ]
 
@@ -165,10 +158,7 @@ export function Home() {
                       </span>
                     )}
                   </span>
-                  <span className="text-xs text-zinc-600 dark:text-zinc-300">
-                    {tile.label}
-                    {tile.soon && <span className="block text-[10px] text-zinc-400">soon</span>}
-                  </span>
+                  <span className="text-xs text-zinc-600 dark:text-zinc-300">{tile.label}</span>
                 </button>
               ))}
             </div>

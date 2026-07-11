@@ -4,12 +4,8 @@ import {
   BubbleChatIcon,
   ComputerIcon,
   Home01Icon,
-  Image01Icon,
-  InboxIcon,
   Key01Icon,
-  Layers01Icon,
   Moon02Icon,
-  MoreHorizontalIcon,
   PlusSignIcon,
   Settings02Icon,
   Sun03Icon,
@@ -21,12 +17,6 @@ import { getToken } from './api/client'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from './components/ui/dropdown-menu'
 import {
   Sidebar,
   SidebarContent,
@@ -49,19 +39,12 @@ import { Dashboard } from './pages/Dashboard'
 import { Home } from './pages/Home'
 import { Memory } from './pages/Memory'
 import { Settings } from './pages/Settings'
-import { Lanes, Library, Queues } from './pages/Stubs'
 
 const railNav = [
   { label: 'Home', href: '/', icon: Home01Icon },
   { label: 'Chat', href: '/chat', icon: BubbleChatIcon },
   { label: 'Memory', href: '/memory', icon: Brain02Icon },
   { label: 'Dashboard', href: '/dashboard', icon: Analytics01Icon },
-]
-
-const moreNav = [
-  { label: 'Lanes', href: '/lanes', icon: Layers01Icon },
-  { label: 'Library', href: '/library', icon: Image01Icon },
-  { label: 'Queues', href: '/queues', icon: InboxIcon },
   { label: 'Settings', href: '/settings', icon: Settings02Icon },
 ]
 
@@ -89,7 +72,6 @@ function Rail({
   onToken: () => void
 }) {
   const { pathname } = useLocation()
-  const moreActive = moreNav.some((item) => pathname === item.href)
 
   const itemClass = (active: boolean) =>
     cn(
@@ -130,22 +112,6 @@ function Rail({
           {item.label}
         </Link>
       ))}
-      <DropdownMenu>
-        <DropdownMenuTrigger className={itemClass(moreActive)} aria-label="More">
-          <HugeiconsIcon icon={MoreHorizontalIcon} className="size-5" />
-          More
-        </DropdownMenuTrigger>
-        <DropdownMenuContent side="right" align="start">
-          {moreNav.map((item) => (
-            <DropdownMenuItem key={item.href} asChild>
-              <Link to={item.href}>
-                <HugeiconsIcon icon={item.icon} className="size-4" />
-                {item.label}
-              </Link>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
 
       <div className="mt-auto flex w-full flex-col items-center gap-1">
         <button type="button" onClick={onCycleTheme} className={itemClass(false)} aria-label={themeLabel[theme]}>
@@ -207,16 +173,16 @@ function App() {
         >
           <Sidebar>
             <SidebarHeader>
-              <div className="flex items-center gap-2.5 px-2 py-1.5">
+              <Link to="/" className="flex items-center gap-2.5 px-2 py-1.5">
                 <span className="size-2.5 rounded-full bg-gradient-to-br from-blue-500 to-violet-600" />
                 <span className="text-base font-semibold tracking-tight">Timothy</span>
-              </div>
+              </Link>
             </SidebarHeader>
             <SidebarContent>
               <SidebarGroup className="md:hidden">
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {[...railNav, ...moreNav].map((item) => (
+                    {railNav.map((item) => (
                       <SidebarMenuItem key={item.href}>
                         <SidebarMenuButton asChild isActive={isActive(pathname, item.href)}>
                           <Link to={item.href}>
@@ -253,7 +219,9 @@ function App() {
               className={cn('flex h-12 shrink-0 items-center gap-2 px-3', !onChat && 'md:hidden')}
             >
               <SidebarTrigger />
-              <span className="text-sm font-semibold tracking-tight md:hidden">Timothy</span>
+              <Link to="/" className="text-sm font-semibold tracking-tight md:hidden">
+                Timothy
+              </Link>
             </header>
             <div className="min-h-0 flex-1 overflow-hidden px-4">
               <Routes>
@@ -273,9 +241,6 @@ function App() {
                 <Route path="/sessions/:id" element={<LegacySessionRedirect />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/memory" element={<Memory />} />
-                <Route path="/lanes" element={<Lanes />} />
-                <Route path="/library" element={<Library />} />
-                <Route path="/queues" element={<Queues />} />
                 <Route path="/settings" element={<Settings />} />
               </Routes>
             </div>
