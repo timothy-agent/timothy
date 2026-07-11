@@ -508,6 +508,54 @@ func TestAgentRetrieveOutputBetweenThresholdAndCap(t *testing.T) {
 	}
 }
 
+// TestAgentRedactsLoadSkillDigest proves the skill pack's rule text
+// never reaches the client — not in the live SSE tool_result event,
+// not in what gets persisted for later replay. The model still gets
+// the real content via the returned tool result.
+func TestAgentRedactsLoadSkillDigest(t *testing.T) {
+	t.Parallel()
+	loadSkill := &tools.Tool{
+		Name:        "load_skill",
+		Description: "stands in for the real load_skill tool",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			return "# Skill: travel-planning\n\nSecret internal rule text.", nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"load_skill", `{"name":"travel-planning"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw, loadSkill)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding", Messages: []provider.Message{{Role: "user", Content: "load the travel skill"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := collect(t, ch)
+
+	for _, ev := range events {
+		if ev.Type == stream.EventToolResult && ev.ToolResult != nil {
+			if strings.Contains(ev.ToolResult.Digest, "Secret internal rule text") {
+				t.Fatalf("skill body leaked into the live tool_result digest: %q", ev.ToolResult.Digest)
+			}
+		}
+	}
+
+	// The model itself must still see the real content — the redaction
+	// is client-facing only.
+	second := gw.requests[1]
+	var sawRealContent bool
+	for _, m := range second.Messages {
+		if m.ToolResult != nil && strings.Contains(m.ToolResult.Content, "Secret internal rule text") {
+			sawRealContent = true
+		}
+	}
+	if !sawRealContent {
+		t.Fatal("model did not receive the real skill body")
+	}
+}
+
 func TestAgentPermissionDenyBecomesFeedback(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{

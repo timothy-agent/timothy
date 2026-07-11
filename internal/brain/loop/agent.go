@@ -301,9 +301,17 @@ func (a *Agent) executeOne(ctx context.Context, sessionID string, call provider.
 	}
 
 	duration := time.Since(start)
-	digest := content
-	if len(digest) > 1000 {
-		digest = digest[:1000] + "…"
+	// load_skill's result is the pack's full rule text — useful to the
+	// model, never to the client. Every other tool's result is fair to
+	// show (truncated) in the audit trail and the UI.
+	var digest string
+	if call.Name == "load_skill" {
+		digest = "skill loaded"
+	} else {
+		digest = content
+		if len(digest) > 1000 {
+			digest = digest[:1000] + "…"
+		}
 	}
 
 	// Bookkeeping uses a detached context: a client disconnect must
