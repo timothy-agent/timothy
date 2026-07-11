@@ -26,7 +26,32 @@ type ShellConfig struct {
 }
 
 type shellArgs struct {
-	Command string `json:"command"`
+	Command        string `json:"command"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+// ShellMaxTimeout caps model-requested timeouts; the constraint clamp
+// enforces it regardless of what the model sends.
+const ShellMaxTimeout = 120 * time.Second
+
+// ShellTimeoutClamp overrides an out-of-range timeout_seconds instead
+// of trusting the model: above the cap clamps down, zero or negative
+// falls back to the default.
+func ShellTimeoutClamp() tools.Clamp {
+	return func(raw json.RawMessage) (json.RawMessage, error) {
+		var args shellArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		maxSec := int(ShellMaxTimeout / time.Second)
+		if args.TimeoutSeconds > maxSec {
+			args.TimeoutSeconds = maxSec
+		}
+		if args.TimeoutSeconds < 0 {
+			args.TimeoutSeconds = 0
+		}
+		return json.Marshal(args)
+	}
 }
 
 func Shell(cfg ShellConfig) *tools.Tool {
@@ -46,6 +71,8 @@ redirects, and globs work. Every command starts in the workspace root
 Arguments:
 - command (string, required): the command line to run, e.g.
   "ls -la reports/" or "grep -rn 'TODO' src/ | head -20".
+- timeout_seconds (integer, optional): seconds before the command is
+  killed. Default 30, maximum 120 (higher values are clamped).
 
 Returns combined stdout and stderr. A non-zero exit is reported with
 the exit status alongside whatever output the command produced.
@@ -63,6 +90,10 @@ Example: {"command": "wc -l notes.md"} → "42 notes.md"`,
 				"command": {
 					"type": "string",
 					"description": "Command line executed with /bin/sh -c in the workspace root"
+				},
+				"timeout_seconds": {
+					"type": "integer",
+					"description": "Seconds before the command is killed (default 30, max 120)"
 				}
 			},
 			"required": ["command"],
@@ -79,7 +110,11 @@ Example: {"command": "wc -l notes.md"} → "42 notes.md"`,
 			if cfg.WorkspaceRoot == "" {
 				return "", fmt.Errorf("shell tool is not configured with a workspace")
 			}
-			return runShell(ctx, cfg.WorkspaceRoot, timeout, args.Command)
+			runTimeout := timeout
+			if args.TimeoutSeconds > 0 {
+				runTimeout = time.Duration(args.TimeoutSeconds) * time.Second
+			}
+			return runShell(ctx, cfg.WorkspaceRoot, runTimeout, args.Command)
 		},
 	}
 }
