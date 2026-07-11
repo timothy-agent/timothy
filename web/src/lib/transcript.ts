@@ -1,5 +1,5 @@
 import type { TranscriptItem } from '../api/types'
-import type { AssistantState } from './chat'
+import type { AssistantState, ToolRun } from './chat'
 
 // ChatItem is one renderable unit of the chat page: live turns and
 // replayed transcript items share this shape so resume is
@@ -7,14 +7,15 @@ import type { AssistantState } from './chat'
 export type ChatItem = { id: string } & (
   | { role: 'user'; text: string }
   | ({ role: 'assistant' } & AssistantState)
+  | { role: 'tool'; tool: ToolRun }
   | { role: 'compaction'; text: string }
   | { role: 'interrupted'; text: string }
 )
 
 // fromTranscript maps the server's UI replay projection into chat
 // items. The transcript hides nothing: compaction dividers and
-// interrupted turns render alongside the conversation. Tool items are
-// skipped until the tool loop lands (no fixture produces them yet).
+// interrupted turns, and executed tool calls render alongside the
+// conversation.
 export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
   const out: ChatItem[] = []
   for (const item of items) {
@@ -23,6 +24,23 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
       case 'user':
         out.push({ id, role: 'user', text: item.text ?? '' })
         break
+      case 'tool': {
+        if (!item.tool) break
+        const status = item.tool.status
+        out.push({
+          id,
+          role: 'tool',
+          tool: {
+            id: item.tool.call_id,
+            name: item.tool.name,
+            args: item.tool.args,
+            status: status === 'ok' || status === 'error' || status === 'denied' ? status : 'ok',
+            digest: item.tool.result_digest,
+            durationMs: item.tool.duration_ms,
+          },
+        })
+        break
+      }
       case 'assistant': {
         let text = ''
         let reasoning = ''
@@ -36,6 +54,8 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           text,
           reasoning,
           notices: [],
+          tools: [],
+          permissions: [],
           streaming: false,
           meta: item.provider
             ? { provider: item.provider, model: item.model, usage: item.usage }

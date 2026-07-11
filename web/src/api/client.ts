@@ -177,6 +177,17 @@ export async function getTranscript(id: string): Promise<Transcript> {
   return request<Transcript>(`/v1/sessions/${id}`)
 }
 
+// answerPermission resolves a parked tool call.
+export async function answerPermission(
+  id: string,
+  decision: 'once' | 'session' | 'deny',
+): Promise<void> {
+  await request<void>(`/v1/permissions/${id}`, {
+    method: 'POST',
+    body: JSON.stringify({ decision }),
+  })
+}
+
 export async function updateSession(
   id: string,
   patch: { title?: string; archived?: boolean },

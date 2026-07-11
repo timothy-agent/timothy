@@ -1,10 +1,10 @@
-import { Copy01Icon, Tick02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { Copy01Icon, Tick02Icon, WrenchIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Badge } from './ui/badge'
-import type { AssistantState } from '../lib/chat'
+import type { AssistantState, ToolRun } from '../lib/chat'
 import 'highlight.js/styles/github-dark.css'
 
 // CopyButton copies a message's raw text; the check confirms briefly.
@@ -82,6 +82,52 @@ export function InterruptedMessage({ text }: { text: string }) {
   )
 }
 
+// ToolBlock renders one tool call: name, status, duration, and a
+// collapsible result digest. Raw results never reach the browser —
+// the digest is all there is.
+export function ToolBlock({ tool }: { tool: ToolRun }) {
+  const statusStyles: Record<ToolRun['status'], string> = {
+    running: 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400',
+    ok: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    error: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
+    denied: 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  }
+  return (
+    <details
+      className="w-full max-w-3xl rounded-lg border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700"
+      data-testid="tool-block"
+    >
+      <summary className="flex cursor-pointer items-center gap-2 select-none">
+        <HugeiconsIcon icon={WrenchIcon} className="size-3.5 text-zinc-400" />
+        <span className="font-mono text-zinc-600 dark:text-zinc-300">{tool.name}</span>
+        <Badge variant="outline" className={statusStyles[tool.status]} data-testid="tool-status">
+          {tool.status === 'running' ? 'running…' : tool.status}
+        </Badge>
+        {tool.durationMs !== undefined && (
+          <span className="text-zinc-400">{formatDuration(tool.durationMs)}</span>
+        )}
+      </summary>
+      <div className="mt-2 space-y-2">
+        {tool.args && (
+          <pre className="overflow-x-auto rounded bg-zinc-100 p-2 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+            {tool.args}
+          </pre>
+        )}
+        {tool.digest && (
+          <pre className="max-h-64 overflow-auto rounded bg-zinc-100 p-2 whitespace-pre-wrap text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+            {tool.digest}
+          </pre>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
 export function AssistantMessage({ msg }: { msg: AssistantState }) {
   const tokens = msg.meta?.usage
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
@@ -95,9 +141,23 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
         </details>
       )}
 
+      {msg.tools.map((t) => (
+        <ToolBlock key={t.id} tool={t} />
+      ))}
+
+      {msg.permissions.length > 0 && (
+        <Badge
+          variant="outline"
+          className="border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          data-testid="awaiting-approval"
+        >
+          waiting for your approval
+        </Badge>
+      )}
+
       <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
         <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{msg.text}</ReactMarkdown>
-        {msg.streaming && <span className="animate-pulse">▍</span>}
+        {msg.streaming && msg.permissions.length === 0 && <span className="animate-pulse">▍</span>}
       </div>
 
       {msg.notices.map((n, i) => (

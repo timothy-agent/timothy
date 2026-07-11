@@ -2,16 +2,24 @@ import { ArrowUp01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { ChatError, chatStream, getTranscript } from '../api/client'
+import { answerPermission, ChatError, chatStream, getTranscript } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { CategoryPicker } from '../components/CategoryPicker'
 import {
   AssistantMessage,
   CompactionDivider,
   InterruptedMessage,
+  ToolBlock,
   UserMessage,
 } from '../components/Message'
-import { applyEvent, categories, type AssistantState } from '../lib/chat'
+import { PermissionModal } from '../components/PermissionModal'
+import {
+  answerPermission as clearPermission,
+  applyEvent,
+  categories,
+  emptyAssistant,
+  type AssistantState,
+} from '../lib/chat'
 import { useSessions } from '../lib/sessions'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
 
@@ -113,14 +121,7 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
     setItems((prev) => [
       ...prev,
       { id: crypto.randomUUID(), role: 'user', text: message },
-      {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        text: '',
-        reasoning: '',
-        notices: [],
-        streaming: true,
-      },
+      { id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() },
     ])
 
     const controller = new AbortController()
@@ -165,8 +166,21 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
     }
   }
 
+  // The permission modal shows the oldest unanswered prompt of the
+  // live turn; answering posts the decision and drops it locally.
+  const last = items[items.length - 1]
+  const pendingPermission = last?.role === 'assistant' ? last.permissions[0] : undefined
+  const decide = (id: string, decision: 'once' | 'session' | 'deny') => {
+    updateLast((m) => clearPermission(m, id))
+    answerPermission(id, decision).catch(() => {
+      // The 10-minute server timeout resolves an undeliverable
+      // decision as deny; nothing useful to render here.
+    })
+  }
+
   return (
     <div className="flex h-full flex-col">
+      {pendingPermission && <PermissionModal request={pendingPermission} onDecision={decide} />}
       <div className="flex-1 space-y-6 overflow-y-auto py-6">
         {items.length === 0 && !loadError && (
           <div className="mt-24 text-center">
@@ -187,6 +201,8 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
           switch (item.role) {
             case 'user':
               return <UserMessage key={item.id} text={item.text} />
+            case 'tool':
+              return <ToolBlock key={item.id} tool={item.tool} />
             case 'compaction':
               return <CompactionDivider key={item.id} text={item.text} />
             case 'interrupted':

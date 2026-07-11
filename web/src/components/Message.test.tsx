@@ -1,15 +1,19 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
-import { applyEvent, type AssistantState } from '../lib/chat'
-import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from './Message'
+import { applyEvent, emptyAssistant, type AssistantState } from '../lib/chat'
+import {
+  AssistantMessage,
+  CompactionDivider,
+  InterruptedMessage,
+  ToolBlock,
+  UserMessage,
+} from './Message'
 
 afterEach(cleanup)
 
-const empty: AssistantState = { text: '', reasoning: '', notices: [], streaming: true }
-
 function play(events: ChatEvent[]): AssistantState {
-  return events.reduce(applyEvent, empty)
+  return events.reduce(applyEvent, emptyAssistant())
 }
 
 describe('AssistantMessage', () => {
@@ -184,5 +188,82 @@ describe('copy buttons', () => {
     render(<AssistantMessage msg={msg} />)
     expect(screen.queryByTestId('copy-button')).toBeNull()
     expect(screen.queryByTestId('meta-badge')).toBeNull()
+  })
+})
+
+describe('tool calls', () => {
+  it('tracks a tool call through start, end, and result', () => {
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
+      { type: 'tool_end', tool_call: { id: 'c1', name: 'shell', input: { command: 'ls' } } },
+      {
+        type: 'tool_result',
+        tool_result: { id: 'c1', name: 'shell', status: 'ok', digest: 'notes.md', duration_ms: 42 },
+      },
+      { type: 'chunk', text: 'you have one file' },
+      { type: 'meta', session_id: 's' },
+    ])
+    expect(msg.tools).toHaveLength(1)
+    expect(msg.tools[0]).toMatchObject({ id: 'c1', status: 'ok', digest: 'notes.md' })
+
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.getByTestId('tool-block')).toHaveTextContent('shell')
+    expect(screen.getByTestId('tool-status')).toHaveTextContent('ok')
+    expect(screen.getByTestId('tool-block')).toHaveTextContent('42ms')
+  })
+
+  it('shows a running tool before its result arrives', () => {
+    const msg = play([{ type: 'tool_start', tool_call: { id: 'c1', name: 'web_fetch' } }])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.getByTestId('tool-status')).toHaveTextContent('running…')
+  })
+
+  it('renders a standalone replayed tool block', () => {
+    render(
+      <ToolBlock
+        tool={{ id: 'c9', name: 'calculate', status: 'error', digest: 'division by zero' }}
+      />,
+    )
+    expect(screen.getByTestId('tool-status')).toHaveTextContent('error')
+  })
+
+  it('parks visibly while a permission request is pending', () => {
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
+      {
+        type: 'permission_request',
+        permission: {
+          id: 'p1',
+          tool: 'shell',
+          args: '{"command":"rm x"}',
+          danger_level: 'destructive',
+          rationale: 'destructive command pattern: rm',
+        },
+      },
+    ])
+    expect(msg.permissions).toHaveLength(1)
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.getByTestId('awaiting-approval')).toHaveTextContent('waiting for your approval')
+  })
+
+  it('clears pending permissions when the tool result lands', () => {
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
+      {
+        type: 'permission_request',
+        permission: {
+          id: 'p1',
+          tool: 'shell',
+          args: '{}',
+          danger_level: 'safe',
+          rationale: 'no standing grant',
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_result: { id: 'c1', name: 'shell', status: 'ok', duration_ms: 5 },
+      },
+    ])
+    expect(msg.permissions).toHaveLength(0)
   })
 })

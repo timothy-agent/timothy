@@ -8,18 +8,45 @@ export interface Usage {
   cache_write_tokens?: number
 }
 
+export interface ToolCallEvent {
+  id: string
+  name: string
+  input?: unknown
+}
+
+export interface ToolResultEvent {
+  id: string
+  name: string
+  status: 'ok' | 'error' | 'denied'
+  digest?: string
+  duration_ms: number
+}
+
+export interface PermissionRequestEvent {
+  id: string
+  tool: string
+  args: string
+  danger_level: 'safe' | 'destructive'
+  rationale: string
+}
+
 export interface StreamEvent {
   type:
     | 'chunk'
     | 'reasoning_chunk'
     | 'tool_start'
     | 'tool_end'
+    | 'tool_result'
+    | 'permission_request'
     | 'usage'
     | 'retry'
     | 'incomplete'
     | 'done'
     | 'error'
   text?: string
+  tool_call?: ToolCallEvent
+  tool_result?: ToolResultEvent
+  permission?: PermissionRequestEvent
   usage?: Usage
   error?: { code: string; message: string; retryable: boolean }
   retry?: { attempt: number; backoff_ms: number; reason: string }
@@ -60,6 +87,16 @@ export interface UIBlock {
   text: string
 }
 
+// One executed tool call in the replay projection (digest only).
+export interface ToolExecution {
+  call_id: string
+  name: string
+  args?: string
+  result_digest?: string
+  status: string
+  duration_ms?: number
+}
+
 // One renderable unit of the UI replay projection. The transcript
 // hides nothing: compactions and interrupted turns are items too.
 export interface TranscriptItem {
@@ -67,6 +104,7 @@ export interface TranscriptItem {
   kind: 'user' | 'assistant' | 'tool' | 'compaction' | 'interrupted'
   text?: string
   blocks?: UIBlock[]
+  tool?: ToolExecution
   provider?: string
   model?: string
   usage?: Usage
