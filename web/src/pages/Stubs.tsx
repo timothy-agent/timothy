@@ -29,11 +29,3 @@ export function Queues() {
   )
 }
 
-export function Settings() {
-  return (
-    <PagePlaceholder
-      title="Settings"
-      description="Provider CRUD, task-route chains, feature switches, and schedules. Arrives with the settings panel. The API token lives behind the gear icon for now."
-    />
-  )
-}

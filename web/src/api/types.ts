@@ -182,3 +182,56 @@ export interface CacheRow {
   input_tokens: number
   hit_ratio: number
 }
+
+// Control-plane shapes (/v1/admin/*). credential_ref is a NAME (env
+// var / Vault path / AWS profile) — secret values never travel.
+export interface AdminModel {
+  id: string
+  context_window?: number
+  capabilities?: string[]
+  prices?: {
+    input_per_mtok?: number
+    output_per_mtok?: number
+    cache_read_per_mtok?: number
+    cache_write_per_mtok?: number
+  }
+}
+
+export interface AdminProvider {
+  id: string
+  name: string
+  kind: string
+  driver: string
+  base_url: string
+  default_model: string
+  models: AdminModel[]
+  credential_ref: string
+  headers: Record<string, string>
+  enabled: boolean
+}
+
+export interface ChainEntry {
+  provider_id: string
+  model: string
+}
+
+export interface AdminRoute {
+  task_category: string
+  chain: ChainEntry[]
+  enabled: boolean
+}
+
+export interface ProviderHealth {
+  name: string
+  enabled: boolean
+  healthy: boolean
+  last_success?: string
+  last_error?: string
+}
+
+export interface TestResult {
+  ok: boolean
+  latency_ms: number
+  model: string
+  detail?: string
+}

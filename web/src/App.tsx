@@ -48,7 +48,8 @@ import { Chat } from './pages/Chat'
 import { Dashboard } from './pages/Dashboard'
 import { Home } from './pages/Home'
 import { Memory } from './pages/Memory'
-import { Lanes, Library, Queues, Settings } from './pages/Stubs'
+import { Settings } from './pages/Settings'
+import { Lanes, Library, Queues } from './pages/Stubs'
 
 const railNav = [
   { label: 'Home', href: '/', icon: Home01Icon },

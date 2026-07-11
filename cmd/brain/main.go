@@ -23,6 +23,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/settings"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
@@ -94,6 +95,7 @@ func main() {
 
 	gwc := gwclient.New(gatewayURL)
 	store := session.NewStore(app.DB)
+	flags := settings.New(app.DB, app.Log)
 	compactor := session.NewCompactor(store, gwc, gwc, budget, app.Log,
 		app.Metrics.NewCounter("session_compactions_total", "Sessions compacted to stay under the context budget."))
 	distill := func(ctx context.Context, sessionID, turnText string) *session.TurnMemory {
@@ -133,8 +135,12 @@ func main() {
 	}
 	go runOutputGC(ctx, outputs, app.Log)
 
-	svc := chat.New(turnRouter{agent: agent, gw: gwc}, store, distill, compactor, budget, skills.Index(packs), app.Log)
+	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
+		gatedCompactor{inner: compactor, flags: flags}, budget, skills.Index(packs), app.Log)
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
+		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
+			return
+		}
 		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 		defer cancel()
 		if _, err := mc.Extract(ectx, sessionID, seq, text); err != nil {
@@ -142,6 +148,9 @@ func main() {
 		}
 	})
 	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) []string {
+		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
+			return nil
+		}
 		// Own deadline WITHIN the compaction budget: extraction must
 		// never starve the summarize that follows it.
 		ectx, cancel := context.WithTimeout(ctx, preCompactExtractBudget)
@@ -165,7 +174,7 @@ func main() {
 	})
 
 	api.Register(app.Server, svc, store, broker,
-		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), token, app.Log)
+		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -221,16 +230,32 @@ func adminProxy(gatewayURL string, log *slog.Logger) http.Handler {
 	}
 }
 
+// gatedCompactor honors the compaction feature switch: off means
+// sessions simply grow until it is flipped back on.
+type gatedCompactor struct {
+	inner chat.Compactor
+	flags *settings.Store
+}
+
+func (g gatedCompactor) MaybeCompact(ctx context.Context, sessionID string) error {
+	if !g.flags.Enabled(ctx, settings.KeyCompaction) {
+		return nil
+	}
+	return g.inner.MaybeCompact(ctx, sessionID)
+}
+
 // turnRouter sends chat turns through the agent loop and everything
 // else (titles, distills, compaction summaries) straight to the
-// gateway.
+// gateway. With the tools switch off, chat turns bypass the agent
+// loop entirely — plain pass-through completion.
 type turnRouter struct {
 	agent *loop.Agent
 	gw    chat.Gateway
+	flags *settings.Store
 }
 
 func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
-	if req.Purpose != "chat" {
+	if req.Purpose != "chat" || !r.flags.Enabled(ctx, settings.KeyTools) {
 		return r.gw.Stream(ctx, req)
 	}
 	return r.agent.Start(ctx, loop.Request{

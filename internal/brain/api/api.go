@@ -18,6 +18,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/settings"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 )
@@ -62,7 +63,7 @@ var memoryRoutePatterns = []string{
 // is the reverse proxy to memoryd's management routes, admin the
 // proxy to the gateway's internal control plane (nil leaves either
 // unmounted).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, token string, log *slog.Logger) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, token string, log *slog.Logger) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
@@ -70,6 +71,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		}
 	}
 	a.registerAdmin(srv.Handle, admin)
+	a.registerSettings(srv.Handle, flags)
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))

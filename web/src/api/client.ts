@@ -1,12 +1,17 @@
 import type {
+  AdminProvider,
+  AdminRoute,
   CacheRow,
+  ChainEntry,
   ChatEvent,
   ChatRequest,
   LatencyRow,
   MemoryItem,
+  ProviderHealth,
   RetrievedMemory,
   SessionMeta,
   SessionUsage,
+  TestResult,
   Transcript,
   UsagePoint,
   UsageSummary,
@@ -298,4 +303,71 @@ export async function usageCache(from: Date, to: Date): Promise<CacheRow[]> {
     `/v1/admin/usage/cache?${rangeParams(from, to)}`,
   )
   return providers ?? []
+}
+
+// --- admin control plane (settings panel) ---
+
+export async function listProviders(): Promise<AdminProvider[]> {
+  const { providers } = await request<{ providers: AdminProvider[] }>('/v1/admin/providers')
+  return providers ?? []
+}
+
+export async function createProvider(p: Partial<AdminProvider>): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/admin/providers', {
+    method: 'POST',
+    body: JSON.stringify(p),
+  })
+  return id
+}
+
+export async function patchProvider(id: string, patch: Partial<AdminProvider>): Promise<void> {
+  await request<void>(`/v1/admin/providers/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function deleteProvider(id: string): Promise<void> {
+  await request<void>(`/v1/admin/providers/${id}`, { method: 'DELETE' })
+}
+
+export async function testProvider(id: string, model?: string): Promise<TestResult> {
+  return request<TestResult>(`/v1/admin/providers/${id}/test`, {
+    method: 'POST',
+    body: JSON.stringify(model ? { model } : {}),
+  })
+}
+
+export async function providersHealth(): Promise<ProviderHealth[]> {
+  const { providers } = await request<{ providers: ProviderHealth[] }>(
+    '/v1/admin/providers/health',
+  )
+  return providers ?? []
+}
+
+export async function listRoutes(): Promise<AdminRoute[]> {
+  const { routes } = await request<{ routes: AdminRoute[] }>('/v1/admin/routes')
+  return routes ?? []
+}
+
+export async function patchRoute(
+  category: string,
+  patch: { chain?: ChainEntry[]; enabled?: boolean },
+): Promise<void> {
+  await request<void>(`/v1/admin/routes/${category}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function getSettings(): Promise<Record<string, boolean>> {
+  const { settings } = await request<{ settings: Record<string, boolean> }>('/v1/admin/settings')
+  return settings ?? {}
+}
+
+export async function patchSettings(changes: Record<string, boolean>): Promise<void> {
+  await request<void>('/v1/admin/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
 }
