@@ -28,7 +28,11 @@ const (
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
 	distillBudget  = 65 * time.Second // two 30s attempts + slack
-	compactBudget  = 90 * time.Second
+	// Compaction runs an extraction round trip AND a summarize on slow
+	// reasoning providers; a tight budget starves the summarize and
+	// compaction never converges. Post-turn passes are off the user's
+	// clock; the rare pre-send pass accepts the latency.
+	compactBudget  = 150 * time.Second
 	titleTimeout   = 15 * time.Second
 )
 

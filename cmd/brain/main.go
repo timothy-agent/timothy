@@ -46,6 +46,10 @@ const (
 	// retrieveBudget sits ON the turn's critical path — one embed +
 	// three SQL legs, so tight.
 	retrieveBudget = 10 * time.Second
+	// preCompactExtractBudget bounds the extraction INSIDE the
+	// compaction pass so a slow extraction degrades to empty facts
+	// instead of starving the summarize.
+	preCompactExtractBudget = 45 * time.Second
 )
 
 func main() {
@@ -137,7 +141,11 @@ func main() {
 		}
 	})
 	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) []string {
-		ids, err := mc.Extract(ctx, sessionID, seq, text)
+		// Own deadline WITHIN the compaction budget: extraction must
+		// never starve the summarize that follows it.
+		ectx, cancel := context.WithTimeout(ctx, preCompactExtractBudget)
+		defer cancel()
+		ids, err := mc.Extract(ectx, sessionID, seq, text)
 		if err != nil {
 			app.Log.Warn("pre-compaction extraction failed", "session_id", sessionID, "error", err)
 			return nil
