@@ -1,0 +1,289 @@
+package extract
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/memory/store"
+)
+
+func TestParseFacts(t *testing.T) {
+	t.Parallel()
+	valid := `[{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9}]`
+	tests := []struct {
+		name    string
+		raw     string
+		wantN   int
+		wantErr bool
+	}{
+		{name: "valid", raw: valid, wantN: 1},
+		{name: "fenced", raw: "```json\n" + valid + "\n```", wantN: 1},
+		{name: "empty array", raw: "[]", wantN: 0},
+		{name: "prose", raw: "Here are the facts: " + valid, wantErr: true},
+		{name: "bad fact type", raw: `[{"type":"opinion","content":"x","entities":[],"confidence":0.5}]`, wantErr: true},
+		{name: "empty content", raw: `[{"type":"semantic","content":"  ","entities":[],"confidence":0.5}]`, wantErr: true},
+		{name: "confidence out of range", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":1.5}]`, wantErr: true},
+		{name: "bad entity type", raw: `[{"type":"semantic","content":"x","entities":[{"type":"animal","name":"cat"}],"confidence":0.5}]`, wantErr: true},
+		{name: "empty entity name", raw: `[{"type":"semantic","content":"x","entities":[{"type":"person","name":""}],"confidence":0.5}]`, wantErr: true},
+		{name: "unknown field", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":0.5,"extra":1}]`, wantErr: true},
+		{name: "object not array", raw: `{"type":"semantic","content":"x"}`, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			facts, err := ParseFacts(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseFacts succeeded with %d facts, want error", len(facts))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseFacts: %v", err)
+			}
+			if len(facts) != tc.wantN {
+				t.Fatalf("got %d facts, want %d", len(facts), tc.wantN)
+			}
+		})
+	}
+}
+
+func TestParseFactsCapsCount(t *testing.T) {
+	t.Parallel()
+	one := `{"type":"episodic","content":"fact","entities":[],"confidence":0.9}`
+	raw := "[" + strings.Repeat(one+",", 30) + one + "]"
+	facts, err := ParseFacts(raw)
+	if err != nil {
+		t.Fatalf("ParseFacts: %v", err)
+	}
+	if len(facts) != maxFacts {
+		t.Fatalf("got %d facts, want cap %d", len(facts), maxFacts)
+	}
+}
+
+func TestAutoPromote(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		f    Fact
+		want bool
+	}{
+		{name: "confident episodic", f: Fact{Type: "episodic", Content: "Deployed v2 on 2026-07-11.", Confidence: 0.9}, want: true},
+		{name: "low confidence episodic", f: Fact{Type: "episodic", Content: "Maybe deployed v2.", Confidence: 0.5}, want: false},
+		{name: "semantic never auto", f: Fact{Type: "semantic", Content: "User lives in Porto.", Confidence: 0.99}, want: false},
+		{name: "procedural never auto", f: Fact{Type: "procedural", Content: "Deploy with make deploy.", Confidence: 0.99}, want: false},
+		{name: "credentials-adjacent episodic", f: Fact{Type: "episodic", Content: "User rotated the API key on 2026-07-11.", Confidence: 0.95}, want: false},
+		{name: "preference-phrased episodic", f: Fact{Type: "episodic", Content: "User said they prefer dark mode.", Confidence: 0.95}, want: false},
+		{name: "standing instruction phrasing", f: Fact{Type: "episodic", Content: "Always run tests before pushing.", Confidence: 0.95}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := AutoPromote(tc.f); got != tc.want {
+				t.Fatalf("AutoPromote(%+v) = %v, want %v", tc.f, got, tc.want)
+			}
+		})
+	}
+}
+
+// fakeGateway scripts LLM replies (consumed in order) and returns
+// deterministic embeddings.
+type fakeGateway struct {
+	replies []string
+	calls   int
+	embeds  [][]float32
+}
+
+func (g *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent, 2)
+	reply := g.replies[min(g.calls, len(g.replies)-1)]
+	g.calls++
+	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: reply}
+	ch <- stream.StreamEvent{Type: stream.EventDone}
+	close(ch)
+	return ch, nil
+}
+
+func (g *fakeGateway) Embed(_ context.Context, texts []string, _ string) ([][]float32, error) {
+	if g.embeds != nil {
+		return g.embeds, nil
+	}
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{1, 0, 0}
+	}
+	return out, nil
+}
+
+// fakeStore records pipeline actions.
+type fakeStore struct {
+	inserted []store.Memory
+	promoted []string
+	entities map[string]string
+	nearest  struct {
+		id  string
+		sim float64
+		ok  bool
+	}
+	nextID int
+}
+
+func (s *fakeStore) Insert(_ context.Context, m store.Memory) (string, error) {
+	s.nextID++
+	id := fmt.Sprintf("mem-%d", s.nextID)
+	s.inserted = append(s.inserted, m)
+	return id, nil
+}
+
+func (s *fakeStore) Promote(_ context.Context, id string) error {
+	s.promoted = append(s.promoted, id)
+	return nil
+}
+
+func (s *fakeStore) UpsertEntity(_ context.Context, typ, name string) (string, error) {
+	if s.entities == nil {
+		s.entities = map[string]string{}
+	}
+	key := typ + "/" + name
+	if _, ok := s.entities[key]; !ok {
+		s.entities[key] = "ent-" + key
+	}
+	return s.entities[key], nil
+}
+
+func (s *fakeStore) NearestActive(context.Context, store.Vector) (string, float64, bool, error) {
+	return s.nearest.id, s.nearest.sim, s.nearest.ok, nil
+}
+
+func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func TestExtractInsertsAndPromotes(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[
+		{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[{"type":"project","name":"v2"}],"confidence":0.9},
+		{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9}
+	]`}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{SessionID: "11111111-1111-1111-1111-111111111111", SourceSeq: 7, Text: "turn text"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 2 || len(st.inserted) != 2 {
+		t.Fatalf("inserted %d ids %d, want 2/2", len(st.inserted), len(ids))
+	}
+	// Episodic ≥0.8 auto-promotes; semantic stays pending.
+	if len(st.promoted) != 1 || st.promoted[0] != ids[0] {
+		t.Fatalf("promoted = %v, want [%s]", st.promoted, ids[0])
+	}
+	first := st.inserted[0]
+	if first.SourceSession != "11111111-1111-1111-1111-111111111111" || first.SourceSeq != 7 {
+		t.Fatalf("provenance = %s/%d", first.SourceSession, first.SourceSeq)
+	}
+	if len(first.EntityRefs) != 1 || first.EntityRefs[0] != "ent-project/v2" {
+		t.Fatalf("entity refs = %v", first.EntityRefs)
+	}
+	if len(first.Embedding) == 0 {
+		t.Fatal("embedding not attached")
+	}
+}
+
+func TestExtractDropsExactDuplicate(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.ok = "existing", 0.995, true
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 || len(st.inserted) != 0 {
+		t.Fatalf("exact dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+}
+
+func TestExtractKeepsNearDuplicate(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.ok = "existing", 0.96, true
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 || len(st.inserted) != 1 {
+		t.Fatalf("near dup dropped: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+}
+
+func TestExtractRetriesOnInvalidJSON(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{
+		"sorry, here are the facts...",
+		`[{"type":"episodic","content":"Fixed the build on 2026-07-11.","entities":[],"confidence":0.9}]`,
+	}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract after retry: %v", err)
+	}
+	if gw.calls != 2 {
+		t.Fatalf("llm calls = %d, want 2", gw.calls)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("ids = %v, want one", ids)
+	}
+}
+
+func TestExtractGivesUpAfterTwoInvalid(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{"garbage", "still garbage"}}
+	st := &fakeStore{}
+	_, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err == nil {
+		t.Fatal("Extract succeeded on garbage, want error")
+	}
+	if gw.calls != 2 {
+		t.Fatalf("llm calls = %d, want exactly 2", gw.calls)
+	}
+	if len(st.inserted) != 0 {
+		t.Fatal("garbage produced inserts")
+	}
+}
+
+func TestExtractNoFactsIsSuccess(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{"[]"}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "hello"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("ids = %v, want none", ids)
+	}
+}
+
+// errGateway fails Stream with a terminal error event.
+type errGateway struct{ fakeGateway }
+
+func (g *errGateway) Stream(context.Context, gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent, 1)
+	ch <- stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{Message: "boom"}}
+	close(ch)
+	return ch, nil
+}
+
+func TestExtractSurfacesLLMError(t *testing.T) {
+	t.Parallel()
+	st := &fakeStore{}
+	_, err := New(&errGateway{}, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want boom", err)
+	}
+}
