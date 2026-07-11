@@ -34,7 +34,11 @@ type Windows interface {
 
 const (
 	compactTimeout   = 60 * time.Second
-	summaryMaxTokens = 1200
+	// Reasoning-forward models (GLM) spend output tokens thinking
+	// before writing; a tight cap gets consumed entirely by hidden
+	// reasoning and yields an empty summary. The summary itself stays
+	// ~1200 tokens; the rest is thinking headroom.
+	summaryMaxTokens = 3000
 )
 
 // summarizeSystem must preserve exactly what summaries usually lose
