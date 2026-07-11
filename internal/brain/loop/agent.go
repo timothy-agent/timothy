@@ -66,27 +66,36 @@ const coercionMessage = "[system] This task category requires consulting your to
 // and permissions, feed results back, repeat until a final answer or
 // the step ceiling.
 type Agent struct {
-	gw        Gateway
-	exec      Executor
-	perms     Permissioner
-	outputs   OutputSink
-	audit     AuditSink
-	events    EventAppender
-	broker    *PermBroker
-	defs      []provider.ToolDef
-	maxSteps  int
-	offloadAt int
-	logger    *slog.Logger
+	gw             Gateway
+	exec           Executor
+	perms          Permissioner
+	outputs        OutputSink
+	audit          AuditSink
+	events         EventAppender
+	broker         *PermBroker
+	defs           []provider.ToolDef
+	maxSteps       int
+	offloadAt      int
+	offloadPerTool map[string]int
+	logger         *slog.Logger
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
 	return &Agent{
 		gw: gw, exec: exec, perms: perms, outputs: outputs, audit: audit,
 		events: events, broker: broker, defs: defs,
-		maxSteps:  tools.DefaultMaxSteps,
-		offloadAt: tools.DefaultOffloadThreshold,
-		logger:    logger,
+		maxSteps:       tools.DefaultMaxSteps,
+		offloadAt:      tools.DefaultOffloadThreshold,
+		offloadPerTool: map[string]int{},
+		logger:         logger,
 	}
+}
+
+// SetOffloadThreshold overrides the offload size for one tool (D-019
+// "per-tool overridable"). A tool whose results are always small can
+// raise it; a chatty tool can lower it.
+func (a *Agent) SetOffloadThreshold(tool string, bytes int) {
+	a.offloadPerTool[tool] = bytes
 }
 
 // Request is one turn's loop input.
@@ -152,6 +161,10 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 
 		upstream, err := a.gw.Stream(ctx, sreq)
 		if err != nil {
+			// Flush usage accumulated by earlier steps before the
+			// terminal error, matching the in-stream error path — a
+			// mid-loop gateway failure must not undercount the turn.
+			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
 			emit(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code: "gateway_unavailable", Message: err.Error(), Retryable: true,
 			}})
@@ -200,6 +213,17 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			}
 			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
 			emit(terminal)
+			return
+		}
+
+		// At the ceiling the schemas were dropped; a model that still
+		// emits tool calls (or hallucinates one) does not get them
+		// executed — the turn ends with whatever text it produced.
+		// This is the loop's hard termination: it can never run past
+		// the ceiling no matter what the model returns.
+		if directive == tools.StepForceSynthesis {
+			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emit(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
 			return
 		}
 
@@ -366,7 +390,7 @@ func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.R
 	defer a.broker.Forget(id)
 
 	emit(stream.StreamEvent{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{
-		ID: id, Tool: call.Name,
+		ID: id, CallID: call.ID, Tool: call.Name,
 		Args:      string(call.Input),
 		Danger:    res.Danger.String(),
 		Rationale: res.Rationale,
@@ -385,7 +409,11 @@ func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.R
 }
 
 func (a *Agent) offloadIfBig(ctx context.Context, sessionID, tool, content string) (string, error) {
-	if len(content) <= a.offloadAt {
+	threshold := a.offloadAt
+	if t, ok := a.offloadPerTool[tool]; ok {
+		threshold = t
+	}
+	if len(content) <= threshold {
 		return content, nil
 	}
 	// retrieve_output must not re-offload what it just retrieved;

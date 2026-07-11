@@ -7,6 +7,7 @@ afterEach(cleanup)
 
 const request: PermissionRequestEvent = {
   id: 'p1',
+  call_id: 'c1',
   tool: 'shell',
   args: '{"command":"rm -rf build/"}',
   danger_level: 'destructive',

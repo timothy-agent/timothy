@@ -336,6 +336,99 @@ func TestAgentStepCeilingForcesSynthesis(t *testing.T) {
 	}
 }
 
+func TestAgentCeilingTerminatesEvenIfModelKeepsCalling(t *testing.T) {
+	t.Parallel()
+	// A model that emits a tool call on EVERY step, including the
+	// forced-synthesis step where schemas are gone. The loop must
+	// still stop — never execute past the ceiling, never spin.
+	var scripts [][]stream.StreamEvent
+	for i := 0; i < tools.DefaultMaxSteps+5; i++ {
+		scripts = append(scripts, toolCallStep([2]string{"echo", `{"text":"again"}`}))
+	}
+	gw := &scriptedGateway{scripts: scripts}
+	a, _, events, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if len(ofType(evs, stream.EventDone)) != 1 {
+		t.Fatal("loop did not terminate with exactly one done")
+	}
+	// No execution on the forced-synthesis step: tool_execution
+	// events must not exceed the pre-ceiling calls.
+	if got := len(events.kinds); got > tools.DefaultMaxSteps {
+		t.Fatalf("executed %d tools — ran past the ceiling", got)
+	}
+	// The gateway must not have been called more than maxSteps times.
+	if len(gw.requests) > tools.DefaultMaxSteps {
+		t.Fatalf("made %d gateway calls — exceeded the ceiling", len(gw.requests))
+	}
+}
+
+func TestAgentFlushesUsageOnGatewayError(t *testing.T) {
+	t.Parallel()
+	// First step succeeds with a tool call and usage; the second
+	// Stream call errors synchronously (exhausted script). Accumulated
+	// usage must still reach the client before the error.
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	usage := ofType(evs, stream.EventUsage)
+	if len(usage) != 1 || usage[0].Usage.InputTokens != 10 {
+		t.Fatalf("usage before error = %+v, want the first step's 10 input tokens", usage)
+	}
+	if len(ofType(evs, stream.EventError)) != 1 {
+		t.Fatal("want exactly one error terminal")
+	}
+}
+
+func TestAgentPerToolOffloadThreshold(t *testing.T) {
+	t.Parallel()
+	// A 100-byte result: default threshold keeps it inline, a 50-byte
+	// per-tool override offloads it.
+	small := &tools.Tool{
+		Name:        "chatty",
+		Description: "small output",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			return strings.Repeat("x", 100), nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"chatty", `{}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw, small)
+	a.SetOffloadThreshold("chatty", 50)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	var content string
+	for _, m := range gw.requests[1].Messages {
+		if m.ToolResult != nil {
+			content = m.ToolResult.Content
+		}
+	}
+	if !strings.Contains(content, "retrieve_output") {
+		t.Fatalf("100-byte result not offloaded under a 50-byte override: %q", content)
+	}
+}
+
 func TestAgentOffloadsBigResults(t *testing.T) {
 	t.Parallel()
 	big := &tools.Tool{

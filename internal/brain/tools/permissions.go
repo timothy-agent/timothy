@@ -237,6 +237,14 @@ func guardSubject(root, tool, subject string) string {
 	}
 	if root != "" {
 		for _, tok := range commandTokens(subject) {
+			// A parent-directory reference in any path-like token can
+			// climb out of the workspace once the shell resolves it —
+			// the lexical check below can't see where it lands, so a
+			// token containing ".." is refused outright.
+			if tok == ".." || strings.HasPrefix(tok, "../") ||
+				strings.Contains(tok, "/../") || strings.HasSuffix(tok, "/..") {
+				return fmt.Sprintf("policy guard: %q uses .. to leave the workspace — use paths under %s", tok, root)
+			}
 			if !strings.HasPrefix(tok, "/") {
 				continue
 			}

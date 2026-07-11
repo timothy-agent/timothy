@@ -234,6 +234,7 @@ describe('tool calls', () => {
         type: 'permission_request',
         permission: {
           id: 'p1',
+          call_id: 'c1',
           tool: 'shell',
           args: '{"command":"rm x"}',
           danger_level: 'destructive',
@@ -253,6 +254,7 @@ describe('tool calls', () => {
         type: 'permission_request',
         permission: {
           id: 'p1',
+          call_id: 'c1',
           tool: 'shell',
           args: '{}',
           danger_level: 'safe',
@@ -265,5 +267,29 @@ describe('tool calls', () => {
       },
     ])
     expect(msg.permissions).toHaveLength(0)
+  })
+
+  it('keeps a second parallel prompt when the first call resolves', () => {
+    const mkPrompt = (pid: string, cid: string): ChatEvent => ({
+      type: 'permission_request',
+      permission: {
+        id: pid,
+        call_id: cid,
+        tool: 'shell',
+        args: '{}',
+        danger_level: 'destructive',
+        rationale: 'destructive command pattern: rm',
+      },
+    })
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
+      { type: 'tool_start', tool_call: { id: 'c2', name: 'shell' } },
+      mkPrompt('p1', 'c1'),
+      mkPrompt('p2', 'c2'),
+      // Answering call c1 resolves ONLY its prompt; c2 stays parked.
+      { type: 'tool_result', tool_result: { id: 'c1', name: 'shell', status: 'ok', duration_ms: 3 } },
+    ])
+    expect(msg.permissions).toHaveLength(1)
+    expect(msg.permissions[0].call_id).toBe('c2')
   })
 })

@@ -24,6 +24,7 @@ export interface ToolResultEvent {
 
 export interface PermissionRequestEvent {
   id: string
+  call_id: string
   tool: string
   args: string
   danger_level: 'safe' | 'destructive'

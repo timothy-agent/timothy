@@ -178,6 +178,9 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	perms := tools.NewPermissions(db, workspace)
 	broker := loop.NewPermBroker()
 	agent := loop.NewAgent(gwc, constrained, perms, outputs, tools.NewAudit(db), store, broker, defs, log)
+	// Shell dumps grow fast; offload them sooner than the default so a
+	// long command output never bloats the context (D-019).
+	agent.SetOffloadThreshold("shell", 4<<10)
 	return agent, broker, outputs, nil
 }
 

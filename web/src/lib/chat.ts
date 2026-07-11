@@ -1,6 +1,6 @@
 import type { ChatEvent, PermissionRequestEvent, Usage } from '../api/types'
 
-export const categories = ['coding', 'reasoning', 'mini', 'summarize', 'realtime'] as const
+export const categories = ['coding', 'research', 'reasoning', 'mini', 'summarize', 'realtime'] as const
 
 // ToolRun is one tool call's lifecycle inside a live turn.
 export interface ToolRun {
@@ -10,6 +10,9 @@ export interface ToolRun {
   status: 'running' | 'ok' | 'error' | 'denied'
   digest?: string
   durationMs?: number
+  // The permission prompt (if any) this call parked on, so its result
+  // clears exactly that prompt and no other parallel one.
+  permissionId?: string
 }
 
 export interface AssistantState {
@@ -61,8 +64,9 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
             ? { ...t, status: r.status, digest: r.digest, durationMs: r.duration_ms }
             : t,
         ),
-        // The loop proceeded, so the answered prompt is gone.
-        permissions: msg.permissions.length > 0 ? [] : msg.permissions,
+        // Clear only the prompt tied to THIS call; other parallel
+        // calls may still be parked awaiting their own decision.
+        permissions: msg.permissions.filter((p) => p.call_id !== r.id),
       }
     }
     case 'permission_request': {

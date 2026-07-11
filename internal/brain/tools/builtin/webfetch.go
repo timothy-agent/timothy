@@ -88,6 +88,10 @@ func fetchReadable(ctx context.Context, client *http.Client, rawURL string) (str
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("unsupported scheme %q: only http and https", u.Scheme)
 	}
+	// Drop any embedded credentials: never send userinfo as a Basic
+	// Authorization header (no auth passthrough), and never leak it on
+	// a redirect to another host.
+	u.User = nil
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)

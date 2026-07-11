@@ -55,9 +55,12 @@ type ToolResultEvent struct {
 }
 
 // PermissionRequestEvent tells the client the turn parked waiting for
-// the user's decision on a tool call (D-010).
+// the user's decision on a tool call (D-010). CallID ties it to the
+// tool call whose result will follow, so a client tracking several
+// parallel prompts clears exactly the right one.
 type PermissionRequestEvent struct {
 	ID        string `json:"id"`
+	CallID    string `json:"call_id"`
 	Tool      string `json:"tool"`
 	Args      string `json:"args"`
 	Danger    string `json:"danger_level"`

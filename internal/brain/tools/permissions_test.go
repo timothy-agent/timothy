@@ -27,6 +27,9 @@ func TestGuardSubject(t *testing.T) {
 		{name: "secrets dir", command: "ls secrets/", blocked: "credential stores"},
 		{name: "outside workspace", command: "cat /Users/someone/notes.txt", blocked: "outside the workspace"},
 		{name: "flag-embedded path", command: "tar -cf out.tar --directory=/opt/data .", blocked: "outside the workspace"},
+		{name: "relative parent escape", command: "cat ../../../../etc/passwd", blocked: ".."},
+		{name: "dotdot mid-path", command: "cat sub/../../private", blocked: ".."},
+		{name: "bare dotdot", command: "ls ..", blocked: ".."},
 
 		{name: "plain listing", command: "ls -la"},
 		{name: "workspace absolute", command: "cat /workspace/notes.txt"},
