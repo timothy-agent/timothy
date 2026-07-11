@@ -12,6 +12,7 @@ func TestBuildRegistry(t *testing.T) {
 		// CredentialRef values are env var *names*, not secrets.
 		{Name: "anthropic", Kind: KindAPI, Driver: "anthropic", CredentialRef: "ANTHROPIC_API_KEY"},                             // #nosec G101
 		{Name: "xai-grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1", CredentialRef: "XAI_API_KEY"}, // #nosec G101
+		{Name: "bedrock", Kind: KindAPI, Driver: "bedrock", BaseURL: "us-east-1", CredentialRef: "sumonmselim"},
 	}, func(ref string) string { return lookups[ref] })
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -24,11 +25,14 @@ func TestBuildRegistry(t *testing.T) {
 	if _, ok := r.Get("xai-grok"); !ok {
 		t.Fatal("xai-grok missing")
 	}
+	if _, ok := r.Get("bedrock"); !ok {
+		t.Fatal("bedrock missing")
+	}
 	if _, ok := r.Get("nope"); ok {
 		t.Fatal("unknown name resolved")
 	}
-	if got := len(r.Names()); got != 2 {
-		t.Fatalf("Names() = %d, want 2", got)
+	if got := len(r.Names()); got != 3 {
+		t.Fatalf("Names() = %d, want 3", got)
 	}
 }
 
@@ -73,5 +77,20 @@ func TestBuildErrors(t *testing.T) {
 				t.Fatalf("Build() error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestNewBedrock(t *testing.T) {
+	t.Parallel()
+	p := NewBedrock(BedrockConfig{Name: "bedrock-test", Region: "us-west-2", Profile: "sumonmselim"})
+	if p.Name() != "bedrock-test" {
+		t.Fatalf("name = %q", p.Name())
+	}
+	if p.Kind() != KindAPI {
+		t.Fatalf("kind = %v", p.Kind())
+	}
+	caps := p.Capabilities()
+	if len(caps) != 4 || caps[0] != CapChat || caps[2] != CapTools {
+		t.Fatalf("caps = %v", caps)
 	}
 }
