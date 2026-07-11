@@ -147,7 +147,7 @@ func testAPI(t *testing.T, token string, events []stream.StreamEvent) (*API, *me
 	t.Helper()
 	dir := newMemDir()
 	gw := &fakeGateway{events: events}
-	svc := chat.New(gw, dir, nil, nil, 60_000, discard())
+	svc := chat.New(gw, dir, nil, nil, 60_000, "", discard())
 	return &API{svc: svc, dir: dir, token: token, log: discard()}, dir, gw
 }
 
@@ -394,7 +394,7 @@ func TestChatErrorCarriesSessionID(t *testing.T) {
 	id, _ := dir.Create(t.Context(), "t")
 	// gateway with error
 	gw := &fakeGateway{err: context.DeadlineExceeded}
-	a.svc = chat.New(gw, dir, nil, nil, 60_000, discard())
+	a.svc = chat.New(gw, dir, nil, nil, 60_000, "", discard())
 
 	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hi"}`)
 	if w.Code != http.StatusBadGateway {

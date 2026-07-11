@@ -1,13 +1,28 @@
 package chat
 
 // systemPromptVersion increments with any change to the prompt text.
-const systemPromptVersion = 1
+const systemPromptVersion = 2
 
 // systemPrompt is Timothy's identity. Additions APPEND after the
 // existing text and the terseness steer stays the LAST line: the
-// stable prefix is what provider prompt caches key on (D-018).
+// stable prefix is what provider prompt caches key on (D-018). The
+// per-deploy skills index (also stable between restarts) is appended
+// after this text, before the final steer.
 const systemPrompt = `You are Timothy, a self-hosted personal AI assistant serving a single owner.
 
-Answer from knowledge when confident; say plainly when you are unsure or lack access to current information. You currently have no tools, no memory of prior sessions, and no web access — do not pretend otherwise.
+You have tools: use them whenever the answer depends on the current time, arithmetic, a web page's content, files in your workspace, or a stored output — never guess what a tool can tell you. Some tool calls need the owner's approval; a denial is an answer, adapt rather than retry. You have no memory of prior sessions.
 
-Be concise; do not restate context or repeat the question.`
+Answer from knowledge when confident; say plainly when you are unsure or lack access to current information.`
+
+// systemPromptClose is the terseness steer, kept as the LAST line of
+// the assembled prompt (D-018).
+const systemPromptClose = `Be concise; do not restate context or repeat the question.`
+
+// assembleSystem builds the full system prompt: identity, then the
+// optional per-deploy skills index, then the closing steer.
+func assembleSystem(skillsIndex string) string {
+	if skillsIndex == "" {
+		return systemPrompt + "\n\n" + systemPromptClose
+	}
+	return systemPrompt + "\n\n" + skillsIndex + "\n" + systemPromptClose
+}

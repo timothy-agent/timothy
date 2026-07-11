@@ -8,7 +8,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
-.PHONY: build test test-integration test-live vet lint tidy up down logs
+.PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs
 
 build:
 	$(GO_RUN) go build ./...
@@ -46,6 +46,15 @@ lint:
 
 tidy:
 	$(GO_RUN) go mod tidy
+
+# Validates skill packs. With the stack up, the embedding-similarity
+# check runs against the gateway; otherwise it is skipped with a note.
+skills-validate:
+	docker run --rm -v $(CURDIR):/src -w /src \
+		-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
+		-e GOFLAGS=-buildvcs=false --network timothy_timothy \
+		-e GATEWAY_URL=http://gateway:8081 \
+		$(GO_IMAGE) go run ./cmd/skills-validate -dir skills
 
 up:
 	$(COMPOSE) up -d --build

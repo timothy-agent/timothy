@@ -66,13 +66,20 @@ type Service struct {
 	distill    Distill
 	compactor  Compactor
 	budget     int
+	system     string
 	flushEvery time.Duration // pending-state flush cadence mid-stream
 	logger     *slog.Logger
 }
 
-func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget int, logger *slog.Logger) *Service {
+// New builds the service. skillsIndex is the one-line-per-skill
+// section appended to the system prompt (empty = no skills).
+func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget int, skillsIndex string, logger *slog.Logger) *Service {
 	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion, "token_budget", budget)
-	return &Service{gw: gw, log: log, distill: distill, compactor: compactor, budget: budget, flushEvery: 2 * time.Second, logger: logger}
+	return &Service{
+		gw: gw, log: log, distill: distill, compactor: compactor, budget: budget,
+		system:     assembleSystem(skillsIndex),
+		flushEvery: 2 * time.Second, logger: logger,
+	}
 }
 
 // Request is one chat turn.
@@ -141,7 +148,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		TaskCategory: category,
 		Purpose:      "chat",
 		ModelHint:    req.ModelHint,
-		System:       systemPrompt,
+		System:       s.system,
 		Messages:     msgs,
 		SessionID:    sessionID,
 	})

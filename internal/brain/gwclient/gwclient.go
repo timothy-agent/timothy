@@ -110,6 +110,39 @@ func (c *Client) ModelWindows(ctx context.Context) (map[string]int, error) {
 	return windows, nil
 }
 
+// Embed returns one vector per input text via the gateway's
+// embedding route.
+func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	body, err := json.Marshal(map[string]any{"texts": texts})
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: marshal embed: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/embed", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		Embeddings [][]float32 `json:"embeddings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("gwclient: decode embed: %w", err)
+	}
+	if len(out.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("gwclient: embed returned %d vectors for %d texts", len(out.Embeddings), len(texts))
+	}
+	return out.Embeddings, nil
+}
+
 // Stream posts the request and yields the gateway's normalized events.
 // The channel closes when the gateway stream ends; a transport failure
 // mid-stream surfaces as a terminal error event.

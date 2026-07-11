@@ -20,6 +20,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # else keeps the distroless default (last stage).
 FROM alpine:3.22.2 AS runtime-shell
 COPY --from=build /out/app /app
+COPY skills/ /skills/
 RUN mkdir -p /workspace && chown nobody:nobody /workspace
 USER nobody
 ENTRYPOINT ["/app"]

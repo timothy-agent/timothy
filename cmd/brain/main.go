@@ -19,6 +19,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
@@ -89,14 +90,30 @@ func main() {
 	if workspace == "" {
 		workspace = "/workspace"
 	}
-	agent, broker, outputs, err := buildAgent(gwc, store, app.DB, workspace, app.Log)
+	skillsDir := os.Getenv("SKILLS_DIR")
+	if skillsDir == "" {
+		skillsDir = "/skills"
+	}
+	// Broken packs degrade health rather than crash the service.
+	packs, err := skills.Load(skillsDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		app.Log.Error("skills failed to load; continuing without them", "error", err)
+	}
+	app.AddCheck("skills", func() httpserver.Check {
+		if err != nil {
+			return httpserver.Check{Status: "degraded", Detail: err.Error()}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
+
+	agent, broker, outputs, buildErr := buildAgent(gwc, store, app.DB, workspace, packs, app.Log)
+	if buildErr != nil {
+		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
 	}
 	go runOutputGC(ctx, outputs, app.Log)
 
-	svc := chat.New(turnRouter{agent: agent, gw: gwc}, store, distill, compactor, budget, app.Log)
+	svc := chat.New(turnRouter{agent: agent, gw: gwc}, store, distill, compactor, budget, skills.Index(packs), app.Log)
 	api.Register(app.Server, svc, store, broker, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -128,17 +145,21 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010).
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace string, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace string, packs []skills.Skill, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, error) {
 	outputs := tools.NewOutputs(db)
 	reg := tools.NewRegistry()
-	for _, t := range []*tools.Tool{
+	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
 		builtin.ConvertTime(),
 		builtin.Calculator(),
 		builtin.WebFetch(),
 		builtin.Shell(builtin.ShellConfig{WorkspaceRoot: workspace}),
 		builtin.RetrieveOutput(outputs),
-	} {
+	}
+	if len(packs) > 0 {
+		set = append(set, skills.LoadSkillTool(packs))
+	}
+	for _, t := range set {
 		if err := reg.Register(t); err != nil {
 			return nil, nil, nil, fmt.Errorf("register tools: %w", err)
 		}

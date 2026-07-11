@@ -140,7 +140,7 @@ func okEvents(text string) []stream.StreamEvent {
 }
 
 func newService(gw Gateway, log SessionLog) *Service {
-	return New(gw, log, nil, nil, 60_000, discard())
+	return New(gw, log, nil, nil, 60_000, "", discard())
 }
 
 func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
@@ -364,7 +364,7 @@ func TestChatCompactsBeforeSend(t *testing.T) {
 	log := newFakeLog()
 	order := &orderCompactor{}
 	gw := &gwAfterCompact{fakeGW: &fakeGW{events: okEvents("hi")}, order: order}
-	svc := New(gw, log, nil, order, 60_000, discard())
+	svc := New(gw, log, nil, order, 60_000, "", discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{Message: "hello"})
 	if err != nil {
@@ -413,7 +413,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 
 	gw := &fakeGW{events: okEvents("fresh reply")}
-	svc := New(gw, log, nil, &compactingLog{log: log}, 60_000, discard())
+	svc := New(gw, log, nil, &compactingLog{log: log}, 60_000, "", discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "new question"})
 	if err != nil {
@@ -456,7 +456,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
 	defer close(distillRelease)
-	svc := New(gw, log, distill, nil, 60_000, discard())
+	svc := New(gw, log, distill, nil, 60_000, "", discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
 	if err != nil {
