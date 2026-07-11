@@ -32,24 +32,59 @@ type Directory interface {
 	Update(ctx context.Context, id string, title *string, archived *bool) error
 }
 
+// PermissionResolver answers parked permission prompts; the loop's
+// broker satisfies it. Nil disables the endpoint (404).
+type PermissionResolver interface {
+	Resolve(id, decision string) bool
+}
+
 // API serves brain's public routes.
 type API struct {
 	svc   *chat.Service
 	dir   Directory
+	perms PermissionResolver
 	token string
 	log   *slog.Logger
 }
 
 // Register mounts the routes, each wrapped in bearer auth.
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, token string, log *slog.Logger) {
-	a := &API{svc: svc, dir: dir, token: token, log: log}
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, token string, log *slog.Logger) {
+	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	srv.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
 	srv.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
+	srv.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
 	// Deprecated shim: same behavior, session_id in the body.
 	srv.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
+}
+
+// handlePermission answers a parked tool call: {decision: once|session|deny}.
+func (a *API) handlePermission(w http.ResponseWriter, r *http.Request) {
+	if a.perms == nil {
+		jsonError(w, http.StatusNotFound, "not_found", "permissions are not enabled")
+		return
+	}
+	var body struct {
+		Decision string `json:"decision"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with a decision field")
+		return
+	}
+	switch body.Decision {
+	case "once", "session", "deny":
+	default:
+		jsonError(w, http.StatusBadRequest, "bad_request", `decision must be "once", "session", or "deny"`)
+		return
+	}
+	if !a.perms.Resolve(r.PathValue("id"), body.Decision) {
+		jsonError(w, http.StatusNotFound, "not_found", "unknown or already-answered permission request")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
 // auth enforces the single bearer token. An unconfigured token fails

@@ -169,8 +169,52 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	m.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
 	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
+	m.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
 	m.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
 	return m
+}
+
+type fakeResolver struct{ known map[string]string }
+
+func (f *fakeResolver) Resolve(id, decision string) bool {
+	if _, ok := f.known[id]; !ok {
+		return false
+	}
+	f.known[id] = decision
+	return true
+}
+
+func TestPermissionEndpoint(t *testing.T) {
+	a, _, _ := testAPI(t, "tok", nil)
+	resolver := &fakeResolver{known: map[string]string{"p1": ""}}
+	a.perms = resolver
+	m := mux(a)
+
+	call := func(id, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/permissions/"+id, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	if w := call("p1", `{"decision":"session"}`); w.Code != http.StatusOK {
+		t.Fatalf("valid decision: %d %s", w.Code, w.Body)
+	}
+	if resolver.known["p1"] != "session" {
+		t.Fatalf("decision not delivered: %q", resolver.known["p1"])
+	}
+	if w := call("p2", `{"decision":"once"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown id: %d", w.Code)
+	}
+	if w := call("p1", `{"decision":"maybe"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad decision: %d", w.Code)
+	}
+
+	a.perms = nil
+	if w := call("p1", `{"decision":"deny"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("nil resolver: %d", w.Code)
+	}
 }
 
 func doMux(a *API, method, path, body string) *httptest.ResponseRecorder {
