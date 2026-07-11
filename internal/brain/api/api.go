@@ -47,9 +47,22 @@ type API struct {
 	log   *slog.Logger
 }
 
-// Register mounts the routes, each wrapped in bearer auth.
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, token string, log *slog.Logger) {
+// Register mounts the routes, each wrapped in bearer auth. memories
+// is the reverse proxy to memoryd's management routes (nil leaves
+// them unmounted).
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories http.Handler, token string, log *slog.Logger) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
+	if memories != nil {
+		for _, pattern := range []string{
+			"GET /v1/memories",
+			"POST /v1/memories",
+			"POST /v1/memories/{id}",
+			"GET /v1/memories/{id}/chain",
+			"POST /v1/memories/search",
+		} {
+			srv.Handle(pattern, a.auth(memories))
+		}
+	}
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))

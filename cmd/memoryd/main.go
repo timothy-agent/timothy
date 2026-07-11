@@ -54,7 +54,7 @@ func main() {
 	st := store.New(app.DB, app.Log)
 	extractor := extract.New(gwc, st, app.Log)
 	searcher := retrieval.NewSearcher(app.DB, app.Log)
-	api.Register(app.Server, extractor, searcher, gwc, app.Log)
+	api.Register(app.Server, extractor, searcher, gwc, st, app.Log)
 
 	consolidator := extract.NewConsolidator(gwc, st, app.Log, extract.Metrics{
 		Merges:   app.Metrics.NewCounter("memory_merges_total", "Near-duplicate memory groups merged."),

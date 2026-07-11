@@ -59,6 +59,36 @@ func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64,
 	return out.MemoryIDs, nil
 }
 
+// Add stores a user-explicit memory (actor=user → active) and
+// returns its id.
+func (c *Client) Add(ctx context.Context, content, memoryType string) (string, error) {
+	body, err := json.Marshal(map[string]string{"content": content, "type": memoryType})
+	if err != nil {
+		return "", fmt.Errorf("memclient: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/memories", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("memclient: request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("memclient: memoryd unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("memclient: memoryd http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("memclient: decode: %w", err)
+	}
+	return out.ID, nil
+}
+
 // Memory is one retrieved long-term memory.
 type Memory struct {
 	ID      string  `json:"id"`

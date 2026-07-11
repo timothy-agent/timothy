@@ -39,14 +39,19 @@ type API struct {
 	ext    Extractor
 	search Searcher
 	embed  Embedder
+	store  Manager
 	log    *slog.Logger
 }
 
 // Register mounts the routes.
-func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embedder, log *slog.Logger) {
-	a := &API{ext: ext, search: search, embed: embed, log: log}
+func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embedder, st Manager, log *slog.Logger) {
+	a := &API{ext: ext, search: search, embed: embed, store: st, log: log}
 	srv.Handle("POST /v1/extract", http.HandlerFunc(a.handleExtract))
 	srv.Handle("POST /v1/retrieve", http.HandlerFunc(a.handleRetrieve))
+	srv.Handle("GET /v1/memories", http.HandlerFunc(a.handleList))
+	srv.Handle("POST /v1/memories", http.HandlerFunc(a.handleAdd))
+	srv.Handle("POST /v1/memories/{id}", http.HandlerFunc(a.handleResolve))
+	srv.Handle("GET /v1/memories/{id}/chain", http.HandlerFunc(a.handleChain))
 }
 
 // handleExtract runs extraction synchronously and returns the inserted
