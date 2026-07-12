@@ -1,10 +1,13 @@
 import {
   Analytics01Icon,
+  ArrowLeft01Icon,
   Brain02Icon,
   BubbleChatIcon,
+  Cancel01Icon,
   ComputerIcon,
   Home01Icon,
   Key01Icon,
+  Menu01Icon,
   Moon02Icon,
   PlusSignIcon,
   Settings02Icon,
@@ -12,24 +15,20 @@ import {
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router'
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { getToken } from './api/client'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
 import {
-  Sidebar,
-  SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarHeader,
-  SidebarInset,
   SidebarMenu,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarTrigger,
+  useSidebar,
 } from './components/ui/sidebar'
 import { usePendingMemories } from './lib/memory'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
@@ -57,9 +56,54 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href
 }
 
-// Rail is the desktop workspace navigation: a slim icon column, every
-// destination one glance away. Mobile navigation lives in the sheet
-// the header trigger opens.
+// TopBar is the one persistent strip above everything: logo, back (only
+// meaningful inside a chat session), and the history toggle. The
+// toggle works from any page — it drives the same sidebar the history
+// panel renders in, via useSidebar, so it opens the mobile sheet or
+// the desktop panel correctly without tracking its own open state.
+function TopBar() {
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const { toggleSidebar, open, openMobile, isMobile } = useSidebar()
+  const historyOpen = isMobile ? openMobile : open
+  const inSession = pathname.startsWith('/chat/')
+
+  return (
+    <header className="flex h-12 w-full shrink-0 items-center gap-1 border-b border-border px-3">
+      <Link to="/" aria-label="Timothy home" className="mr-1 flex size-8 items-center justify-center">
+        <span className="size-3 rounded-full bg-gradient-to-br from-blue-500 to-violet-600" />
+      </Link>
+      {inSession && (
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          aria-label="Back to home"
+          className="flex size-8 items-center justify-center rounded-md text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+        >
+          <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={toggleSidebar}
+        aria-label={historyOpen ? 'Hide chat history' : 'Show chat history'}
+        aria-pressed={historyOpen}
+        className={cn(
+          'flex size-8 items-center justify-center rounded-md transition',
+          historyOpen
+            ? 'bg-zinc-200/70 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50'
+            : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100',
+        )}
+      >
+        <HugeiconsIcon icon={Menu01Icon} className="size-4" />
+      </button>
+    </header>
+  )
+}
+
+// Rail is the desktop workspace navigation: a slim icon column below
+// the top bar, every destination one glance away. Mobile navigation
+// lives in the sheet the top bar's toggle opens.
 function Rail({
   pendingMemories,
   theme,
@@ -86,9 +130,6 @@ function Rail({
       aria-label="Workspace"
       className="hidden w-18 shrink-0 flex-col items-center gap-1 border-r border-border px-2 py-3 md:flex"
     >
-      <Link to="/" aria-label="Timothy home" className="mb-2 flex size-9 items-center justify-center">
-        <span className="size-3 rounded-full bg-gradient-to-br from-blue-500 to-violet-600" />
-      </Link>
       <Link
         to="/chat"
         aria-label="New chat"
@@ -136,10 +177,8 @@ function LegacySessionRedirect() {
 function App() {
   const [tokenOpen, setTokenOpen] = useState(false)
   const [theme, setThemeState] = useState<Theme>(() => getTheme())
-  const [sessionsOpen, setSessionsOpen] = useState(true)
   const { pathname } = useLocation()
   const pendingMemories = usePendingMemories()
-  const onChat = isActive(pathname, '/chat')
 
   useEffect(() => {
     if (getToken() === '') setTokenOpen(true)
@@ -156,73 +195,57 @@ function App() {
 
   return (
     <SessionsProvider>
-      <div className="flex h-dvh w-full">
-        <Rail
-          pendingMemories={pendingMemories}
-          theme={theme}
-          onCycleTheme={cycleTheme}
-          onToken={openToken}
-        />
-        {/* Desktop: the sidebar holds sessions and only appears on chat
-            routes. Mobile: the same sidebar is the navigation sheet —
-            nav links ride above the session list. */}
-        <SidebarProvider
-          open={onChat && sessionsOpen}
-          onOpenChange={setSessionsOpen}
-          className="min-h-0 min-w-0 flex-1"
-        >
-          <Sidebar>
-            <SidebarHeader>
-              <Link to="/" className="flex items-center gap-2.5 px-2 py-1.5">
-                <span className="size-2.5 rounded-full bg-gradient-to-br from-blue-500 to-violet-600" />
-                <span className="text-base font-semibold tracking-tight">Timothy</span>
-              </Link>
-            </SidebarHeader>
-            <SidebarContent>
-              <SidebarGroup className="md:hidden">
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {railNav.map((item) => (
-                      <SidebarMenuItem key={item.href}>
-                        <SidebarMenuButton asChild isActive={isActive(pathname, item.href)}>
-                          <Link to={item.href}>
-                            <HugeiconsIcon icon={item.icon} />
-                            <span>{item.label}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                        {item.href === '/memory' && pendingMemories > 0 && (
-                          <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
-                        )}
-                      </SidebarMenuItem>
-                    ))}
-                    <SidebarMenuItem>
-                      <SidebarMenuButton onClick={cycleTheme}>
-                        <HugeiconsIcon icon={themeIcon[theme]} />
-                        <span>{themeLabel[theme]}</span>
+      {/* The history panel is a global overlay: SidebarProvider wraps
+          the top bar too so its toggle button can drive the same
+          sidebar state via useSidebar, on both desktop and mobile.
+          Closes on every navigation — opening it again is always an
+          explicit click, never state carried from a previous page. */}
+      <SidebarProvider defaultOpen={false} className="flex h-dvh w-full flex-col">
+        <RouteClosesHistory />
+        <TopBar />
+        <div className="flex min-h-0 flex-1">
+          <Rail
+            pendingMemories={pendingMemories}
+            theme={theme}
+            onCycleTheme={cycleTheme}
+            onToken={openToken}
+          />
+          <HistoryPanel>
+            <SidebarGroup className="md:hidden">
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {railNav.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton asChild isActive={isActive(pathname, item.href)}>
+                        <Link to={item.href}>
+                          <HugeiconsIcon icon={item.icon} />
+                          <span>{item.label}</span>
+                        </Link>
                       </SidebarMenuButton>
+                      {item.href === '/memory' && pendingMemories > 0 && (
+                        <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
+                      )}
                     </SidebarMenuItem>
-                    <SidebarMenuItem>
-                      <SidebarMenuButton onClick={() => setTokenOpen(true)}>
-                        <HugeiconsIcon icon={Key01Icon} />
-                        <span>API token</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-              <SessionList />
-            </SidebarContent>
-          </Sidebar>
+                  ))}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton onClick={cycleTheme}>
+                      <HugeiconsIcon icon={themeIcon[theme]} />
+                      <span>{themeLabel[theme]}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton onClick={() => setTokenOpen(true)}>
+                      <HugeiconsIcon icon={Key01Icon} />
+                      <span>API token</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+            <SessionList />
+          </HistoryPanel>
 
-          <SidebarInset className="min-w-0">
-            <header
-              className={cn('flex h-12 shrink-0 items-center gap-2 px-3', !onChat && 'md:hidden')}
-            >
-              <SidebarTrigger />
-              <Link to="/" className="text-sm font-semibold tracking-tight md:hidden">
-                Timothy
-              </Link>
-            </header>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-hidden px-4">
               <Routes>
                 <Route path="/" element={<Home />} />
@@ -245,11 +268,64 @@ function App() {
               </Routes>
             </div>
             <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
-          </SidebarInset>
-        </SidebarProvider>
-      </div>
+          </div>
+        </div>
+      </SidebarProvider>
     </SessionsProvider>
   )
+}
+
+// HistoryPanel is a plain flex drawer, not the shadcn Sidebar: that
+// primitive is fixed-position and assumes it owns the full viewport
+// height, which fights a persistent TopBar above it. This one just
+// renders inline in the flex row beside Rail, confined to the space
+// below the top bar like everything else on the page.
+function HistoryPanel({ children }: { children: React.ReactNode }) {
+  const { open, openMobile, isMobile, toggleSidebar } = useSidebar()
+  const panelOpen = isMobile ? openMobile : open
+  if (!panelOpen) return null
+
+  return (
+    <aside
+      aria-label="Chat history"
+      className={cn(
+        'flex h-full flex-col overflow-y-auto border-r border-border bg-sidebar text-sidebar-foreground',
+        isMobile ? 'w-full' : 'w-64 shrink-0',
+      )}
+    >
+      {isMobile && (
+        <div className="flex items-center justify-end px-2 py-1.5">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-label="Close chat history"
+            className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+          >
+            <HugeiconsIcon icon={Cancel01Icon} className="size-4" />
+          </button>
+        </div>
+      )}
+      {children}
+    </aside>
+  )
+}
+
+// RouteClosesHistory closes the history panel on every navigation —
+// opening it is always an explicit click on the top bar's toggle,
+// never state carried over from a previous page.
+function RouteClosesHistory() {
+  const { pathname } = useLocation()
+  const { setOpen, setOpenMobile } = useSidebar()
+
+  useEffect(() => {
+    setOpen(false)
+    setOpenMobile(false)
+    // Route changes alone close the panel; opening it is never part of
+    // the effect that reacts to them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname])
+
+  return null
 }
 
 export default App
