@@ -1,11 +1,41 @@
-import { Copy01Icon, Tick02Icon, WrenchIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { Copy01Icon, Link04Icon, Tick02Icon, WrenchIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Badge } from './ui/badge'
+import { splitSources } from '../lib/citations'
 import type { AssistantState, ToolRun } from '../lib/chat'
 import 'highlight.js/styles/github-dark.css'
+
+// SourcesPanel renders a research answer's citations as a distinct,
+// clickable list — separate from the prose so "these are the sources"
+// reads at a glance instead of blending into the markdown body.
+function SourcesPanel({ citations }: { citations: { title: string; url: string }[] }) {
+  return (
+    <div className="w-full max-w-3xl rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/40">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        <HugeiconsIcon icon={Link04Icon} className="size-3.5" />
+        Sources
+      </div>
+      <ol className="space-y-1.5 text-sm">
+        {citations.map((c, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="text-zinc-400 dark:text-zinc-500">{i + 1}.</span>
+            <a
+              href={c.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate text-blue-600 hover:underline dark:text-blue-400"
+            >
+              {c.title}
+            </a>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
 
 // CopyButton copies a message's raw text; the check confirms briefly.
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -132,6 +162,10 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
   const tokens = msg.meta?.usage
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
     : null
+  // Citations only split out once the answer is done streaming: a
+  // partial "## Sources" heading mid-stream would otherwise flicker
+  // the body text as more of it arrives.
+  const { body, citations } = msg.streaming ? { body: msg.text, citations: [] } : splitSources(msg.text)
   return (
     <div className="group/message flex flex-col items-start gap-2">
       {msg.reasoning !== '' && (
@@ -156,9 +190,11 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
       )}
 
       <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
-        <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{msg.text}</ReactMarkdown>
+        <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{body}</ReactMarkdown>
         {msg.streaming && msg.permissions.length === 0 && <span className="animate-pulse">▍</span>}
       </div>
+
+      {citations.length > 0 && <SourcesPanel citations={citations} />}
 
       {msg.notices.map((n, i) => (
         <Badge

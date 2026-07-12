@@ -13,6 +13,7 @@ export function Composer({
   onSend,
   category,
   onCategory,
+  hideCategoryPicker = false,
   skillHint,
   onRemoveSkillHint,
   disabled = false,
@@ -24,6 +25,7 @@ export function Composer({
   onSend: () => void
   category: string
   onCategory: (c: string) => void
+  hideCategoryPicker?: boolean
   skillHint?: string
   onRemoveSkillHint?: () => void
   disabled?: boolean
@@ -77,7 +79,7 @@ export function Composer({
         }}
       />
       <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
-        <CategoryPicker value={category} onChange={onCategory} />
+        {hideCategoryPicker ? <span /> : <CategoryPicker value={category} onChange={onCategory} />}
         <button
           type="button"
           onClick={onSend}

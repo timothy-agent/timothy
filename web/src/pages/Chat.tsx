@@ -24,19 +24,44 @@ import type { ChatIntent } from './Home'
 
 const categoryKey = 'timothy.category'
 
-export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
+export function Chat({
+  onNeedToken,
+  basePath = '/chat',
+  lockedSkillHint,
+  emptyHeading = 'What can I help with?',
+  emptySubtext = 'Ask anything. The category picker steers which model serves you.',
+  placeholder,
+}: {
+  onNeedToken: () => void
+  // Route prefix for session-id adoption (e.g. "/research" for the
+  // locked research page) — kept in sync with the <Route> that mounts
+  // this component so mid-stream URL adoption lands on the right page.
+  basePath?: string
+  // When set, the skill is pinned for every turn and cannot be
+  // removed or overridden by a home-screen intent — a dedicated,
+  // single-purpose page rather than general chat with a chip.
+  lockedSkillHint?: string
+  emptyHeading?: string
+  emptySubtext?: string
+  placeholder?: string
+}) {
   const { id: routeSession } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
   const { refresh } = useSessions()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
+  // Locked pages fix their own category and never touch the shared
+  // localStorage preference — a research page reading (or clobbering)
+  // whatever category general chat last used would be a leak either
+  // direction.
   const [category, setCategory] = useState(
-    () => localStorage.getItem(categoryKey) ?? categories[0],
+    () => (lockedSkillHint ? 'research' : (localStorage.getItem(categoryKey) ?? categories[0])),
   )
   // A skill picked from the home screen: pinned, not text the user
-  // can accidentally mangle. Rides every turn until removed.
-  const [skillHint, setSkillHint] = useState<string | undefined>(undefined)
+  // can accidentally mangle. Rides every turn until removed. Locked
+  // pages skip this state entirely and always send lockedSkillHint.
+  const [skillHint, setSkillHint] = useState<string | undefined>(lockedSkillHint)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
   const sessionRef = useRef<string | undefined>(routeSession)
@@ -124,9 +149,9 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
       if (sessionRef.current === id) return
       sessionRef.current = id
       adoptedRef.current = id
-      // Same route pattern serves /chat and /chat/:id, so this only
-      // re-renders — the live stream keeps its component state.
-      navigate(`/chat/${id}`, { replace: true })
+      // Same route pattern serves basePath and basePath/:id, so this
+      // only re-renders — the live stream keeps its component state.
+      navigate(`${basePath}/${id}`, { replace: true })
     }
     try {
       await chatStream(
@@ -168,7 +193,7 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
   // relying on the skillHint state landing before the call — setState
   // doesn't take effect until the next render.
   useEffect(() => {
-    if (intentConsumedRef.current) return
+    if (lockedSkillHint || intentConsumedRef.current) return
     const intent = location.state as ChatIntent | null
     if (!intent || (!intent.send && !intent.draft && !intent.category && !intent.skillHint)) return
     intentConsumedRef.current = true
@@ -202,11 +227,9 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
         {items.length === 0 && !loadError && (
           <div className="mt-24 text-center">
             <h2 className="text-xl font-semibold text-zinc-700 dark:text-zinc-200">
-              What can I help with?
+              {emptyHeading}
             </h2>
-            <p className="mt-2 text-sm text-zinc-400">
-              Ask anything. The category picker steers which model serves you.
-            </p>
+            <p className="mt-2 text-sm text-zinc-400">{emptySubtext}</p>
           </div>
         )}
         {loadError && (
@@ -244,9 +267,11 @@ export function Chat({ onNeedToken }: { onNeedToken: () => void }) {
           onSend={send}
           category={category}
           onCategory={pickCategory}
+          hideCategoryPicker={Boolean(lockedSkillHint)}
           skillHint={skillHint}
-          onRemoveSkillHint={() => setSkillHint(undefined)}
+          onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
           disabled={streaming}
+          placeholder={placeholder}
         />
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
           Enter to send · Shift+Enter for a new line

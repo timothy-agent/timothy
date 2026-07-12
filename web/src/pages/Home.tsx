@@ -1,10 +1,7 @@
 import {
-  AirplaneTakeOff01Icon,
   Analytics01Icon,
   Brain02Icon,
   BubbleChatIcon,
-  ChartLineData01Icon,
-  CodeIcon,
   InboxIcon,
   SearchList01Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
@@ -69,31 +66,8 @@ export function Home() {
       ],
     },
     {
-      // Skill packs are prompt-focused personas the agent loads on
-      // demand; each tile opens a chat pre-aimed at one of them.
       title: 'Skills',
-      tiles: [
-        {
-          label: 'Research',
-          icon: SearchList01Icon,
-          intent: { skillHint: 'research-brief', category: 'research' },
-        },
-        {
-          label: 'Markets',
-          icon: ChartLineData01Icon,
-          intent: { skillHint: 'markets-digest', category: 'research' },
-        },
-        {
-          label: 'Travel',
-          icon: AirplaneTakeOff01Icon,
-          intent: { skillHint: 'travel-planning', category: 'research' },
-        },
-        {
-          label: 'Coding',
-          icon: CodeIcon,
-          intent: { skillHint: 'coding-task', category: 'coding' },
-        },
-      ],
+      tiles: [{ label: 'Research', icon: SearchList01Icon, to: '/research' }],
     },
     {
       title: 'Workspace',

@@ -37,6 +37,7 @@ import { Chat } from './pages/Chat'
 import { Dashboard } from './pages/Dashboard'
 import { Home } from './pages/Home'
 import { Memory } from './pages/Memory'
+import { Research } from './pages/Research'
 import { Settings } from './pages/Settings'
 
 const railNav = [
@@ -258,6 +259,14 @@ function App() {
                   element={
                     <div className="mx-auto flex h-full max-w-4xl flex-col">
                       <Chat onNeedToken={openToken} />
+                    </div>
+                  }
+                />
+                <Route
+                  path="/research/:id?"
+                  element={
+                    <div className="mx-auto flex h-full max-w-4xl flex-col">
+                      <Research onNeedToken={openToken} />
                     </div>
                   }
                 />

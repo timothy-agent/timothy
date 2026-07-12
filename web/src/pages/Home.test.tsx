@@ -25,6 +25,7 @@ function renderHome() {
         <Route path="/" element={<Home />} />
         <Route path="/chat" element={<ChatProbe />} />
         <Route path="/memory" element={<div>memory page</div>} />
+        <Route path="/research" element={<div>research page</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -45,7 +46,7 @@ describe('Home', () => {
       expect(screen.getByRole('heading', { name: title })).toBeTruthy()
     }
     expect(screen.getByRole('button', { name: /New chat/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Markets/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Research/ })).toBeTruthy()
   })
 
   it('submitting the composer starts a chat with the message', () => {
@@ -65,12 +66,10 @@ describe('Home', () => {
     expect(landed).toBeNull()
   })
 
-  it('skill tiles carry a deterministic skill hint into chat', () => {
+  it('the Research tile navigates to the dedicated research page', () => {
     renderHome()
-    fireEvent.click(screen.getByRole('button', { name: /Travel/ }))
-    expect(landed?.pathname).toBe('/chat')
-    expect(landed?.state?.skillHint).toBe('travel-planning')
-    expect(landed?.state?.send).toBeUndefined()
+    fireEvent.click(screen.getByRole('button', { name: /Research/ }))
+    expect(screen.getByText('research page')).toBeTruthy()
   })
 
   it('memory tiles navigate to the memory page', () => {
