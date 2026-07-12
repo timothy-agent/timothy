@@ -338,7 +338,12 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 	if reasoning != "" {
 		turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "reasoning", Text: reasoning})
 	}
-	turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "text", Text: text})
+	// A turn whose answer landed entirely in reasoning has no text;
+	// an empty text block serializes without its text key (omitempty)
+	// and renders as a literal "undefined" in older clients.
+	if text != "" {
+		turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "text", Text: text})
+	}
 	if meta != nil {
 		turn.Provider, turn.Model, turn.LedgerID = meta.Provider, meta.Model, meta.LedgerID
 	}

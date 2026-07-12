@@ -45,8 +45,10 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
         let text = ''
         let reasoning = ''
         for (const b of item.blocks ?? []) {
-          if (b.type === 'text') text += b.text
-          else if (b.type === 'reasoning') reasoning += b.text
+          // An empty block serializes without its text key (omitempty);
+          // naive concat would render a literal "undefined".
+          if (b.type === 'text') text += b.text ?? ''
+          else if (b.type === 'reasoning') reasoning += b.text ?? ''
         }
         out.push({
           id,

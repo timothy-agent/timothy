@@ -345,24 +345,26 @@ function Browser() {
 export function Memory() {
   const [tab, setTab] = useState<'queue' | 'browser'>('queue')
   return (
-    <div className="mx-auto w-full max-w-3xl p-6 space-y-6">
-      <div className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold">Memory</h1>
-        <div className="ml-auto flex gap-1 rounded-lg border p-0.5">
-          {(['queue', 'browser'] as const).map((t) => (
-            <Button
-              key={t}
-              size="sm"
-              variant={tab === t ? 'secondary' : 'ghost'}
-              onClick={() => setTab(t)}
-              data-testid={`tab-${t}`}
-            >
-              {t === 'queue' ? 'Queue' : 'Browser'}
-            </Button>
-          ))}
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl p-6 space-y-6">
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold">Memory</h1>
+          <div className="ml-auto flex gap-1 rounded-lg border p-0.5">
+            {(['queue', 'browser'] as const).map((t) => (
+              <Button
+                key={t}
+                size="sm"
+                variant={tab === t ? 'secondary' : 'ghost'}
+                onClick={() => setTab(t)}
+                data-testid={`tab-${t}`}
+              >
+                {t === 'queue' ? 'Queue' : 'Browser'}
+              </Button>
+            ))}
+          </div>
         </div>
+        {tab === 'queue' ? <Queue /> : <Browser />}
       </div>
-      {tab === 'queue' ? <Queue /> : <Browser />}
     </div>
   )
 }
