@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Badge } from './ui/badge'
-import { splitSources } from '../lib/citations'
+import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import type { AssistantState, ToolRun } from '../lib/chat'
 import 'highlight.js/styles/github-dark.css'
 
@@ -165,7 +165,9 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
   // Citations only split out once the answer is done streaming: a
   // partial "## Sources" heading mid-stream would otherwise flicker
   // the body text as more of it arrives.
-  const { body, citations } = msg.streaming ? { body: msg.text, citations: [] } : splitSources(msg.text)
+  const { body, citations } = msg.streaming
+    ? { body: msg.text, citations: [] }
+    : splitSources(collapseRepeatedTail(msg.text))
   return (
     <div className="group/message flex flex-col items-start gap-2">
       {msg.reasoning !== '' && (

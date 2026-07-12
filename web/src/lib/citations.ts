@@ -12,6 +12,24 @@ export interface SplitAnswer {
   citations: Citation[]
 }
 
+// collapseRepeatedTail strips a verbatim duplicated tail: models
+// occasionally restate their entire answer (Sources section included)
+// after a late tool call, and the stream concatenates both copies.
+// Mirrors the server-side collapse so the live view matches what the
+// brain persists. The 40-char floor keeps legitimately repeated short
+// phrases intact.
+export function collapseRepeatedTail(s: string): string {
+  const minRepeat = 40
+  const t = s.replace(/[ \t\n]+$/, '')
+  const n = t.length
+  for (let l = Math.floor(n / 2); l >= minRepeat; l--) {
+    const tail = t.slice(n - l)
+    const head = t.slice(0, n - l).replace(/[ \t\n]+$/, '')
+    if (head.endsWith(tail)) return collapseRepeatedTail(head)
+  }
+  return n === s.length ? s : t
+}
+
 const sourcesHeading = /\n##\s*Sources\s*\n/gi
 const citationLine = /^\s*\d+\.\s*\[([^\]]+)\]\(([^)]+)\)\s*$/
 

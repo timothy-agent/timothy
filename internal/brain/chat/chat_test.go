@@ -698,3 +698,30 @@ func TestMemoryExtractFiresOnTextlessTurn(t *testing.T) {
 		t.Fatal("memory extract skipped on textless turn")
 	}
 }
+
+// TestCollapseRepeatedTail covers the duplicate-answer collapse: a
+// model that restates its whole reply after a late tool call must not
+// leave two copies in the persisted turn.
+func TestCollapseRepeatedTail(t *testing.T) {
+	t.Parallel()
+	answer := "The monthly bill would be $29.85 based on 30 million requests and 1,843,200 GB-seconds.\n\n## Sources\n1. [AWS Lambda Pricing](https://aws.amazon.com/lambda/pricing)"
+	cases := []struct {
+		name, in, want string
+	}{
+		{"exact double", answer + answer, answer},
+		{"double with newline between", answer + "\n" + answer, answer},
+		{"triple", answer + "\n" + answer + "\n" + answer, answer},
+		{"prefix kept", "Let me check the pricing page.\n" + answer + "\n" + answer, "Let me check the pricing page.\n" + answer},
+		{"no repeat unchanged", answer, answer},
+		{"short repeats kept", "very good, very good, very good", "very good, very good, very good"},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := collapseRepeatedTail(tc.in); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

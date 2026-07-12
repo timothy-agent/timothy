@@ -21,6 +21,19 @@ description: Source-grounded research with verification and citations. Use when 
   `1. [Title](URL)`. Nothing else on that line — no dates, no notes,
   no extra prose. Every URL listed must be one you actually fetched or
   searched this turn.
+- Write arithmetic in plain text or inline code — never LaTeX or math
+  notation (`\frac`, `\times`, `\text`, `$...$`); the interface does
+  not render it.
+- Before a tool call, write at most one short line saying what you are
+  checking — never the answer itself. The answer comes only after all
+  tool results are in.
+- State the final answer exactly once. Never repeat a sentence or
+  paragraph you already wrote this turn, and do not add an `## Answer`
+  heading.
+- When comparing a number against a limit or allowance, write the
+  comparison out explicitly (`184,320 < 400,000: under the limit`)
+  before concluding. When pricing usage that has a free allowance,
+  subtract the allowance first and price only the remainder.
 
 ## Anti-rationalization
 

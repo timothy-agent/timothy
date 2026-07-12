@@ -70,6 +70,11 @@ export function Chat({
   const adoptedRef = useRef<string | null>(null)
   const intentConsumedRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  // Whether the view is pinned to the bottom. Scrolling up releases
+  // the pin so a streaming answer stops yanking the view back down;
+  // scrolling back near the bottom re-engages it.
+  const pinnedRef = useRef(true)
   const abortRef = useRef<AbortController | null>(null)
 
   // Cancel any in-flight stream when the page unmounts (route change).
@@ -115,8 +120,14 @@ export function Chat({
   }, [routeSession, onNeedToken])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (pinnedRef.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [items])
+
+  const trackPin = () => {
+    const el = listRef.current
+    if (!el) return
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
 
   const pickCategory = (c: string) => {
     setCategory(c)
@@ -137,6 +148,7 @@ export function Chat({
     if (!message || streaming) return
     setDraft('')
     setStreaming(true)
+    pinnedRef.current = true // sending always re-follows the answer
     setItems((prev) => [
       ...prev,
       { id: crypto.randomUUID(), role: 'user', text: message },
@@ -223,7 +235,7 @@ export function Chat({
   return (
     <div className="flex h-full flex-col">
       {pendingPermission && <PermissionModal request={pendingPermission} onDecision={decide} />}
-      <div className="flex-1 space-y-6 overflow-y-auto py-6">
+      <div ref={listRef} onScroll={trackPin} className="flex-1 space-y-6 overflow-y-auto py-6">
         {items.length === 0 && !loadError && (
           <div className="mt-24 text-center">
             <h2 className="text-xl font-semibold text-zinc-700 dark:text-zinc-200">
