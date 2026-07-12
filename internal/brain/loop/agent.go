@@ -137,9 +137,17 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	effort := ""
 	toolCallCount := 0
 	coerced := false
+	var repeats tools.RepeatGuard
+	stuck := false
 
 	for step := 1; ; step++ {
 		directive := tools.CeilingFor(step, a.maxSteps)
+		// A model retrying the same call over and over (e.g. hoping a
+		// search tool will "book" something on a later attempt) forces
+		// synthesis early rather than burning steps up to the ceiling.
+		if stuck && directive == tools.StepProceed {
+			directive = tools.StepForceSynthesis
+		}
 		sreq := gwclient.StreamRequest{
 			TaskCategory: req.TaskCategory,
 			Purpose:      "chat",
@@ -243,6 +251,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		}
 
 		toolCallCount += len(calls)
+		stuck = repeats.Record(calls)
 		results := a.executeAll(ctx, req.SessionID, calls, emit)
 
 		msgs = append(msgs, provider.Message{

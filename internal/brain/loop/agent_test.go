@@ -302,10 +302,13 @@ func TestAgentParallelCallsRunConcurrently(t *testing.T) {
 
 func TestAgentStepCeilingForcesSynthesis(t *testing.T) {
 	t.Parallel()
-	// The model calls a tool on every step; the loop must cut it off.
+	// The model calls a tool on every step with distinct arguments each
+	// time — genuine exploration, not a stuck retry loop — so this
+	// isolates the step-count ceiling from the repeat guard, which
+	// would otherwise cut the run short on its own.
 	var scripts [][]stream.StreamEvent
-	for range tools.DefaultMaxSteps {
-		scripts = append(scripts, toolCallStep([2]string{"echo", `{"text":"again"}`}))
+	for i := range tools.DefaultMaxSteps {
+		scripts = append(scripts, toolCallStep([2]string{"echo", fmt.Sprintf(`{"text":"call %d"}`, i)}))
 	}
 	scripts = append(scripts, finalStep("forced answer"))
 	gw := &scriptedGateway{scripts: scripts}
@@ -333,6 +336,41 @@ func TestAgentStepCeilingForcesSynthesis(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no finalize warning injected at max_steps-1")
+	}
+}
+
+// TestAgentForcesSynthesisOnRepeatedIdenticalCalls reproduces a live
+// loop: a model retrying the exact same tool call (e.g. web_search
+// hoping a later attempt "books" something it structurally cannot)
+// must be cut off well before the full step ceiling, not burn all
+// DefaultMaxSteps steps first.
+func TestAgentForcesSynthesisOnRepeatedIdenticalCalls(t *testing.T) {
+	t.Parallel()
+	var scripts [][]stream.StreamEvent
+	for range tools.DefaultMaxSteps {
+		scripts = append(scripts, toolCallStep([2]string{"echo", `{"text":"book hotel in Nairobi"}`}))
+	}
+	scripts = append(scripts, finalStep("gave up retrying"))
+	gw := &scriptedGateway{scripts: scripts}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if len(ofType(evs, stream.EventDone)) != 1 {
+		t.Fatal("no clean terminal event")
+	}
+	// 3 identical calls trips the guard; the 4th request must have no
+	// tool schemas, forced far short of the 16-step default ceiling.
+	if len(gw.requests) >= tools.DefaultMaxSteps {
+		t.Fatalf("loop ran %d requests before stopping — repeat guard did not cut it short", len(gw.requests))
+	}
+	last := gw.requests[len(gw.requests)-1]
+	if len(last.Tools) != 0 {
+		t.Fatalf("final step still offered %d tools — repeat guard must force synthesis", len(last.Tools))
 	}
 }
 

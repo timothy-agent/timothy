@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
 // Violation is a constraint breach reported back to the model as a
@@ -181,6 +183,43 @@ func CeilingFor(step, maxSteps int) StepDirective {
 	default:
 		return StepProceed
 	}
+}
+
+// repeatThreshold: the same tool called with the same arguments this
+// many times in one turn forces synthesis early — a model retrying an
+// unproductive call (e.g. hoping a search engine will "book" something
+// on a later attempt) would otherwise burn steps up to the full
+// ceiling before answering.
+const repeatThreshold = 3
+
+// RepeatGuard tracks (tool, args) signatures across a turn's steps and
+// reports when the same call has repeated too many times in a row.
+type RepeatGuard struct {
+	lastSig   string
+	lastCount int
+}
+
+// Record folds in one step's calls and returns true once any single
+// call signature has repeated repeatThreshold times consecutively.
+// Consecutive, not merely "seen before": a model that tries A, B, A
+// is exploring, not stuck; A, A, A is stuck. Signatures compare the
+// tool name and raw argument JSON — args differing by whitespace only
+// would already have been re-marshaled identically by the model.
+func (g *RepeatGuard) Record(calls []provider.ToolCall) bool {
+	stuck := false
+	for _, c := range calls {
+		sig := c.Name + ":" + string(c.Input)
+		if sig == g.lastSig {
+			g.lastCount++
+		} else {
+			g.lastSig = sig
+			g.lastCount = 1
+		}
+		if g.lastCount >= repeatThreshold {
+			stuck = true
+		}
+	}
+	return stuck
 }
 
 // MinToolCallsFor is the per-category floor of tool calls before a

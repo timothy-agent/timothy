@@ -49,6 +49,13 @@ prices, recent releases, anything past your knowledge — or asks you to
 "search the internet". Returns titles, URLs, and short snippets, not
 full page text; call web_fetch on a promising URL to read further.
 
+This is read-only lookup, never a transaction: it cannot book a
+flight, reserve a hotel, purchase anything, or fill in a form. If the
+user asks you to "book" or "buy" something, use this tool (and
+web_fetch) to find options and prices, then tell the user what you
+found and that they need to complete the booking themselves — do not
+retry the search hoping for a different kind of result.
+
 Arguments:
 - query (string, required): the search query.
 
