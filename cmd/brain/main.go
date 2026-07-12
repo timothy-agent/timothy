@@ -115,6 +115,22 @@ func main() {
 	if err != nil {
 		app.Log.Error("skills failed to load; continuing without them", "error", err)
 	}
+	// SKILLS_ALLOWLIST restricts which loaded packs the agent may reach
+	// for, without deleting the others from disk — comma-separated
+	// names, empty means no restriction.
+	if allow := os.Getenv("SKILLS_ALLOWLIST"); allow != "" {
+		allowed := make(map[string]bool)
+		for _, name := range strings.Split(allow, ",") {
+			allowed[strings.TrimSpace(name)] = true
+		}
+		filtered := packs[:0]
+		for _, p := range packs {
+			if allowed[p.Name] {
+				filtered = append(filtered, p)
+			}
+		}
+		packs = filtered
+	}
 	app.AddCheck("skills", func() httpserver.Check {
 		if err != nil {
 			return httpserver.Check{Status: "degraded", Detail: err.Error()}

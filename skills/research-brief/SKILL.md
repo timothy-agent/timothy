@@ -9,13 +9,18 @@ description: Source-grounded research with verification and citations. Use when 
 
 - Retrieve before you write: every load-bearing claim needs a source you actually fetched this turn, not trained recall.
 - Two independent sources for any claim that drives a decision; one source for background color.
-- Record where each fact came from and cite it inline next to the fact, not in a pile at the end.
+- Record where each fact came from; a source mentioned only in the trailing list without ever being referenced in the body is not a citation, it is decoration.
 - Distinguish plainly between what a source states and what you infer from it; label inference as inference.
 - Prefer primary sources (the vendor's page, the law's text, the paper) over aggregators repeating them.
 - Note the date on every time-sensitive fact; an undated price or version number is a trap for the reader.
 - When sources conflict, report the conflict — do not silently pick one.
 - If retrieval fails or the fact cannot be found, say so; a stated gap beats a confident guess.
 - End with the answer to the actual question asked, not a survey of everything found.
+- Close every answer with a `## Sources` section: a numbered markdown
+  list, one fetched source per line, formatted exactly as
+  `1. [Title](URL)`. Nothing else on that line — no dates, no notes,
+  no extra prose. Every URL listed must be one you actually fetched or
+  searched this turn.
 
 ## Anti-rationalization
 

@@ -71,6 +71,9 @@ services:
       WORKSPACE_ROOT: /workspace
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
+      # Restricts the agent to this skill pack only; empty allows all
+      # loaded packs. Comma-separated names.
+      SKILLS_ALLOWLIST: ${SKILLS_ALLOWLIST:-}
     volumes:
       - workspace:/workspace
     ports:
