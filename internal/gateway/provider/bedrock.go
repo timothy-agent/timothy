@@ -285,23 +285,49 @@ func converseMessages(msgs []Message) []types.Message {
 			if m.ToolResult == nil {
 				continue
 			}
-			resultBlock := types.ToolResultBlock{
+			resultBlock := types.ContentBlock(&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
 				ToolUseId: aws.String(m.ToolResult.ID),
 				Content: []types.ToolResultContentBlock{
 					&types.ToolResultContentBlockMemberText{Value: m.ToolResult.Content},
 				},
-				Status: types.ToolResultStatusSuccess,
-			}
-			if m.ToolResult.IsError {
-				resultBlock.Status = types.ToolResultStatusError
+				Status: toolResultStatus(m.ToolResult.IsError),
+			}})
+			// Bedrock requires every toolResult for one assistant turn's
+			// parallel toolUse blocks to land in a SINGLE following user
+			// turn — one user turn per tool result (the normalized
+			// message shape agent.go builds) is invalid and Converse
+			// rejects it with "Expected toolResult blocks ... for the
+			// following Ids". Merge consecutive tool messages together.
+			if n := len(out); n > 0 && out[n-1].Role == types.ConversationRoleUser && isToolResultTurn(out[n-1]) {
+				out[n-1].Content = append(out[n-1].Content, resultBlock)
+				continue
 			}
 			out = append(out, types.Message{
 				Role:    types.ConversationRoleUser,
-				Content: []types.ContentBlock{&types.ContentBlockMemberToolResult{Value: resultBlock}},
+				Content: []types.ContentBlock{resultBlock},
 			})
 		}
 	}
 	return out
+}
+
+func toolResultStatus(isError bool) types.ToolResultStatus {
+	if isError {
+		return types.ToolResultStatusError
+	}
+	return types.ToolResultStatusSuccess
+}
+
+// isToolResultTurn reports whether a user turn is made entirely of
+// tool results (as opposed to plain user text) — only these are safe
+// to append more tool results onto.
+func isToolResultTurn(msg types.Message) bool {
+	for _, c := range msg.Content {
+		if _, ok := c.(*types.ContentBlockMemberToolResult); !ok {
+			return false
+		}
+	}
+	return len(msg.Content) > 0
 }
 
 // converseSystem builds the system blocks. Nova models get a cache

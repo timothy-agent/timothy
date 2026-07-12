@@ -43,6 +43,67 @@ func TestConverseMessages(t *testing.T) {
 	}
 }
 
+// TestConverseMessagesMergesParallelToolResults reproduces a live
+// crash: two tool calls in one assistant turn produced two separate
+// user turns (one toolResult block each), which Bedrock's Converse API
+// rejects with "Expected toolResult blocks ... for the following Ids"
+// — it requires every result for one turn's parallel tool calls in a
+// SINGLE following user turn.
+func TestConverseMessagesMergesParallelToolResults(t *testing.T) {
+	t.Parallel()
+	msgs := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{ID: "t1", Name: "calc", Input: json.RawMessage(`{}`)},
+			{ID: "t2", Name: "calc", Input: json.RawMessage(`{}`)},
+		}},
+		{Role: "tool", ToolResult: &ToolResult{ID: "t1", Content: "4"}},
+		{Role: "tool", ToolResult: &ToolResult{ID: "t2", Content: "9"}},
+	}
+
+	out := converseMessages(msgs)
+	if len(out) != 2 {
+		t.Fatalf("len = %d, want 2 (one assistant turn, one merged user turn)", len(out))
+	}
+	if out[1].Role != types.ConversationRoleUser {
+		t.Fatalf("msg 1 role = %v", out[1].Role)
+	}
+	if len(out[1].Content) != 2 {
+		t.Fatalf("merged user turn has %d blocks, want 2", len(out[1].Content))
+	}
+	first, ok := out[1].Content[0].(*types.ContentBlockMemberToolResult)
+	if !ok || *first.Value.ToolUseId != "t1" {
+		t.Fatalf("block 0 = %#v", out[1].Content[0])
+	}
+	second, ok := out[1].Content[1].(*types.ContentBlockMemberToolResult)
+	if !ok || *second.Value.ToolUseId != "t2" {
+		t.Fatalf("block 1 = %#v", out[1].Content[1])
+	}
+}
+
+// TestConverseMessagesDoesNotMergeIntoRealUserText proves the merge
+// only fires between consecutive tool-result turns — a plain user
+// message must never absorb a tool result or vice versa.
+func TestConverseMessagesDoesNotMergeIntoRealUserText(t *testing.T) {
+	t.Parallel()
+	msgs := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "t1", Name: "calc", Input: json.RawMessage(`{}`)}}},
+		{Role: "tool", ToolResult: &ToolResult{ID: "t1", Content: "4"}},
+		{Role: "user", Content: "thanks, one more question"},
+	}
+
+	out := converseMessages(msgs)
+	if len(out) != 3 {
+		t.Fatalf("len = %d, want 3 (assistant, tool result, plain user text kept separate)", len(out))
+	}
+	if len(out[1].Content) != 1 {
+		t.Fatalf("tool result turn has %d blocks, want 1", len(out[1].Content))
+	}
+	txt, ok := out[2].Content[0].(*types.ContentBlockMemberText)
+	if !ok || txt.Value != "thanks, one more question" {
+		t.Fatalf("msg 2 = %#v", out[2].Content[0])
+	}
+}
+
 func TestConverseSystem(t *testing.T) {
 	t.Parallel()
 	if converseSystem("", "us.amazon.nova-pro-v1:0") != nil {
