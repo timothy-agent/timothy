@@ -11,6 +11,11 @@ COPY . .
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.29-alpine
+# The base image's OS packages lag their alpine repo fixes; upgrade so
+# the Trivy CI gate (CRITICAL/HIGH, fixed-only) stays green.
+USER root
+RUN apk upgrade --no-cache
+USER 101
 # Same-origin /v1 in the browser; nginx forwards to brain (the image
 # entrypoint envsubsts ${BRAIN_URL} into the template at startup).
 ENV BRAIN_URL=http://brain:8080
