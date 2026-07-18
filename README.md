@@ -40,7 +40,7 @@ make test    # unit tests (containerized)
 make lint    # golangci-lint
 ```
 
-Design decisions live in [docs/architecture.md](docs/architecture.md).
+Design decisions are documented as `D-0XX` markers in code comments next to the code they explain.
 
 ## License
 
