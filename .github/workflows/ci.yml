@@ -88,14 +88,24 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [brain, gateway, memoryd]
+        service: [brain, gateway, memoryd, web]
     steps:
       - uses: actions/checkout@v7
       - name: Build image
-        run: >-
-          docker build -f deploy/Dockerfile
-          --build-arg SERVICE=${{ matrix.service }}
-          -t timothy-${{ matrix.service }}:ci .
+        env:
+          # Web only: HugeIcons Pro registry auth, passed as a BuildKit
+          # secret so it never lands in an image layer.
+          HUGEICONS_TOKEN: ${{ secrets.HUGEICONS_TOKEN }}
+        run: |
+          if [ "${{ matrix.service }}" = "web" ]; then
+            docker build -f web/Dockerfile \
+              --secret id=hugeicons_token,env=HUGEICONS_TOKEN \
+              -t timothy-web:ci web
+          else
+            docker build -f deploy/Dockerfile \
+              --build-arg SERVICE=${{ matrix.service }} \
+              -t timothy-${{ matrix.service }}:ci .
+          fi
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:

@@ -1,0 +1,33 @@
+# Serves the built SPA and proxies /v1 to brain. Only ${BRAIN_URL} is
+# substituted at container start (set env vars stay, nginx runtime
+# variables like $uri pass through untouched).
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # SPA: unknown paths fall back to the app shell.
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # API, including SSE chat streams: no buffering, long read timeout
+    # so a slow turn is not cut mid-stream. proxy_pass through a
+    # variable + Docker's embedded DNS defers name resolution to
+    # request time: nginx boots before brain and survives brain
+    # getting a new address on restart.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    location /v1/ {
+        set $brain ${BRAIN_URL};
+        proxy_pass $brain;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+}
