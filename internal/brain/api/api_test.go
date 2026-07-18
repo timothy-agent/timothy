@@ -267,8 +267,11 @@ func TestAdminProxyScopedToUsageRoutes(t *testing.T) {
 			t.Fatalf("GET %s = %d, want 200", path, code)
 		}
 	}
-	if proxied != 3 {
-		t.Fatalf("proxied = %d, want 3", proxied)
+	if code := call(http.MethodPatch, "/v1/admin/usage/budget", "Bearer tok"); code != http.StatusOK {
+		t.Fatalf("PATCH /v1/admin/usage/budget = %d, want 200", code)
+	}
+	if proxied != 4 {
+		t.Fatalf("proxied = %d, want 4", proxied)
 	}
 
 	// Only the admin usage surface is mounted; the gateway's other

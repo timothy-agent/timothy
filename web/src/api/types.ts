@@ -184,6 +184,19 @@ export interface CacheRow {
   hit_ratio: number
 }
 
+// Budget position per UTC calendar window; limit_usd is null when no
+// budget is configured.
+export interface BudgetWindow {
+  limit_usd: number | null
+  spend_usd: number
+  over: boolean
+}
+
+export interface BudgetStatus {
+  day: BudgetWindow
+  month: BudgetWindow
+}
+
 // Control-plane shapes (/v1/admin/*). credential_ref is a NAME (env
 // var / Vault path / AWS profile) — secret values never travel.
 export interface AdminModel {

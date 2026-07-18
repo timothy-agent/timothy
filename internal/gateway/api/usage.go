@@ -13,17 +13,19 @@ import (
 // RegisterUsage mounts the internal usage-aggregation routes. Like the
 // rest of the gateway surface they carry no auth — brain proxies them
 // behind its bearer as /v1/admin/usage/*.
-func RegisterUsage(srv *httpserver.Server, agg *ledger.Aggregator) {
-	u := &usageAPI{agg: agg}
+func RegisterUsage(srv *httpserver.Server, agg *ledger.Aggregator, budgets *ledger.BudgetStore) {
+	u := &usageAPI{agg: agg, budgets: budgets}
 	srv.Handle("GET /internal/admin/usage/summary", http.HandlerFunc(u.handleSummary))
 	srv.Handle("GET /internal/admin/usage/series", http.HandlerFunc(u.handleSeries))
 	srv.Handle("GET /internal/admin/usage/sessions", http.HandlerFunc(u.handleSessions))
 	srv.Handle("GET /internal/admin/usage/latency", http.HandlerFunc(u.handleLatency))
 	srv.Handle("GET /internal/admin/usage/cache", http.HandlerFunc(u.handleCache))
+	srv.Handle("GET /internal/admin/usage/budget", http.HandlerFunc(u.handleBudget))
 }
 
 type usageAPI struct {
-	agg *ledger.Aggregator
+	agg     *ledger.Aggregator
+	budgets *ledger.BudgetStore
 }
 
 // timeRange parses from/to with sane defaults: the last 30 days, and
@@ -121,6 +123,20 @@ func (u *usageAPI) handleCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"providers": rows})
+}
+
+func (u *usageAPI) handleBudget(w http.ResponseWriter, r *http.Request) {
+	limits, err := u.budgets.Limits(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "usage_failed", err.Error())
+		return
+	}
+	status, err := u.agg.BudgetStatus(r.Context(), limits, time.Now())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "usage_failed", err.Error())
+		return
+	}
+	writeJSON(w, status)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

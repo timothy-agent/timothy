@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/admin"
 	"github.com/SumonMSelim/timothy/internal/gateway/api"
@@ -44,9 +45,17 @@ func main() {
 	store := router.NewStore(app.DB, os.Getenv, app.Log)
 	go store.Run(ctx)
 	led := ledger.New(app.DB, app.Log)
+	agg := ledger.NewAggregator(app.DB)
+	budgets := ledger.NewBudgetStore(app.DB)
 	api.Register(app.Server, store, led, app.Log)
-	api.RegisterUsage(app.Server, ledger.NewAggregator(app.DB))
-	api.RegisterAdmin(app.Server, admin.New(app.DB, store, led, app.Log))
+	api.RegisterUsage(app.Server, agg, budgets)
+	api.RegisterAdmin(app.Server, admin.New(app.DB, store, led, budgets, app.Log))
+
+	spendGauge := app.Metrics.NewGaugeVec("spend_usd",
+		"USD spent in the current UTC calendar window.", "window")
+	budgetGauge := app.Metrics.NewGaugeVec("spend_budget_usd",
+		"Configured USD budget per window; 0 when unset.", "window")
+	go ledger.RunSpendGauges(ctx, time.Minute, agg, budgets, spendGauge, budgetGauge, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

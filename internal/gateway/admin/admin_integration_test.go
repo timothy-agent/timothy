@@ -55,7 +55,7 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatalf("store load: %v", err)
 	}
-	return New(pool, store, ledger.New(pool, log), log), store, pool
+	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), log), store, pool
 }
 
 func TestProviderCRUDAuditsAndReloads(t *testing.T) {
@@ -243,5 +243,47 @@ func TestConnectionProbeBooksAsTestOnly(t *testing.T) {
 		if p.Group == adminMarker+"probe" {
 			t.Fatalf("test probe leaked into usage series: %+v", p)
 		}
+	}
+}
+
+func TestPatchBudgetValidatesAndAudits(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM spend_budgets")
+		_, _ = db.Exec(context.Background(), "DELETE FROM admin_audit WHERE entity = 'budget'")
+	})
+
+	// Any invalid key rejects the whole patch before writes.
+	limit := 5.0
+	if err := adm.PatchBudget(ctx, map[string]*float64{"day": &limit, "week": &limit}); err == nil {
+		t.Fatal("unknown scope accepted")
+	}
+	var count int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM spend_budgets`).Scan(&count)
+	if count != 0 {
+		t.Fatalf("partial write: %d rows after rejected patch", count)
+	}
+
+	// Valid patch writes both windows and audits once.
+	month := 100.0
+	if err := adm.PatchBudget(ctx, map[string]*float64{"day": &limit, "month": &month}); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	limits, err := ledger.NewBudgetStore(pool).Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	if limits.Day == nil || *limits.Day != limit || limits.Month == nil || *limits.Month != month {
+		t.Fatalf("limits = %+v, want day=%v month=%v", limits, limit, month)
+	}
+	var audits int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM admin_audit
+		WHERE entity = 'budget' AND action = 'update'`).Scan(&audits); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if audits != 1 {
+		t.Fatalf("audit rows = %d, want 1", audits)
 	}
 }

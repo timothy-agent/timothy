@@ -1,0 +1,117 @@
+//go:build integration
+
+package ledger
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/migrate"
+	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
+	"github.com/SumonMSelim/timothy/migrations"
+)
+
+func TestBudgetRoundTripAndStatus(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM spend_budgets")
+		_, _ = db.Exec(context.Background(), "DELETE FROM cost_ledger WHERE provider = 'itest-budget'")
+	})
+
+	s := NewBudgetStore(pool)
+
+	// Round-trip: set both, read back, clear one.
+	day, month := 0.9, 1e9
+	if err := s.Set(ctx, "day", &day); err != nil {
+		t.Fatalf("set day: %v", err)
+	}
+	if err := s.Set(ctx, "month", &month); err != nil {
+		t.Fatalf("set month: %v", err)
+	}
+	limits, err := s.Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	if limits.Day == nil || *limits.Day != day || limits.Month == nil || *limits.Month != month {
+		t.Fatalf("limits = %+v, want day=%v month=%v", limits, day, month)
+	}
+
+	// Upsert overwrites.
+	day2 := 0.8
+	if err := s.Set(ctx, "day", &day2); err != nil {
+		t.Fatalf("set day again: %v", err)
+	}
+
+	// Status: spend today crosses the day limit but not the huge
+	// month limit. Other tests' rows can only add spend, which keeps
+	// both assertions stable.
+	l := New(pool, log)
+	cost := 0.5
+	for range 2 {
+		l.Record(ctx, Entry{
+			Provider: "itest-budget", Model: "m1", TaskCategory: "coding",
+			Usage:     &stream.Usage{InputTokens: 1, OutputTokens: 1},
+			LatencyMS: 1, Status: "ok", CostUSD: &cost,
+		})
+	}
+	limits, err = s.Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	agg := NewAggregator(pool)
+	status, err := agg.BudgetStatus(ctx, limits, time.Now())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Day.SpendUSD < 1.0 || !status.Day.Over {
+		t.Fatalf("day = %+v, want spend >= 1.0 and over", status.Day)
+	}
+	if status.Month.Over {
+		t.Fatalf("month = %+v, want not over under limit %v", status.Month, month)
+	}
+	if status.Month.LimitUSD == nil || *status.Month.LimitUSD != month {
+		t.Fatalf("month limit = %v, want %v", status.Month.LimitUSD, month)
+	}
+
+	// Clear: nil deletes the row.
+	if err := s.Set(ctx, "day", nil); err != nil {
+		t.Fatalf("clear day: %v", err)
+	}
+	limits, err = s.Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits after clear: %v", err)
+	}
+	if limits.Day != nil {
+		t.Fatalf("day limit after clear = %v, want nil", *limits.Day)
+	}
+	// No limit set: never over, spend still reported.
+	status, err = agg.BudgetStatus(ctx, limits, time.Now())
+	if err != nil {
+		t.Fatalf("status after clear: %v", err)
+	}
+	if status.Day.Over || status.Day.LimitUSD != nil {
+		t.Fatalf("day after clear = %+v, want no limit and not over", status.Day)
+	}
+}

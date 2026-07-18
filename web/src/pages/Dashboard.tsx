@@ -13,13 +13,21 @@ import {
   YAxis,
 } from 'recharts'
 import {
+  usageBudget,
   usageCache,
   usageLatency,
   usageSeries,
   usageSessions,
   usageSummary,
 } from '../api/client'
-import type { CacheRow, LatencyRow, SessionUsage, UsagePoint, UsageSummary } from '../api/types'
+import type {
+  BudgetStatus,
+  CacheRow,
+  LatencyRow,
+  SessionUsage,
+  UsagePoint,
+  UsageSummary,
+} from '../api/types'
 
 // Accessible categorical palette that reads on light and dark.
 const palette = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#f43f5e', '#06b6d4', '#a3a3a3']
@@ -59,6 +67,7 @@ interface Loaded {
   sessions: SessionUsage[]
   latency: LatencyRow[]
   cache: CacheRow[]
+  budget: BudgetStatus | null
 }
 
 // pivot turns (bucket, group) points into recharts rows keyed by
@@ -131,6 +140,7 @@ export function Dashboard() {
       usageSessions(from, to, 10),
       usageLatency(from, to),
       usageCache(from, to),
+      usageBudget(),
     ]).then((results) => {
       if (!live) return
       const failed = results.filter((r) => r.status === 'rejected').length
@@ -148,6 +158,7 @@ export function Dashboard() {
         sessions: val(results[6], []),
         latency: val(results[7], []),
         cache: val(results[8], []),
+        budget: val<BudgetStatus | null>(results[9], null),
       })
     })
     return () => {
@@ -180,9 +191,16 @@ export function Dashboard() {
   }, [data])
 
   const s = data?.summary
+  const budget = data?.budget
+  const budgetHint = (w?: { limit_usd: number | null }) =>
+    w?.limit_usd != null ? `of ${money(w.limit_usd)} budget` : undefined
   const tiles = [
-    { label: 'Spend today', value: data ? money(data.today.cost_usd) : '—' },
-    { label: 'Spend this month', value: data ? money(data.month.cost_usd) : '—' },
+    { label: 'Spend today', value: data ? money(data.today.cost_usd) : '—', hint: budgetHint(budget?.day) },
+    {
+      label: 'Spend this month',
+      value: data ? money(data.month.cost_usd) : '—',
+      hint: budgetHint(budget?.month),
+    },
     {
       label: 'Requests',
       value: s ? compact(s.requests) : '—',
@@ -235,6 +253,24 @@ export function Dashboard() {
         {error && (
           <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-600 dark:text-red-400">
             Could not load usage: {error}
+          </div>
+        )}
+
+        {budget && (budget.day.over || budget.month.over) && (
+          <div
+            role="alert"
+            className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-400"
+          >
+            {[
+              budget.day.over && budget.day.limit_usd != null
+                ? `Daily budget reached: ${money(budget.day.spend_usd)} spent of ${money(budget.day.limit_usd)}.`
+                : null,
+              budget.month.over && budget.month.limit_usd != null
+                ? `Monthly budget reached: ${money(budget.month.spend_usd)} spent of ${money(budget.month.limit_usd)}.`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' ')}
           </div>
         )}
 

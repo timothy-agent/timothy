@@ -42,14 +42,46 @@ const testTimeout = 20 * time.Second
 // snapshot after every write; rec books test-connection probes under
 // purpose='test' so they never pollute usage.
 type Admin struct {
-	db    *pgpool.Pool
-	store *router.Store
-	rec   ledger.Recorder
-	log   *slog.Logger
+	db      *pgpool.Pool
+	store   *router.Store
+	rec     ledger.Recorder
+	budgets *ledger.BudgetStore
+	log     *slog.Logger
 }
 
-func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, log *slog.Logger) *Admin {
-	return &Admin{db: db, store: store, rec: rec, log: log}
+func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, log *slog.Logger) *Admin {
+	return &Admin{db: db, store: store, rec: rec, budgets: budgets, log: log}
+}
+
+// PatchBudget applies per-window budget changes: a key maps a window
+// scope to its new USD limit, nil clears it, absent keys stay
+// untouched. All keys are validated before any write so a bad entry
+// cannot leave a partial update. No snapshot reload: budgets never
+// affect routing.
+func (a *Admin) PatchBudget(ctx context.Context, patch map[string]*float64) error {
+	for scope, limit := range patch {
+		if scope != "day" && scope != "month" {
+			return fmt.Errorf("unknown budget scope %q", scope)
+		}
+		if limit != nil && *limit <= 0 {
+			return fmt.Errorf("budget limit for %s must be positive", scope)
+		}
+	}
+	before, err := a.budgets.Limits(ctx)
+	if err != nil {
+		return err
+	}
+	for scope, limit := range patch {
+		if err := a.budgets.Set(ctx, scope, limit); err != nil {
+			return err
+		}
+	}
+	after, err := a.budgets.Limits(ctx)
+	if err != nil {
+		return err
+	}
+	a.audit(ctx, "update", "budget", "spend", before, after)
+	return nil
 }
 
 // Provider is the API shape of one providers row. credential_ref is a

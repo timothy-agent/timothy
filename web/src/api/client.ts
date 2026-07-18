@@ -1,6 +1,7 @@
 import type {
   AdminProvider,
   AdminRoute,
+  BudgetStatus,
   CacheRow,
   ChainEntry,
   ChatEvent,
@@ -303,6 +304,22 @@ export async function usageCache(from: Date, to: Date): Promise<CacheRow[]> {
     `/v1/admin/usage/cache?${rangeParams(from, to)}`,
   )
   return providers ?? []
+}
+
+export async function usageBudget(): Promise<BudgetStatus> {
+  return request<BudgetStatus>('/v1/admin/usage/budget')
+}
+
+// patchBudget updates spend limits per window: a number sets, null
+// clears, an absent key stays untouched.
+export async function patchBudget(changes: {
+  day?: number | null
+  month?: number | null
+}): Promise<void> {
+  await request<void>('/v1/admin/usage/budget', {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
 }
 
 // --- admin control plane (settings panel) ---

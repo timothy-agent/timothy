@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ChatError, chatStream, createSSEParser, listSessions } from './client'
+import {
+  ChatError,
+  chatStream,
+  createSSEParser,
+  listSessions,
+  patchBudget,
+  usageBudget,
+} from './client'
 import type { ChatEvent } from './types'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -132,5 +139,37 @@ describe('chatStream errors', () => {
     expect(err.status).toBe(500)
     expect(err.message).toBe('plain failure')
     expect(err.sessionId).toBeUndefined()
+  })
+})
+
+describe('spend budgets', () => {
+  it('fetches budget status from the usage surface', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const status = {
+      day: { limit_usd: 1, spend_usd: 1.5, over: true },
+      month: { limit_usd: null, spend_usd: 8, over: false },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(status), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const b = await usageBudget()
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/admin/usage/budget')
+    expect(b).toEqual(status)
+  })
+
+  it('patches budgets keeping explicit nulls so clearing works', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await patchBudget({ day: 5, month: null })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/v1/admin/usage/budget')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ day: 5, month: null })
   })
 })

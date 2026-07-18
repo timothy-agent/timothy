@@ -21,6 +21,7 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("GET /internal/admin/providers/health", http.HandlerFunc(h.health))
 	srv.Handle("GET /internal/admin/routes", http.HandlerFunc(h.routes))
 	srv.Handle("PATCH /internal/admin/routes/{category}", http.HandlerFunc(h.patchRoute))
+	srv.Handle("PATCH /internal/admin/usage/budget", http.HandlerFunc(h.patchBudget))
 }
 
 type adminAPI struct {
@@ -122,6 +123,20 @@ func (h *adminAPI) patchRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.adm.PatchRoute(r.Context(), r.PathValue("category"), patch); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) patchBudget(w http.ResponseWriter, r *http.Request) {
+	var patch map[string]*float64
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil || len(patch) == 0 {
+		jsonError(w, http.StatusBadRequest, "bad_request",
+			"body must map budget scopes (day, month) to USD limits or null")
+		return
+	}
+	if err := h.adm.PatchBudget(r.Context(), patch); err != nil {
 		fail(w, err)
 		return
 	}

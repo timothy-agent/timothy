@@ -7,11 +7,13 @@ import {
   getSettings,
   listProviders,
   listRoutes,
+  patchBudget,
   patchProvider,
   patchRoute,
   patchSettings,
   providersHealth,
   testProvider,
+  usageBudget,
 } from '../api/client'
 import type { AdminProvider, AdminRoute, ChainEntry, ProviderHealth, TestResult } from '../api/types'
 import { Button } from '../components/ui/button'
@@ -599,6 +601,90 @@ function FeaturesTab() {
           />
         </div>
       ))}
+      <BudgetsCard />
+    </div>
+  )
+}
+
+// BudgetsCard edits the gateway's spend budgets. Empty field = no
+// budget for that window; both keys always travel so clearing works.
+function BudgetsCard() {
+  const [day, setDay] = useState('')
+  const [month, setMonth] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    usageBudget()
+      .then((b) => {
+        setDay(b.day.limit_usd != null ? String(b.day.limit_usd) : '')
+        setMonth(b.month.limit_usd != null ? String(b.month.limit_usd) : '')
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+  }, [])
+
+  // '' → null (clear), positive number → set, anything else → invalid.
+  const parse = (v: string): number | null | undefined => {
+    if (v.trim() === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? n : undefined
+  }
+
+  const save = () => {
+    setSaved(false)
+    const d = parse(day)
+    const m = parse(month)
+    if (d === undefined || m === undefined) {
+      setError('Budgets must be positive USD amounts (or empty for no budget).')
+      return
+    }
+    patchBudget({ day: d, month: m })
+      .then(() => {
+        setError(null)
+        setSaved(true)
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Spend budgets</div>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        USD limits per UTC day and month. When spend reaches a limit the dashboard shows a
+        banner; Prometheus gauges carry the same signal for external alerting. Requests are
+        never blocked.
+      </p>
+      {error && (
+        <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-600 dark:text-red-400">
+          {error}
+        </div>
+      )}
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Daily (USD)
+          <Input
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            placeholder="none"
+            inputMode="decimal"
+            className="w-32"
+            aria-label="Daily budget in USD"
+          />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Monthly (USD)
+          <Input
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            placeholder="none"
+            inputMode="decimal"
+            className="w-32"
+            aria-label="Monthly budget in USD"
+          />
+        </label>
+        <Button onClick={save}>Save budgets</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
     </div>
   )
 }

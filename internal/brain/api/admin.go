@@ -12,6 +12,7 @@ import (
 // from outside. Tests pin this scope like the memory proxy's.
 var adminRoutePatterns = []string{
 	"GET /v1/admin/usage/{rest...}",
+	"PATCH /v1/admin/usage/budget",
 	"GET /v1/admin/providers",
 	"POST /v1/admin/providers",
 	"PATCH /v1/admin/providers/{id}",
