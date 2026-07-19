@@ -5,6 +5,7 @@ import {
   createProvider,
   deleteProvider,
   deleteSecret,
+  getSecretBackendConfig,
   getSettings,
   listProviders,
   listRoutes,
@@ -13,9 +14,12 @@ import {
   patchRoute,
   patchSettings,
   providersHealth,
-  secretConfigured,
+  putSecretBackendConfig,
+  secretStatus,
   setSecret,
+  setSecretExternal,
   testProvider,
+  testSecretBackend,
   usageBudget,
 } from '../api/client'
 import type { AdminProvider, AdminRoute, ChainEntry, ProviderHealth, TestResult } from '../api/types'
@@ -137,6 +141,7 @@ function ProvidersTab() {
         </div>
       )}
       <AddProvider onAdded={refresh} onError={setError} />
+      <SecretBackendsCard onError={setError} />
 
       <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
         <DialogContent>
@@ -178,15 +183,27 @@ function ProviderCard({
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
   const [configured, setConfigured] = useState(false)
+  const [storedBackend, setStoredBackend] = useState('')
+  const [source, setSource] = useState<'db' | 'vault' | 'asm'>('db')
   const [secretValue, setSecretValue] = useState('')
   const [savingSecret, setSavingSecret] = useState(false)
 
   const refreshSecretStatus = useCallback(() => {
     if (!provider.credential_ref) {
       setConfigured(false)
+      setStoredBackend('')
       return
     }
-    secretConfigured(provider.credential_ref).then(setConfigured, () => setConfigured(false))
+    secretStatus(provider.credential_ref).then(
+      (s) => {
+        setConfigured(s.configured)
+        setStoredBackend(s.backend)
+      },
+      () => {
+        setConfigured(false)
+        setStoredBackend('')
+      },
+    )
   }, [provider.credential_ref])
   useEffect(refreshSecretStatus, [refreshSecretStatus])
 
@@ -210,7 +227,8 @@ function ProviderCard({
     if (!ref || !secretValue) return
     setSavingSecret(true)
     try {
-      await setSecret(ref, secretValue)
+      if (source === 'db') await setSecret(ref, secretValue)
+      else await setSecretExternal(ref, source, secretValue)
       setSecretValue('')
       refreshSecretStatus()
       onChanged()
@@ -302,43 +320,63 @@ function ProviderCard({
             encrypted secret store below; without a stored value the provider stays unhealthy.
           </span>
           {ref && (
-            <div className="mt-2 flex items-center gap-2">
-              <span
-                className={`rounded px-1.5 py-px text-[10px] font-medium uppercase ${
-                  configured
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
-                }`}
-              >
-                {configured ? 'secret configured' : 'no stored secret'}
-              </span>
-              <Input
-                type="password"
-                value={secretValue}
-                onChange={(e) => setSecretValue(e.target.value)}
-                placeholder="paste key to store/rotate"
-                className="h-8"
-                autoComplete="off"
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={savingSecret || !secretValue}
-                onClick={() => void saveSecretValue()}
-              >
-                Save
-              </Button>
-              {configured && (
+            <>
+              <div className="mt-2 flex items-center gap-2">
+                <span
+                  className={`rounded px-1.5 py-px text-[10px] font-medium uppercase ${
+                    configured
+                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                      : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                  }`}
+                >
+                  {configured ? `stored · ${storedBackend}` : 'no stored secret'}
+                </span>
+                {configured && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={savingSecret}
+                    onClick={() => void clearSecretValue()}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <select
+                  value={source}
+                  onChange={(e) => setSource(e.target.value as 'db' | 'vault' | 'asm')}
+                  aria-label="secret source"
+                  className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
+                >
+                  <option value="db">encrypted here</option>
+                  <option value="vault">Vault</option>
+                  <option value="asm">AWS Secrets Manager</option>
+                </select>
+                <Input
+                  type={source === 'db' ? 'password' : 'text'}
+                  value={secretValue}
+                  onChange={(e) => setSecretValue(e.target.value)}
+                  placeholder={
+                    source === 'db'
+                      ? 'paste key to store/rotate'
+                      : source === 'vault'
+                        ? 'path in mount, e.g. timothy/anthropic#api_key'
+                        : 'secret name or ARN, optionally #json_key'
+                  }
+                  className="h-8"
+                  autoComplete="off"
+                />
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={savingSecret}
-                  onClick={() => void clearSecretValue()}
+                  disabled={savingSecret || !secretValue}
+                  onClick={() => void saveSecretValue()}
                 >
-                  Clear
+                  Save
                 </Button>
-              )}
-            </div>
+              </div>
+            </>
           )}
         </label>
         <div className="text-xs text-muted-foreground">
@@ -362,6 +400,136 @@ function ProviderCard({
             {provider.models.length === 0 && <li className="text-xs">none declared</li>}
           </ul>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// SecretBackendsCard configures where external secrets live: a Vault
+// KV v2 mount and/or an AWS Secrets Manager region. The Vault token
+// itself is stored through the encrypted secret store under the token
+// ref — this config never holds a credential.
+function SecretBackendsCard({ onError }: { onError: (msg: string) => void }) {
+  const [vault, setVault] = useState({ address: '', mount: '', token_ref: '' })
+  const [vaultToken, setVaultToken] = useState('')
+  const [region, setRegion] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    getSecretBackendConfig('vault').then(
+      (c) => setVault({ address: c.address ?? '', mount: c.mount ?? '', token_ref: c.token_ref ?? '' }),
+      () => undefined,
+    )
+    getSecretBackendConfig('asm').then(
+      (c) => setRegion(c.region ?? ''),
+      () => undefined,
+    )
+  }, [])
+
+  const run = async (backend: 'vault' | 'asm', fn: () => Promise<string>) => {
+    setBusy(true)
+    try {
+      const msg = await fn()
+      setStatus((s) => ({ ...s, [backend]: msg }))
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveVault = () =>
+    run('vault', async () => {
+      await putSecretBackendConfig('vault', vault)
+      if (vaultToken) {
+        await setSecret(vault.token_ref || 'VAULT_TOKEN', vaultToken)
+        setVaultToken('')
+      }
+      return 'saved'
+    })
+
+  const saveASM = () =>
+    run('asm', async () => {
+      await putSecretBackendConfig('asm', { region })
+      return 'saved'
+    })
+
+  const test = (backend: 'vault' | 'asm') =>
+    run(backend, async () => {
+      const res = await testSecretBackend(backend)
+      return res.ok ? 'connection OK' : `failed: ${res.error ?? 'unknown'}`
+    })
+
+  const statusLine = (backend: 'vault' | 'asm') =>
+    status[backend] && (
+      <span
+        className={`text-xs ${status[backend].startsWith('failed') ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}
+      >
+        {status[backend]}
+      </span>
+    )
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <h2 className="text-sm font-medium">Secret backends</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Optional external stores for provider keys. Each secret picks its source when saved;
+        the default keeps values encrypted in Timothy&apos;s own database.
+      </p>
+
+      <div className="mt-4 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-32 text-xs font-medium">Vault (KV v2)</span>
+          <Input
+            value={vault.address}
+            onChange={(e) => setVault((v) => ({ ...v, address: e.target.value }))}
+            placeholder="address, e.g. https://vault.internal:8200"
+            className="h-8 max-w-64"
+          />
+          <Input
+            value={vault.mount}
+            onChange={(e) => setVault((v) => ({ ...v, mount: e.target.value }))}
+            placeholder="mount (secret)"
+            className="h-8 max-w-28"
+          />
+          <Input
+            type="password"
+            value={vaultToken}
+            onChange={(e) => setVaultToken(e.target.value)}
+            placeholder="paste token to store/rotate"
+            className="h-8 max-w-52"
+            autoComplete="off"
+          />
+          <Button size="sm" variant="outline" disabled={busy || !vault.address} onClick={() => void saveVault()}>
+            Save
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void test('vault')}>
+            Test
+          </Button>
+          {statusLine('vault')}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-32 text-xs font-medium">AWS Secrets Manager</span>
+          <Input
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            placeholder="region (empty = credential chain default)"
+            className="h-8 max-w-64"
+          />
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void saveASM()}>
+            Save
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void test('asm')}>
+            Test
+          </Button>
+          {statusLine('asm')}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          AWS auth uses the default credential chain mounted into the gateway (same as Bedrock).
+          The Vault token is stored encrypted under {vault.token_ref || 'VAULT_TOKEN'}.
+        </p>
       </div>
     </div>
   )

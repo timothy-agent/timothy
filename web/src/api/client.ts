@@ -373,16 +373,58 @@ export async function setSecret(refName: string, value: string): Promise<void> {
   })
 }
 
+// setSecretExternal points refName at a secret held in Vault or AWS
+// Secrets Manager instead of storing a value here.
+export async function setSecretExternal(
+  refName: string,
+  backend: 'vault' | 'asm',
+  backendRef: string,
+): Promise<void> {
+  await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ backend, backend_ref: backendRef }),
+  })
+}
+
 export async function deleteSecret(refName: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, { method: 'DELETE' })
 }
 
-export async function secretConfigured(refName: string): Promise<boolean> {
-  if (!refName) return false
-  const { configured } = await request<{ configured: boolean }>(
-    `/v1/admin/secrets/${encodeURIComponent(refName)}`,
+export interface SecretStatus {
+  configured: boolean
+  backend: string
+}
+
+export async function secretStatus(refName: string): Promise<SecretStatus> {
+  if (!refName) return { configured: false, backend: '' }
+  return request<SecretStatus>(`/v1/admin/secrets/${encodeURIComponent(refName)}`)
+}
+
+export async function getSecretBackendConfig(
+  backend: 'vault' | 'asm',
+): Promise<Record<string, string>> {
+  const { config } = await request<{ config: Record<string, string> }>(
+    `/v1/admin/secret-backends/${backend}`,
   )
-  return configured
+  return config ?? {}
+}
+
+export async function putSecretBackendConfig(
+  backend: 'vault' | 'asm',
+  config: Record<string, string>,
+): Promise<void> {
+  await request<void>(`/v1/admin/secret-backends/${backend}`, {
+    method: 'PUT',
+    body: JSON.stringify({ config }),
+  })
+}
+
+export async function testSecretBackend(
+  backend: 'vault' | 'asm',
+): Promise<{ ok: boolean; error?: string }> {
+  return request<{ ok: boolean; error?: string }>(`/v1/admin/secret-backends/${backend}/test`, {
+    method: 'POST',
+  })
 }
 
 export async function listRoutes(): Promise<AdminRoute[]> {

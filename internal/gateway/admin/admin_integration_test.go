@@ -307,16 +307,16 @@ func TestSecretSetDeleteAuditsAndReloads(t *testing.T) {
 	db, _ := pool.Get()
 	ref := adminMarker + "secret"
 
-	if configured, err := adm.SecretConfigured(ctx, ref); err != nil || configured {
-		t.Fatalf("SecretConfigured before Set: configured=%v err=%v", configured, err)
+	if configured, _, err := adm.SecretStatus(ctx, ref); err != nil || configured {
+		t.Fatalf("SecretStatus before Set: configured=%v err=%v", configured, err)
 	}
 
 	before := store.Snapshot()
 	if err := adm.SetSecret(ctx, ref, "sk-live-value"); err != nil {
 		t.Fatalf("SetSecret: %v", err)
 	}
-	if configured, err := adm.SecretConfigured(ctx, ref); err != nil || !configured {
-		t.Fatalf("SecretConfigured after Set: configured=%v err=%v", configured, err)
+	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("SecretStatus after Set: configured=%v backend=%q err=%v", configured, backend, err)
 	}
 	if store.Snapshot() == before {
 		t.Fatal("SetSecret did not trigger a snapshot reload")
@@ -334,7 +334,45 @@ func TestSecretSetDeleteAuditsAndReloads(t *testing.T) {
 	if err := adm.DeleteSecret(ctx, ref); err != nil {
 		t.Fatalf("DeleteSecret: %v", err)
 	}
-	if configured, err := adm.SecretConfigured(ctx, ref); err != nil || configured {
-		t.Fatalf("SecretConfigured after Delete: configured=%v err=%v", configured, err)
+	if configured, _, err := adm.SecretStatus(ctx, ref); err != nil || configured {
+		t.Fatalf("SecretStatus after Delete: configured=%v err=%v", configured, err)
+	}
+}
+
+func TestSecretExternalBackendConfig(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+	ref := adminMarker + "vault-secret"
+
+	if err := adm.SetSecretBackendConfig(ctx, "vault",
+		[]byte(`{"address":"http://vault:8200","mount":"kv"}`)); err != nil {
+		t.Fatalf("SetSecretBackendConfig: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Exec(ctx, `DELETE FROM secret_backend_config WHERE backend = 'vault'`)
+	})
+	cfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig: %v", err)
+	}
+	for _, want := range []string{`"address":"http://vault:8200"`, `"mount":"kv"`, `"token_ref":"VAULT_TOKEN"`} {
+		if !strings.Contains(string(cfg), want) {
+			t.Errorf("config %s missing %s", cfg, want)
+		}
+	}
+
+	if err := adm.SetSecretExternal(ctx, ref, "vault", "timothy/anthropic#api_key"); err != nil {
+		t.Fatalf("SetSecretExternal: %v", err)
+	}
+	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "vault" {
+		t.Fatalf("SecretStatus: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+
+	if err := adm.SetSecretExternal(ctx, ref, "db", "x"); err == nil {
+		t.Fatal("SetSecretExternal with backend db: want error")
+	}
+	if err := adm.SetSecretExternal(ctx, ref, "vault", ""); err == nil {
+		t.Fatal("SetSecretExternal without backend_ref: want error")
 	}
 }

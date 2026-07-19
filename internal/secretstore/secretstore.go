@@ -58,11 +58,29 @@ func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
 	switch backend {
 	case "db":
 		return s.cipher.open(ciphertext, nonce)
-	case "vault", "asm":
-		return "", fmt.Errorf("secretstore: backend %q not yet implemented", backend)
+	case "vault":
+		return s.resolveVault(ctx, backendRef)
+	case "asm":
+		return s.resolveASM(ctx, backendRef)
 	default:
 		return "", fmt.Errorf("secretstore: unknown backend %q for %s", backend, refName)
 	}
+}
+
+// Status reports whether refName is configured and through which
+// backend, without decrypting or contacting the backend — used for
+// the UI's "configured" badge.
+func (s *Store) Status(ctx context.Context, refName string) (configured bool, backend string, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return false, "", fmt.Errorf("secretstore: %w", err)
+	}
+	err = db.QueryRow(ctx,
+		`SELECT backend FROM secrets WHERE ref_name = $1`, refName).Scan(&backend)
+	if err != nil {
+		return false, "", nil
+	}
+	return true, backend, nil
 }
 
 // Set encrypts value and upserts it under refName with backend "db".

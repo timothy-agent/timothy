@@ -25,6 +25,9 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
 	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
 	srv.Handle("GET /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.getSecretStatus))
+	srv.Handle("GET /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.getSecretBackend))
+	srv.Handle("PUT /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.putSecretBackend))
+	srv.Handle("POST /internal/admin/secret-backends/{backend}/test", http.HandlerFunc(h.testSecretBackend))
 }
 
 type adminAPI struct {
@@ -146,15 +149,26 @@ func (h *adminAPI) patchBudget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// setSecret stores a secret two ways: {"value": ...} encrypts the
+// value into the db backend; {"backend": "vault"|"asm",
+// "backend_ref": ...} points the ref at an external system instead.
 func (h *adminAPI) setSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value string `json:"value"`
+		Value      string `json:"value"`
+		Backend    string `json:"backend"`
+		BackendRef string `json:"backend_ref"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if err := h.adm.SetSecret(r.Context(), r.PathValue("ref_name"), body.Value); err != nil {
+	var err error
+	if body.Backend != "" && body.Backend != "db" {
+		err = h.adm.SetSecretExternal(r.Context(), r.PathValue("ref_name"), body.Backend, body.BackendRef)
+	} else {
+		err = h.adm.SetSecret(r.Context(), r.PathValue("ref_name"), body.Value)
+	}
+	if err != nil {
 		fail(w, err)
 		return
 	}
@@ -170,10 +184,45 @@ func (h *adminAPI) deleteSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPI) getSecretStatus(w http.ResponseWriter, r *http.Request) {
-	configured, err := h.adm.SecretConfigured(r.Context(), r.PathValue("ref_name"))
+	configured, backend, err := h.adm.SecretStatus(r.Context(), r.PathValue("ref_name"))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
 		return
 	}
-	writeJSON(w, map[string]bool{"configured": configured})
+	writeJSON(w, map[string]any{"configured": configured, "backend": backend})
+}
+
+func (h *adminAPI) getSecretBackend(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.adm.SecretBackendConfig(r.Context(), r.PathValue("backend"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]json.RawMessage{"config": cfg})
+}
+
+func (h *adminAPI) putSecretBackend(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Config json.RawMessage `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := h.adm.SetSecretBackendConfig(r.Context(), r.PathValue("backend"), body.Config); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// testSecretBackend mirrors the provider test endpoint's shape: 200
+// with {ok, error} rather than an HTTP error, so the UI renders the
+// failure text inline.
+func (h *adminAPI) testSecretBackend(w http.ResponseWriter, r *http.Request) {
+	if err := h.adm.TestSecretBackend(r.Context(), r.PathValue("backend")); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }

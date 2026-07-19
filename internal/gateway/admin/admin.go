@@ -84,13 +84,54 @@ func (a *Admin) DeleteSecret(ctx context.Context, refName string) error {
 	return nil
 }
 
-// SecretConfigured reports whether refName has a stored value, without
-// exposing it — used to render a "configured" badge in the UI.
-func (a *Admin) SecretConfigured(ctx context.Context, refName string) (bool, error) {
+// SetSecretExternal points refName at a secret held in an external
+// backend (vault, asm) instead of storing a value. backendRef is the
+// path/name in that system.
+func (a *Admin) SetSecretExternal(ctx context.Context, refName, backend, backendRef string) error {
 	if refName == "" {
-		return false, nil
+		return fmt.Errorf("ref name is required")
 	}
-	return a.secrets.Has(ctx, refName)
+	if err := a.secrets.SetExternal(ctx, refName, backend, backendRef); err != nil {
+		return err
+	}
+	a.audit(ctx, "set", "secret", refName, nil, map[string]string{"backend": backend})
+	a.reload(ctx)
+	return nil
+}
+
+// SecretStatus reports whether refName has a stored secret and which
+// backend serves it, without exposing the value — used to render the
+// "configured" badge in the UI.
+func (a *Admin) SecretStatus(ctx context.Context, refName string) (configured bool, backend string, err error) {
+	if refName == "" {
+		return false, "", nil
+	}
+	return a.secrets.Status(ctx, refName)
+}
+
+// SecretBackendConfig returns a backend's stored connection config
+// (never a credential — the vault token lives in the secret store).
+func (a *Admin) SecretBackendConfig(ctx context.Context, backend string) (json.RawMessage, error) {
+	return a.secrets.GetBackendConfig(ctx, backend)
+}
+
+// SetSecretBackendConfig saves a backend's connection config and
+// reloads the snapshot so refs served by that backend re-resolve.
+func (a *Admin) SetSecretBackendConfig(ctx context.Context, backend string, cfg json.RawMessage) error {
+	if err := a.secrets.SetBackendConfig(ctx, backend, cfg); err != nil {
+		return err
+	}
+	a.audit(ctx, "set", "secret_backend", backend, nil, json.RawMessage(cfg))
+	a.reload(ctx)
+	return nil
+}
+
+// TestSecretBackend checks connectivity and auth for an external
+// secret backend without reading any stored secret.
+func (a *Admin) TestSecretBackend(ctx context.Context, backend string) error {
+	ctx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+	return a.secrets.TestBackend(ctx, backend)
 }
 
 // PatchBudget applies per-window budget changes: a key maps a window
