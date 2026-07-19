@@ -116,12 +116,16 @@ func (a *Admin) SecretBackendConfig(ctx context.Context, backend string) (json.R
 }
 
 // SetSecretBackendConfig saves a backend's connection config and
-// reloads the snapshot so refs served by that backend re-resolve.
+// reloads the snapshot so refs served by that backend re-resolve. The
+// audit row records the normalized config the store kept, not the raw
+// request body — unknown fields (a mistakenly pasted token, say) must
+// not survive anywhere.
 func (a *Admin) SetSecretBackendConfig(ctx context.Context, backend string, cfg json.RawMessage) error {
-	if err := a.secrets.SetBackendConfig(ctx, backend, cfg); err != nil {
+	normalized, err := a.secrets.SetBackendConfig(ctx, backend, cfg)
+	if err != nil {
 		return err
 	}
-	a.audit(ctx, "set", "secret_backend", backend, nil, json.RawMessage(cfg))
+	a.audit(ctx, "set", "secret_backend", backend, nil, normalized)
 	a.reload(ctx)
 	return nil
 }

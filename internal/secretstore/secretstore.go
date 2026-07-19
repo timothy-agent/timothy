@@ -3,13 +3,17 @@
 // secret in an env var or a plaintext DB column. A ref_name is looked
 // up in the secrets table; its backend column says how to fetch the
 // value: envelope-decrypt a ciphertext column (db), or read from an
-// external system by backend_ref (vault, asm — not yet implemented).
+// external system by backend_ref (vault: KV v2, asm: AWS Secrets
+// Manager).
 package secretstore
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -21,6 +25,12 @@ var ErrNotFound = errors.New("secretstore: not found")
 type Store struct {
 	db     *pgpool.Pool
 	cipher *sealer
+
+	// asm caches the AWS Secrets Manager client so Resolve doesn't
+	// re-run the SDK's config chain on every snapshot reload; cleared
+	// when the asm backend config changes.
+	asmMu sync.Mutex
+	asm   asmAPI
 }
 
 // New builds a Store. masterKey must be exactly 32 bytes (AES-256);
@@ -34,36 +44,53 @@ func New(db *pgpool.Pool, masterKey []byte) (*Store, error) {
 	return &Store{db: db, cipher: c}, nil
 }
 
+// secretRow is one secrets-table row; shared by Resolve and the vault
+// token lookup so both distinguish "absent" from "database broken".
+type secretRow struct {
+	backend    string
+	ciphertext []byte
+	nonce      []byte
+	backendRef string
+}
+
+// row fetches refName's row. A missing row is ErrNotFound; any other
+// failure (connection loss, timeout) surfaces as its own error so a
+// database blip never reads as "secret was deleted".
+func (s *Store) row(ctx context.Context, refName string) (secretRow, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return secretRow{}, fmt.Errorf("secretstore: %w", err)
+	}
+	var r secretRow
+	err = db.QueryRow(ctx,
+		`SELECT backend, ciphertext, nonce, backend_ref FROM secrets WHERE ref_name = $1`,
+		refName).Scan(&r.backend, &r.ciphertext, &r.nonce, &r.backendRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return secretRow{}, fmt.Errorf("%w: %s", ErrNotFound, refName)
+	}
+	if err != nil {
+		return secretRow{}, fmt.Errorf("secretstore: read %s: %w", refName, err)
+	}
+	return r, nil
+}
+
 // Resolve returns the plaintext value for refName. Callers treat a
 // missing ref as "no secret configured", not an error, for optional
 // credentials.
 func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
-	db, err := s.db.Get()
+	r, err := s.row(ctx, refName)
 	if err != nil {
-		return "", fmt.Errorf("secretstore: %w", err)
+		return "", err
 	}
-	var (
-		backend    string
-		ciphertext []byte
-		nonce      []byte
-		backendRef string
-	)
-	err = db.QueryRow(ctx,
-		`SELECT backend, ciphertext, nonce, backend_ref FROM secrets WHERE ref_name = $1`,
-		refName).Scan(&backend, &ciphertext, &nonce, &backendRef)
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrNotFound, refName)
-	}
-
-	switch backend {
+	switch r.backend {
 	case "db":
-		return s.cipher.open(ciphertext, nonce)
+		return s.cipher.open(r.ciphertext, r.nonce)
 	case "vault":
-		return s.resolveVault(ctx, backendRef)
+		return s.resolveVault(ctx, r.backendRef)
 	case "asm":
-		return s.resolveASM(ctx, backendRef)
+		return s.resolveASM(ctx, r.backendRef)
 	default:
-		return "", fmt.Errorf("secretstore: unknown backend %q for %s", backend, refName)
+		return "", fmt.Errorf("secretstore: unknown backend %q for %s", r.backend, refName)
 	}
 }
 
@@ -71,16 +98,14 @@ func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
 // backend, without decrypting or contacting the backend — used for
 // the UI's "configured" badge.
 func (s *Store) Status(ctx context.Context, refName string) (configured bool, backend string, err error) {
-	db, err := s.db.Get()
-	if err != nil {
-		return false, "", fmt.Errorf("secretstore: %w", err)
-	}
-	err = db.QueryRow(ctx,
-		`SELECT backend FROM secrets WHERE ref_name = $1`, refName).Scan(&backend)
-	if err != nil {
+	r, err := s.row(ctx, refName)
+	if errors.Is(err, ErrNotFound) {
 		return false, "", nil
 	}
-	return true, backend, nil
+	if err != nil {
+		return false, "", err
+	}
+	return true, r.backend, nil
 }
 
 // Set encrypts value and upserts it under refName with backend "db".
@@ -117,19 +142,4 @@ func (s *Store) Delete(ctx context.Context, refName string) error {
 		return fmt.Errorf("secretstore: delete %s: %w", refName, err)
 	}
 	return nil
-}
-
-// Has reports whether refName has a stored secret, without decrypting
-// it — used to show "configured" state in the UI.
-func (s *Store) Has(ctx context.Context, refName string) (bool, error) {
-	db, err := s.db.Get()
-	if err != nil {
-		return false, fmt.Errorf("secretstore: %w", err)
-	}
-	var exists bool
-	err = db.QueryRow(ctx, `SELECT true FROM secrets WHERE ref_name = $1`, refName).Scan(&exists)
-	if err != nil {
-		return false, nil
-	}
-	return exists, nil
 }

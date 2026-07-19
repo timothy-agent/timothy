@@ -3,15 +3,18 @@ package secretstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/jackc/pgx/v5"
 )
 
 // VaultConfig connects the vault backend to a HashiCorp Vault KV v2
@@ -30,11 +33,35 @@ type ASMConfig struct {
 	Region string `json:"region"`
 }
 
+// asmAPI is the slice of the Secrets Manager client the store uses;
+// an interface so tests can stub AWS without live credentials.
+type asmAPI interface {
+	GetSecretValue(ctx context.Context, in *secretsmanager.GetSecretValueInput,
+		opts ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
+	ListSecrets(ctx context.Context, in *secretsmanager.ListSecretsInput,
+		opts ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretsOutput, error)
+}
+
 const (
 	defaultVaultMount    = "secret"
 	defaultVaultTokenRef = "VAULT_TOKEN"
 	backendHTTPTimeout   = 10 * time.Second
 )
+
+// backendRefPattern bounds what a backend_ref may look like (vault
+// paths, ASM names/ARNs, an optional #field suffix). Like
+// credential_ref it must be a name, never a value: no spaces, quotes,
+// or long opaque blobs.
+var backendRefPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/#=+@-]{1,256}$`)
+
+// vaultHTTP never follows redirects: Go strips only Authorization and
+// Cookie on cross-host redirects, so a malicious or compromised
+// endpoint could otherwise bounce the X-Vault-Token header elsewhere.
+var vaultHTTP = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // GetBackendConfig returns the stored config JSON for a backend, or
 // "{}" when none has been saved yet.
@@ -49,26 +76,30 @@ func (s *Store) GetBackendConfig(ctx context.Context, backend string) (json.RawM
 	var cfg json.RawMessage
 	err = db.QueryRow(ctx,
 		`SELECT config FROM secret_backend_config WHERE backend = $1`, backend).Scan(&cfg)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return json.RawMessage("{}"), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("secretstore: read backend config %s: %w", backend, err)
 	}
 	return cfg, nil
 }
 
-// SetBackendConfig upserts a backend's connection config. The JSON is
-// validated against the backend's config shape so the UI can't save
-// unknown fields.
-func (s *Store) SetBackendConfig(ctx context.Context, backend string, cfg json.RawMessage) error {
+// SetBackendConfig upserts a backend's connection config and returns
+// the normalized form it stored — callers audit that, never the raw
+// request body, so a mistakenly pasted credential can't land in the
+// audit log. Unknown fields are dropped.
+func (s *Store) SetBackendConfig(ctx context.Context, backend string, cfg json.RawMessage) (json.RawMessage, error) {
 	if err := validExternalBackend(backend); err != nil {
-		return err
+		return nil, err
 	}
 	normalized, err := normalizeBackendConfig(backend, cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	db, err := s.db.Get()
 	if err != nil {
-		return fmt.Errorf("secretstore: %w", err)
+		return nil, fmt.Errorf("secretstore: %w", err)
 	}
 	_, err = db.Exec(ctx, `
 		INSERT INTO secret_backend_config (backend, config, updated_at)
@@ -76,9 +107,14 @@ func (s *Store) SetBackendConfig(ctx context.Context, backend string, cfg json.R
 		ON CONFLICT (backend) DO UPDATE SET config = $2, updated_at = now()`,
 		backend, normalized)
 	if err != nil {
-		return fmt.Errorf("secretstore: set backend config %s: %w", backend, err)
+		return nil, fmt.Errorf("secretstore: set backend config %s: %w", backend, err)
 	}
-	return nil
+	if backend == "asm" {
+		s.asmMu.Lock()
+		s.asm = nil
+		s.asmMu.Unlock()
+	}
+	return normalized, nil
 }
 
 // SetExternal points refName at a secret held in an external backend.
@@ -89,8 +125,8 @@ func (s *Store) SetExternal(ctx context.Context, refName, backend, backendRef st
 	if err := validExternalBackend(backend); err != nil {
 		return err
 	}
-	if backendRef == "" {
-		return fmt.Errorf("secretstore: backend_ref is required for backend %q", backend)
+	if err := validBackendRef(backendRef); err != nil {
+		return err
 	}
 	db, err := s.db.Get()
 	if err != nil {
@@ -131,7 +167,7 @@ func (s *Store) TestBackend(ctx context.Context, backend string) error {
 		one := int32(1)
 		_, err = client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{MaxResults: &one})
 		if err != nil {
-			return fmt.Errorf("secretstore: asm test: %w", err)
+			return fmt.Errorf("secretstore: asm test (needs secretsmanager:ListSecrets; resolution itself only needs GetSecretValue): %w", err)
 		}
 		return nil
 	default:
@@ -146,6 +182,16 @@ func validExternalBackend(backend string) error {
 	return nil
 }
 
+// validBackendRef rejects anything that isn't a plausible path or
+// name, and any ".." segment that could escape the vault mount when
+// spliced into the request path.
+func validBackendRef(ref string) error {
+	if !backendRefPattern.MatchString(ref) || strings.Contains(ref, "..") {
+		return fmt.Errorf("secretstore: backend_ref must be a path or name (vault path, ASM name/ARN), never a secret value")
+	}
+	return nil
+}
+
 // normalizeBackendConfig re-marshals cfg through the backend's typed
 // struct, dropping unknown fields and filling vault defaults.
 func normalizeBackendConfig(backend string, cfg json.RawMessage) (json.RawMessage, error) {
@@ -155,11 +201,12 @@ func normalizeBackendConfig(backend string, cfg json.RawMessage) (json.RawMessag
 		if err := json.Unmarshal(cfg, &v); err != nil {
 			return nil, fmt.Errorf("secretstore: vault config: %w", err)
 		}
-		if v.Address == "" {
-			return nil, fmt.Errorf("secretstore: vault config: address is required")
-		}
-		if _, err := url.Parse(v.Address); err != nil {
+		u, err := url.Parse(v.Address)
+		if err != nil {
 			return nil, fmt.Errorf("secretstore: vault config: bad address: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("secretstore: vault config: address must be an http(s) URL")
 		}
 		if v.Mount == "" {
 			v.Mount = defaultVaultMount
@@ -204,25 +251,17 @@ func (s *Store) vaultConfig(ctx context.Context) (VaultConfig, error) {
 // — never via Resolve — so a misconfigured token ref can't recurse
 // back into the vault backend.
 func (s *Store) vaultToken(ctx context.Context, cfg VaultConfig) (string, error) {
-	db, err := s.db.Get()
-	if err != nil {
-		return "", fmt.Errorf("secretstore: %w", err)
-	}
-	var (
-		backend    string
-		ciphertext []byte
-		nonce      []byte
-	)
-	err = db.QueryRow(ctx,
-		`SELECT backend, ciphertext, nonce FROM secrets WHERE ref_name = $1`,
-		cfg.TokenRef).Scan(&backend, &ciphertext, &nonce)
-	if err != nil {
+	r, err := s.row(ctx, cfg.TokenRef)
+	if errors.Is(err, ErrNotFound) {
 		return "", fmt.Errorf("secretstore: vault token %q not stored (paste it in Settings)", cfg.TokenRef)
 	}
-	if backend != "db" {
-		return "", fmt.Errorf("secretstore: vault token ref %q must be a db-backed secret, got %q", cfg.TokenRef, backend)
+	if err != nil {
+		return "", err
 	}
-	return s.cipher.open(ciphertext, nonce)
+	if r.backend != "db" {
+		return "", fmt.Errorf("secretstore: vault token ref %q must be a db-backed secret, got %q", cfg.TokenRef, r.backend)
+	}
+	return s.cipher.open(r.ciphertext, r.nonce)
 }
 
 // resolveVault reads a KV v2 secret. backendRef is "path[#field]"
@@ -240,16 +279,16 @@ func (s *Store) resolveVault(ctx context.Context, backendRef string) (string, er
 
 	var body struct {
 		Data struct {
-			Data map[string]string `json:"data"`
+			Data map[string]json.RawMessage `json:"data"`
 		} `json:"data"`
 	}
 	endpoint := "/v1/" + cfg.Mount + "/data/" + strings.TrimPrefix(path, "/")
 	if err := vaultRequest(ctx, cfg.Address, endpoint, token, &body); err != nil {
 		return "", err
 	}
-	val, ok := body.Data.Data[field]
-	if !ok {
-		return "", fmt.Errorf("secretstore: vault secret %s has no field %q", path, field)
+	val, err := stringField(body.Data.Data, field)
+	if err != nil {
+		return "", fmt.Errorf("secretstore: vault secret %s: %w", path, err)
 	}
 	return val, nil
 }
@@ -263,7 +302,7 @@ func vaultRequest(ctx context.Context, address, endpoint, token string, out any)
 		return fmt.Errorf("secretstore: vault: %w", err)
 	}
 	req.Header.Set("X-Vault-Token", token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := vaultHTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("secretstore: vault: %w", err)
 	}
@@ -300,10 +339,19 @@ func (s *Store) resolveASM(ctx context.Context, backendRef string) (string, erro
 	if key == "" {
 		return *out.SecretString, nil
 	}
-	return pluckJSONField(*out.SecretString, key)
+	val, err := pluckJSONField(*out.SecretString, key)
+	if err != nil {
+		return "", fmt.Errorf("secretstore: asm %s: %w", id, err)
+	}
+	return val, nil
 }
 
-func (s *Store) asmClient(ctx context.Context) (*secretsmanager.Client, error) {
+func (s *Store) asmClient(ctx context.Context) (asmAPI, error) {
+	s.asmMu.Lock()
+	defer s.asmMu.Unlock()
+	if s.asm != nil {
+		return s.asm, nil
+	}
 	raw, err := s.GetBackendConfig(ctx, "asm")
 	if err != nil {
 		return nil, err
@@ -320,7 +368,8 @@ func (s *Store) asmClient(ctx context.Context) (*secretsmanager.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("secretstore: asm: load aws config: %w", err)
 	}
-	return secretsmanager.NewFromConfig(awsCfg), nil
+	s.asm = secretsmanager.NewFromConfig(awsCfg)
+	return s.asm, nil
 }
 
 // splitRef splits "ref#field" into (ref, field), falling back to
@@ -333,13 +382,23 @@ func splitRef(ref, defaultField string) (string, string) {
 }
 
 func pluckJSONField(secret, key string) (string, error) {
-	var m map[string]string
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(secret), &m); err != nil {
-		return "", fmt.Errorf("secretstore: secret is not a flat JSON object: %w", err)
+		return "", fmt.Errorf("secret is not a JSON object: %w", err)
 	}
-	val, ok := m[key]
+	return stringField(m, key)
+}
+
+// stringField extracts one string-typed key from a decoded JSON
+// object; other keys may hold any type without breaking the lookup.
+func stringField(m map[string]json.RawMessage, key string) (string, error) {
+	raw, ok := m[key]
 	if !ok {
-		return "", fmt.Errorf("secretstore: secret has no key %q", key)
+		return "", fmt.Errorf("no field %q", key)
+	}
+	var val string
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return "", fmt.Errorf("field %q is not a string", key)
 	}
 	return val, nil
 }

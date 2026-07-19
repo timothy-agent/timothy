@@ -58,8 +58,8 @@ func TestStoreSetResolveDelete(t *testing.T) {
 	if _, err := s.Resolve(ctx, ref); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve before Set: got %v, want ErrNotFound", err)
 	}
-	if has, _ := s.Has(ctx, ref); has {
-		t.Fatalf("Has before Set: got true")
+	if configured, _, err := s.Status(ctx, ref); err != nil || configured {
+		t.Fatalf("Status before Set: configured=%v err=%v", configured, err)
 	}
 
 	if err := s.Set(ctx, ref, "sk-abc123"); err != nil {
@@ -72,8 +72,8 @@ func TestStoreSetResolveDelete(t *testing.T) {
 	if got != "sk-abc123" {
 		t.Fatalf("Resolve: got %q, want sk-abc123", got)
 	}
-	if has, _ := s.Has(ctx, ref); !has {
-		t.Fatalf("Has after Set: got false")
+	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("Status after Set: configured=%v backend=%q err=%v", configured, backend, err)
 	}
 
 	// Overwrite: last Set wins.
@@ -121,7 +121,7 @@ func TestVaultResolve(t *testing.T) {
 	defer srv.Close()
 
 	cfg := `{"address":"` + srv.URL + `","mount":"kv","token_ref":"` + ref + `_TOKEN"}`
-	if err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
+	if _, err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
 		t.Fatalf("SetBackendConfig: %v", err)
 	}
 	t.Cleanup(func() {
