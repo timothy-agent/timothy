@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   createProvider,
   deleteProvider,
+  deleteSecret,
   getSettings,
   listProviders,
   listRoutes,
@@ -12,6 +13,8 @@ import {
   patchRoute,
   patchSettings,
   providersHealth,
+  secretConfigured,
+  setSecret,
   testProvider,
   usageBudget,
 } from '../api/client'
@@ -174,6 +177,18 @@ function ProviderCard({
   const [ref, setRef] = useState(provider.credential_ref)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
+  const [configured, setConfigured] = useState(false)
+  const [secretValue, setSecretValue] = useState('')
+  const [savingSecret, setSavingSecret] = useState(false)
+
+  const refreshSecretStatus = useCallback(() => {
+    if (!provider.credential_ref) {
+      setConfigured(false)
+      return
+    }
+    secretConfigured(provider.credential_ref).then(setConfigured, () => setConfigured(false))
+  }, [provider.credential_ref])
+  useEffect(refreshSecretStatus, [refreshSecretStatus])
 
   const toggle = (enabled: boolean) => {
     patchProvider(provider.id, { enabled }).then(onChanged, (err: unknown) =>
@@ -189,6 +204,35 @@ function ProviderCard({
       setRef(provider.credential_ref)
       onError(err instanceof Error ? err.message : String(err))
     })
+  }
+
+  const saveSecretValue = async () => {
+    if (!ref || !secretValue) return
+    setSavingSecret(true)
+    try {
+      await setSecret(ref, secretValue)
+      setSecretValue('')
+      refreshSecretStatus()
+      onChanged()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSavingSecret(false)
+    }
+  }
+
+  const clearSecretValue = async () => {
+    if (!ref) return
+    setSavingSecret(true)
+    try {
+      await deleteSecret(ref)
+      refreshSecretStatus()
+      onChanged()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSavingSecret(false)
+    }
   }
 
   const runTest = async () => {
@@ -249,14 +293,53 @@ function ProviderCard({
               value={ref}
               onChange={(e) => setRef(e.target.value)}
               onBlur={saveRef}
-              placeholder="ENV_VAR_NAME or profile"
+              placeholder="name (e.g. ANTHROPIC_API_KEY)"
               className="h-8"
             />
           </div>
           <span className="mt-1 block">
-            Name of the env var / Vault path / AWS profile that holds the key — never the key
-            itself.
+            Name under which the key is stored — never the key itself. Resolved from the
+            encrypted secret store below; without a stored value the provider stays unhealthy.
           </span>
+          {ref && (
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                className={`rounded px-1.5 py-px text-[10px] font-medium uppercase ${
+                  configured
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                }`}
+              >
+                {configured ? 'secret configured' : 'no stored secret'}
+              </span>
+              <Input
+                type="password"
+                value={secretValue}
+                onChange={(e) => setSecretValue(e.target.value)}
+                placeholder="paste key to store/rotate"
+                className="h-8"
+                autoComplete="off"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={savingSecret || !secretValue}
+                onClick={() => void saveSecretValue()}
+              >
+                Save
+              </Button>
+              {configured && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={savingSecret}
+                  onClick={() => void clearSecretValue()}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+          )}
         </label>
         <div className="text-xs text-muted-foreground">
           Models

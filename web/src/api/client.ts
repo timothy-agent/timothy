@@ -362,6 +362,29 @@ export async function providersHealth(): Promise<ProviderHealth[]> {
   return providers ?? []
 }
 
+// setSecret stores a credential value under refName (write-only: it is
+// never returned by any endpoint). deleteSecret removes it; the
+// provider then builds without a key and shows unhealthy until a new
+// value is set.
+export async function setSecret(refName: string, value: string): Promise<void> {
+  await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  })
+}
+
+export async function deleteSecret(refName: string): Promise<void> {
+  await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, { method: 'DELETE' })
+}
+
+export async function secretConfigured(refName: string): Promise<boolean> {
+  if (!refName) return false
+  const { configured } = await request<{ configured: boolean }>(
+    `/v1/admin/secrets/${encodeURIComponent(refName)}`,
+  )
+  return configured
+}
+
 export async function listRoutes(): Promise<AdminRoute[]> {
   const { routes } = await request<{ routes: AdminRoute[] }>('/v1/admin/routes')
   return routes ?? []

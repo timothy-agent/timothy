@@ -15,6 +15,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
+	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/migrations"
 )
 
@@ -53,6 +54,7 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 		_, _ = db.Exec(ctx,
 			"DELETE FROM cost_ledger WHERE provider LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx, "DELETE FROM spend_budgets")
+		_, _ = db.Exec(ctx, "DELETE FROM secrets WHERE ref_name LIKE $1 || '%'", adminMarker)
 	}
 	sweep(ctx)
 	t.Cleanup(func() { sweep(context.Background()) })
@@ -61,7 +63,12 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatalf("store load: %v", err)
 	}
-	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), log), store, pool
+	masterKey := make([]byte, 32)
+	secrets, err := secretstore.New(pool, masterKey)
+	if err != nil {
+		t.Fatalf("secretstore.New: %v", err)
+	}
+	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, log), store, pool
 }
 
 func TestProviderCRUDAuditsAndReloads(t *testing.T) {
@@ -291,5 +298,43 @@ func TestPatchBudgetValidatesAndAudits(t *testing.T) {
 	}
 	if audits != 1 {
 		t.Fatalf("audit rows = %d, want 1", audits)
+	}
+}
+
+func TestSecretSetDeleteAuditsAndReloads(t *testing.T) {
+	adm, store, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+	ref := adminMarker + "secret"
+
+	if configured, err := adm.SecretConfigured(ctx, ref); err != nil || configured {
+		t.Fatalf("SecretConfigured before Set: configured=%v err=%v", configured, err)
+	}
+
+	before := store.Snapshot()
+	if err := adm.SetSecret(ctx, ref, "sk-live-value"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	if configured, err := adm.SecretConfigured(ctx, ref); err != nil || !configured {
+		t.Fatalf("SecretConfigured after Set: configured=%v err=%v", configured, err)
+	}
+	if store.Snapshot() == before {
+		t.Fatal("SetSecret did not trigger a snapshot reload")
+	}
+
+	var audits int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM admin_audit
+		WHERE entity = 'secret' AND entity_id = $1 AND action = 'set'`, ref).Scan(&audits); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if audits != 1 {
+		t.Fatalf("audit rows = %d, want 1", audits)
+	}
+
+	if err := adm.DeleteSecret(ctx, ref); err != nil {
+		t.Fatalf("DeleteSecret: %v", err)
+	}
+	if configured, err := adm.SecretConfigured(ctx, ref); err != nil || configured {
+		t.Fatalf("SecretConfigured after Delete: configured=%v err=%v", configured, err)
 	}
 }

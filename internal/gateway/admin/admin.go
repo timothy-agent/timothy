@@ -19,6 +19,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
+	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
 // pgxQuerier is satisfied by both *pgxpool.Pool and pgx.Tx: scanProvider
@@ -46,11 +47,50 @@ type Admin struct {
 	store   *router.Store
 	rec     ledger.Recorder
 	budgets *ledger.BudgetStore
+	secrets *secretstore.Store
 	log     *slog.Logger
 }
 
-func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, log *slog.Logger) *Admin {
-	return &Admin{db: db, store: store, rec: rec, budgets: budgets, log: log}
+func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, secrets *secretstore.Store, log *slog.Logger) *Admin {
+	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, log: log}
+}
+
+// SetSecret stores value under refName (write-only: the value is never
+// read back through any admin endpoint) and reloads the serving
+// snapshot so a provider whose credential_ref matches starts resolving
+// immediately.
+func (a *Admin) SetSecret(ctx context.Context, refName, value string) error {
+	if refName == "" {
+		return fmt.Errorf("ref name is required")
+	}
+	if value == "" {
+		return fmt.Errorf("value is required")
+	}
+	if err := a.secrets.Set(ctx, refName, value); err != nil {
+		return err
+	}
+	a.audit(ctx, "set", "secret", refName, nil, map[string]bool{"configured": true})
+	a.reload(ctx)
+	return nil
+}
+
+// DeleteSecret removes a stored secret value.
+func (a *Admin) DeleteSecret(ctx context.Context, refName string) error {
+	if err := a.secrets.Delete(ctx, refName); err != nil {
+		return err
+	}
+	a.audit(ctx, "delete", "secret", refName, map[string]bool{"configured": true}, nil)
+	a.reload(ctx)
+	return nil
+}
+
+// SecretConfigured reports whether refName has a stored value, without
+// exposing it — used to render a "configured" badge in the UI.
+func (a *Admin) SecretConfigured(ctx context.Context, refName string) (bool, error) {
+	if refName == "" {
+		return false, nil
+	}
+	return a.secrets.Has(ctx, refName)
 }
 
 // PatchBudget applies per-window budget changes: a key maps a window

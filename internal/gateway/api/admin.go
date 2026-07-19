@@ -22,6 +22,9 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("GET /internal/admin/routes", http.HandlerFunc(h.routes))
 	srv.Handle("PATCH /internal/admin/routes/{category}", http.HandlerFunc(h.patchRoute))
 	srv.Handle("PATCH /internal/admin/usage/budget", http.HandlerFunc(h.patchBudget))
+	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
+	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
+	srv.Handle("GET /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.getSecretStatus))
 }
 
 type adminAPI struct {
@@ -141,4 +144,36 @@ func (h *adminAPI) patchBudget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) setSecret(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := h.adm.SetSecret(r.Context(), r.PathValue("ref_name"), body.Value); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) deleteSecret(w http.ResponseWriter, r *http.Request) {
+	if err := h.adm.DeleteSecret(r.Context(), r.PathValue("ref_name")); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) getSecretStatus(w http.ResponseWriter, r *http.Request) {
+	configured, err := h.adm.SecretConfigured(r.Context(), r.PathValue("ref_name"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"configured": configured})
 }

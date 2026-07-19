@@ -93,11 +93,11 @@ services:
     environment:
       <<: *db-env
       PORT: "8081"
-      # Provider credentials, resolved by credential_ref name at call
-      # time. Values live in deploy/.env only.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      XAI_API_KEY: ${XAI_API_KEY:-}
+      # Root of trust for the encrypted secret store (base64, 32
+      # bytes). Generate with: openssl rand -base64 32. Provider
+      # credentials are configured in Settings, not env — this key is
+      # what decrypts them.
+      TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in deploy/.env}
     # Bedrock (driver 'bedrock') reads the AWS default credential
     # chain. Local dev: run `aws sso login --profile <name>` on the
     # host and set the bedrock provider's credential_ref to that
