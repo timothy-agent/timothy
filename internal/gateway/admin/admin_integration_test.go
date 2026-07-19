@@ -4,6 +4,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -352,13 +353,18 @@ func TestSecretExternalBackendConfig(t *testing.T) {
 	t.Cleanup(func() {
 		db.Exec(ctx, `DELETE FROM secret_backend_config WHERE backend = 'vault'`)
 	})
-	cfg, err := adm.SecretBackendConfig(ctx, "vault")
+	raw, err := adm.SecretBackendConfig(ctx, "vault")
 	if err != nil {
 		t.Fatalf("SecretBackendConfig: %v", err)
 	}
-	for _, want := range []string{`"address":"http://vault:8200"`, `"mount":"kv"`, `"token_ref":"VAULT_TOKEN"`} {
-		if !strings.Contains(string(cfg), want) {
-			t.Errorf("config %s missing %s", cfg, want)
+	var cfg map[string]string
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("config %s: %v", raw, err)
+	}
+	want := map[string]string{"address": "http://vault:8200", "mount": "kv", "token_ref": "VAULT_TOKEN"}
+	for k, v := range want {
+		if cfg[k] != v {
+			t.Errorf("config[%s] = %q, want %q", k, cfg[k], v)
 		}
 	}
 
