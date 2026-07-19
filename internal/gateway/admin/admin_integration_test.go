@@ -40,16 +40,22 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
+	// Sweep runs at setup AND teardown: a killed run never executes
+	// cleanups, and its leftovers would fail every later run (unique
+	// name collisions, accumulated audit rows).
+	sweep := func(ctx context.Context) {
+		_, _ = db.Exec(ctx,
 			"DELETE FROM task_routes WHERE task_category LIKE $1 || '%'", adminMarker)
-		_, _ = db.Exec(context.Background(),
+		_, _ = db.Exec(ctx,
 			"DELETE FROM providers WHERE name LIKE $1 || '%'", adminMarker)
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM admin_audit WHERE entity_id LIKE $1 || '%' OR after::text LIKE '%' || $1 || '%'", adminMarker)
-		_, _ = db.Exec(context.Background(),
+		_, _ = db.Exec(ctx,
+			"DELETE FROM admin_audit WHERE entity = 'budget' OR entity_id LIKE $1 || '%' OR after::text LIKE '%' || $1 || '%'", adminMarker)
+		_, _ = db.Exec(ctx,
 			"DELETE FROM cost_ledger WHERE provider LIKE $1 || '%'", adminMarker)
-	})
+		_, _ = db.Exec(ctx, "DELETE FROM spend_budgets")
+	}
+	sweep(ctx)
+	t.Cleanup(func() { sweep(context.Background()) })
 
 	store := router.NewStore(pool, func(string) string { return "resolved" }, log)
 	if err := store.Load(ctx); err != nil {
