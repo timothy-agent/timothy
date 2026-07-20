@@ -130,6 +130,17 @@ func (a *Admin) SetSecretBackendConfig(ctx context.Context, backend string, cfg 
 	return nil
 }
 
+// DeleteSecretBackendConfig removes a backend's connection config;
+// secrets pointed at it fail to resolve until it's reconfigured.
+func (a *Admin) DeleteSecretBackendConfig(ctx context.Context, backend string) error {
+	if err := a.secrets.DeleteBackendConfig(ctx, backend); err != nil {
+		return err
+	}
+	a.audit(ctx, "delete", "secret_backend", backend, nil, nil)
+	a.reload(ctx)
+	return nil
+}
+
 // TestSecretBackend checks connectivity and auth for an external
 // secret backend without reading any stored secret.
 func (a *Admin) TestSecretBackend(ctx context.Context, backend string) error {

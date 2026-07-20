@@ -1,6 +1,7 @@
 package secretstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,24 +14,37 @@ import (
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/jackc/pgx/v5"
 )
 
 // VaultConfig connects the vault backend to a HashiCorp Vault KV v2
-// mount. TokenRef names a db-backed secret holding the Vault token —
-// the token never sits in this table or in env.
+// mount. Credentials never sit in this config: TokenRef and
+// SecretIDRef name db-backed secrets holding the actual values.
 type VaultConfig struct {
-	Address  string `json:"address"`
-	Mount    string `json:"mount"`
+	Address string `json:"address"`
+	Mount   string `json:"mount"`
+	// Auth is "token" (default) or "approle".
+	Auth     string `json:"auth"`
 	TokenRef string `json:"token_ref"`
+	// AppRole fields; SecretIDRef names the stored secret_id.
+	RoleID      string `json:"role_id"`
+	SecretIDRef string `json:"secret_id_ref"`
 }
 
-// ASMConfig connects the asm backend to AWS Secrets Manager. Auth
-// comes from the SDK's default credential chain (like Bedrock);
-// Region empty defers to the chain's own region resolution.
+// ASMConfig connects the asm backend to AWS Secrets Manager. Region
+// empty defers to the credential chain's own resolution.
 type ASMConfig struct {
 	Region string `json:"region"`
+	// Auth is "chain" (default: the SDK credential chain, like
+	// Bedrock), "profile" (a named profile from the mounted ~/.aws)
+	// or "keys" (static access keys; the secret key is a db-backed
+	// secret named by SecretKeyRef).
+	Auth         string `json:"auth"`
+	Profile      string `json:"profile"`
+	AccessKeyID  string `json:"access_key_id"`
+	SecretKeyRef string `json:"secret_key_ref"`
 }
 
 // asmAPI is the slice of the Secrets Manager client the store uses;
@@ -43,9 +57,11 @@ type asmAPI interface {
 }
 
 const (
-	defaultVaultMount    = "secret"
-	defaultVaultTokenRef = "VAULT_TOKEN"
-	backendHTTPTimeout   = 10 * time.Second
+	defaultVaultMount       = "secret"
+	defaultVaultTokenRef    = "VAULT_TOKEN"
+	defaultVaultSecretIDRef = "VAULT_SECRET_ID"
+	defaultASMSecretKeyRef  = "AWS_SECRET_ACCESS_KEY"
+	backendHTTPTimeout      = 10 * time.Second
 )
 
 // backendRefPattern bounds what a backend_ref may look like (vault
@@ -115,6 +131,30 @@ func (s *Store) SetBackendConfig(ctx context.Context, backend string, cfg json.R
 		s.asmMu.Unlock()
 	}
 	return normalized, nil
+}
+
+// DeleteBackendConfig removes a backend's connection config. Secrets
+// already pointed at that backend stay stored and simply fail to
+// resolve (provider unhealthy) until the backend is reconfigured or
+// the refs are repointed.
+func (s *Store) DeleteBackendConfig(ctx context.Context, backend string) error {
+	if err := validExternalBackend(backend); err != nil {
+		return err
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("secretstore: %w", err)
+	}
+	if _, err := db.Exec(ctx,
+		`DELETE FROM secret_backend_config WHERE backend = $1`, backend); err != nil {
+		return fmt.Errorf("secretstore: delete backend config %s: %w", backend, err)
+	}
+	if backend == "asm" {
+		s.asmMu.Lock()
+		s.asm = nil
+		s.asmMu.Unlock()
+	}
+	return nil
 }
 
 // SetExternal points refName at a secret held in an external backend.
@@ -193,7 +233,8 @@ func validBackendRef(ref string) error {
 }
 
 // normalizeBackendConfig re-marshals cfg through the backend's typed
-// struct, dropping unknown fields and filling vault defaults.
+// struct, dropping unknown fields, filling defaults and validating
+// the chosen auth method's required fields.
 func normalizeBackendConfig(backend string, cfg json.RawMessage) (json.RawMessage, error) {
 	switch backend {
 	case "vault":
@@ -211,14 +252,44 @@ func normalizeBackendConfig(backend string, cfg json.RawMessage) (json.RawMessag
 		if v.Mount == "" {
 			v.Mount = defaultVaultMount
 		}
-		if v.TokenRef == "" {
-			v.TokenRef = defaultVaultTokenRef
+		switch v.Auth {
+		case "", "token":
+			v.Auth = "token"
+			if v.TokenRef == "" {
+				v.TokenRef = defaultVaultTokenRef
+			}
+		case "approle":
+			if v.RoleID == "" {
+				return nil, fmt.Errorf("secretstore: vault config: approle auth needs role_id")
+			}
+			if v.SecretIDRef == "" {
+				v.SecretIDRef = defaultVaultSecretIDRef
+			}
+		default:
+			return nil, fmt.Errorf("secretstore: vault config: auth must be token or approle")
 		}
 		return json.Marshal(v)
 	case "asm":
 		var a ASMConfig
 		if err := json.Unmarshal(cfg, &a); err != nil {
 			return nil, fmt.Errorf("secretstore: asm config: %w", err)
+		}
+		switch a.Auth {
+		case "", "chain":
+			a.Auth = "chain"
+		case "profile":
+			if a.Profile == "" {
+				return nil, fmt.Errorf("secretstore: asm config: profile auth needs a profile name")
+			}
+		case "keys":
+			if a.AccessKeyID == "" {
+				return nil, fmt.Errorf("secretstore: asm config: keys auth needs access_key_id")
+			}
+			if a.SecretKeyRef == "" {
+				a.SecretKeyRef = defaultASMSecretKeyRef
+			}
+		default:
+			return nil, fmt.Errorf("secretstore: asm config: auth must be chain, profile or keys")
 		}
 		return json.Marshal(a)
 	default:
@@ -247,21 +318,49 @@ func (s *Store) vaultConfig(ctx context.Context) (VaultConfig, error) {
 	return cfg, nil
 }
 
-// vaultToken decrypts the db-backed token named by token_ref directly
-// — never via Resolve — so a misconfigured token ref can't recurse
-// back into the vault backend.
-func (s *Store) vaultToken(ctx context.Context, cfg VaultConfig) (string, error) {
-	r, err := s.row(ctx, cfg.TokenRef)
+// dbSecret decrypts a db-backed secret directly — never via Resolve —
+// so backend credentials (vault token, approle secret_id, AWS secret
+// key) can't recurse back into an external backend.
+func (s *Store) dbSecret(ctx context.Context, refName, what string) (string, error) {
+	r, err := s.row(ctx, refName)
 	if errors.Is(err, ErrNotFound) {
-		return "", fmt.Errorf("secretstore: vault token %q not stored (paste it in Settings)", cfg.TokenRef)
+		return "", fmt.Errorf("secretstore: %s %q not stored (paste it in Settings)", what, refName)
 	}
 	if err != nil {
 		return "", err
 	}
 	if r.backend != "db" {
-		return "", fmt.Errorf("secretstore: vault token ref %q must be a db-backed secret, got %q", cfg.TokenRef, r.backend)
+		return "", fmt.Errorf("secretstore: %s ref %q must be a db-backed secret, got %q", what, refName, r.backend)
 	}
 	return s.cipher.open(r.ciphertext, r.nonce)
+}
+
+// vaultToken obtains a client token per the configured auth method:
+// decrypt the stored token, or log in with AppRole credentials.
+func (s *Store) vaultToken(ctx context.Context, cfg VaultConfig) (string, error) {
+	if cfg.Auth == "approle" {
+		secretID, err := s.dbSecret(ctx, cfg.SecretIDRef, "vault approle secret_id")
+		if err != nil {
+			return "", err
+		}
+		login, err := json.Marshal(map[string]string{"role_id": cfg.RoleID, "secret_id": secretID})
+		if err != nil {
+			return "", fmt.Errorf("secretstore: vault approle: %w", err)
+		}
+		var body struct {
+			Auth struct {
+				ClientToken string `json:"client_token"`
+			} `json:"auth"`
+		}
+		if err := vaultDo(ctx, http.MethodPost, cfg.Address, "/v1/auth/approle/login", "", login, &body); err != nil {
+			return "", err
+		}
+		if body.Auth.ClientToken == "" {
+			return "", fmt.Errorf("secretstore: vault approle login returned no token")
+		}
+		return body.Auth.ClientToken, nil
+	}
+	return s.dbSecret(ctx, cfg.TokenRef, "vault token")
 }
 
 // resolveVault reads a KV v2 secret. backendRef is "path[#field]"
@@ -294,14 +393,24 @@ func (s *Store) resolveVault(ctx context.Context, backendRef string) (string, er
 }
 
 func vaultRequest(ctx context.Context, address, endpoint, token string, out any) error {
+	return vaultDo(ctx, http.MethodGet, address, endpoint, token, nil, out)
+}
+
+func vaultDo(ctx context.Context, method, address, endpoint, token string, body []byte, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, backendHTTPTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimSuffix(address, "/")+endpoint, nil)
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method,
+		strings.TrimSuffix(address, "/")+endpoint, rdr)
 	if err != nil {
 		return fmt.Errorf("secretstore: vault: %w", err)
 	}
-	req.Header.Set("X-Vault-Token", token)
+	if token != "" {
+		req.Header.Set("X-Vault-Token", token)
+	}
 	resp, err := vaultHTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("secretstore: vault: %w", err)
@@ -363,6 +472,21 @@ func (s *Store) asmClient(ctx context.Context) (asmAPI, error) {
 	var opts []func(*awsconfig.LoadOptions) error
 	if cfg.Region != "" {
 		opts = append(opts, awsconfig.WithRegion(cfg.Region))
+	}
+	switch cfg.Auth {
+	case "profile":
+		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.Profile))
+	case "keys":
+		ref := cfg.SecretKeyRef
+		if ref == "" {
+			ref = defaultASMSecretKeyRef
+		}
+		secretKey, err := s.dbSecret(ctx, ref, "aws secret access key")
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, secretKey, "")))
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {

@@ -69,6 +69,53 @@ func TestNormalizeBackendConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeBackendConfigAuthMethods(t *testing.T) {
+	// Vault AppRole: role_id required, secret_id_ref defaulted.
+	got, err := normalizeBackendConfig("vault",
+		json.RawMessage(`{"address":"http://v:8200","auth":"approle","role_id":"r-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v VaultConfig
+	if err := json.Unmarshal(got, &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.SecretIDRef != defaultVaultSecretIDRef {
+		t.Errorf("secret_id_ref = %q, want default", v.SecretIDRef)
+	}
+	if _, err := normalizeBackendConfig("vault",
+		json.RawMessage(`{"address":"http://v:8200","auth":"approle"}`)); err == nil {
+		t.Fatal("approle without role_id: want error")
+	}
+	if _, err := normalizeBackendConfig("vault",
+		json.RawMessage(`{"address":"http://v:8200","auth":"ldap"}`)); err == nil {
+		t.Fatal("unknown vault auth: want error")
+	}
+
+	// ASM: profile needs a name, keys need access_key_id + defaulted ref.
+	if _, err := normalizeBackendConfig("asm", json.RawMessage(`{"auth":"profile"}`)); err == nil {
+		t.Fatal("asm profile auth without profile: want error")
+	}
+	got, err = normalizeBackendConfig("asm",
+		json.RawMessage(`{"auth":"keys","access_key_id":"AKIA123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a ASMConfig
+	if err := json.Unmarshal(got, &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.SecretKeyRef != defaultASMSecretKeyRef {
+		t.Errorf("secret_key_ref = %q, want default", a.SecretKeyRef)
+	}
+	if _, err := normalizeBackendConfig("asm", json.RawMessage(`{"auth":"keys"}`)); err == nil {
+		t.Fatal("asm keys auth without access_key_id: want error")
+	}
+	if _, err := normalizeBackendConfig("asm", json.RawMessage(`{"auth":"oauth"}`)); err == nil {
+		t.Fatal("unknown asm auth: want error")
+	}
+}
+
 func TestValidBackendRef(t *testing.T) {
 	for _, ok := range []string{
 		"timothy/anthropic#api_key",

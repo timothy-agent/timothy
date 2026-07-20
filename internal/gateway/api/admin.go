@@ -27,6 +27,7 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("GET /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.getSecretStatus))
 	srv.Handle("GET /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.getSecretBackend))
 	srv.Handle("PUT /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.putSecretBackend))
+	srv.Handle("DELETE /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.deleteSecretBackend))
 	srv.Handle("POST /internal/admin/secret-backends/{backend}/test", http.HandlerFunc(h.testSecretBackend))
 }
 
@@ -210,6 +211,14 @@ func (h *adminAPI) putSecretBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.adm.SetSecretBackendConfig(r.Context(), r.PathValue("backend"), body.Config); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) deleteSecretBackend(w http.ResponseWriter, r *http.Request) {
+	if err := h.adm.DeleteSecretBackendConfig(r.Context(), r.PathValue("backend")); err != nil {
 		fail(w, err)
 		return
 	}

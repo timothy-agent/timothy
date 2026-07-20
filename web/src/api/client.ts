@@ -419,6 +419,10 @@ export async function putSecretBackendConfig(
   })
 }
 
+export async function deleteSecretBackendConfig(backend: 'vault' | 'asm'): Promise<void> {
+  await request<void>(`/v1/admin/secret-backends/${backend}`, { method: 'DELETE' })
+}
+
 export async function testSecretBackend(
   backend: 'vault' | 'asm',
 ): Promise<{ ok: boolean; error?: string }> {
