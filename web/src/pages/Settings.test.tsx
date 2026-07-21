@@ -16,8 +16,11 @@ vi.mock('../api/client', async (importOriginal) => {
     deleteSecretBackendConfig: vi.fn(),
     getSecretBackendConfig: vi.fn(),
     getSettings: vi.fn(),
+    patchSettingValues: vi.fn(),
     listProviders: vi.fn(),
     listRoutes: vi.fn(),
+    listSecretBackends: vi.fn(),
+    setDefaultSecretBackend: vi.fn(),
     patchBudget: vi.fn(),
     patchProvider: vi.fn(),
     patchRoute: vi.fn(),
@@ -26,7 +29,6 @@ vi.mock('../api/client', async (importOriginal) => {
     putSecretBackendConfig: vi.fn(),
     secretStatus: vi.fn(),
     setSecret: vi.fn(),
-    setSecretExternal: vi.fn(),
     testProvider: vi.fn(),
     testSecretBackend: vi.fn(),
     usageBudget: vi.fn(),
@@ -38,11 +40,16 @@ import {
   availableModels,
   createProvider,
   getSecretBackendConfig,
+  getSettings,
   listProviders,
+  listSecretBackends,
   patchProvider,
+  patchSettingValues,
   providersHealth,
   secretStatus,
+  setDefaultSecretBackend,
   setSecret,
+  usageBudget,
   validateProvider,
 } from '../api/client'
 
@@ -78,6 +85,11 @@ beforeEach(() => {
   ])
   vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
   vi.mocked(getSecretBackendConfig).mockResolvedValue({})
+  vi.mocked(listSecretBackends).mockResolvedValue([
+    { backend: 'db', configured: true, default: true },
+    { backend: 'vault', configured: false, default: false },
+    { backend: 'asm', configured: false, default: false },
+  ])
 })
 
 describe('Settings tabs', () => {
@@ -90,6 +102,65 @@ describe('Settings tabs', () => {
   it('defaults to Providers', async () => {
     renderPage()
     expect(await screen.findByText('Connect a provider')).toBeTruthy()
+  })
+})
+
+describe('Features tab agent settings', () => {
+  it('renders stored runtime values and patches them on save', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: { tools_enabled: true },
+      values: { session_token_budget: '120000', skills_allowlist: '' },
+    })
+    vi.mocked(usageBudget).mockResolvedValue({
+      day: { limit_usd: null, spend_usd: 0, over: false },
+      month: { limit_usd: null, spend_usd: 0, over: false },
+    })
+    vi.mocked(patchSettingValues).mockResolvedValue()
+
+    renderPage('/settings?tab=features')
+    const budget = await screen.findByLabelText('Session token budget')
+    expect((budget as HTMLInputElement).value).toBe('120000')
+
+    fireEvent.change(screen.getByLabelText('Skills allowlist'), {
+      target: { value: 'coding-task, research' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({
+        session_token_budget: '120000',
+        skills_allowlist: 'coding-task, research',
+      }),
+    )
+  })
+})
+
+describe('Secrets tab default backend', () => {
+  it('shows the built-in storage card carrying the default badge', async () => {
+    renderPage('/settings?tab=secrets')
+    expect(await screen.findByText('Timothy storage')).toBeTruthy()
+    expect(screen.getByText('default')).toBeTruthy()
+    // Unconfigured backends cannot claim the default.
+    const buttons = screen.getAllByRole('button', { name: 'Make default' })
+    expect(buttons.length).toBe(2)
+    for (const b of buttons) expect((b as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('claims the default for a configured backend', async () => {
+    vi.mocked(getSecretBackendConfig).mockResolvedValue({ address: 'http://vault:8200' })
+    vi.mocked(listSecretBackends).mockResolvedValue([
+      { backend: 'db', configured: true, default: true },
+      { backend: 'vault', configured: true, default: false },
+      { backend: 'asm', configured: false, default: false },
+    ])
+    vi.mocked(setDefaultSecretBackend).mockResolvedValue()
+
+    renderPage('/settings?tab=secrets')
+    const enabled = (await screen.findAllByRole('button', { name: 'Make default' })).find(
+      (b) => !(b as HTMLButtonElement).disabled,
+    )
+    fireEvent.click(enabled!)
+    await waitFor(() => expect(setDefaultSecretBackend).toHaveBeenCalledWith('vault'))
   })
 })
 
@@ -139,6 +210,22 @@ describe('Providers tab', () => {
         models: [{ id: 'llama-3.3-70b-versatile' }],
       }),
     )
+  })
+
+  it('asks for a reference, not a key, when the default backend is external', async () => {
+    vi.mocked(listSecretBackends).mockResolvedValue([
+      { backend: 'db', configured: true, default: false },
+      { backend: 'vault', configured: true, default: true },
+      { backend: 'asm', configured: false, default: false },
+    ])
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
+    const dialog = within(await screen.findByRole('dialog'))
+    const input = await dialog.findByPlaceholderText(/Vault path/)
+    // A reference is not a secret: no password masking.
+    expect((input as HTMLInputElement).type).toBe('text')
+    expect(dialog.getByText(/paste the path of the secret/)).toBeTruthy()
   })
 
   it('keeps the dialog open and skips create when validation fails', async () => {

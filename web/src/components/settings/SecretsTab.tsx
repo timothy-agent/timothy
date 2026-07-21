@@ -1,12 +1,15 @@
 import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   deleteSecretBackendConfig,
   getSecretBackendConfig,
+  listSecretBackends,
   putSecretBackendConfig,
-  setSecret,
+  setDefaultSecretBackend,
+  setSecretStorage,
   testSecretBackend,
+  type SecretBackendStatus,
 } from '../../api/client'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -22,17 +25,94 @@ import { errText } from './util'
 
 export function SecretsTab() {
   const [error, setError] = useState<string | null>(null)
+  const [backends, setBackends] = useState<SecretBackendStatus[]>([])
+
+  const refresh = useCallback(() => {
+    listSecretBackends().then(setBackends, (err: unknown) => setError(errText(err)))
+  }, [])
+  useEffect(refresh, [refresh])
+
+  const state = (b: string) => backends.find((x) => x.backend === b)
+  const makeDefault = (b: string) => {
+    setDefaultSecretBackend(b).then(refresh, (err: unknown) => setError(errText(err)))
+  }
+
   return (
     <div className="mt-6 space-y-4">
       <p className="text-sm text-muted-foreground">
-        Where provider keys live. By default each key is encrypted with the master key and kept
-        in Timothy&apos;s own database — nothing to configure. Connect Vault or AWS Secrets
-        Manager to resolve keys from existing secret infrastructure instead; pick the source
-        per key on its provider card. OAuth-based connections arrive with connectors.
+        Where credentials live. Exactly one backend is the default: every key or token entered
+        anywhere (providers, connectors) is stored through it. Timothy storage keeps values
+        encrypted in its own database; with Vault or AWS Secrets Manager as default you enter
+        the reference of a secret already held there — Timothy only reads, never writes,
+        external systems.
       </p>
       <ErrorBanner message={error} />
-      <VaultCard onError={setError} />
-      <ASMCard onError={setError} />
+      <StorageCard isDefault={state('db')?.default ?? true} onMakeDefault={() => makeDefault('db')} />
+      <VaultCard
+        isDefault={state('vault')?.default ?? false}
+        onMakeDefault={() => makeDefault('vault')}
+        onBackendsChanged={refresh}
+        onError={setError}
+      />
+      <ASMCard
+        isDefault={state('asm')?.default ?? false}
+        onMakeDefault={() => makeDefault('asm')}
+        onBackendsChanged={refresh}
+        onError={setError}
+      />
+    </div>
+  )
+}
+
+// DefaultControl is the per-card default marker: a badge when the card
+// is the default, a button to claim it otherwise.
+function DefaultControl({
+  isDefault,
+  disabled,
+  onMakeDefault,
+}: {
+  isDefault: boolean
+  disabled?: boolean
+  onMakeDefault: () => void
+}) {
+  if (isDefault) {
+    return (
+      <span className="rounded bg-sky-500/15 px-1.5 py-px text-[10px] font-medium uppercase text-sky-600 dark:text-sky-400">
+        default
+      </span>
+    )
+  }
+  return (
+    <Button size="sm" variant="outline" disabled={disabled} onClick={onMakeDefault}>
+      Make default
+    </Button>
+  )
+}
+
+// StorageCard is the built-in backend: nothing to configure, always
+// available, keys envelope-encrypted with the master key.
+function StorageCard({
+  isDefault,
+  onMakeDefault,
+}: {
+  isDefault: boolean
+  onMakeDefault: () => void
+}) {
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="font-medium">Timothy storage</span>
+        <span className="rounded bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium uppercase text-emerald-600 dark:text-emerald-400">
+          built-in
+        </span>
+        <div className="ml-auto flex items-center gap-3">
+          <DefaultControl isDefault={isDefault} onMakeDefault={onMakeDefault} />
+        </div>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Keys are envelope-encrypted with the master key and kept in Timothy&apos;s own database.
+        Nothing to configure.
+      </p>
     </div>
   )
 }
@@ -43,6 +123,7 @@ function useBackendCard(
   backend: 'vault' | 'asm',
   onLoaded: (cfg: Record<string, string>) => void,
   onError: (msg: string) => void,
+  onChanged: () => void,
 ) {
   const [configured, setConfigured] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -77,6 +158,9 @@ function useBackendCard(
     run(async () => {
       await deleteSecretBackendConfig(backend)
       setConfigured(false)
+      // Removing the default backend hands the flag back to storage;
+      // the parent re-fetches so badges follow.
+      onChanged()
       return 'removed'
     })
 
@@ -90,6 +174,8 @@ function BackendCardHeader({
   status,
   busy,
   canSave,
+  isDefault,
+  onMakeDefault,
   onSave,
   onTest,
   onRemove,
@@ -100,6 +186,8 @@ function BackendCardHeader({
   status: string
   busy: boolean
   canSave: boolean
+  isDefault: boolean
+  onMakeDefault: () => void
   onSave: () => void
   onTest: () => void
   onRemove: () => void
@@ -125,6 +213,11 @@ function BackendCardHeader({
           </span>
         )}
         <div className="ml-auto flex items-center gap-3">
+          <DefaultControl
+            isDefault={isDefault}
+            disabled={busy || !configured}
+            onMakeDefault={onMakeDefault}
+          />
           <Button size="sm" variant="outline" disabled={busy || !configured} onClick={onTest}>
             Test
           </Button>
@@ -149,7 +242,14 @@ function BackendCardHeader({
   )
 }
 
-function VaultCard({ onError }: { onError: (msg: string) => void }) {
+type BackendCardProps = {
+  isDefault: boolean
+  onMakeDefault: () => void
+  onBackendsChanged: () => void
+  onError: (msg: string) => void
+}
+
+function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: BackendCardProps) {
   const [cfg, setCfg] = useState({
     address: '',
     mount: '',
@@ -164,20 +264,22 @@ function VaultCard({ onError }: { onError: (msg: string) => void }) {
     'vault',
     (c) => setCfg((v) => ({ ...v, ...c, auth: c.auth || 'token' })),
     onError,
+    onBackendsChanged,
   )
 
   const save = () =>
     card.run(async () => {
       await putSecretBackendConfig('vault', cfg)
       if (cfg.auth === 'token' && tokenPaste) {
-        await setSecret(cfg.token_ref || 'VAULT_TOKEN', tokenPaste)
+        await setSecretStorage(cfg.token_ref || 'VAULT_TOKEN', tokenPaste)
         setTokenPaste('')
       }
       if (cfg.auth === 'approle' && secretIDPaste) {
-        await setSecret(cfg.secret_id_ref || 'VAULT_SECRET_ID', secretIDPaste)
+        await setSecretStorage(cfg.secret_id_ref || 'VAULT_SECRET_ID', secretIDPaste)
         setSecretIDPaste('')
       }
       card.setConfigured(true)
+      onBackendsChanged()
       return 'saved'
     })
 
@@ -190,6 +292,8 @@ function VaultCard({ onError }: { onError: (msg: string) => void }) {
         status={card.status}
         busy={card.busy}
         canSave={!!cfg.address}
+        isDefault={isDefault}
+        onMakeDefault={onMakeDefault}
         onSave={save}
         onTest={card.test}
         onRemove={card.remove}
@@ -263,7 +367,7 @@ function VaultCard({ onError }: { onError: (msg: string) => void }) {
   )
 }
 
-function ASMCard({ onError }: { onError: (msg: string) => void }) {
+function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: BackendCardProps) {
   const [cfg, setCfg] = useState({
     region: '',
     auth: 'chain',
@@ -276,16 +380,18 @@ function ASMCard({ onError }: { onError: (msg: string) => void }) {
     'asm',
     (c) => setCfg((v) => ({ ...v, ...c, auth: c.auth || 'chain' })),
     onError,
+    onBackendsChanged,
   )
 
   const save = () =>
     card.run(async () => {
       await putSecretBackendConfig('asm', cfg)
       if (cfg.auth === 'keys' && secretKeyPaste) {
-        await setSecret(cfg.secret_key_ref || 'AWS_SECRET_ACCESS_KEY', secretKeyPaste)
+        await setSecretStorage(cfg.secret_key_ref || 'AWS_SECRET_ACCESS_KEY', secretKeyPaste)
         setSecretKeyPaste('')
       }
       card.setConfigured(true)
+      onBackendsChanged()
       return 'saved'
     })
 
@@ -298,6 +404,8 @@ function ASMCard({ onError }: { onError: (msg: string) => void }) {
         status={card.status}
         busy={card.busy}
         canSave
+        isDefault={isDefault}
+        onMakeDefault={onMakeDefault}
         onSave={save}
         onTest={card.test}
         onRemove={card.remove}

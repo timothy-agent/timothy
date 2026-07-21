@@ -3,6 +3,7 @@ import {
   ChatError,
   chatStream,
   createSSEParser,
+  listProviders,
   listSessions,
   patchBudget,
   usageBudget,
@@ -171,5 +172,25 @@ describe('spend budgets', () => {
     expect(url).toBe('/v1/admin/usage/budget')
     expect(init.method).toBe('PATCH')
     expect(JSON.parse(init.body as string)).toEqual({ day: 5, month: null })
+  })
+})
+
+describe('listProviders', () => {
+  it('normalizes null models/headers so the settings page never maps over null', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const body = {
+      providers: [
+        { id: 'p1', name: 'legacy', kind: 'api', driver: 'bedrock', models: null, headers: null },
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 })),
+    )
+
+    const [p] = await listProviders()
+
+    expect(p.models).toEqual([])
+    expect(p.headers).toEqual({})
   })
 })

@@ -137,7 +137,8 @@ func (s *Store) SetBackendConfig(ctx context.Context, backend string, cfg json.R
 // DeleteBackendConfig removes a backend's connection config. Secrets
 // already pointed at that backend stay stored and simply fail to
 // resolve (provider unhealthy) until the backend is reconfigured or
-// the refs are repointed.
+// the refs are repointed. Removing the default backend hands the flag
+// back to built-in storage so credential writes always have a home.
 func (s *Store) DeleteBackendConfig(ctx context.Context, backend string) error {
 	if err := validExternalBackend(backend); err != nil {
 		return err
@@ -146,14 +147,139 @@ func (s *Store) DeleteBackendConfig(ctx context.Context, backend string) error {
 	if err != nil {
 		return fmt.Errorf("secretstore: %w", err)
 	}
-	if _, err := db.Exec(ctx,
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("secretstore: delete backend config %s: %w", backend, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM secret_backend_config WHERE backend = $1`, backend); err != nil {
+		return fmt.Errorf("secretstore: delete backend config %s: %w", backend, err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secret_backend_config (backend, is_default)
+		SELECT 'db', true
+		WHERE NOT EXISTS (SELECT 1 FROM secret_backend_config WHERE is_default)
+		ON CONFLICT (backend) DO UPDATE SET is_default = true, updated_at = now()`); err != nil {
+		return fmt.Errorf("secretstore: delete backend config %s: %w", backend, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("secretstore: delete backend config %s: %w", backend, err)
 	}
 	if backend == "asm" {
 		s.asmMu.Lock()
 		s.asm = nil
 		s.asmMu.Unlock()
+	}
+	return nil
+}
+
+// BackendStatus is one row of the backends listing: whether a backend
+// has connection config and whether it is the store-wide default.
+type BackendStatus struct {
+	Backend    string `json:"backend"`
+	Configured bool   `json:"configured"`
+	Default    bool   `json:"default"`
+}
+
+// Backends lists every known backend with its configured/default
+// state. Built-in storage ("db") is always configured — it needs
+// nothing beyond the master key the store was constructed with.
+func (s *Store) Backends(ctx context.Context) ([]BackendStatus, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("secretstore: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT backend, is_default FROM secret_backend_config`)
+	if err != nil {
+		return nil, fmt.Errorf("secretstore: list backends: %w", err)
+	}
+	defer rows.Close()
+	state := map[string]bool{}
+	anyDefault := false
+	for rows.Next() {
+		var backend string
+		var isDefault bool
+		if err := rows.Scan(&backend, &isDefault); err != nil {
+			return nil, fmt.Errorf("secretstore: list backends: %w", err)
+		}
+		state[backend] = isDefault
+		anyDefault = anyDefault || isDefault
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("secretstore: list backends: %w", err)
+	}
+	out := []BackendStatus{{Backend: "db", Configured: true}}
+	for _, b := range []string{"vault", "asm"} {
+		if isDefault, ok := state[b]; ok {
+			out = append(out, BackendStatus{Backend: b, Configured: true, Default: isDefault})
+		} else {
+			out = append(out, BackendStatus{Backend: b})
+		}
+	}
+	// No flagged row anywhere means built-in storage is the default.
+	out[0].Default = state["db"] || !anyDefault
+	return out, nil
+}
+
+// DefaultBackend returns the backend every newly entered credential is
+// stored through. No flagged row means built-in storage.
+func (s *Store) DefaultBackend(ctx context.Context) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("secretstore: %w", err)
+	}
+	var backend string
+	err = db.QueryRow(ctx,
+		`SELECT backend FROM secret_backend_config WHERE is_default`).Scan(&backend)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "db", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("secretstore: read default backend: %w", err)
+	}
+	return backend, nil
+}
+
+// SetDefaultBackend moves the single default flag. An external backend
+// must have connection config first — a default that cannot resolve
+// would break every subsequent credential write.
+func (s *Store) SetDefaultBackend(ctx context.Context, backend string) error {
+	if backend != "db" {
+		if err := validExternalBackend(backend); err != nil {
+			return err
+		}
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("secretstore: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("secretstore: set default backend: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if backend != "db" {
+		var configured bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+				SELECT 1 FROM secret_backend_config WHERE backend = $1)`, backend).Scan(&configured); err != nil {
+			return fmt.Errorf("secretstore: set default backend: %w", err)
+		}
+		if !configured {
+			return fmt.Errorf("secretstore: backend %s must be configured before it can be the default", backend)
+		}
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE secret_backend_config SET is_default = false WHERE is_default`); err != nil {
+		return fmt.Errorf("secretstore: set default backend: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secret_backend_config (backend, is_default) VALUES ($1, true)
+		ON CONFLICT (backend) DO UPDATE SET is_default = true, updated_at = now()`, backend); err != nil {
+		return fmt.Errorf("secretstore: set default backend: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("secretstore: set default backend: %w", err)
 	}
 	return nil
 }

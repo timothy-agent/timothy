@@ -24,6 +24,11 @@ import (
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+func staticBudget(n int) func(context.Context) int {
+	return func(context.Context) int { return n }
+}
+
+
 // memDir is an in-memory Directory + chat.SessionLog.
 type memDir struct {
 	mu     sync.Mutex
@@ -147,7 +152,7 @@ func testAPI(t *testing.T, token string, events []stream.StreamEvent) (*API, *me
 	t.Helper()
 	dir := newMemDir()
 	gw := &fakeGateway{events: events}
-	svc := chat.New(gw, dir, nil, nil, 60_000, nil, discard())
+	svc := chat.New(gw, dir, nil, nil, staticBudget(60_000), nil, nil, discard())
 	return &API{svc: svc, dir: dir, token: token, log: discard()}, dir, gw
 }
 
@@ -504,7 +509,7 @@ func TestChatErrorCarriesSessionID(t *testing.T) {
 	id, _ := dir.Create(t.Context(), "t")
 	// gateway with error
 	gw := &fakeGateway{err: context.DeadlineExceeded}
-	a.svc = chat.New(gw, dir, nil, nil, 60_000, nil, discard())
+	a.svc = chat.New(gw, dir, nil, nil, staticBudget(60_000), nil, nil, discard())
 
 	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hi"}`)
 	if w.Code != http.StatusBadGateway {

@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -88,17 +87,13 @@ func main() {
 	if gatewayURL == "" {
 		gatewayURL = "http://gateway:8081"
 	}
-	budget := defaultTokenBudget
-	if v := os.Getenv("SESSION_TOKEN_BUDGET"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			budget = n
-		}
-	}
-
 	gwc := gwclient.New(gatewayURL)
 	store := session.NewStore(app.DB)
 	flags := settings.New(app.DB, app.Log)
-	compactor := session.NewCompactor(store, gwc, gwc, budget, app.Log,
+	// Runtime settings, editable in the UI without a restart: the
+	// projected-context budget fallback and the skill-pack allowlist.
+	budgetFn := func(ctx context.Context) int { return flags.TokenBudget(ctx, defaultTokenBudget) }
+	compactor := session.NewCompactor(store, gwc, gwc, budgetFn, app.Log,
 		app.Metrics.NewCounter("session_compactions_total", "Sessions compacted to stay under the context budget."))
 	distill := func(ctx context.Context, sessionID, turnText string) *session.TurnMemory {
 		return loop.DistillTurn(ctx, gwc, sessionID, turnText)
@@ -113,25 +108,11 @@ func main() {
 		skillsDir = "/skills"
 	}
 	// Broken packs degrade health rather than crash the service.
+	// All loaded packs stay in memory; the skills_allowlist runtime
+	// setting gates which ones the agent may reach per turn.
 	packs, err := skills.Load(skillsDir)
 	if err != nil {
 		app.Log.Error("skills failed to load; continuing without them", "error", err)
-	}
-	// SKILLS_ALLOWLIST restricts which loaded packs the agent may reach
-	// for, without deleting the others from disk — comma-separated
-	// names, empty means no restriction.
-	if allow := os.Getenv("SKILLS_ALLOWLIST"); allow != "" {
-		allowed := make(map[string]bool)
-		for _, name := range strings.Split(allow, ",") {
-			allowed[strings.TrimSpace(name)] = true
-		}
-		filtered := packs[:0]
-		for _, p := range packs {
-			if allowed[p.Name] {
-				filtered = append(filtered, p)
-			}
-		}
-		packs = filtered
 	}
 	app.AddCheck("skills", func() httpserver.Check {
 		if err != nil {
@@ -148,7 +129,7 @@ func main() {
 
 	searxngURL := os.Getenv("SEARXNG_URL")
 
-	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, packs, mc.Add, app.Log)
+	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, packs, flags.SkillAllowed, mc.Add, app.Log)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -168,7 +149,7 @@ func main() {
 	}
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
-		gatedCompactor{inner: compactor, flags: flags}, budget, packs, app.Log)
+		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed, app.Log)
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
@@ -335,7 +316,7 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL string, packs []skills.Skill, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
@@ -352,7 +333,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 		set = append(set, builtin.WebSearch(searxngURL))
 	}
 	if len(packs) > 0 {
-		set = append(set, skills.LoadSkillTool(packs))
+		set = append(set, skills.LoadSkillTool(packs, skillAllow))
 	}
 	constrained, defs, err := compileToolset(set, nil, log)
 	if err != nil {

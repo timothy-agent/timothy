@@ -11,7 +11,6 @@ import {
   providersHealth,
   secretStatus,
   setSecret,
-  setSecretExternal,
   testProvider,
   validateProvider,
 } from '../../api/client'
@@ -40,9 +39,8 @@ import {
 import { matchPreset, providerPresets, type ProviderPreset } from './presets'
 import { LogoSprite, ProviderLogo } from './ProviderLogo'
 import { ErrorBanner, Field, Toggle } from './shared'
-import { backendLabel, errText } from './util'
-
-type KeySource = 'db' | 'vault' | 'asm'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { backendLabel, errText, secretField } from './util'
 
 // stripPaste removes whitespace and zero-width characters that ride
 // along when a key is copied out of wrapped text.
@@ -64,6 +62,7 @@ export function ProvidersTab() {
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<AdminProvider | null>(null)
   const [connecting, setConnecting] = useState<ProviderPreset | null>(null)
+  const defaultBackend = useDefaultSecretBackend()
 
   const refresh = useCallback(() => {
     Promise.all([listProviders(), providersHealth()])
@@ -103,6 +102,7 @@ export function ProvidersTab() {
           key={p.id}
           provider={p}
           health={health[p.name]}
+          defaultBackend={defaultBackend}
           onChanged={refresh}
           onDelete={() => setConfirmDelete(p)}
           onError={setError}
@@ -141,6 +141,7 @@ export function ProvidersTab() {
 
       <ConnectDialog
         preset={connecting}
+        defaultBackend={defaultBackend}
         onClose={() => setConnecting(null)}
         onAdded={() => {
           setConnecting(null)
@@ -178,10 +179,12 @@ export function ProvidersTab() {
 // all.
 function ConnectDialog({
   preset,
+  defaultBackend,
   onClose,
   onAdded,
 }: {
   preset: ProviderPreset | null
+  defaultBackend: string
   onClose: () => void
   onAdded: () => void
 }) {
@@ -190,7 +193,6 @@ function ConnectDialog({
   const [region, setRegion] = useState('')
   const [profile, setProfile] = useState('')
   const [key, setKey] = useState('')
-  const [source, setSource] = useState<KeySource>('db')
   const [ref, setRef] = useState('')
   const [refEdited, setRefEdited] = useState(false)
   const [model, setModel] = useState('')
@@ -206,7 +208,6 @@ function ConnectDialog({
     setRegion(preset.region ?? '')
     setProfile('')
     setKey('')
-    setSource('db')
     setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
@@ -239,8 +240,7 @@ function ConnectDialog({
     try {
       if (wantsKey && key) {
         if (!ref.trim()) throw new Error('a credential reference name is required to store the key')
-        if (source === 'db') await setSecret(ref.trim(), stripPaste(key))
-        else await setSecretExternal(ref.trim(), source, key.trim())
+        await setSecret(ref.trim(), stripPaste(key))
       }
       const res = await validateProvider(config, model.trim())
       setStatus(res)
@@ -324,41 +324,29 @@ function ConnectDialog({
                   />
                 </Field>
               )}
-              {wantsKey && (
-                <div>
-                  <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
-                    <div className="mt-1 flex gap-2">
-                      <Select value={source} onValueChange={(v) => setSource(v as KeySource)}>
-                        <SelectTrigger className="h-8 w-40 shrink-0 text-xs" aria-label="key source">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="db">Encrypted here</SelectItem>
-                          <SelectItem value="vault">Vault</SelectItem>
-                          <SelectItem value="asm">AWS Secrets Manager</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Input
-                        type={source === 'db' ? 'password' : 'text'}
-                        value={key}
-                        onChange={(e) => setKey(e.target.value)}
-                        placeholder={
-                          source === 'db'
-                            ? (preset.keyPlaceholder ?? 'paste key')
-                            : source === 'vault'
-                              ? 'path, e.g. timothy/anthropic#api_key'
-                              : 'name or ARN, optional #json_key'
-                        }
-                        className="h-8"
-                        autoComplete="off"
-                      />
+              {wantsKey &&
+                (() => {
+                  const field = secretField(defaultBackend, preset.keyPlaceholder ?? 'paste key')
+                  return (
+                    <div>
+                      <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
+                        <Input
+                          type={field.type}
+                          value={key}
+                          onChange={(e) => setKey(e.target.value)}
+                          placeholder={field.placeholder}
+                          className="mt-1 h-8"
+                          autoComplete="off"
+                        />
+                      </Field>
+                      {(field.hint || preset.keyHint) && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {field.hint || preset.keyHint}
+                        </p>
+                      )}
                     </div>
-                  </Field>
-                  {preset.keyHint && (
-                    <p className="mt-1 text-xs text-muted-foreground">{preset.keyHint}</p>
-                  )}
-                </div>
-              )}
+                  )
+                })()}
             </>
           )}
 
@@ -427,12 +415,14 @@ function ConnectDialog({
 function ProviderCard({
   provider,
   health,
+  defaultBackend,
   onChanged,
   onDelete,
   onError,
 }: {
   provider: AdminProvider
   health?: ProviderHealth
+  defaultBackend: string
   onChanged: () => void
   onDelete: () => void
   onError: (msg: string) => void
@@ -443,7 +433,6 @@ function ProviderCard({
   const [test, setTest] = useState<TestResult | null>(null)
   const [configured, setConfigured] = useState(false)
   const [storedBackend, setStoredBackend] = useState('')
-  const [source, setSource] = useState<KeySource>('db')
   const [secretValue, setSecretValue] = useState('')
   const [savingSecret, setSavingSecret] = useState(false)
 
@@ -486,8 +475,7 @@ function ProviderCard({
     if (!ref || !secretValue) return
     setSavingSecret(true)
     try {
-      if (source === 'db') await setSecret(ref, stripPaste(secretValue))
-      else await setSecretExternal(ref, source, secretValue)
+      await setSecret(ref, stripPaste(secretValue))
       setSecretValue('')
       refreshSecretStatus()
       onChanged()
@@ -607,28 +595,13 @@ function ProviderCard({
               )}
             </div>
             <div className="mt-1.5 flex gap-2">
-              <Select value={source} onValueChange={(v) => setSource(v as KeySource)}>
-                <SelectTrigger className="h-8 w-40 shrink-0 text-xs" aria-label="key source">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="db">Encrypted here</SelectItem>
-                  <SelectItem value="vault">Vault</SelectItem>
-                  <SelectItem value="asm">AWS Secrets Manager</SelectItem>
-                </SelectContent>
-              </Select>
               <Input
-                type={source === 'db' ? 'password' : 'text'}
+                type={secretField(defaultBackend, '').type}
                 value={secretValue}
                 onChange={(e) => setSecretValue(e.target.value)}
                 placeholder={
-                  source === 'db'
-                    ? configured
-                      ? 'paste new key to rotate'
-                      : 'paste key'
-                    : source === 'vault'
-                      ? 'path, e.g. timothy/anthropic#api_key'
-                      : 'name or ARN, optional #json_key'
+                  secretField(defaultBackend, configured ? 'paste new key to rotate' : 'paste key')
+                    .placeholder
                 }
                 className="h-8"
                 autoComplete="off"
@@ -643,11 +616,11 @@ function ProviderCard({
               </Button>
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              {source === 'db'
-                ? 'Encrypted with the master key and kept in Timothy’s database.'
-                : source === 'vault'
-                  ? 'The key stays in Vault; only its path is saved. Connect Vault in the Secrets tab.'
-                  : 'The key stays in AWS Secrets Manager; only its name is saved. Connect AWS in the Secrets tab.'}
+              {defaultBackend === 'vault'
+                ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
+                : defaultBackend === 'asm'
+                  ? 'The key stays in AWS Secrets Manager; only its name is saved. The default backend is set in the Secrets tab.'
+                  : 'Encrypted with the master key and kept in Timothy’s database.'}
             </p>
             <details className="mt-2">
               <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">

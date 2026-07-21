@@ -55,6 +55,10 @@ func (g *summarizerGW) Stream(_ context.Context, req gwclient.StreamRequest) (<-
 	return ch, nil
 }
 
+func staticBudget(n int) func(context.Context) int {
+	return func(context.Context) int { return n }
+}
+
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // seedConversation appends n user/assistant turn pairs with padded
@@ -79,7 +83,7 @@ func TestMaybeCompactUnderBudgetIsNoop(t *testing.T) {
 	t.Parallel()
 	log, gw := newMemLog(), &summarizerGW{summary: "s"}
 	seedConversation(t, log, "s1", 3)
-	c := NewCompactor(log, gw, nil, 1_000_000, discardLogger(), nil)
+	c := NewCompactor(log, gw, nil, staticBudget(1_000_000), discardLogger(), nil)
 
 	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -94,7 +98,7 @@ func TestMaybeCompactSummarizesOldestHalf(t *testing.T) {
 	log := newMemLog()
 	gw := &summarizerGW{summary: "compact summary: topics 0 through N discussed"}
 	seedConversation(t, log, "s1", 10)
-	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil) // force compaction
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil) // force compaction
 
 	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -136,7 +140,7 @@ func TestCompactionConverges(t *testing.T) {
 			id := fmt.Sprintf("s-%d", turns)
 			seedConversation(t, log, id, turns)
 			budget := 800
-			c := NewCompactor(log, gw, nil, budget, discardLogger(), nil)
+			c := NewCompactor(log, gw, nil, staticBudget(budget), discardLogger(), nil)
 
 			for i := 0; i < 12; i++ { // bounded iterations must suffice
 				events, _ := log.Events(t.Context(), id)
@@ -230,7 +234,7 @@ func TestBudgetFollowsModelWindow(t *testing.T) {
 		log, gw := newMemLog(), &summarizerGW{summary: "s"}
 		seed(t, log)
 		windows := &fakeWindows{windows: map[string]int{"narrow-model": 1000}} // budget 600
-		c := NewCompactor(log, gw, windows, 1_000_000, discardLogger(), nil)
+		c := NewCompactor(log, gw, windows, staticBudget(1_000_000), discardLogger(), nil)
 		if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 			t.Fatalf("MaybeCompact: %v", err)
 		}
@@ -244,7 +248,7 @@ func TestBudgetFollowsModelWindow(t *testing.T) {
 		log, gw := newMemLog(), &summarizerGW{summary: "s"}
 		seed(t, log)
 		windows := &fakeWindows{err: fmt.Errorf("gateway down")}
-		c := NewCompactor(log, gw, windows, 1_000_000, discardLogger(), nil)
+		c := NewCompactor(log, gw, windows, staticBudget(1_000_000), discardLogger(), nil)
 		if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 			t.Fatalf("MaybeCompact: %v", err)
 		}
@@ -258,7 +262,7 @@ func TestBudgetFollowsModelWindow(t *testing.T) {
 		log, gw := newMemLog(), &summarizerGW{summary: "s"}
 		seed(t, log)
 		windows := &fakeWindows{windows: map[string]int{"other-model": 1000}}
-		c := NewCompactor(log, gw, windows, 1_000_000, discardLogger(), nil)
+		c := NewCompactor(log, gw, windows, staticBudget(1_000_000), discardLogger(), nil)
 		if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 			t.Fatalf("MaybeCompact: %v", err)
 		}
@@ -345,7 +349,7 @@ func TestSummarizeInputPreservesFacts(t *testing.T) {
 	}
 	seedConversation(t, log, "s1", 6) // push the facts into the oldest half
 
-	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil)
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
 	if err := c.MaybeCompact(ctx, "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
 	}
@@ -380,7 +384,7 @@ func TestHundredTurnSessionPreservesReference(t *testing.T) {
 	pad := strings.Repeat("lorem ipsum dolor sit amet ", 10)
 
 	budget := 2000
-	c := NewCompactor(log, gw, nil, budget, discardLogger(), nil)
+	c := NewCompactor(log, gw, nil, staticBudget(budget), discardLogger(), nil)
 	for i := 0; i < 100; i++ {
 		text := fmt.Sprintf("question %d %s", i, pad)
 		if i == 2 {
@@ -438,7 +442,7 @@ func TestCompactionExtractsBeforeSummarizing(t *testing.T) {
 	log := newMemLog()
 	gw := &summarizerGW{summary: "short summary"}
 	seedConversation(t, log, "s1", 10)
-	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil)
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
 
 	var sawText string
 	var extractedAtCall int
@@ -480,7 +484,7 @@ func TestCompactionSurvivesExtractionFailure(t *testing.T) {
 	log := newMemLog()
 	gw := &summarizerGW{summary: "short summary"}
 	seedConversation(t, log, "s1", 10)
-	c := NewCompactor(log, gw, nil, 500, discardLogger(), nil)
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
 	c.SetMemoryExtract(func(context.Context, string, int64, string) []string {
 		return nil // extraction failed upstream; hook contract returns nil
 	})

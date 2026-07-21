@@ -158,3 +158,72 @@ func TestVaultResolve(t *testing.T) {
 		t.Fatalf("Status: configured=%v backend=%q err=%v", configured, backend, err)
 	}
 }
+
+// Default backend: single flag, external backends must be configured
+// before they can take it, and removing the default's config hands the
+// flag back to built-in storage.
+func TestDefaultBackendLifecycle(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+
+	origCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	origDefault, err := s.DefaultBackend(ctx)
+	if err != nil {
+		t.Fatalf("DefaultBackend: %v", err)
+	}
+	// The backend config table is shared state (a dev database may hold
+	// a real vault config): restore what was there. A defer, not
+	// t.Cleanup — it runs while t.Context() is still alive.
+	defer func() {
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else {
+			_ = s.DeleteBackendConfig(ctx, "vault")
+		}
+		if err := s.SetDefaultBackend(ctx, origDefault); err != nil {
+			t.Errorf("restore default backend: %v", err)
+		}
+	}()
+
+	if err := s.SetDefaultBackend(ctx, "nope"); err == nil {
+		t.Fatal("unknown backend accepted as default")
+	}
+	if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+		t.Fatalf("DeleteBackendConfig: %v", err)
+	}
+	if err := s.SetDefaultBackend(ctx, "vault"); err == nil {
+		t.Fatal("unconfigured vault accepted as default")
+	}
+
+	if _, err := s.SetBackendConfig(ctx, "vault", []byte(`{"address":"http://127.0.0.1:1"}`)); err != nil {
+		t.Fatalf("SetBackendConfig: %v", err)
+	}
+	if err := s.SetDefaultBackend(ctx, "vault"); err != nil {
+		t.Fatalf("SetDefaultBackend vault: %v", err)
+	}
+	if got, err := s.DefaultBackend(ctx); err != nil || got != "vault" {
+		t.Fatalf("DefaultBackend = %q, %v; want vault", got, err)
+	}
+	backends, err := s.Backends(ctx)
+	if err != nil {
+		t.Fatalf("Backends: %v", err)
+	}
+	for _, b := range backends {
+		if b.Default != (b.Backend == "vault") {
+			t.Fatalf("Backends = %+v, want only vault default", backends)
+		}
+	}
+
+	// Deleting the default's config falls back to built-in storage.
+	if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+		t.Fatalf("DeleteBackendConfig: %v", err)
+	}
+	if got, err := s.DefaultBackend(ctx); err != nil || got != "db" {
+		t.Fatalf("DefaultBackend after delete = %q, %v; want db", got, err)
+	}
+}

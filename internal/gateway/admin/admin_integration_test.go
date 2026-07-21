@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
@@ -44,8 +47,12 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	}
 	// Sweep runs at setup AND teardown: a killed run never executes
 	// cleanups, and its leftovers would fail every later run (unique
-	// name collisions, accumulated audit rows).
-	sweep := func(ctx context.Context) {
+	// name collisions, accumulated audit rows) — and pollute a shared
+	// dev database with fixture rows.
+	type execer interface {
+		Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	}
+	sweep := func(ctx context.Context, db execer) {
 		_, _ = db.Exec(ctx,
 			"DELETE FROM task_routes WHERE task_category LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx,
@@ -57,8 +64,21 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 		_, _ = db.Exec(ctx, "DELETE FROM spend_budgets")
 		_, _ = db.Exec(ctx, "DELETE FROM secrets WHERE ref_name LIKE $1 || '%'", adminMarker)
 	}
-	sweep(ctx)
-	t.Cleanup(func() { sweep(context.Background()) })
+	sweep(ctx, db)
+	t.Cleanup(func() {
+		// The pool dies with t.Context(), which is canceled before
+		// cleanups run — a sweep through it fails silently and leaves
+		// fixture rows behind. Sweep over a fresh one-shot connection.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Logf("teardown sweep skipped: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		sweep(ctx, conn)
+	})
 
 	store := router.NewStore(pool, func(string) string { return "resolved" }, log)
 	if err := store.Load(ctx); err != nil {
@@ -142,6 +162,99 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 	if len(actions) < 3 || actions[0] != "create" || actions[len(actions)-1] != "delete" {
 		t.Fatalf("audit actions = %v, want create…delete", actions)
 	}
+}
+
+// SetSecretValue routes through the store-wide default backend: the
+// built-in store encrypts the value itself, an external default
+// records the value as that backend's reference.
+func TestSetSecretValueFollowsDefaultBackend(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+
+	ref := adminMarker + "SECRET_DB"
+	if err := adm.SetSecretValue(ctx, ref, "sk-plain"); err != nil {
+		t.Fatalf("SetSecretValue: %v", err)
+	}
+	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("Status = %v %q %v, want configured via db", configured, backend, err)
+	}
+
+	// Shared table: restore the pre-test vault config and default flag.
+	// Defers run while t.Context() is still alive; t.Cleanup would not.
+	origCfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig: %v", err)
+	}
+	defer func() {
+		if string(origCfg) != "{}" {
+			if err := adm.SetSecretBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("remove test vault config: %v", err)
+		}
+		if err := adm.SetDefaultSecretBackend(ctx, "db"); err != nil {
+			t.Errorf("restore default backend: %v", err)
+		}
+	}()
+
+	if err := adm.SetSecretBackendConfig(ctx, "vault", []byte(`{"address":"http://127.0.0.1:1"}`)); err != nil {
+		t.Fatalf("SetSecretBackendConfig: %v", err)
+	}
+	if err := adm.SetDefaultSecretBackend(ctx, "vault"); err != nil {
+		t.Fatalf("SetDefaultSecretBackend: %v", err)
+	}
+	extRef := adminMarker + "SECRET_VAULT"
+	if err := adm.SetSecretValue(ctx, extRef, "timothy/key#api_key"); err != nil {
+		t.Fatalf("SetSecretValue external: %v", err)
+	}
+	if configured, backend, err := adm.SecretStatus(ctx, extRef); err != nil || !configured || backend != "vault" {
+		t.Fatalf("Status = %v %q %v, want configured via vault", configured, backend, err)
+	}
+}
+
+// A provider created without models/headers, and rows that already
+// hold jsonb null (written before jsonOr guarded typed nils), must
+// come back as [] / {} — a null models array crashes the settings UI.
+func TestProviderNilModelsRoundTripsAsEmpty(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "nilmodels", Kind: "api", Driver: "bedrock",
+		BaseURL: "us-east-1", CredentialRef: "SOME_ENV_NAME",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	db, _ := pool.Get()
+	var raw string
+	if err := db.QueryRow(ctx, `SELECT models::text FROM providers WHERE id = $1`, id).Scan(&raw); err != nil {
+		t.Fatalf("models query: %v", err)
+	}
+	if raw != "[]" {
+		t.Fatalf("stored models = %s, want []", raw)
+	}
+
+	// Simulate a pre-fix row: jsonb null in both columns.
+	if _, err := db.Exec(ctx, `UPDATE providers SET models = 'null', headers = 'null' WHERE id = $1`, id); err != nil {
+		t.Fatalf("force null: %v", err)
+	}
+	list, err := adm.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, p := range list {
+		if p.ID != id {
+			continue
+		}
+		if p.Models == nil || p.Headers == nil {
+			t.Fatalf("List returned nil models/headers: %+v", p)
+		}
+		return
+	}
+	t.Fatal("created provider missing from List")
 }
 
 // seedRoute inserts an enabled route whose chain references the

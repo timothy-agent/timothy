@@ -27,6 +27,8 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
 	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
 	srv.Handle("GET /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.getSecretStatus))
+	srv.Handle("GET /internal/admin/secret-backends", http.HandlerFunc(h.listSecretBackends))
+	srv.Handle("PUT /internal/admin/secret-backends/default", http.HandlerFunc(h.putDefaultSecretBackend))
 	srv.Handle("GET /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.getSecretBackend))
 	srv.Handle("PUT /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.putSecretBackend))
 	srv.Handle("DELETE /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.deleteSecretBackend))
@@ -185,24 +187,32 @@ func (h *adminAPI) patchBudget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// setSecret stores a secret two ways: {"value": ...} encrypts the
-// value into the db backend; {"backend": "vault"|"asm",
-// "backend_ref": ...} points the ref at an external system instead.
+// setSecret stores {"value": ...} through the store-wide default
+// backend: built-in storage encrypts the value, an external default
+// (vault/asm) treats it as the reference of a secret already there.
+// The client no longer picks a backend per key — the one exception is
+// {"backend": "db"}, which pins built-in storage for bootstrap
+// credentials (the vault token, ASM secret key): the credential that
+// unlocks an external backend cannot live behind that backend.
 func (h *adminAPI) setSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value      string `json:"value"`
-		Backend    string `json:"backend"`
-		BackendRef string `json:"backend_ref"`
+		Value   string `json:"value"`
+		Backend string `json:"backend"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 	var err error
-	if body.Backend != "" && body.Backend != "db" {
-		err = h.adm.SetSecretExternal(r.Context(), r.PathValue("ref_name"), body.Backend, body.BackendRef)
-	} else {
+	switch body.Backend {
+	case "":
+		err = h.adm.SetSecretValue(r.Context(), r.PathValue("ref_name"), body.Value)
+	case "db":
 		err = h.adm.SetSecret(r.Context(), r.PathValue("ref_name"), body.Value)
+	default:
+		jsonError(w, http.StatusUnprocessableEntity, "bad_backend",
+			"per-key backend selection was removed; set the default backend in the Secrets tab")
+		return
 	}
 	if err != nil {
 		fail(w, err)
@@ -226,6 +236,32 @@ func (h *adminAPI) getSecretStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"configured": configured, "backend": backend})
+}
+
+func (h *adminAPI) listSecretBackends(w http.ResponseWriter, r *http.Request) {
+	backends, err := h.adm.SecretBackends(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"backends": backends})
+}
+
+// putDefaultSecretBackend is registered as a literal path, so it wins
+// over the {backend} wildcard routes on the same prefix.
+func (h *adminAPI) putDefaultSecretBackend(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Backend string `json:"backend"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := h.adm.SetDefaultSecretBackend(r.Context(), body.Backend); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *adminAPI) getSecretBackend(w http.ResponseWriter, r *http.Request) {

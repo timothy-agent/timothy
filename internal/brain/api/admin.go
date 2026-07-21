@@ -26,6 +26,8 @@ var adminRoutePatterns = []string{
 	"PUT /v1/admin/secrets/{ref_name}",
 	"DELETE /v1/admin/secrets/{ref_name}",
 	"GET /v1/admin/secrets/{ref_name}",
+	"GET /v1/admin/secret-backends",
+	"PUT /v1/admin/secret-backends/default",
 	"GET /v1/admin/secret-backends/{backend}",
 	"PUT /v1/admin/secret-backends/{backend}",
 	"DELETE /v1/admin/secret-backends/{backend}",
@@ -51,7 +53,10 @@ func (a *API) registerSettings(handle func(pattern string, h http.Handler), flag
 	}
 	handle("GET /v1/admin/settings", a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"settings": flags.All(r.Context())})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"settings": flags.All(r.Context()),
+			"values":   flags.AllValues(r.Context()),
+		})
 	})))
 	handle("PATCH /v1/admin/settings", a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]bool
@@ -61,6 +66,23 @@ func (a *API) registerSettings(handle func(pattern string, h http.Handler), flag
 		}
 		for key, value := range body {
 			if err := flags.Set(r.Context(), key, value); err != nil {
+				jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	// Typed runtime settings (strings; empty resets to the built-in
+	// default) — separate from the boolean switches above so both
+	// bodies stay flat maps.
+	handle("PATCH /v1/admin/settings/values", a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) == 0 {
+			jsonError(w, http.StatusBadRequest, "bad_request", "body must be a JSON object of setting keys to string values")
+			return
+		}
+		for key, value := range body {
+			if err := flags.SetValue(r.Context(), key, value); err != nil {
 				jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 				return
 			}

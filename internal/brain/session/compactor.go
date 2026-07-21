@@ -50,10 +50,13 @@ const summarizeSystem = `Summarize this conversation excerpt for an AI assistant
 // compaction_applied event. Automatic and incremental — never a
 // destructive one-shot (D-006).
 type Compactor struct {
-	log      Log
-	gw       Gateway
-	windows  Windows // nil-safe: static budget only
-	budget   int     // fallback when no model window is resolvable
+	log     Log
+	gw      Gateway
+	windows Windows // nil-safe: static budget only
+	// budget resolves the fallback cap when no model window is
+	// resolvable — a func because it is a runtime setting, editable
+	// without a restart.
+	budget   func(context.Context) int
 	extract  MemoryExtract
 	logger   *slog.Logger
 	compacts prometheus.Counter // nil-safe: may be unset in tests
@@ -65,7 +68,7 @@ type Compactor struct {
 // return nil — extraction must never block compaction.
 type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string) []string
 
-func NewCompactor(log Log, gw Gateway, windows Windows, budget int, logger *slog.Logger, compacts prometheus.Counter) *Compactor {
+func NewCompactor(log Log, gw Gateway, windows Windows, budget func(context.Context) int, logger *slog.Logger, compacts prometheus.Counter) *Compactor {
 	return &Compactor{log: log, gw: gw, windows: windows, budget: budget, logger: logger, compacts: compacts}
 }
 
@@ -81,17 +84,17 @@ func (c *Compactor) SetMemoryExtract(fn MemoryExtract) { c.extract = fn }
 func (c *Compactor) budgetFor(ctx context.Context, sessionID string, events []Event) int {
 	model := lastModel(events)
 	if c.windows == nil || model == "" {
-		return c.budget
+		return c.budget(ctx)
 	}
 	ws, err := c.windows.ModelWindows(ctx)
 	if err != nil {
 		c.logger.Warn("model windows lookup, using static budget", "session_id", sessionID, "error", err)
-		return c.budget
+		return c.budget(ctx)
 	}
 	if w := ws[model]; w > 0 {
 		return w * 60 / 100
 	}
-	return c.budget
+	return c.budget(ctx)
 }
 
 // lastModel returns the model of the newest assistant_turn, or "".

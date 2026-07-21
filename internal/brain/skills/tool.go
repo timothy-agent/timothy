@@ -15,8 +15,10 @@ type loadArgs struct {
 
 // LoadSkillTool returns the load_skill tool over an already-loaded
 // pack set. The body comes back as a transient tool result — it is
-// never copied into the system prompt.
-func LoadSkillTool(packs []Skill) *tools.Tool {
+// never copied into the system prompt. allow gates packs against the
+// runtime allowlist at load time (nil allows all); a disallowed pack
+// is indistinguishable from an unknown one.
+func LoadSkillTool(packs []Skill, allow func(context.Context, string) bool) *tools.Tool {
 	byName := make(map[string]Skill, len(packs))
 	names := make([]string, 0, len(packs))
 	for _, s := range packs {
@@ -51,14 +53,23 @@ Example: {"name": "` + names[0] + `"} → the pack's rules.`,
 			"required": ["name"],
 			"additionalProperties": false
 		}`),
-		Execute: func(_ context.Context, raw json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var args loadArgs
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
 			}
 			s, ok := byName[args.Name]
-			if !ok {
-				return "", fmt.Errorf("unknown skill %q — available: %s", args.Name, strings.Join(names, ", "))
+			if !ok || (allow != nil && !allow(ctx, args.Name)) {
+				available := names
+				if allow != nil {
+					available = available[:0:0]
+					for _, n := range names {
+						if allow(ctx, n) {
+							available = append(available, n)
+						}
+					}
+				}
+				return "", fmt.Errorf("unknown skill %q — available: %s", args.Name, strings.Join(available, ", "))
 			}
 			return fmt.Sprintf("# Skill: %s\n\n%s", s.Name, s.Body), nil
 		},

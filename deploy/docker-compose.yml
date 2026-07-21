@@ -62,9 +62,6 @@ services:
       PORT: "8080"
       GATEWAY_URL: http://gateway:8081
       MEMORYD_URL: http://memoryd:8082
-      # Optional projected-context budget override (tokens); empty
-      # uses the built-in default. Handy for compaction testing.
-      SESSION_TOKEN_BUDGET: ${SESSION_TOKEN_BUDGET:-}
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
       # Connector credentials resolve through brain's own secret-store
@@ -77,9 +74,6 @@ services:
       WORKSPACE_ROOT: /workspace
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
-      # Restricts the agent to this skill pack only; empty allows all
-      # loaded packs. Comma-separated names.
-      SKILLS_ALLOWLIST: ${SKILLS_ALLOWLIST:-}
     volumes:
       - workspace:/workspace
     ports:

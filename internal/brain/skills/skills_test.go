@@ -108,7 +108,7 @@ func TestLoadSkillTool(t *testing.T) {
 	t.Parallel()
 	tool := LoadSkillTool([]Skill{
 		{Name: "coding-task", Description: "d", Body: "- plan first\n- test first"},
-	})
+	}, nil)
 
 	args, _ := json.Marshal(map[string]string{"name": "coding-task"})
 	got, err := tool.Execute(context.Background(), args)
@@ -123,6 +123,30 @@ func TestLoadSkillTool(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), args); err == nil ||
 		!strings.Contains(err.Error(), "unknown skill") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A disallowed pack loads exactly like an unknown one, and the
+// "available" list never leaks disallowed names.
+func TestLoadSkillToolHonorsAllowlist(t *testing.T) {
+	t.Parallel()
+	tool := LoadSkillTool([]Skill{
+		{Name: "allowed", Description: "d", Body: "a"},
+		{Name: "blocked", Description: "d", Body: "b"},
+	}, func(_ context.Context, name string) bool { return name == "allowed" })
+
+	args, _ := json.Marshal(map[string]string{"name": "blocked"})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "unknown skill") {
+		t.Fatalf("err = %v, want unknown-skill refusal", err)
+	}
+	if strings.Contains(err.Error(), "blocked") && strings.Contains(err.Error(), "available: allowed, blocked") {
+		t.Fatalf("available list leaks disallowed pack: %v", err)
+	}
+
+	args, _ = json.Marshal(map[string]string{"name": "allowed"})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("allowed pack refused: %v", err)
 	}
 }
 

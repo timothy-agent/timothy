@@ -99,6 +99,37 @@ func (a *Admin) SetSecretExternal(ctx context.Context, refName, backend, backend
 	return nil
 }
 
+// SetSecretValue stores value under refName through the store-wide
+// default backend: built-in storage encrypts the value itself, while
+// vault/asm treat it as the reference (path or name) of a secret that
+// already lives there — Timothy never writes into external systems.
+func (a *Admin) SetSecretValue(ctx context.Context, refName, value string) error {
+	backend, err := a.secrets.DefaultBackend(ctx)
+	if err != nil {
+		return err
+	}
+	if backend == "db" {
+		return a.SetSecret(ctx, refName, value)
+	}
+	return a.SetSecretExternal(ctx, refName, backend, value)
+}
+
+// SecretBackends lists every secret backend with configured/default
+// state for the settings UI.
+func (a *Admin) SecretBackends(ctx context.Context) ([]secretstore.BackendStatus, error) {
+	return a.secrets.Backends(ctx)
+}
+
+// SetDefaultSecretBackend moves the single store-wide default that
+// SetSecretValue routes through.
+func (a *Admin) SetDefaultSecretBackend(ctx context.Context, backend string) error {
+	if err := a.secrets.SetDefaultBackend(ctx, backend); err != nil {
+		return err
+	}
+	a.audit(ctx, "set", "secret_backend_default", backend, nil, map[string]string{"default": backend})
+	return nil
+}
+
 // SecretStatus reports whether refName has a stored secret and which
 // backend serves it, without exposing the value — used to render the
 // "configured" badge in the UI.
@@ -244,6 +275,7 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 		if err := json.Unmarshal(hdrs, &p.Headers); err != nil {
 			return nil, fmt.Errorf("admin providers: headers: %w", err)
 		}
+		normalizeProvider(&p)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -702,7 +734,19 @@ func scanProvider(ctx context.Context, q pgxQuerier, id, lock string) (Provider,
 	}
 	_ = json.Unmarshal(models, &p.Models)
 	_ = json.Unmarshal(hdrs, &p.Headers)
+	normalizeProvider(&p)
 	return p, nil
+}
+
+// normalizeProvider papers over jsonb null in rows written before
+// jsonOr guarded against typed nils: clients get [] / {}, never null.
+func normalizeProvider(p *Provider) {
+	if p.Models == nil {
+		p.Models = []router.ModelInfo{}
+	}
+	if p.Headers == nil {
+		p.Headers = map[string]string{}
+	}
 }
 
 // audit records who-did-what; failures log — an audit hiccup must not
@@ -730,9 +774,12 @@ func (a *Admin) reload(ctx context.Context) {
 	}
 }
 
+// jsonOr never returns "null": a nil slice or map inside v marshals to
+// JSON null (v == nil is false for typed nils), which would land in a
+// jsonb column and come back as null to API clients that expect [] / {}.
 func jsonOr(v any, empty string) []byte {
 	b, err := json.Marshal(v)
-	if err != nil || v == nil {
+	if err != nil || string(b) == "null" {
 		return []byte(empty)
 	}
 	return b

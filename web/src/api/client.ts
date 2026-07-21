@@ -328,7 +328,10 @@ export async function patchBudget(changes: {
 
 export async function listProviders(): Promise<AdminProvider[]> {
   const { providers } = await request<{ providers: AdminProvider[] }>('/v1/admin/providers')
-  return providers ?? []
+  // Rows written before the backend guarded typed nils can carry
+  // models/headers as JSON null; a null models array would crash every
+  // component that maps over it, blanking the whole settings page.
+  return (providers ?? []).map((p) => ({ ...p, models: p.models ?? [], headers: p.headers ?? {} }))
 }
 
 export async function createProvider(p: Partial<AdminProvider>): Promise<string> {
@@ -387,10 +390,12 @@ export async function providersHealth(): Promise<ProviderHealth[]> {
   return providers ?? []
 }
 
-// setSecret stores a credential value under refName (write-only: it is
-// never returned by any endpoint). deleteSecret removes it; the
-// provider then builds without a key and shows unhealthy until a new
-// value is set.
+// setSecret stores a credential under refName through the store-wide
+// default backend (write-only: it is never returned by any endpoint).
+// Built-in storage encrypts the value; a Vault/ASM default records it
+// as the reference of a secret already held there. deleteSecret
+// removes it; the provider then builds without a key and shows
+// unhealthy until a new value is set.
 export async function setSecret(refName: string, value: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
     method: 'PUT',
@@ -398,16 +403,14 @@ export async function setSecret(refName: string, value: string): Promise<void> {
   })
 }
 
-// setSecretExternal points refName at a secret held in Vault or AWS
-// Secrets Manager instead of storing a value here.
-export async function setSecretExternal(
-  refName: string,
-  backend: 'vault' | 'asm',
-  backendRef: string,
-): Promise<void> {
+// setSecretStorage pins built-in storage regardless of the default
+// backend. Only for backend bootstrap credentials (the vault token,
+// ASM secret key): the credential that unlocks an external backend
+// cannot live behind that backend.
+export async function setSecretStorage(refName: string, value: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
     method: 'PUT',
-    body: JSON.stringify({ backend, backend_ref: backendRef }),
+    body: JSON.stringify({ value, backend: 'db' }),
   })
 }
 
@@ -423,6 +426,28 @@ export interface SecretStatus {
 export async function secretStatus(refName: string): Promise<SecretStatus> {
   if (!refName) return { configured: false, backend: '' }
   return request<SecretStatus>(`/v1/admin/secrets/${encodeURIComponent(refName)}`)
+}
+
+export interface SecretBackendStatus {
+  backend: string
+  configured: boolean
+  default: boolean
+}
+
+// listSecretBackends reports each backend's configured/default state;
+// exactly one is the default all credential writes route through.
+export async function listSecretBackends(): Promise<SecretBackendStatus[]> {
+  const { backends } = await request<{ backends: SecretBackendStatus[] }>(
+    '/v1/admin/secret-backends',
+  )
+  return backends ?? []
+}
+
+export async function setDefaultSecretBackend(backend: string): Promise<void> {
+  await request<void>('/v1/admin/secret-backends/default', {
+    method: 'PUT',
+    body: JSON.stringify({ backend }),
+  })
 }
 
 export async function getSecretBackendConfig(
@@ -515,13 +540,28 @@ export async function patchRoute(
   })
 }
 
-export async function getSettings(): Promise<Record<string, boolean>> {
-  const { settings } = await request<{ settings: Record<string, boolean> }>('/v1/admin/settings')
-  return settings ?? {}
+export interface AdminSettings {
+  settings: Record<string, boolean>
+  // Typed runtime settings; empty string means the built-in default.
+  values: Record<string, string>
+}
+
+export async function getSettings(): Promise<AdminSettings> {
+  const s = await request<AdminSettings>('/v1/admin/settings')
+  return { settings: s.settings ?? {}, values: s.values ?? {} }
 }
 
 export async function patchSettings(changes: Record<string, boolean>): Promise<void> {
   await request<void>('/v1/admin/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+// patchSettingValues updates typed runtime settings (strings; empty
+// resets a key to its built-in default).
+export async function patchSettingValues(changes: Record<string, string>): Promise<void> {
+  await request<void>('/v1/admin/settings/values', {
     method: 'PATCH',
     body: JSON.stringify(changes),
   })

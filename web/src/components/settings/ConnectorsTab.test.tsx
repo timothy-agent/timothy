@@ -9,6 +9,7 @@ vi.mock('../../api/client', () => ({
   createConnector: vi.fn(),
   deleteConnector: vi.fn(),
   listConnectors: vi.fn(),
+  listSecretBackends: vi.fn(),
   patchConnector: vi.fn(),
   setSecret: vi.fn(),
   testConnector: vi.fn(),
@@ -18,6 +19,7 @@ import {
   connectorOAuthStart,
   createConnector,
   listConnectors,
+  listSecretBackends,
   patchConnector,
   setSecret,
   testConnector,
@@ -46,6 +48,11 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+  vi.mocked(listSecretBackends).mockResolvedValue([
+    { backend: 'db', configured: true, default: true },
+    { backend: 'vault', configured: false, default: false },
+    { backend: 'asm', configured: false, default: false },
+  ])
   vi.stubGlobal('location', { ...window.location, assign, origin: 'http://localhost:3300' })
 })
 

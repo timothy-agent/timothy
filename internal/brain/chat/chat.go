@@ -85,10 +85,11 @@ type Service struct {
 	compactor   Compactor
 	memory      MemoryExtract  // nil: long-term memory off
 	recall      MemoryRetrieve // nil: no memory injection
-	budget      int
-	system      string
-	skillBodies map[string]string // name -> full pack body, for skill_hint
-	flushEvery  time.Duration     // pending-state flush cadence mid-stream
+	budget      func(context.Context) int
+	packs       []skills.Skill
+	skillAllow  func(context.Context, string) bool // nil: all packs allowed
+	skillBodies map[string]string                  // name -> full pack body, for skill_hint
+	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
 	logger      *slog.Logger
 }
 
@@ -101,19 +102,38 @@ func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 
 // New builds the service. packs are the loaded skill definitions: their
 // one-line index goes into the system prompt, and their bodies back
-// skill_hint (nil/empty = no skills).
-func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget int, packs []skills.Skill, logger *slog.Logger) *Service {
-	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion, "token_budget", budget)
+// skill_hint (nil/empty = no skills). budget resolves the projected
+// context cap per turn (a runtime setting, not a constant); skillAllow
+// gates packs per turn, nil allows all. The assembled system prompt
+// only changes when a setting does, so provider prompt caches (D-018)
+// stay warm in the steady state.
+func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget func(context.Context) int, packs []skills.Skill, skillAllow func(context.Context, string) bool, logger *slog.Logger) *Service {
+	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion)
 	bodies := make(map[string]string, len(packs))
 	for _, p := range packs {
 		bodies[p.Name] = p.Body
 	}
 	return &Service{
 		gw: gw, log: log, distill: distill, compactor: compactor, budget: budget,
-		system:      assembleSystem(skills.Index(packs)),
+		packs:       packs,
+		skillAllow:  skillAllow,
 		skillBodies: bodies,
 		flushEvery:  2 * time.Second, logger: logger,
 	}
+}
+
+// allowedPacks filters the loaded packs through the runtime allowlist.
+func (s *Service) allowedPacks(ctx context.Context) []skills.Skill {
+	if s.skillAllow == nil {
+		return s.packs
+	}
+	out := make([]skills.Skill, 0, len(s.packs))
+	for _, p := range s.packs {
+		if s.skillAllow(ctx, p.Name) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Request is one chat turn.
@@ -141,7 +161,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	var skillBody string
 	if req.SkillHint != "" {
 		body, ok := s.skillBodies[req.SkillHint]
-		if !ok {
+		if !ok || (s.skillAllow != nil && !s.skillAllow(ctx, req.SkillHint)) {
 			return "", nil, fmt.Errorf("chat: %w: unknown skill %q", ErrBadRequest, req.SkillHint)
 		}
 		skillBody = body
@@ -187,7 +207,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if err != nil {
 		return sessionID, nil, err
 	}
-	msgs, err := session.LLMContext(events, s.budget)
+	msgs, err := session.LLMContext(events, s.budget(ctx))
 	if err != nil {
 		return sessionID, nil, err
 	}
@@ -199,7 +219,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// (D-011 poisoning defense); the skill body is instructions the
 	// user explicitly selected, deterministically loaded rather than
 	// left to the model's load_skill judgment.
-	system := s.system
+	system := assembleSystem(skills.Index(s.allowedPacks(ctx)))
 	if skillBody != "" {
 		system += "\n\n# Skill: " + req.SkillHint + "\n\n" + skillBody
 	}

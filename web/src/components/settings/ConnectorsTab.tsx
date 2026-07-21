@@ -24,7 +24,8 @@ import { Input } from '../ui/input'
 import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
 import { connectorPresets, type ConnectorPreset } from './connectorPresets'
 import { ErrorBanner, Field, Toggle } from './shared'
-import { errText } from './util'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { errText, secretField } from './util'
 
 // slugify turns a display name into a connector name (tool-name
 // prefix): lowercase slug, the backend rejects anything else.
@@ -307,6 +308,7 @@ function AddConnectorDialog({
   const [clientSecret, setClientSecret] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const defaultBackend = useDefaultSecretBackend()
 
   useEffect(() => {
     if (!preset) return
@@ -419,10 +421,10 @@ function AddConnectorDialog({
                 </Field>
                 <Field label="OAuth client secret">
                   <Input
-                    type="password"
+                    type={secretField(defaultBackend, '').type}
                     value={clientSecret}
                     onChange={(e) => setClientSecret(e.target.value)}
-                    placeholder="GOCSPX-…"
+                    placeholder={secretField(defaultBackend, 'GOCSPX-…').placeholder}
                     className="mt-1 h-8"
                     autoComplete="off"
                   />
@@ -450,15 +452,19 @@ function AddConnectorDialog({
               )}
               <Field label={preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'}>
                 <Input
-                  type="password"
+                  type={secretField(defaultBackend, '').type}
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  placeholder={preset.tokenPlaceholder ?? 'token'}
+                  placeholder={secretField(defaultBackend, preset.tokenPlaceholder ?? 'token').placeholder}
                   className="mt-1 h-8"
                   autoComplete="off"
                 />
               </Field>
-              {preset.tokenHint && <p className="text-xs text-muted-foreground">{preset.tokenHint}</p>}
+              {(secretField(defaultBackend, '').hint || preset.tokenHint) && (
+                <p className="text-xs text-muted-foreground">
+                  {secretField(defaultBackend, '').hint || preset.tokenHint}
+                </p>
+              )}
             </>
           )}
 

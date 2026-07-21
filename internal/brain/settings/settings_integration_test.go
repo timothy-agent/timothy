@@ -35,10 +35,16 @@ func testStore(t *testing.T) *Store {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), "DELETE FROM settings")
-		_, _ = db.Exec(context.Background(), "DELETE FROM admin_audit WHERE entity = 'setting'")
-	})
+	// Sweep at setup AND teardown: the teardown runs after t.Context()
+	// is canceled (dead pool → silent failure), so the next run's setup
+	// must clean leftovers itself.
+	sweep := func(ctx context.Context) {
+		_, _ = db.Exec(ctx, "DELETE FROM settings")
+		_, _ = db.Exec(ctx, "DELETE FROM runtime_settings")
+		_, _ = db.Exec(ctx, "DELETE FROM admin_audit WHERE entity = 'setting'")
+	}
+	sweep(ctx)
+	t.Cleanup(func() { sweep(context.Background()) })
 	return New(pool, log)
 }
 
@@ -75,5 +81,57 @@ func TestSettingsDefaultsFlipAndAudit(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("no audit row for the settings flip")
+	}
+}
+
+// Typed value settings: empty by default, validated on write, cache
+// invalidated, helpers apply defaults and parse the allowlist.
+func TestRuntimeValueSettings(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if v := s.Value(ctx, ValueTokenBudget); v != "" {
+		t.Fatalf("default budget value = %q, want empty", v)
+	}
+	if got := s.TokenBudget(ctx, 60_000); got != 60_000 {
+		t.Fatalf("TokenBudget default = %d, want 60000", got)
+	}
+	if !s.SkillAllowed(ctx, "anything") {
+		t.Fatal("empty allowlist must admit everything")
+	}
+
+	if err := s.SetValue(ctx, ValueTokenBudget, "not-a-number"); err == nil {
+		t.Fatal("non-numeric budget accepted")
+	}
+	if err := s.SetValue(ctx, ValueTokenBudget, "-5"); err == nil {
+		t.Fatal("negative budget accepted")
+	}
+	if err := s.SetValue(ctx, "nope", "x"); err == nil {
+		t.Fatal("unknown value key accepted")
+	}
+
+	if err := s.SetValue(ctx, ValueTokenBudget, "120000"); err != nil {
+		t.Fatalf("SetValue budget: %v", err)
+	}
+	if got := s.TokenBudget(ctx, 60_000); got != 120_000 {
+		t.Fatalf("TokenBudget = %d, want 120000 (cache must invalidate on write)", got)
+	}
+
+	if err := s.SetValue(ctx, ValueSkillsAllowlist, "coding-task, research"); err != nil {
+		t.Fatalf("SetValue allowlist: %v", err)
+	}
+	if !s.SkillAllowed(ctx, "coding-task") || !s.SkillAllowed(ctx, "research") {
+		t.Fatal("listed packs must be allowed")
+	}
+	if s.SkillAllowed(ctx, "other") {
+		t.Fatal("unlisted pack admitted")
+	}
+
+	// Empty clears back to default.
+	if err := s.SetValue(ctx, ValueSkillsAllowlist, ""); err != nil {
+		t.Fatalf("SetValue clear: %v", err)
+	}
+	if !s.SkillAllowed(ctx, "other") {
+		t.Fatal("cleared allowlist must admit everything")
 	}
 }

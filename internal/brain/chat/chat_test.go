@@ -19,6 +19,11 @@ import (
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+func staticBudget(n int) func(context.Context) int {
+	return func(context.Context) int { return n }
+}
+
+
 // fakeLog is an in-memory SessionLog.
 type fakeLog struct {
 	mu       sync.Mutex
@@ -141,7 +146,7 @@ func okEvents(text string) []stream.StreamEvent {
 }
 
 func newService(gw Gateway, log SessionLog) *Service {
-	return New(gw, log, nil, nil, 60_000, nil, discard())
+	return New(gw, log, nil, nil, staticBudget(60_000), nil, nil, discard())
 }
 
 func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
@@ -336,9 +341,9 @@ func TestChatValidatesMessage(t *testing.T) {
 func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("planned")}
-	s := New(gw, newFakeLog(), nil, nil, 60_000, []skills.Skill{
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), []skills.Skill{
 		{Name: "travel-planning", Description: "Use when planning a trip", Body: "Ask about dates, budget, destination."},
-	}, discard())
+	}, nil, discard())
 
 	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "Tokyo, 5 days", SkillHint: "travel-planning"})
 	if err != nil {
@@ -354,6 +359,33 @@ func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 	gw.mu.Unlock()
 	if !strings.Contains(sys, "travel-planning") || !strings.Contains(sys, "Ask about dates, budget, destination.") {
 		t.Fatalf("system prompt missing the hinted skill body:\n%s", sys)
+	}
+}
+
+// The runtime allowlist gates both the system-prompt skill index and
+// skill_hint, per turn — no restart, no rebuild.
+func TestChatSkillAllowlistGatesIndexAndHint(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	packs := []skills.Skill{
+		{Name: "allowed-skill", Description: "Use when allowed", Body: "rules-a"},
+		{Name: "blocked-skill", Description: "Use when blocked", Body: "rules-b"},
+	}
+	allow := func(_ context.Context, name string) bool { return name == "allowed-skill" }
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, discard())
+
+	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "blocked-skill"}); err == nil {
+		t.Fatal("skill_hint for a disallowed pack accepted")
+	}
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	sys := chatRequest(t, gw).System
+	if !strings.Contains(sys, "allowed-skill") || strings.Contains(sys, "blocked-skill") {
+		t.Fatalf("skill index not gated by allowlist:\n%s", sys)
 	}
 }
 
@@ -402,7 +434,7 @@ func TestChatCompactsBeforeSend(t *testing.T) {
 	log := newFakeLog()
 	order := &orderCompactor{}
 	gw := &gwAfterCompact{fakeGW: &fakeGW{events: okEvents("hi")}, order: order}
-	svc := New(gw, log, nil, order, 60_000, nil, discard())
+	svc := New(gw, log, nil, order, staticBudget(60_000), nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{Message: "hello"})
 	if err != nil {
@@ -451,7 +483,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 
 	gw := &fakeGW{events: okEvents("fresh reply")}
-	svc := New(gw, log, nil, &compactingLog{log: log}, 60_000, nil, discard())
+	svc := New(gw, log, nil, &compactingLog{log: log}, staticBudget(60_000), nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "new question"})
 	if err != nil {
@@ -494,7 +526,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
 	defer close(distillRelease)
-	svc := New(gw, log, distill, nil, 60_000, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
 	if err != nil {
@@ -544,7 +576,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 	distill := func(context.Context, string, string) *session.TurnMemory {
 		return &session.TurnMemory{KeyFindings: []string{"user moved to Porto"}}
 	}
-	svc := New(gw, log, distill, nil, 60_000, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, discard())
 
 	type call struct {
 		sessionID string
@@ -630,7 +662,7 @@ func TestMemoryRetrieveInjectsIntoSystemTail(t *testing.T) {
 	}
 	// The stable prefix stays byte-identical (D-018).
 	base := newService(gw, log)
-	if !strings.HasPrefix(sent.System, base.system) {
+	if !strings.HasPrefix(sent.System, assembleSystem(skills.Index(base.allowedPacks(t.Context())))) {
 		t.Fatal("system prefix changed by memory injection")
 	}
 }
@@ -664,8 +696,9 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 	drain(t, ch)
 
 	got := chatRequest(t, gw).System
-	if got != svc.system {
-		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, svc.system)
+	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context())))
+	if got != want {
+		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, want)
 	}
 }
 
