@@ -38,10 +38,14 @@ func testAggregator(t *testing.T) (*Aggregator, *Ledger) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM cost_ledger WHERE provider LIKE $1 || '%'", aggMarker)
-	})
+	// Sweep at setup AND teardown (the admin tests' discipline): the
+	// teardown runs after t.Context() is canceled, so its delete can
+	// fail silently and leave rows that double the next test's fixture.
+	sweep := func(ctx context.Context) {
+		_, _ = db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider LIKE $1 || '%'", aggMarker)
+	}
+	sweep(ctx)
+	t.Cleanup(func() { sweep(context.Background()) })
 	return NewAggregator(pool), New(pool, log)
 }
 
