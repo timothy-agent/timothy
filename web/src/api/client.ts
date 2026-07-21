@@ -1,6 +1,7 @@
 import type {
   AdminProvider,
   AdminRoute,
+  AvailableModel,
   BudgetStatus,
   CacheRow,
   ChainEntry,
@@ -353,6 +354,29 @@ export async function testProvider(id: string, model?: string): Promise<TestResu
     method: 'POST',
     body: JSON.stringify(model ? { model } : {}),
   })
+}
+
+// validateProvider probes an UNSAVED provider config with a one-token
+// completion — the add dialog's validate-on-create. Probe failures come
+// back as { ok: false, detail }; only invalid configs throw.
+export async function validateProvider(
+  p: Partial<AdminProvider>,
+  model: string,
+): Promise<TestResult> {
+  return request<TestResult>('/v1/admin/providers/validate', {
+    method: 'POST',
+    body: JSON.stringify({ ...p, model }),
+  })
+}
+
+// availableModels proxies the provider's own model-listing endpoint.
+// Throws ChatError with status 422 when the driver cannot list models
+// (bedrock) — callers fall back to manual entry.
+export async function availableModels(id: string): Promise<AvailableModel[]> {
+  const { models } = await request<{ models: AvailableModel[] }>(
+    `/v1/admin/providers/${id}/models`,
+  )
+  return models ?? []
 }
 
 export async function providersHealth(): Promise<ProviderHealth[]> {

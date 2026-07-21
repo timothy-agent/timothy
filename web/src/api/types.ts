@@ -249,3 +249,9 @@ export interface TestResult {
   model: string
   detail?: string
 }
+
+// AvailableModel is one model reported by a provider's own listing
+// endpoint (GET /v1/admin/providers/:id/models).
+export interface AvailableModel {
+  id: string
+}

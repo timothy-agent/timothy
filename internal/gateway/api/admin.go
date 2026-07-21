@@ -18,6 +18,8 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("PATCH /internal/admin/providers/{id}", http.HandlerFunc(h.patch))
 	srv.Handle("DELETE /internal/admin/providers/{id}", http.HandlerFunc(h.delete))
 	srv.Handle("POST /internal/admin/providers/{id}/test", http.HandlerFunc(h.test))
+	srv.Handle("GET /internal/admin/providers/{id}/models", http.HandlerFunc(h.models))
+	srv.Handle("POST /internal/admin/providers/validate", http.HandlerFunc(h.validate))
 	srv.Handle("GET /internal/admin/providers/health", http.HandlerFunc(h.health))
 	srv.Handle("GET /internal/admin/routes", http.HandlerFunc(h.routes))
 	srv.Handle("PATCH /internal/admin/routes/{category}", http.HandlerFunc(h.patchRoute))
@@ -43,6 +45,8 @@ func fail(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, admin.ErrInUse):
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
+	case errors.Is(err, admin.ErrUnsupported):
+		jsonError(w, http.StatusUnprocessableEntity, "unsupported", err.Error())
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}
@@ -98,6 +102,37 @@ func (h *adminAPI) test(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body) // empty body = default model
 	res, err := h.adm.Test(r.Context(), r.PathValue("id"), body.Model)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, res)
+}
+
+// models proxies the provider's own model-listing endpoint; 422 means
+// the driver cannot list models and the UI falls back to manual entry.
+func (h *adminAPI) models(w http.ResponseWriter, r *http.Request) {
+	models, err := h.adm.AvailableModels(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"models": models})
+}
+
+// validate probes an unsaved provider config with a one-token
+// completion. Probe failures come back 200 with {ok:false, detail} so
+// the UI renders them inline; only invalid configs get an HTTP error.
+func (h *adminAPI) validate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		admin.Provider
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	res, err := h.adm.Validate(r.Context(), body.Provider, body.Model)
 	if err != nil {
 		fail(w, err)
 		return

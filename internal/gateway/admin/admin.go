@@ -547,6 +547,89 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 		return TestResult{}, fmt.Errorf("provider %s has no default model; pass one", p.Name)
 	}
 
+	res := a.probe(ctx, drv, p.Name, model)
+	a.audit(ctx, "test", "provider", id, nil, res)
+	return res, nil
+}
+
+// Validate runs the same one-token probe as Test against a provider
+// config that has NOT been persisted — the UI's validate-on-create.
+// The credential_ref must already resolve (the key is stored before
+// validation), so a passing validation means the provider is born
+// working.
+func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestResult, error) {
+	if err := validateProvider(p); err != nil {
+		return TestResult{}, err
+	}
+	if model == "" {
+		model = p.DefaultModel
+	}
+	if model == "" {
+		return TestResult{}, fmt.Errorf("a model is required to validate a provider")
+	}
+
+	reg, err := provider.Build([]provider.Config{{
+		Name:          p.Name,
+		Kind:          provider.KindAPI,
+		Driver:        p.Driver,
+		BaseURL:       p.BaseURL,
+		CredentialRef: p.CredentialRef,
+		Headers:       p.Headers,
+	}}, a.credentialLookup())
+	if err != nil {
+		return TestResult{}, err
+	}
+	drv, _ := reg.Get(p.Name)
+
+	res := a.probe(ctx, drv, p.Name, model)
+	a.audit(ctx, "validate", "provider", p.Name, nil, res)
+	return res, nil
+}
+
+// AvailableModels proxies the provider's own model-listing endpoint.
+// Drivers that cannot enumerate models (bedrock) return an error the
+// UI turns into its manual-entry fallback.
+func (a *Admin) AvailableModels(ctx context.Context, id string) ([]provider.AvailableModel, error) {
+	p, err := a.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	snap := a.store.Snapshot()
+	if snap == nil {
+		return nil, fmt.Errorf("routing configuration not loaded yet")
+	}
+	drv, ok := snap.Provider(p.Name)
+	if !ok {
+		return nil, fmt.Errorf("provider %s not in the serving snapshot; wait for the next reload", p.Name)
+	}
+	lister, ok := drv.(provider.ModelLister)
+	if !ok {
+		return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
+	}
+	lctx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+	return lister.ListModels(lctx)
+}
+
+// credentialLookup mirrors the router store's resolver: a ref that
+// fails to resolve builds the driver with an empty key, and the probe
+// reports the provider's own auth error instead of a config error.
+func (a *Admin) credentialLookup() func(string) string {
+	return func(ref string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		val, err := a.secrets.Resolve(ctx, ref)
+		if err != nil {
+			return ""
+		}
+		return val
+	}
+}
+
+// probe runs one one-token completion against drv and books it under
+// purpose='test'. Shared by Test (persisted provider) and Validate
+// (unsaved config).
+func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string) TestResult {
 	tctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
 	start := time.Now()
@@ -556,7 +639,7 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 		MaxTokens: 1,
 	})
 	res := TestResult{Model: model}
-	entry := ledger.Entry{Provider: p.Name, Model: model, TaskCategory: "admin", Purpose: "test"}
+	entry := ledger.Entry{Provider: providerName, Model: model, TaskCategory: "admin", Purpose: "test"}
 	if err != nil {
 		res.Detail = err.Error()
 		entry.Status, entry.ErrorCode = "error", "invalid_request"
@@ -580,14 +663,14 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 	res.LatencyMS = time.Since(start).Milliseconds()
 	entry.LatencyMS = res.LatencyMS
 	a.rec.Record(ctx, entry)
-	a.audit(ctx, "test", "provider", id, nil, res)
-	return res, nil
+	return res
 }
 
 // Sentinel errors the HTTP layer maps onto status codes.
 var (
-	ErrNotFound = fmt.Errorf("not found")
-	ErrInUse    = fmt.Errorf("in use")
+	ErrNotFound    = fmt.Errorf("not found")
+	ErrInUse       = fmt.Errorf("in use")
+	ErrUnsupported = fmt.Errorf("unsupported")
 )
 
 func (a *Admin) get(ctx context.Context, id string) (Provider, error) {
