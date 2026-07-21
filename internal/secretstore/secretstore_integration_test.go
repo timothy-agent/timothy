@@ -125,9 +125,15 @@ func TestVaultResolve(t *testing.T) {
 		t.Fatalf("SetBackendConfig: %v", err)
 	}
 	t.Cleanup(func() {
-		db, _ := s.db.Get()
-		db.Exec(context.Background(), `DELETE FROM secret_backend_config WHERE backend = 'vault'`)
-		db.Exec(context.Background(), `DELETE FROM secrets WHERE ref_name LIKE 'TEST_VAULT_%'`)
+		// A transient pool failure here must not panic the run — the
+		// next run's setup sweep gets another chance at the leftovers.
+		db, err := s.db.Get()
+		if err != nil {
+			t.Logf("cleanup skipped: %v", err)
+			return
+		}
+		_, _ = db.Exec(context.Background(), `DELETE FROM secret_backend_config WHERE backend = 'vault'`)
+		_, _ = db.Exec(context.Background(), `DELETE FROM secrets WHERE ref_name LIKE 'TEST_VAULT_%'`)
 	})
 	if err := s.Set(ctx, ref+"_TOKEN", "vault-tok"); err != nil {
 		t.Fatalf("Set token: %v", err)
