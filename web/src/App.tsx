@@ -34,7 +34,7 @@ import { usePendingMemories } from './lib/memory'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { cn } from './lib/utils'
 import { Chat } from './pages/Chat'
-import { Dashboard } from './pages/Dashboard'
+import { Analytics } from './pages/Analytics'
 import { Home } from './pages/Home'
 import { Memory } from './pages/Memory'
 import { Research } from './pages/Research'
@@ -44,7 +44,7 @@ const railNav = [
   { label: 'Home', href: '/', icon: Home01Icon },
   { label: 'Chat', href: '/chat', icon: BubbleChatIcon },
   { label: 'Memory', href: '/memory', icon: Brain02Icon },
-  { label: 'Dashboard', href: '/dashboard', icon: Analytics01Icon },
+  { label: 'Analytics', href: '/analytics', icon: Analytics01Icon },
   { label: 'Settings', href: '/settings', icon: Settings02Icon },
 ]
 
@@ -271,7 +271,9 @@ function App() {
                   }
                 />
                 <Route path="/sessions/:id" element={<LegacySessionRedirect />} />
-                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/analytics" element={<Analytics />} />
+                {/* Old bookmarks: the page lived at /dashboard before the rename. */}
+                <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/settings" element={<Settings />} />
               </Routes>

@@ -105,7 +105,7 @@ const bucketLabel = (iso: string, bucket: string) => {
     : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-export function Dashboard() {
+export function Analytics() {
   const [range, setRange] = useState('7d')
   const [data, setData] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -210,6 +210,15 @@ export function Dashboard() {
       label: 'Error rate',
       value: s && s.requests > 0 ? `${((s.errors / s.requests) * 100).toFixed(1)}%` : '—',
     },
+    {
+      label: 'Input tokens',
+      value: s ? compact(s.input_tokens) : '—',
+      hint: s ? `${compact(s.cache_read_tokens)} cached reads` : undefined,
+    },
+    {
+      label: 'Output tokens',
+      value: s ? compact(s.output_tokens) : '—',
+    },
     { label: 'Cache hit', value: data ? `${(cacheHit * 100).toFixed(0)}%` : '—' },
   ]
 
@@ -227,7 +236,7 @@ export function Dashboard() {
       <div className="mx-auto max-w-6xl py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Spend, tokens, and latency from the cost ledger.
             </p>
@@ -274,7 +283,7 @@ export function Dashboard() {
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
           {tiles.map((t) => (
             <div key={t.label} className="rounded-xl border border-border p-4">
               <div className="text-xs text-muted-foreground">{t.label}</div>

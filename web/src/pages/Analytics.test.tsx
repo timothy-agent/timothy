@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BudgetStatus, UsageSummary } from '../api/types'
-import { Dashboard } from './Dashboard'
+import { Analytics } from './Analytics'
 
 vi.mock('../api/client', () => ({
   usageBudget: vi.fn(),
@@ -40,7 +40,7 @@ const calmBudget: BudgetStatus = {
 function renderPage() {
   return render(
     <MemoryRouter>
-      <Dashboard />
+      <Analytics />
     </MemoryRouter>,
   )
 }
@@ -56,7 +56,7 @@ beforeEach(() => {
   vi.mocked(usageBudget).mockResolvedValue(calmBudget)
 })
 
-describe('Dashboard budget alert', () => {
+describe('Analytics budget alert', () => {
   it('shows no banner while spend stays under budget', async () => {
     renderPage()
     await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
@@ -82,5 +82,22 @@ describe('Dashboard budget alert', () => {
     // The shared widget-failure note appears; no budget banner.
     await screen.findByText(/widgets failed to load/)
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('Analytics token tiles', () => {
+  it('shows total input and output tokens for the range', async () => {
+    vi.mocked(usageSummary).mockResolvedValue({
+      ...summary,
+      input_tokens: 1_250_000,
+      output_tokens: 84_000,
+      cache_read_tokens: 400_000,
+    })
+    renderPage()
+    expect(await screen.findByText('Input tokens')).toBeTruthy()
+    expect(screen.getByText('1.3M')).toBeTruthy()
+    expect(screen.getByText('Output tokens')).toBeTruthy()
+    expect(screen.getByText('84.0k')).toBeTruthy()
+    expect(screen.getByText('400.0k cached reads')).toBeTruthy()
   })
 })
