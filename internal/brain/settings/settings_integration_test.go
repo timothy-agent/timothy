@@ -40,7 +40,6 @@ func testStore(t *testing.T) *Store {
 	// must clean leftovers itself.
 	sweep := func(ctx context.Context) {
 		_, _ = db.Exec(ctx, "DELETE FROM settings")
-		_, _ = db.Exec(ctx, "DELETE FROM runtime_settings")
 		_, _ = db.Exec(ctx, "DELETE FROM admin_audit WHERE entity = 'setting'")
 	}
 	sweep(ctx)

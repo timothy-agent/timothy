@@ -1,6 +1,6 @@
-// Package settings holds brain's global feature switches: durable in
-// one Postgres table, defaulting to enabled, cached briefly so the
-// per-turn checks cost nothing.
+// Package settings holds brain's global runtime configuration in one
+// Postgres table (D-032): boolean feature switches and typed string
+// knobs, cached briefly so per-turn checks cost nothing.
 package settings
 
 import (
@@ -29,9 +29,9 @@ var knownKeys = map[string]bool{
 	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyScheduler: true,
 }
 
-// Typed value settings (runtime_settings table): strings where empty
-// means the built-in default. These replaced the SESSION_TOKEN_BUDGET
-// and SKILLS_ALLOWLIST env vars.
+// Typed value settings: strings where empty means the built-in
+// default. These replaced the SESSION_TOKEN_BUDGET and
+// SKILLS_ALLOWLIST env vars.
 const (
 	// ValueTokenBudget caps the projected context in tokens; empty
 	// defers to the model window / built-in default.
@@ -47,20 +47,18 @@ var knownValueKeys = map[string]bool{
 
 const cacheTTL = 10 * time.Second
 
-// Store reads and writes switches. Reads serve from a short cache;
-// a database outage degrades to "everything enabled" — features
-// failing closed because config storage hiccupped would be worse.
+// Store reads and writes settings. Reads serve from a short cache; a
+// database outage degrades to defaults (switches enabled, values
+// empty) — features failing closed because config storage hiccupped
+// would be worse.
 type Store struct {
 	db  *pgpool.Pool
 	log *slog.Logger
 
 	mu      sync.Mutex
-	cached  map[string]bool
+	flags   map[string]bool
+	values  map[string]string
 	fetched time.Time
-
-	valMu      sync.Mutex
-	valCached  map[string]string
-	valFetched time.Time
 }
 
 func New(db *pgpool.Pool, log *slog.Logger) *Store {
@@ -79,38 +77,8 @@ func (s *Store) Enabled(ctx context.Context, key string) bool {
 
 // All returns every known switch with defaults applied.
 func (s *Store) All(ctx context.Context) map[string]bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cached != nil && time.Since(s.fetched) < cacheTTL {
-		return s.cached
-	}
-
-	out := map[string]bool{}
-	for k := range knownKeys {
-		out[k] = true
-	}
-	db, err := s.db.Get()
-	if err != nil {
-		s.log.Warn("settings read degraded to defaults", "error", err)
-		return out
-	}
-	rows, err := db.Query(ctx, `SELECT key, value FROM settings`)
-	if err != nil {
-		s.log.Warn("settings read degraded to defaults", "error", err)
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			k string
-			v bool
-		)
-		if err := rows.Scan(&k, &v); err == nil && knownKeys[k] {
-			out[k] = v
-		}
-	}
-	s.cached, s.fetched = out, time.Now()
-	return out
+	flags, _ := s.load(ctx)
+	return flags
 }
 
 // Value returns one typed setting; empty string means "use the
@@ -148,35 +116,70 @@ func (s *Store) SkillAllowed(ctx context.Context, name string) bool {
 // AllValues returns every known value setting; missing rows come back
 // as empty strings so callers apply their own defaults.
 func (s *Store) AllValues(ctx context.Context) map[string]string {
-	s.valMu.Lock()
-	defer s.valMu.Unlock()
-	if s.valCached != nil && time.Since(s.valFetched) < cacheTTL {
-		return s.valCached
+	_, values := s.load(ctx)
+	return values
+}
+
+// load returns both maps from one cached read of the settings table.
+// Rows decode by their key's declared type; rows that fail to decode
+// (or carry unknown keys) are ignored rather than fatal.
+func (s *Store) load(ctx context.Context) (map[string]bool, map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flags != nil && time.Since(s.fetched) < cacheTTL {
+		return s.flags, s.values
 	}
 
-	out := map[string]string{}
+	flags := map[string]bool{}
+	for k := range knownKeys {
+		flags[k] = true
+	}
+	values := map[string]string{}
 	for k := range knownValueKeys {
-		out[k] = ""
+		values[k] = ""
 	}
 	db, err := s.db.Get()
 	if err != nil {
-		s.log.Warn("runtime settings read degraded to defaults", "error", err)
-		return out
+		s.log.Warn("settings read degraded to defaults", "error", err)
+		return flags, values
 	}
-	rows, err := db.Query(ctx, `SELECT key, value FROM runtime_settings`)
+	rows, err := db.Query(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
-		s.log.Warn("runtime settings read degraded to defaults", "error", err)
-		return out
+		s.log.Warn("settings read degraded to defaults", "error", err)
+		return flags, values
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err == nil && knownValueKeys[k] {
-			out[k] = v
+		var (
+			k   string
+			raw json.RawMessage
+		)
+		if err := rows.Scan(&k, &raw); err != nil {
+			continue
+		}
+		switch {
+		case knownKeys[k]:
+			var v bool
+			if json.Unmarshal(raw, &v) == nil {
+				flags[k] = v
+			}
+		case knownValueKeys[k]:
+			var v string
+			if json.Unmarshal(raw, &v) == nil {
+				values[k] = v
+			}
 		}
 	}
-	s.valCached, s.valFetched = out, time.Now()
-	return out
+	s.flags, s.values, s.fetched = flags, values, time.Now()
+	return flags, values
+}
+
+// Set flips one switch, audits the change, and invalidates the cache.
+func (s *Store) Set(ctx context.Context, key string, value bool) error {
+	if !knownKeys[key] {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	return s.write(ctx, key, s.Enabled(ctx, key), value)
 }
 
 // SetValue stores one typed setting (empty clears back to default),
@@ -191,40 +194,22 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
 	}
-	db, err := s.db.Get()
-	if err != nil {
-		return fmt.Errorf("settings: %w", err)
-	}
-	before := s.Value(ctx, key)
-	if _, err := db.Exec(ctx, `INSERT INTO runtime_settings (key, value) VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value); err != nil {
-		return fmt.Errorf("settings: %w", err)
-	}
-	b, _ := json.Marshal(before)
-	a, _ := json.Marshal(value)
-	if _, err := db.Exec(ctx, `INSERT INTO admin_audit (action, entity, entity_id, before, after)
-		VALUES ('update', 'setting', $1, $2, $3)`, key, b, a); err != nil {
-		s.log.Warn("settings audit failed", "key", key, "error", err)
-	}
-
-	s.valMu.Lock()
-	s.valCached = nil // next read refetches
-	s.valMu.Unlock()
-	return nil
+	return s.write(ctx, key, s.Value(ctx, key), value)
 }
 
-// Set flips one switch, audits the change, and invalidates the cache.
-func (s *Store) Set(ctx context.Context, key string, value bool) error {
-	if !knownKeys[key] {
-		return fmt.Errorf("unknown setting %q", key)
-	}
+// write upserts one row (value marshaled to jsonb), audits before →
+// after, and invalidates the cache.
+func (s *Store) write(ctx context.Context, key string, before, value any) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
-	before := s.Enabled(ctx, key)
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
 	if _, err := db.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value); err != nil {
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, raw); err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
 	b, _ := json.Marshal(before)
@@ -235,7 +220,7 @@ func (s *Store) Set(ctx context.Context, key string, value bool) error {
 	}
 
 	s.mu.Lock()
-	s.cached = nil // next read refetches
+	s.flags = nil // next read refetches
 	s.mu.Unlock()
 	return nil
 }
