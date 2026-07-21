@@ -155,9 +155,12 @@ func main() {
 	}
 	go runOutputGC(ctx, outputs, app.Log)
 
-	conns := buildConnectors(app.DB, app.Log)
+	conns, goog := buildConnectors(app.DB, app.Log)
 	if conns != nil {
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil))
+		if goog != nil {
+			conns.RegisterBuilder("google", goog.Builder())
+		}
 		conns.SetOnReload(func(context.Context) {
 			swapAgentTools(agent, builtinSet, conns, app.Log)
 		})
@@ -204,7 +207,7 @@ func main() {
 
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
-		conns, token, app.Log)
+		conns, goog, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -215,24 +218,33 @@ func main() {
 // buildConnectors wires the integration control plane. Brain resolves
 // connector credentials through its own secret-store handle (same DB,
 // same master key as the gateway); without a valid master key the
-// connector surface stays unmounted and the rest of brain runs.
-func buildConnectors(db *pgpool.Pool, log *slog.Logger) *connectors.Manager {
+// connector surface stays unmounted and the rest of brain runs. The
+// Google half additionally needs TIMOTHY_PUBLIC_URL for the OAuth
+// redirect; without it google connectors are configured but cannot
+// connect.
+func buildConnectors(db *pgpool.Pool, log *slog.Logger) (*connectors.Manager, *connectors.Google) {
 	masterKey, err := secretstore.DecodeMasterKey(os.Getenv(secretstore.MasterKeyEnv))
 	if err != nil {
 		log.Warn("connectors disabled: no usable master key", "error", err)
-		return nil
+		return nil, nil
 	}
 	secrets, err := secretstore.New(db, masterKey)
 	if err != nil {
 		log.Warn("connectors disabled: secret store init failed", "error", err)
-		return nil
+		return nil, nil
 	}
 	resolve := func(ctx context.Context, ref string) (string, error) {
 		return secrets.Resolve(ctx, ref)
 	}
-	mgr := connectors.NewManager(connectors.NewStore(db, log), resolve, log)
-	// Kind builders (mcp, google) register here as they land.
-	return mgr
+	store := connectors.NewStore(db, log)
+	mgr := connectors.NewManager(store, resolve, log)
+
+	publicURL := os.Getenv("TIMOTHY_PUBLIC_URL")
+	if publicURL == "" {
+		log.Warn("TIMOTHY_PUBLIC_URL not set; google connectors cannot run their OAuth flow")
+	}
+	goog := connectors.NewGoogle(secrets, store, publicURL, log)
+	return mgr, goog
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd

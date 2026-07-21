@@ -255,3 +255,15 @@ export interface TestResult {
 export interface AvailableModel {
   id: string
 }
+
+// AdminConnector is one third-party integration the agent can call as
+// tools (MCP server or Google account). config is kind-specific; the
+// credential_ref names where its secret/tokens live.
+export interface AdminConnector {
+  id: string
+  name: string
+  kind: 'mcp' | 'google'
+  config: Record<string, unknown>
+  credential_ref: string
+  enabled: boolean
+}
