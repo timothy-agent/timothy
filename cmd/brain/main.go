@@ -19,6 +19,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/api"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
@@ -29,6 +30,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
@@ -146,12 +148,21 @@ func main() {
 
 	searxngURL := os.Getenv("SEARXNG_URL")
 
-	agent, broker, outputs, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, packs, mc.Add, app.Log)
+	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, packs, mc.Add, app.Log)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
 	}
 	go runOutputGC(ctx, outputs, app.Log)
+
+	conns := buildConnectors(app.DB, app.Log)
+	if conns != nil {
+		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil))
+		conns.SetOnReload(func(context.Context) {
+			swapAgentTools(agent, builtinSet, conns, app.Log)
+		})
+		go runConnectorReload(ctx, conns, app.Log)
+	}
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budget, packs, app.Log)
@@ -192,12 +203,36 @@ func main() {
 	})
 
 	api.Register(app.Server, svc, store, broker,
-		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags, token, app.Log)
+		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
+		conns, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
 		os.Exit(1)
 	}
+}
+
+// buildConnectors wires the integration control plane. Brain resolves
+// connector credentials through its own secret-store handle (same DB,
+// same master key as the gateway); without a valid master key the
+// connector surface stays unmounted and the rest of brain runs.
+func buildConnectors(db *pgpool.Pool, log *slog.Logger) *connectors.Manager {
+	masterKey, err := secretstore.DecodeMasterKey(os.Getenv(secretstore.MasterKeyEnv))
+	if err != nil {
+		log.Warn("connectors disabled: no usable master key", "error", err)
+		return nil
+	}
+	secrets, err := secretstore.New(db, masterKey)
+	if err != nil {
+		log.Warn("connectors disabled: secret store init failed", "error", err)
+		return nil
+	}
+	resolve := func(ctx context.Context, ref string) (string, error) {
+		return secrets.Resolve(ctx, ref)
+	}
+	mgr := connectors.NewManager(connectors.NewStore(db, log), resolve, log)
+	// Kind builders (mcp, google) register here as they land.
+	return mgr
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd
@@ -286,10 +321,10 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 }
 
 // buildAgent assembles the compiled-in tool registry and its guard
-// rails (D-009, D-010).
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL string, packs []skills.Skill, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, error) {
+// rails (D-009, D-010). The returned builtin set is the fixed half of
+// the tool surface; connector tools join it via swapAgentTools.
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL string, packs []skills.Skill, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
 	outputs := tools.NewOutputs(db)
-	reg := tools.NewRegistry()
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
 		builtin.ConvertTime(),
@@ -307,20 +342,9 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	if len(packs) > 0 {
 		set = append(set, skills.LoadSkillTool(packs))
 	}
-	for _, t := range set {
-		if err := reg.Register(t); err != nil {
-			return nil, nil, nil, fmt.Errorf("register tools: %w", err)
-		}
-	}
-	constrained, err := tools.NewConstrained(reg)
+	constrained, defs, err := compileToolset(set, nil, log)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("compile tool schemas: %w", err)
-	}
-	constrained.SetClamp("shell", builtin.ShellTimeoutClamp())
-
-	defs := make([]provider.ToolDef, 0, len(reg.List()))
-	for _, t := range reg.List() {
-		defs = append(defs, provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+		return nil, nil, nil, nil, err
 	}
 
 	perms := tools.NewPermissions(db, workspace)
@@ -329,7 +353,71 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	// Shell dumps grow fast; offload them sooner than the default so a
 	// long command output never bloats the context (D-019).
 	agent.SetOffloadThreshold("shell", 4<<10)
-	return agent, broker, outputs, nil
+	return agent, broker, outputs, set, nil
+}
+
+// compileToolset registers builtin + connector tools into a fresh
+// constrained registry. A connector tool whose name collides with an
+// existing tool is skipped with a log — a remote server must never
+// shadow a builtin.
+func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger) (*tools.Constrained, []provider.ToolDef, error) {
+	reg := tools.NewRegistry()
+	for _, t := range builtins {
+		if err := reg.Register(t); err != nil {
+			return nil, nil, fmt.Errorf("register tools: %w", err)
+		}
+	}
+	for _, t := range connectorTools {
+		if err := reg.Register(t); err != nil {
+			log.Warn("connector tool skipped", "tool", t.Name, "error", err)
+		}
+	}
+	constrained, err := tools.NewConstrained(reg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("compile tool schemas: %w", err)
+	}
+	constrained.SetClamp("shell", builtin.ShellTimeoutClamp())
+
+	defs := make([]provider.ToolDef, 0, len(reg.List()))
+	for _, t := range reg.List() {
+		defs = append(defs, provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	return constrained, defs, nil
+}
+
+// swapAgentTools recompiles builtin + connector tools and swaps them
+// into the agent. A compile failure keeps the previous surface — a
+// broken connector schema must not take down the builtins.
+func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors.Manager, log *slog.Logger) {
+	constrained, defs, err := compileToolset(builtins, conns.Tools(), log)
+	if err != nil {
+		log.Warn("connector toolset compile failed; keeping previous tools", "error", err)
+		return
+	}
+	agent.SwapTools(constrained, defs)
+	log.Info("agent tool surface updated", "tools", len(defs))
+}
+
+// runConnectorReload loads connector sources at startup and keeps
+// retrying/refreshing on a slow tick, mirroring the gateway's snapshot
+// poll: a DB that wasn't ready at boot, or a row edited outside the
+// admin API, converges within a minute.
+func runConnectorReload(ctx context.Context, conns *connectors.Manager, log *slog.Logger) {
+	if err := conns.Reload(ctx); err != nil {
+		log.Warn("initial connector load failed; will retry", "error", err)
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := conns.Reload(ctx); err != nil {
+				log.Warn("connector reload failed; keeping previous sources", "error", err)
+			}
+		}
+	}
 }
 
 // runOutputGC sweeps expired offloaded outputs (D-019 retention).

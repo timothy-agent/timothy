@@ -67,6 +67,9 @@ services:
       SESSION_TOKEN_BUDGET: ${SESSION_TOKEN_BUDGET:-}
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
+      # Connector credentials resolve through brain's own secret-store
+      # handle — same key the gateway uses.
+      TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in deploy/.env}
       # Where the shell tool runs; the only tree tools may touch.
       WORKSPACE_ROOT: /workspace
       # Compose-internal only: the model never sees this address.

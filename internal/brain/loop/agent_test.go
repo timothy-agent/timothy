@@ -774,3 +774,51 @@ func TestAgentResearchCoercion(t *testing.T) {
 		t.Fatal("must still end with exactly one done")
 	}
 }
+
+func TestSwapToolsChangesSurfaceForNewTurns(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"github_create_issue", `{"title":"bug"}`}),
+		finalStep("filed"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	// Swap in a connector tool alongside the builtin echo.
+	reg := tools.NewRegistry()
+	connector := &tools.Tool{
+		Name:        "github_create_issue",
+		Description: "Create a GitHub issue",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "issue #7", nil
+		},
+	}
+	if err := reg.Register(connector); err != nil {
+		t.Fatal(err)
+	}
+	c, err := tools.NewConstrained(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SwapTools(registryExec{c}, []provider.ToolDef{
+		{Name: connector.Name, Description: connector.Description, InputSchema: connector.InputSchema},
+	})
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding",
+		Messages: []provider.Message{{Role: "user", Content: "file it"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	results := ofType(evs, stream.EventToolResult)
+	if len(results) != 1 || results[0].ToolResult.Status != "ok" || results[0].ToolResult.Digest != "issue #7" {
+		t.Fatalf("tool result = %+v, want ok issue #7", results)
+	}
+	// The gateway saw the swapped defs, not the original echo set.
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) == 0 || len(gw.requests[0].Tools) != 1 || gw.requests[0].Tools[0].Name != "github_create_issue" {
+		t.Fatalf("first request tools = %+v, want only github_create_issue", gw.requests[0].Tools)
+	}
+}

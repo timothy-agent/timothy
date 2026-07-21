@@ -67,17 +67,22 @@ const coercionMessage = "[system] This task category requires consulting your to
 // the step ceiling.
 type Agent struct {
 	gw             Gateway
-	exec           Executor
 	perms          Permissioner
 	outputs        OutputSink
 	audit          AuditSink
 	events         EventAppender
 	broker         *PermBroker
-	defs           []provider.ToolDef
 	maxSteps       int
 	offloadAt      int
 	offloadPerTool map[string]int
 	logger         *slog.Logger
+
+	// The tool surface swaps at runtime when connectors reload; a turn
+	// snapshots both under one lock at its start, so defs and executor
+	// always agree within a turn.
+	toolMu sync.RWMutex
+	exec   Executor
+	defs   []provider.ToolDef
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
@@ -89,6 +94,20 @@ func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink,
 		offloadPerTool: map[string]int{},
 		logger:         logger,
 	}
+}
+
+// SwapTools atomically replaces the tool surface for future turns;
+// in-flight turns keep the snapshot they started with.
+func (a *Agent) SwapTools(exec Executor, defs []provider.ToolDef) {
+	a.toolMu.Lock()
+	defer a.toolMu.Unlock()
+	a.exec, a.defs = exec, defs
+}
+
+func (a *Agent) toolset() (Executor, []provider.ToolDef) {
+	a.toolMu.RLock()
+	defer a.toolMu.RUnlock()
+	return a.exec, a.defs
 }
 
 // SetOffloadThreshold overrides the offload size for one tool (D-019
@@ -131,6 +150,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		}
 	}
 
+	exec, defs := a.toolset()
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
 	var lastMeta *stream.Meta
@@ -154,7 +174,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			ModelHint:    req.ModelHint,
 			System:       req.System,
 			Messages:     msgs,
-			Tools:        a.defs,
+			Tools:        defs,
 			Effort:       effort,
 			SessionID:    req.SessionID,
 		}
@@ -252,7 +272,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 
 		toolCallCount += len(calls)
 		stuck = repeats.Record(calls)
-		results := a.executeAll(ctx, req.SessionID, calls, emit)
+		results := a.executeAll(ctx, exec, req.SessionID, calls, emit)
 
 		msgs = append(msgs, provider.Message{
 			Role: "assistant", Content: text.String(), ToolCalls: calls,
@@ -281,13 +301,13 @@ func EffortFor(results []provider.ToolResult) string {
 
 // executeAll runs a step's tool calls concurrently (bounded) and
 // returns results in call order.
-func (a *Agent) executeAll(ctx context.Context, sessionID string, calls []provider.ToolCall, emit func(stream.StreamEvent)) []provider.ToolResult {
+func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, emit func(stream.StreamEvent)) []provider.ToolResult {
 	results := make([]provider.ToolResult, len(calls))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxParallelTools)
 	for i, call := range calls {
 		g.Go(func() error {
-			results[i] = a.executeOne(gctx, sessionID, call, emit)
+			results[i] = a.executeOne(gctx, exec, sessionID, call, emit)
 			return nil
 		})
 	}
@@ -295,9 +315,9 @@ func (a *Agent) executeAll(ctx context.Context, sessionID string, calls []provid
 	return results
 }
 
-func (a *Agent) executeOne(ctx context.Context, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) provider.ToolResult {
+func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
-	content, status := a.resolveAndRun(ctx, sessionID, call, emit)
+	content, status := a.resolveAndRun(ctx, exec, sessionID, call, emit)
 	isError := status != "ok"
 
 	if status == "ok" {
@@ -360,7 +380,7 @@ func (a *Agent) executeOne(ctx context.Context, sessionID string, call provider.
 // on allow. It returns the content the model sees plus a status of
 // ok, denied, or error — denials and failures come back as feedback
 // text, never as a broken turn (D-009).
-func (a *Agent) resolveAndRun(ctx context.Context, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) (content, status string) {
+func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) (content, status string) {
 	res, err := a.perms.Resolve(ctx, sessionID, call.Name, call.Input)
 	if err != nil {
 		return "permission check failed: " + err.Error(), "error"
@@ -383,7 +403,7 @@ func (a *Agent) resolveAndRun(ctx context.Context, sessionID string, call provid
 		}
 	}
 
-	out, err := a.exec.Execute(ctx, call.Name, call.Input)
+	out, err := exec.Execute(ctx, call.Name, call.Input)
 	if err != nil {
 		if tools.IsViolation(err) {
 			return err.Error(), "error"
