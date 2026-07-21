@@ -60,7 +60,8 @@ const (
 	defaultVaultMount       = "secret"
 	defaultVaultTokenRef    = "VAULT_TOKEN"
 	defaultVaultSecretIDRef = "VAULT_SECRET_ID"
-	defaultASMSecretKeyRef  = "AWS_SECRET_ACCESS_KEY"
+	//nolint:gosec // G101: a ref NAME in the secret store, not a credential value.
+	defaultASMSecretKeyRef = "AWS_SECRET_ACCESS_KEY"
 	backendHTTPTimeout      = 10 * time.Second
 )
 
@@ -415,7 +416,7 @@ func vaultDo(ctx context.Context, method, address, endpoint, token string, body 
 	if err != nil {
 		return fmt.Errorf("secretstore: vault: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return fmt.Errorf("secretstore: vault %s: status %d: %s", endpoint, resp.StatusCode, snippet)

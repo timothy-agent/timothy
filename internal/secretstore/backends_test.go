@@ -159,6 +159,7 @@ func (s stubASM) ListSecrets(context.Context, *secretsmanager.ListSecretsInput,
 }
 
 func TestResolveASMWithStub(t *testing.T) {
+	//nolint:gosec // G101: fake stub value, not a credential.
 	s := &Store{asm: stubASM{secret: `{"api_key":"sk-9","port":443}`}}
 
 	got, err := s.resolveASM(context.Background(), "prod/key#api_key")
@@ -192,7 +193,7 @@ func TestVaultRequest(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write([]byte(`{"data":{"data":{"value":"sk-abc"}}}`))
+		_, _ = w.Write([]byte(`{"data":{"data":{"value":"sk-abc"}}}`))
 	}))
 	defer srv.Close()
 
