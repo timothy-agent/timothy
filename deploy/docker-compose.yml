@@ -70,6 +70,9 @@ services:
       # Connector credentials resolve through brain's own secret-store
       # handle — same key the gateway uses.
       TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in deploy/.env}
+      # Public base URL (as the browser sees it) for OAuth redirects;
+      # empty disables google connector OAuth.
+      TIMOTHY_PUBLIC_URL: ${TIMOTHY_PUBLIC_URL:-}
       # Where the shell tool runs; the only tree tools may touch.
       WORKSPACE_ROOT: /workspace
       # Compose-internal only: the model never sees this address.
