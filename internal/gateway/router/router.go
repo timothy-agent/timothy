@@ -49,11 +49,15 @@ type ChainEntry struct {
 	Model      string `json:"model"`
 }
 
-// RouteRow mirrors one task_routes table row.
+// RouteRow mirrors one routes table row. Strategy picks the chain
+// order at resolve time: "ordered" keeps the written priority; "auto",
+// "price", and "latency" score entries from recent ledger stats and
+// declared prices (empty means ordered).
 type RouteRow struct {
-	TaskCategory string
-	Chain        []ChainEntry
-	Enabled      bool
+	Name     string
+	Chain    []ChainEntry
+	Strategy string
+	Enabled  bool
 }
 
 // Snapshot is an immutable view of the routing configuration plus the
@@ -62,9 +66,24 @@ type Snapshot struct {
 	rows     map[string]ProviderRow // by id
 	byName   map[string]ProviderRow
 	routes   map[string][]ChainEntry // enabled routes only
+	strategy map[string]string       // route name -> chain strategy
+	stats    map[string]ModelStats   // "provider/model" -> recent ledger stats
 	registry *provider.Registry
 	healthy  map[string]bool // by name: credential ref resolved
 }
+
+// ModelStats are time-decayed aggregates from the recent cost ledger,
+// keyed per provider+model, feeding scored chain strategies.
+type ModelStats struct {
+	Uptime     float64 // weighted success rate, 0..1
+	LatencyMS  float64 // weighted mean latency
+	TokensPerS float64 // weighted output tokens per second
+}
+
+// SetStats attaches ledger stats to the snapshot (Store.Load calls it
+// after a successful stats query; a failed query just leaves scored
+// strategies running on prices alone).
+func (s *Snapshot) SetStats(stats map[string]ModelStats) { s.stats = stats }
 
 // Attempt is one provider+model candidate, in try order.
 type Attempt struct {
@@ -75,13 +94,13 @@ type Attempt struct {
 
 // NoRouteError reports that resolution produced zero usable attempts.
 type NoRouteError struct {
-	Category string
-	Hint     string
-	Skipped  []string // "name (reason)" for every candidate rejected
+	Route   string
+	Hint    string
+	Skipped []string // "name (reason)" for every candidate rejected
 }
 
 func (e *NoRouteError) Error() string {
-	msg := fmt.Sprintf("no usable provider for category %q", e.Category)
+	msg := fmt.Sprintf("no usable provider for route %q", e.Route)
 	if e.Hint != "" {
 		msg += fmt.Sprintf(" (hint %q)", e.Hint)
 	}
@@ -96,10 +115,11 @@ func (e *NoRouteError) Error() string {
 // unhealthy (skipped by routing) without failing the build.
 func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string) (*Snapshot, error) {
 	s := &Snapshot{
-		rows:    make(map[string]ProviderRow, len(provRows)),
-		byName:  make(map[string]ProviderRow, len(provRows)),
-		routes:  map[string][]ChainEntry{},
-		healthy: make(map[string]bool, len(provRows)),
+		rows:     make(map[string]ProviderRow, len(provRows)),
+		byName:   make(map[string]ProviderRow, len(provRows)),
+		routes:   map[string][]ChainEntry{},
+		strategy: map[string]string{},
+		healthy:  make(map[string]bool, len(provRows)),
 	}
 
 	cfgs := make([]provider.Config, 0, len(provRows))
@@ -130,33 +150,47 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 
 	for _, r := range routeRows {
 		if r.Enabled {
-			s.routes[r.TaskCategory] = r.Chain
+			s.routes[r.Name] = r.Chain
+			s.strategy[r.Name] = r.Strategy
 		}
 	}
 	return s, nil
 }
 
-// requiredCapability maps a task category to the driver capability its
+// requiredCapability maps a route to the driver capability its
 // attempts must declare (D-005: routing never assumes an undeclared
 // capability).
-func requiredCapability(category string) provider.Capability {
-	if category == "embedding" {
+func requiredCapability(route string) provider.Capability {
+	if route == "embedding" {
 		return provider.CapEmbeddings
 	}
 	return provider.CapChat
 }
 
-// Resolve returns the ordered attempts for a category and optional
-// hint. Hint semantics: a provider name routes to that provider's
-// default model; an exact model id routes to the first enabled healthy
-// provider listing it. A failed hint falls through to the chain.
-// Disabled, unhealthy, and capability-lacking providers are skipped;
-// each chain entry is tried at most once.
-func (s *Snapshot) Resolve(category, hint string) ([]Attempt, error) {
-	required := requiredCapability(category)
+// Sticky names the provider+model that served a session's last
+// successful turn. When set and still usable it is tried first (after
+// an explicit hint): staying on one provider keeps its prompt cache
+// warm (D-018), which is usually worth more than a marginally better
+// score elsewhere.
+type Sticky struct {
+	ProviderName string
+	Model        string
+}
+
+// Resolve returns the ordered attempts for a route, an optional hint,
+// and an optional sticky preference. Hint semantics: a provider name
+// routes to that provider's default model; an exact model id routes to
+// the first enabled healthy provider listing it. A failed hint falls
+// through. Try order: hint, sticky, then the chain — written order for
+// "ordered" routes, score order for "auto"/"price"/"latency" (recent
+// ledger stats + declared prices). Disabled, unhealthy, and
+// capability-lacking providers are skipped; each candidate is tried at
+// most once.
+func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error) {
+	required := requiredCapability(route)
 	var attempts []Attempt
 	var skipped []string
-	seen := map[string]bool{} // "name/model" dedupe across hint + chain
+	seen := map[string]bool{} // "name/model" dedupe across hint + sticky + chain
 
 	add := func(row ProviderRow, model, source string) {
 		p, inRegistry := s.registry.Get(row.Name)
@@ -188,7 +222,20 @@ func (s *Snapshot) Resolve(category, hint string) ([]Attempt, error) {
 		}
 	}
 
-	for _, entry := range s.routes[category] {
+	// Sticky is a preference, never an expansion: it must already be a
+	// member of this route's chain, so a route change or chain edit
+	// naturally breaks the pin.
+	if sticky.ProviderName != "" {
+		for _, entry := range s.routes[route] {
+			row, ok := s.rows[entry.ProviderID]
+			if ok && row.Name == sticky.ProviderName && entry.Model == sticky.Model {
+				add(row, entry.Model, "sticky")
+				break
+			}
+		}
+	}
+
+	for _, entry := range s.orderedChain(route) {
 		row, ok := s.rows[entry.ProviderID]
 		if !ok {
 			skipped = append(skipped, fmt.Sprintf("chain entry %s (unknown provider id)", entry.ProviderID))
@@ -202,9 +249,100 @@ func (s *Snapshot) Resolve(category, hint string) ([]Attempt, error) {
 	}
 
 	if len(attempts) == 0 {
-		return nil, &NoRouteError{Category: category, Hint: hint, Skipped: skipped}
+		return nil, &NoRouteError{Route: route, Hint: hint, Skipped: skipped}
 	}
 	return attempts, nil
+}
+
+// Strategy weights: relative importance of each additive factor,
+// normalized against the best candidate in the chain (the llmgateway
+// scheme). price dominates "price", latency dominates "latency",
+// "auto" balances. Uptime is not a weight — it multiplies the whole
+// score, so an unreliable provider sinks under every strategy: no
+// price advantage outruns failing most requests. Factors with no data
+// score neutrally so a brand-new entry is neither favored nor starved.
+var strategyWeights = map[string]struct{ price, latency, tps float64 }{
+	"auto":    {price: 0.6, latency: 0.1, tps: 0.05},
+	"price":   {price: 0.9, latency: 0.02, tps: 0.02},
+	"latency": {price: 0.1, latency: 0.6, tps: 0.1},
+}
+
+// orderedChain returns a route's chain in try order: written order for
+// "ordered" (or unknown) strategies, descending score otherwise.
+func (s *Snapshot) orderedChain(route string) []ChainEntry {
+	chain := s.routes[route]
+	w, scoredStrategy := strategyWeights[s.strategy[route]]
+	if !scoredStrategy || len(chain) < 2 {
+		return chain
+	}
+
+	// Gather each entry's raw factors first: normalization needs the
+	// best value across the candidate set.
+	type cand struct {
+		entry   ChainEntry
+		price   float64 // declared output price; 0 = unknown
+		uptime  float64 // -1 = unknown
+		latency float64 // 0 = unknown
+		tps     float64 // 0 = unknown
+	}
+	cands := make([]cand, 0, len(chain))
+	minPrice, minLatency, maxTPS := 0.0, 0.0, 0.0
+	for _, e := range chain {
+		c := cand{entry: e, uptime: -1}
+		if row, ok := s.rows[e.ProviderID]; ok {
+			if p := s.Prices(row.Name, e.Model); p != nil && p.OutputPerMTok > 0 {
+				c.price = p.OutputPerMTok
+				if minPrice == 0 || c.price < minPrice {
+					minPrice = c.price
+				}
+			}
+			if st, ok := s.stats[row.Name+"/"+e.Model]; ok {
+				c.uptime = st.Uptime
+				c.latency = st.LatencyMS
+				c.tps = st.TokensPerS
+				if c.latency > 0 && (minLatency == 0 || c.latency < minLatency) {
+					minLatency = c.latency
+				}
+				if c.tps > maxTPS {
+					maxTPS = c.tps
+				}
+			}
+		}
+		cands = append(cands, c)
+	}
+
+	const neutral = 0.5
+	score := func(c cand) float64 {
+		total := 0.0
+		if c.price > 0 && minPrice > 0 {
+			total += w.price * (minPrice / c.price)
+		} else {
+			total += w.price * neutral
+		}
+		if c.latency > 0 && minLatency > 0 {
+			total += w.latency * (minLatency / c.latency)
+		} else {
+			total += w.latency * neutral
+		}
+		if c.tps > 0 && maxTPS > 0 {
+			total += w.tps * (c.tps / maxTPS)
+		} else {
+			total += w.tps * neutral
+		}
+		if c.uptime >= 0 {
+			// Multiplicative, floored so one bad minute can't zero a
+			// candidate out of consideration entirely.
+			total *= max(c.uptime, 0.05)
+		}
+		return total
+	}
+
+	sort.SliceStable(cands, func(i, j int) bool { return score(cands[i]) > score(cands[j]) })
+	out := make([]ChainEntry, len(cands))
+	for i, c := range cands {
+		out[i] = c.entry
+	}
+	return out
 }
 
 // attemptCapable gates one provider+model candidate on the required
@@ -292,7 +430,7 @@ func (s *Snapshot) Providers() ([]ProviderRow, map[string]bool) {
 // (for the /v1/providers listing).
 func (s *Snapshot) Routes() map[string][]map[string]string {
 	out := make(map[string][]map[string]string, len(s.routes))
-	for category, chain := range s.routes {
+	for name, chain := range s.routes {
 		entries := make([]map[string]string, 0, len(chain))
 		for _, e := range chain {
 			name := e.ProviderID
@@ -301,7 +439,7 @@ func (s *Snapshot) Routes() map[string][]map[string]string {
 			}
 			entries = append(entries, map[string]string{"provider": name, "model": e.Model})
 		}
-		out[category] = entries
+		out[name] = entries
 	}
 	return out
 }

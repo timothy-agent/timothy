@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/api"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
@@ -148,8 +149,10 @@ func main() {
 		go runConnectorReload(ctx, conns, app.Log)
 	}
 
+	agentReg := agents.NewStore(app.DB, app.Log)
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
-		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed, app.Log)
+		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
+		agentReg.Resolve, app.Log)
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
@@ -188,7 +191,7 @@ func main() {
 
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
-		conns, goog, token, app.Log)
+		agentReg, conns, goog, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -305,11 +308,13 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 		return r.gw.Stream(ctx, req)
 	}
 	return r.agent.Start(ctx, loop.Request{
-		SessionID:    req.SessionID,
-		TaskCategory: req.TaskCategory,
-		ModelHint:    req.ModelHint,
-		System:       req.System,
-		Messages:     req.Messages,
+		SessionID: req.SessionID,
+		Route:     req.Route,
+		Agent:     req.Agent,
+		ToolAllow: req.ToolAllow,
+		ModelHint: req.ModelHint,
+		System:    req.System,
+		Messages:  req.Messages,
 	})
 }
 

@@ -45,8 +45,8 @@ export function RoutesTab() {
         })
       : undefined
 
-  const save = (category: string, patch: { chain?: ChainEntry[]; enabled?: boolean }) => {
-    patchRoute(category, patch).then(refresh, (err: unknown) => setError(errText(err)))
+  const save = (name: string, patch: { chain?: ChainEntry[]; strategy?: string; enabled?: boolean }) => {
+    patchRoute(name, patch).then(refresh, (err: unknown) => setError(errText(err)))
   }
 
   return (
@@ -55,9 +55,9 @@ export function RoutesTab() {
       {routes.map((r) => {
         const serving = servingEntry(r)
         return (
-          <div key={r.task_category} className="rounded-xl border border-border p-4">
+          <div key={r.name} className="rounded-xl border border-border p-4">
             <div className="flex items-center gap-3">
-              <span className="font-medium">{r.task_category}</span>
+              <span className="font-medium">{r.name}</span>
               {serving ? (
                 <span className="text-xs text-muted-foreground">
                   serving: {nameOf(serving.provider_id)} / {serving.model}
@@ -67,11 +67,22 @@ export function RoutesTab() {
                   {r.enabled ? 'no usable provider' : 'disabled'}
                 </span>
               )}
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-3">
+                <Select value={r.strategy || 'ordered'} onValueChange={(v) => save(r.name, { strategy: v })}>
+                  <SelectTrigger className="h-8 w-28 text-xs" aria-label={`${r.name} strategy`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ordered">Ordered</SelectItem>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="price">Cheapest</SelectItem>
+                    <SelectItem value="latency">Fastest</SelectItem>
+                  </SelectContent>
+                </Select>
                 <Toggle
                   on={r.enabled}
-                  onChange={(v) => save(r.task_category, { enabled: v })}
-                  label={`${r.task_category} route enabled`}
+                  onChange={(v) => save(r.name, { enabled: v })}
+                  label={`${r.name} route enabled`}
                 />
               </div>
             </div>
@@ -90,7 +101,7 @@ export function RoutesTab() {
                       onClick={() => {
                         const chain = [...r.chain]
                         ;[chain[i - 1], chain[i]] = [chain[i], chain[i - 1]]
-                        save(r.task_category, { chain })
+                        save(r.name, { chain })
                       }}
                       className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                     >
@@ -103,7 +114,7 @@ export function RoutesTab() {
                       onClick={() => {
                         const chain = [...r.chain]
                         ;[chain[i], chain[i + 1]] = [chain[i + 1], chain[i]]
-                        save(r.task_category, { chain })
+                        save(r.name, { chain })
                       }}
                       className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                     >
@@ -113,7 +124,7 @@ export function RoutesTab() {
                       type="button"
                       aria-label={`Remove ${e.model}`}
                       onClick={() =>
-                        save(r.task_category, { chain: r.chain.filter((_, j) => j !== i) })
+                        save(r.name, { chain: r.chain.filter((_, j) => j !== i) })
                       }
                       className="text-muted-foreground hover:text-red-500"
                     >
@@ -125,7 +136,7 @@ export function RoutesTab() {
             </ol>
             <AddChainEntry
               providers={providers}
-              onAdd={(entry) => save(r.task_category, { chain: [...r.chain, entry] })}
+              onAdd={(entry) => save(r.name, { chain: [...r.chain, entry] })}
             />
           </div>
         )

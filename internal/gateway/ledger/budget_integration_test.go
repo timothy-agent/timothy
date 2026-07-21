@@ -71,7 +71,7 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 	cost := 0.5
 	for range 2 {
 		l.Record(ctx, Entry{
-			Provider: "itest-budget", Model: "m1", TaskCategory: "coding",
+			Provider: "itest-budget", Model: "m1", Route: "coding",
 			Usage:     &stream.Usage{InputTokens: 1, OutputTokens: 1},
 			LatencyMS: 1, Status: "ok", CostUSD: &cost,
 		})

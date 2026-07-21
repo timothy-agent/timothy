@@ -267,7 +267,7 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 		b.WriteString(m.Role + ": " + m.Content + "\n\n")
 	}
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
-		TaskCategory: "summarize",
+		Route: "summarize",
 		Purpose:      "compaction",
 		System:       summarizeSystem,
 		Messages:     []provider.Message{{Role: "user", Content: b.String()}},

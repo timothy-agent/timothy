@@ -81,15 +81,21 @@ func doWithRetry(ctx context.Context, client *http.Client, build func() (*http.R
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			_ = resp.Body.Close()
-			return nil, &permanentError{fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+			return nil, &permanentError{status: resp.StatusCode, err: fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
 		}
 		return resp, nil
 	}
 }
 
 // permanentError marks a failure retries cannot fix (4xx other than
-// 429): the stream error it produces is flagged not retryable.
-type permanentError struct{ err error }
+// 429): the stream error it produces is flagged not retryable and
+// carries the upstream status in its code (http_401, http_422, …) so
+// the failover layer can tell request-shape errors from
+// provider-specific ones.
+type permanentError struct {
+	status int
+	err    error
+}
 
 func (e *permanentError) Error() string { return e.err.Error() }
 func (e *permanentError) Unwrap() error { return e.err }
@@ -99,8 +105,11 @@ func errEvent(err error) stream.StreamEvent {
 	var perm *permanentError
 	retryable := !errors.As(err, &perm)
 	code := "provider_error"
-	if errors.Is(err, context.DeadlineExceeded) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
 		code = "timeout"
+	case perm != nil && perm.status != 0:
+		code = fmt.Sprintf("http_%d", perm.status)
 	}
 	return stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 		Code:      code,

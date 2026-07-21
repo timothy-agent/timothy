@@ -1,7 +1,5 @@
 import type { ChatEvent, PermissionRequestEvent, Usage } from '../api/types'
 
-export const categories = ['coding', 'research', 'reasoning', 'mini', 'summarize', 'realtime'] as const
-
 // ToolRun is one tool call's lifecycle inside a live turn.
 export interface ToolRun {
   id: string

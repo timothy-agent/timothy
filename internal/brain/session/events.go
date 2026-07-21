@@ -40,7 +40,8 @@ type SessionStarted struct {
 // UserMessage is one user turn.
 type UserMessage struct {
 	Text      string `json:"text"`
-	Category  string `json:"category,omitempty"`
+	Route  string `json:"route,omitempty"`
+	Agent  string `json:"agent,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
 }
 

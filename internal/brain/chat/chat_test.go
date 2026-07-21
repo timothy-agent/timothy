@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -76,10 +77,10 @@ func (f *fakeLog) SetTitleIfEmpty(_ context.Context, id, title string) error {
 	return nil
 }
 
-func (f *fakeLog) SetLastCategory(_ context.Context, id, category string) error {
+func (f *fakeLog) SetLastRoute(_ context.Context, id, route, agent string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.category[id] = category
+	f.category[id] = route
 	return nil
 }
 
@@ -146,7 +147,7 @@ func okEvents(text string) []stream.StreamEvent {
 }
 
 func newService(gw Gateway, log SessionLog) *Service {
-	return New(gw, log, nil, nil, staticBudget(60_000), nil, nil, discard())
+	return New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, discard())
 }
 
 func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
@@ -186,7 +187,7 @@ func TestChatPersistsTurnAsEvents(t *testing.T) {
 	gw := &fakeGW{events: okEvents("the answer")}
 	s := newService(gw, log)
 
-	id, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question", TaskCategory: "mini"})
+	id, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question", Route: "mini"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 	gw := &fakeGW{events: okEvents("planned")}
 	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), []skills.Skill{
 		{Name: "travel-planning", Description: "Use when planning a trip", Body: "Ask about dates, budget, destination."},
-	}, nil, discard())
+	}, nil, nil, discard())
 
 	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "Tokyo, 5 days", SkillHint: "travel-planning"})
 	if err != nil {
@@ -372,7 +373,7 @@ func TestChatSkillAllowlistGatesIndexAndHint(t *testing.T) {
 		{Name: "blocked-skill", Description: "Use when blocked", Body: "rules-b"},
 	}
 	allow := func(_ context.Context, name string) bool { return name == "allowed-skill" }
-	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, discard())
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, nil, discard())
 
 	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "blocked-skill"}); err == nil {
 		t.Fatal("skill_hint for a disallowed pack accepted")
@@ -434,7 +435,7 @@ func TestChatCompactsBeforeSend(t *testing.T) {
 	log := newFakeLog()
 	order := &orderCompactor{}
 	gw := &gwAfterCompact{fakeGW: &fakeGW{events: okEvents("hi")}, order: order}
-	svc := New(gw, log, nil, order, staticBudget(60_000), nil, nil, discard())
+	svc := New(gw, log, nil, order, staticBudget(60_000), nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{Message: "hello"})
 	if err != nil {
@@ -483,7 +484,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 
 	gw := &fakeGW{events: okEvents("fresh reply")}
-	svc := New(gw, log, nil, &compactingLog{log: log}, staticBudget(60_000), nil, nil, discard())
+	svc := New(gw, log, nil, &compactingLog{log: log}, staticBudget(60_000), nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "new question"})
 	if err != nil {
@@ -526,7 +527,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
 	defer close(distillRelease)
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
 	if err != nil {
@@ -576,7 +577,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 	distill := func(context.Context, string, string) *session.TurnMemory {
 		return &session.TurnMemory{KeyFindings: []string{"user moved to Porto"}}
 	}
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
 
 	type call struct {
 		sessionID string
@@ -662,7 +663,7 @@ func TestMemoryRetrieveInjectsIntoSystemTail(t *testing.T) {
 	}
 	// The stable prefix stays byte-identical (D-018).
 	base := newService(gw, log)
-	if !strings.HasPrefix(sent.System, assembleSystem(skills.Index(base.allowedPacks(t.Context())))) {
+	if !strings.HasPrefix(sent.System, assembleSystem(skills.Index(base.allowedPacks(t.Context(), agents.Agent{Memory: true})))) {
 		t.Fatal("system prefix changed by memory injection")
 	}
 }
@@ -696,7 +697,7 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 	drain(t, ch)
 
 	got := chatRequest(t, gw).System
-	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context())))
+	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})))
 	if got != want {
 		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, want)
 	}
@@ -756,5 +757,58 @@ func TestCollapseRepeatedTail(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The serving agent's profile shapes the whole turn: its route and
+// name ride the gateway request, its tool allowlist travels for the
+// loop, its overlay joins the system prompt, and memory off suppresses
+// recall.
+func TestAgentProfileShapesTurn(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		switch name {
+		case "", "researcher":
+			return agents.Agent{
+				Name: "researcher", Route: "research",
+				PromptOverlay: "Consult sources before answering.",
+				Tools:         []string{"web_search"},
+				Memory:        false,
+			}, true
+		default:
+			return agents.Agent{}, false
+		}
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	recalled := false
+	svc.SetMemoryRetrieve(func(context.Context, string, string) string {
+		recalled = true
+		return "MEMORY BLOCK"
+	})
+
+	if _, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "nope"}); err == nil {
+		t.Fatal("unknown agent accepted")
+	}
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "researcher"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := chatRequest(t, gw)
+	if sent.Route != "research" || sent.Agent != "researcher" {
+		t.Fatalf("route/agent = %s/%s, want research/researcher", sent.Route, sent.Agent)
+	}
+	if len(sent.ToolAllow) != 1 || sent.ToolAllow[0] != "web_search" {
+		t.Fatalf("tool allowlist = %v", sent.ToolAllow)
+	}
+	if !strings.Contains(sent.System, "Consult sources before answering.") {
+		t.Fatalf("overlay missing from system prompt:\n%s", sent.System)
+	}
+	if recalled || strings.Contains(sent.System, "MEMORY BLOCK") {
+		t.Fatal("memory recall ran for a memory-off agent")
 	}
 }

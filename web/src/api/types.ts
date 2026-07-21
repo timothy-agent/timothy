@@ -68,7 +68,8 @@ export type ChatEvent = StreamEvent | MetaEvent
 export interface ChatRequest {
   session_id?: string
   message: string
-  task_category?: string
+  agent?: string
+  route?: string
   model_hint?: string
   skill_hint?: string
 }
@@ -79,7 +80,8 @@ export interface SessionMeta {
   id: string
   title: string
   archived: boolean
-  last_category?: string
+  agent?: string
+  last_route?: string
   created_at: string
   updated_at: string
 }
@@ -230,8 +232,11 @@ export interface ChainEntry {
 }
 
 export interface AdminRoute {
-  task_category: string
+  name: string
   chain: ChainEntry[]
+  // 'ordered' tries the chain as written; 'auto' | 'price' | 'latency'
+  // score entries from recent ledger stats and declared prices.
+  strategy: string
   enabled: boolean
 }
 
@@ -254,6 +259,22 @@ export interface TestResult {
 // endpoint (GET /v1/admin/providers/:id/models).
 export interface AvailableModel {
   id: string
+}
+
+// AdminAgent is one row of the agent registry (D-034): who serves a
+// session. Empty skills/tools = everything allowed; empty route = the
+// default chain.
+export interface AdminAgent {
+  id: string
+  name: string
+  description: string
+  prompt_overlay: string
+  route: string
+  skills: string[]
+  tools: string[]
+  memory: boolean
+  is_default: boolean
+  enabled: boolean
 }
 
 // AdminConnector is one third-party integration the agent can call as

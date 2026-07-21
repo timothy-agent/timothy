@@ -21,7 +21,12 @@ import (
 
 // StreamRequest mirrors the gateway's /v1/stream request contract.
 type StreamRequest struct {
-	TaskCategory string             `json:"task_category"`
+	Route string             `json:"route"`
+	// Agent attributes the call in the cost ledger. ToolAllow is
+	// loop-internal (never serialized): the serving agent's tool
+	// allowlist, empty = all tools.
+	Agent     string   `json:"agent,omitempty"`
+	ToolAllow []string `json:"-"`
 	Purpose      string             `json:"purpose,omitempty"` // ledger tag: why this call happened
 	ModelHint    string             `json:"model_hint,omitempty"`
 	System       string             `json:"system,omitempty"`

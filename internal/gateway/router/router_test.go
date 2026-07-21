@@ -29,20 +29,20 @@ func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
 		},
 	}
 	routeRows := []RouteRow{
-		{TaskCategory: "coding", Chain: []ChainEntry{
+		{Name: "coding", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "sonnet"},
 			{ProviderID: "p2", Model: "grok-4"},
 		}, Enabled: true},
-		{TaskCategory: "mini", Chain: []ChainEntry{
+		{Name: "mini", Chain: []ChainEntry{
 			{ProviderID: "p3", Model: "m"},
 		}, Enabled: true},
-		{TaskCategory: "off", Chain: []ChainEntry{
+		{Name: "off", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "sonnet"},
 		}, Enabled: false},
-		{TaskCategory: "ghost", Chain: []ChainEntry{
+		{Name: "ghost", Chain: []ChainEntry{
 			{ProviderID: "nope", Model: "m"},
 		}, Enabled: true},
-		{TaskCategory: "embedding", Chain: []ChainEntry{
+		{Name: "embedding", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "embed-a"}, // anthropic driver: no embeddings
 			{ProviderID: "p2", Model: "embed-b"},
 		}, Enabled: true},
@@ -70,7 +70,7 @@ func TestResolveChainOrder(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())
 
-	attempts, err := snap.Resolve("coding", "")
+	attempts, err := snap.Resolve("coding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestResolveHintProviderNameFirst(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())
 
-	attempts, err := snap.Resolve("coding", "grok")
+	attempts, err := snap.Resolve("coding", "grok", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestResolveHintExactModel(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())
 
-	attempts, err := snap.Resolve("coding", "opus")
+	attempts, err := snap.Resolve("coding", "opus", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestResolveHintMissFallsToChain(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())
 
-	attempts, err := snap.Resolve("coding", "no-such-thing")
+	attempts, err := snap.Resolve("coding", "no-such-thing", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestResolveSkipsUnhealthy(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, map[string]string{"X_KEY": "sk-x"}) // A_KEY unresolved
 
-	attempts, err := snap.Resolve("coding", "")
+	attempts, err := snap.Resolve("coding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestResolveExhaustionNamesEveryReason(t *testing.T) {
 		{"unrouted", []string{"no usable provider"}},
 	}
 	for _, tt := range tests {
-		_, err := snap.Resolve(tt.category, "")
+		_, err := snap.Resolve(tt.category, "", Sticky{})
 		var nre *NoRouteError
 		if !errors.As(err, &nre) {
 			t.Fatalf("%s: err = %v, want NoRouteError", tt.category, err)
@@ -163,7 +163,7 @@ func TestResolveSkipsCapabilityMismatch(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())
 
-	attempts, err := snap.Resolve("embedding", "")
+	attempts, err := snap.Resolve("embedding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestResolveCapabilityExhaustionNamesReason(t *testing.T) {
 	// Only the anthropic-driver provider is available for embedding.
 	snap := testSnapshot(t, map[string]string{"A_KEY": "sk-a"})
 
-	_, err := snap.Resolve("embedding", "")
+	_, err := snap.Resolve("embedding", "", Sticky{})
 	if err == nil || !strings.Contains(err.Error(), "lacks embeddings capability") {
 		t.Fatalf("err = %v, want capability reason", err)
 	}
@@ -202,12 +202,12 @@ func TestResolveModelLevelCapabilities(t *testing.T) {
 		},
 	}}
 	routeRows := []RouteRow{
-		{TaskCategory: "coding", Chain: []ChainEntry{
+		{Name: "coding", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "titan-embed"}, // embeddings-only: skip
 			{ProviderID: "p1", Model: "nova"},
 			{ProviderID: "p1", Model: "undeclared"}, // driver decides: keep
 		}, Enabled: true},
-		{TaskCategory: "embedding", Chain: []ChainEntry{
+		{Name: "embedding", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "nova"}, // chat-only model: skip
 			{ProviderID: "p1", Model: "titan-embed"},
 		}, Enabled: true},
@@ -217,7 +217,7 @@ func TestResolveModelLevelCapabilities(t *testing.T) {
 		t.Fatalf("BuildSnapshot: %v", err)
 	}
 
-	attempts, err := snap.Resolve("coding", "")
+	attempts, err := snap.Resolve("coding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve coding: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestResolveModelLevelCapabilities(t *testing.T) {
 		t.Fatalf("coding attempts = %s", got)
 	}
 
-	attempts, err = snap.Resolve("embedding", "")
+	attempts, err = snap.Resolve("embedding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve embedding: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 		CredentialRef: "B_KEY", Enabled: true,
 		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
-	routeRows := []RouteRow{{TaskCategory: "coding", Chain: []ChainEntry{
+	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
 	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
@@ -250,7 +250,7 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 		t.Fatalf("BuildSnapshot: %v", err)
 	}
 
-	_, err = snap.Resolve("coding", "")
+	_, err = snap.Resolve("coding", "", Sticky{})
 	if err == nil || !strings.Contains(err.Error(), "bedrock/titan-embed (lacks chat capability") {
 		t.Fatalf("err = %v, want model-naming capability reason", err)
 	}
@@ -308,7 +308,7 @@ func TestBedrockHealthyWithoutEnvCredential(t *testing.T) {
 		CredentialRef: "some-aws-profile", Enabled: true,
 		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
-	routeRows := []RouteRow{{TaskCategory: "embedding", Chain: []ChainEntry{
+	routeRows := []RouteRow{{Name: "embedding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
 	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
@@ -316,11 +316,102 @@ func TestBedrockHealthyWithoutEnvCredential(t *testing.T) {
 		t.Fatalf("BuildSnapshot: %v", err)
 	}
 
-	attempts, err := snap.Resolve("embedding", "")
+	attempts, err := snap.Resolve("embedding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if len(attempts) != 1 || attempts[0].ProviderName != "bedrock" {
 		t.Fatalf("attempts = %v, want bedrock", attempts)
+	}
+}
+
+// A price-strategy route reorders its chain: the cheaper declared
+// model jumps ahead of the written first entry, and dead entries sink.
+func TestScoredStrategyReordersChain(t *testing.T) {
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "pricey", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true,
+			Models: []ModelInfo{{ID: "big", Prices: &ModelPrices{OutputPerMTok: 25}}}},
+		{ID: "p2", Name: "cheap", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true,
+			Models: []ModelInfo{{ID: "small", Prices: &ModelPrices{OutputPerMTok: 1}}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "big"},
+		{ProviderID: "p2", Model: "small"},
+	}}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("r", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if attempts[0].ProviderName != "cheap" {
+		t.Fatalf("price strategy served %s first, want cheap", attempts[0].ProviderName)
+	}
+
+	// Mild degradation doesn't dethrone a 25x price advantage…
+	snap.SetStats(map[string]ModelStats{
+		"cheap/small": {Uptime: 0.8, LatencyMS: 900},
+		"pricey/big":  {Uptime: 1.0, LatencyMS: 800},
+	})
+	attempts, err = snap.Resolve("r", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve with stats: %v", err)
+	}
+	if attempts[0].ProviderName != "cheap" {
+		t.Fatalf("price strategy abandoned cheap on soft stats: %+v", attempts)
+	}
+	// …but uptime multiplies the score, so a provider failing almost
+	// every request sinks under ANY strategy, price included.
+	snap.SetStats(map[string]ModelStats{
+		"cheap/small": {Uptime: 0.05, LatencyMS: 900},
+		"pricey/big":  {Uptime: 1.0, LatencyMS: 800},
+	})
+	attempts, err = snap.Resolve("r", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve with hard-down stats: %v", err)
+	}
+	if attempts[0].ProviderName != "pricey" {
+		t.Fatalf("a 5%%-uptime provider stayed first: %+v", attempts)
+	}
+}
+
+// An ordered route ignores stats entirely — written order is the
+// contract.
+func TestOrderedStrategyIgnoresStats(t *testing.T) {
+	snap := testSnapshot(t, map[string]string{"ANTH_KEY": "sk", "X_KEY": "sk", "A_KEY": "sk"})
+	snap.SetStats(map[string]ModelStats{"anthropic/sonnet": {Uptime: 0.01}})
+	attempts, err := snap.Resolve("coding", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if attempts[0].ProviderName != "anthropic" {
+		t.Fatalf("ordered chain reordered by stats: %+v", attempts)
+	}
+}
+
+// Sticky moves a chain member to the front, but never smuggles in a
+// provider+model outside the chain.
+func TestStickyPrefersChainMemberOnly(t *testing.T) {
+	snap := testSnapshot(t, map[string]string{"ANTH_KEY": "sk", "X_KEY": "sk", "A_KEY": "sk"})
+
+	attempts, err := snap.Resolve("coding", "", Sticky{ProviderName: "grok", Model: "grok-4"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if attempts[0].ProviderName != "grok" {
+		t.Fatalf("sticky chain member not first: %+v", attempts)
+	}
+
+	attempts, err = snap.Resolve("coding", "", Sticky{ProviderName: "grok", Model: "not-in-chain"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if attempts[0].ProviderName != "anthropic" {
+		t.Fatalf("sticky outside the chain changed order: %+v", attempts)
 	}
 }

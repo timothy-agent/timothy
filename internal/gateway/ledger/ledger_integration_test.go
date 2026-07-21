@@ -44,14 +44,14 @@ func TestRecordWritesRows(t *testing.T) {
 
 	// Success with usage and cost.
 	l.Record(ctx, Entry{
-		Provider: "itest-provider", Model: "m1", TaskCategory: "coding",
+		Provider: "itest-provider", Model: "m1", Route: "coding",
 		SessionID: "sess-1",
 		Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10},
 		LatencyMS: 321, Status: "ok", CostUSD: &cost,
 	})
 	// Failure without usage: cost, tokens, session all NULL.
 	l.Record(ctx, Entry{
-		Provider: "itest-provider", Model: "m1", TaskCategory: "coding",
+		Provider: "itest-provider", Model: "m1", Route: "coding",
 		LatencyMS: 45, Status: "error", ErrorCode: "timeout",
 	})
 

@@ -51,7 +51,7 @@ func TestStreamRelaysEvents(t *testing.T) {
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"done\",\"meta\":{\"provider\":\"p\",\"model\":\"m\"}}\n\n")
 	})
 
-	ch, err := c.Stream(t.Context(), StreamRequest{TaskCategory: "mini"})
+	ch, err := c.Stream(t.Context(), StreamRequest{Route: "mini"})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestStreamNoSecondTerminalWhenConnectionDropsAfterDone(t *testing.T) {
 		panic(http.ErrAbortHandler)
 	})
 
-	ch, err := c.Stream(t.Context(), StreamRequest{TaskCategory: "mini"})
+	ch, err := c.Stream(t.Context(), StreamRequest{Route: "mini"})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestStreamEmitsTerminalWhenCutBeforeDone(t *testing.T) {
 		panic(http.ErrAbortHandler)
 	})
 
-	ch, err := c.Stream(t.Context(), StreamRequest{TaskCategory: "mini"})
+	ch, err := c.Stream(t.Context(), StreamRequest{Route: "mini"})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestStreamRejectsGatewayErrorStatus(t *testing.T) {
 		http.Error(w, `{"error":"no_route"}`, http.StatusBadGateway)
 	})
 
-	if _, err := c.Stream(t.Context(), StreamRequest{TaskCategory: "mini"}); err == nil {
+	if _, err := c.Stream(t.Context(), StreamRequest{Route: "mini"}); err == nil {
 		t.Fatal("Stream() = nil error for 502 gateway response")
 	}
 }

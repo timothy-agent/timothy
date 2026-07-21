@@ -28,7 +28,7 @@ var buckets = map[string]string{"hour": "hour", "day": "day", "week": "week"}
 var groups = map[string]string{
 	"provider": "provider",
 	"model":    "model",
-	"category": "task_category",
+	"route": "route",
 }
 
 const notTest = `purpose IS DISTINCT FROM 'test'`

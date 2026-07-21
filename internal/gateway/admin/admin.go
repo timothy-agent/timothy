@@ -395,7 +395,7 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	// task_routes isn't locked here, so a concurrent PatchRoute could
+	// routes isn't locked here, so a concurrent PatchRoute could
 	// still commit a fresh reference right after this check reads zero.
 	// PatchRoute's own provider-existence check runs inside its own
 	// FOR UPDATE-guarded tx against this same row, so the two race
@@ -403,7 +403,7 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 	// state and fails cleanly (delete finds a ref, or the route patch
 	// finds the provider gone).
 	var refs int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM task_routes
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM routes
 		WHERE enabled AND chain @> $1::jsonb`,
 		fmt.Sprintf(`[{"provider_id": %q}]`, id)).Scan(&refs); err != nil {
 		return fmt.Errorf("admin delete: %w", err)
@@ -422,11 +422,12 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Route is the API shape of one task_routes row.
+// Route is the API shape of one routes row.
 type Route struct {
-	TaskCategory string              `json:"task_category"`
-	Chain        []router.ChainEntry `json:"chain"`
-	Enabled      bool                `json:"enabled"`
+	Name     string              `json:"name"`
+	Chain    []router.ChainEntry `json:"chain"`
+	Strategy string              `json:"strategy"`
+	Enabled  bool                `json:"enabled"`
 }
 
 func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
@@ -434,7 +435,7 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin routes: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT task_category, chain, enabled FROM task_routes ORDER BY task_category`)
+	rows, err := db.Query(ctx, `SELECT name, chain, strategy, enabled FROM routes ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("admin routes: %w", err)
 	}
@@ -446,7 +447,7 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 			r     Route
 			chain []byte
 		)
-		if err := rows.Scan(&r.TaskCategory, &chain, &r.Enabled); err != nil {
+		if err := rows.Scan(&r.Name, &chain, &r.Strategy, &r.Enabled); err != nil {
 			return nil, fmt.Errorf("admin routes: %w", err)
 		}
 		if err := json.Unmarshal(chain, &r.Chain); err != nil {
@@ -457,13 +458,17 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 	return out, rows.Err()
 }
 
-// RoutePatch reorders/replaces a category's chain and/or flips it.
+// RoutePatch reorders/replaces a route's chain, changes its strategy,
+// and/or flips it.
 type RoutePatch struct {
-	Chain   *[]router.ChainEntry `json:"chain"`
-	Enabled *bool                `json:"enabled"`
+	Chain    *[]router.ChainEntry `json:"chain"`
+	Strategy *string              `json:"strategy"`
+	Enabled  *bool                `json:"enabled"`
 }
 
-func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatch) error {
+var validStrategies = map[string]bool{"ordered": true, "auto": true, "price": true, "latency": true}
+
+func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) error {
 	db, err := a.db.Get()
 	if err != nil {
 		return fmt.Errorf("admin route patch: %w", err)
@@ -478,10 +483,10 @@ func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatc
 		before    Route
 		chainJSON []byte
 	)
-	err = tx.QueryRow(ctx, `SELECT task_category, chain, enabled FROM task_routes WHERE task_category = $1`,
-		category).Scan(&before.TaskCategory, &chainJSON, &before.Enabled)
+	err = tx.QueryRow(ctx, `SELECT name, chain, strategy, enabled FROM routes WHERE name = $1`,
+		name).Scan(&before.Name, &chainJSON, &before.Strategy, &before.Enabled)
 	if err != nil {
-		return fmt.Errorf("route %s: %w", category, ErrNotFound)
+		return fmt.Errorf("route %s: %w", name, ErrNotFound)
 	}
 	_ = json.Unmarshal(chainJSON, &before.Chain)
 
@@ -500,18 +505,24 @@ func (a *Admin) PatchRoute(ctx context.Context, category string, patch RoutePatc
 		}
 		after.Chain = *patch.Chain
 	}
+	if patch.Strategy != nil {
+		if !validStrategies[*patch.Strategy] {
+			return fmt.Errorf("unknown strategy %q", *patch.Strategy)
+		}
+		after.Strategy = *patch.Strategy
+	}
 	if patch.Enabled != nil {
 		after.Enabled = *patch.Enabled
 	}
 
-	if _, err := tx.Exec(ctx, `UPDATE task_routes SET chain = $2, enabled = $3, updated_at = now()
-		WHERE task_category = $1`, category, jsonOr(after.Chain, "[]"), after.Enabled); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE routes SET chain = $2, strategy = $3, enabled = $4, updated_at = now()
+		WHERE name = $1`, name, jsonOr(after.Chain, "[]"), after.Strategy, after.Enabled); err != nil {
 		return fmt.Errorf("admin route patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("admin route patch: %w", err)
 	}
-	a.audit(ctx, "update", "route", category, before, after)
+	a.audit(ctx, "update", "route", name, before, after)
 	a.reload(ctx)
 	return nil
 }
@@ -671,7 +682,7 @@ func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, 
 		MaxTokens: 1,
 	})
 	res := TestResult{Model: model}
-	entry := ledger.Entry{Provider: providerName, Model: model, TaskCategory: "admin", Purpose: "test"}
+	entry := ledger.Entry{Provider: providerName, Model: model, Route: "admin", Purpose: "test"}
 	if err != nil {
 		res.Detail = err.Error()
 		entry.Status, entry.ErrorCode = "error", "invalid_request"

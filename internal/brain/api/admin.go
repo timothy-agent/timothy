@@ -22,7 +22,7 @@ var adminRoutePatterns = []string{
 	"POST /v1/admin/providers/validate",
 	"GET /v1/admin/providers/health",
 	"GET /v1/admin/routes",
-	"PATCH /v1/admin/routes/{category}",
+	"PATCH /v1/admin/routes/{name}",
 	"PUT /v1/admin/secrets/{ref_name}",
 	"DELETE /v1/admin/secrets/{ref_name}",
 	"GET /v1/admin/secrets/{ref_name}",

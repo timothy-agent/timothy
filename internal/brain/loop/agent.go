@@ -119,11 +119,13 @@ func (a *Agent) SetOffloadThreshold(tool string, bytes int) {
 
 // Request is one turn's loop input.
 type Request struct {
-	SessionID    string
-	TaskCategory string
-	ModelHint    string
-	System       string
-	Messages     []provider.Message
+	SessionID string
+	Route     string
+	Agent     string   // serving agent, for ledger attribution
+	ToolAllow []string // agent's tool allowlist; empty = all
+	ModelHint string
+	System    string
+	Messages  []provider.Message
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -151,6 +153,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	}
 
 	exec, defs := a.toolset()
+	defs = filterDefs(defs, req.ToolAllow)
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
 	var lastMeta *stream.Meta
@@ -169,7 +172,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			directive = tools.StepForceSynthesis
 		}
 		sreq := gwclient.StreamRequest{
-			TaskCategory: req.TaskCategory,
+			Route: req.Route,
+			Agent:        req.Agent,
 			Purpose:      "chat",
 			ModelHint:    req.ModelHint,
 			System:       req.System,
@@ -257,7 +261,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 
 		if len(calls) == 0 {
 			if directive == tools.StepProceed &&
-				tools.NeedsRetrievalCoercion(req.TaskCategory, toolCallCount, coerced) {
+				tools.NeedsRetrievalCoercion(req.Route, toolCallCount, coerced) {
 				coerced = true
 				msgs = append(msgs,
 					provider.Message{Role: "assistant", Content: text.String()},
@@ -477,4 +481,24 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// filterDefs narrows the tool surface to an agent's allowlist. The
+// model never sees a disallowed tool, so there is nothing to refuse
+// at execution time; empty allow means the full surface.
+func filterDefs(defs []provider.ToolDef, allow []string) []provider.ToolDef {
+	if len(allow) == 0 {
+		return defs
+	}
+	allowed := make(map[string]bool, len(allow))
+	for _, name := range allow {
+		allowed[name] = true
+	}
+	out := make([]provider.ToolDef, 0, len(defs))
+	for _, d := range defs {
+		if allowed[d.Name] {
+			out = append(out, d)
+		}
+	}
+	return out
 }

@@ -5,7 +5,7 @@
 
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_category text NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_route text NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS session_events (
     session_id uuid NOT NULL REFERENCES sessions(id),

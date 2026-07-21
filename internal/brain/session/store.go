@@ -130,7 +130,7 @@ type Meta struct {
 	ID           string    `json:"id"`
 	Title        string    `json:"title"`
 	Archived     bool      `json:"archived"`
-	LastCategory string    `json:"last_category,omitempty"`
+	LastRoute string    `json:"last_route,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -157,14 +157,14 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 	var sql string
 	var args []any
 	if query == "" {
-		sql = `SELECT id, COALESCE(title, ''), archived, last_category, created_at, updated_at
+		sql = `SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at
 		       FROM sessions WHERE NOT archived AND (updated_at, id) < ($1, $2::uuid)
 		       ORDER BY updated_at DESC, id DESC LIMIT $3`
 		args = []any{before, beforeID, listLimit}
 	} else {
 		// ILIKE wildcards in the user's query are literals, not patterns.
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
-		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_category, s.created_at, s.updated_at
+		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_route, s.created_at, s.updated_at
 		       FROM sessions s
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
 		       WHERE (s.updated_at, s.id) < ($2, $3::uuid)
@@ -184,7 +184,7 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 	var out []Meta
 	for rows.Next() {
 		var m Meta
-		if err := rows.Scan(&m.ID, &m.Title, &m.Archived, &m.LastCategory, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("session: list scan: %w", err)
 		}
 		out = append(out, m)
@@ -200,9 +200,9 @@ func (s *Store) Get(ctx context.Context, id string) (Meta, error) {
 	}
 	var m Meta
 	err = db.QueryRow(ctx,
-		`SELECT id, COALESCE(title, ''), archived, last_category, created_at, updated_at
+		`SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at
 		 FROM sessions WHERE id = $1`, id,
-	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastCategory, &m.CreatedAt, &m.UpdatedAt)
+	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return Meta{}, fmt.Errorf("session: get %s: %w", id, err)
 	}
@@ -243,14 +243,14 @@ func (s *Store) SetTitleIfEmpty(ctx context.Context, id, title string) error {
 	return err
 }
 
-// SetLastCategory remembers the session's most recent task category so
+// SetLastRoute remembers the session's most recent route and agent so
 // the UI composer can restore it.
-func (s *Store) SetLastCategory(ctx context.Context, id, category string) error {
+func (s *Store) SetLastRoute(ctx context.Context, id, route, agent string) error {
 	db, err := s.db.Get()
 	if err != nil {
-		return fmt.Errorf("session: set category: %w", err)
+		return fmt.Errorf("session: set route: %w", err)
 	}
 	_, err = db.Exec(ctx,
-		"UPDATE sessions SET last_category = $2 WHERE id = $1", id, category)
+		"UPDATE sessions SET last_route = $2, agent = $3 WHERE id = $1", id, route, agent)
 	return err
 }

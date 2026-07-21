@@ -63,7 +63,7 @@ interface Loaded {
   today: UsageSummary
   byProvider: UsagePoint[]
   byModel: UsagePoint[]
-  byCategory: UsagePoint[]
+  byRoute: UsagePoint[]
   sessions: SessionUsage[]
   latency: LatencyRow[]
   cache: CacheRow[]
@@ -136,7 +136,7 @@ export function Analytics() {
       usageSummary(startOfToday, to),
       usageSeries(from, to, bucket, 'provider'),
       usageSeries(from, to, bucket, 'model'),
-      usageSeries(from, to, bucket, 'category'),
+      usageSeries(from, to, bucket, 'route'),
       usageSessions(from, to, 10),
       usageLatency(from, to),
       usageCache(from, to),
@@ -154,7 +154,7 @@ export function Analytics() {
         today: val(results[2], emptySummary),
         byProvider: val(results[3], []),
         byModel: val(results[4], []),
-        byCategory: val(results[5], []),
+        byRoute: val(results[5], []),
         sessions: val(results[6], []),
         latency: val(results[7], []),
         cache: val(results[8], []),
@@ -348,7 +348,7 @@ export function Analytics() {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} />
-          <BreakdownTable title="By category" rows={data ? totals(data.byCategory) : []} />
+          <BreakdownTable title="By route" rows={data ? totals(data.byRoute) : []} />
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Top sessions by cost</h2>
             <table className="mt-3 w-full text-sm">

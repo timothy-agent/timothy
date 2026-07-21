@@ -59,19 +59,19 @@ func seedAgg(t *testing.T, led *Ledger) (from, to time.Time) {
 	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
 
 	rows := []Entry{
-		{Provider: aggMarker + "a", Model: "m1", TaskCategory: "coding", SessionID: "s1",
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20},
 			LatencyMS: 100, Status: "ok", CostUSD: usd(0.10)},
-		{Provider: aggMarker + "a", Model: "m1", TaskCategory: "coding", SessionID: "s1",
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
 			LatencyMS: 300, Status: "ok", CostUSD: usd(0.20)},
-		{Provider: aggMarker + "b", Model: "m2", TaskCategory: "mini", SessionID: "s2",
+		{Provider: aggMarker + "b", Model: "m2", Route: "mini", SessionID: "s2",
 			Usage:     &stream.Usage{InputTokens: 10, OutputTokens: 5},
 			LatencyMS: 50, Status: "ok", CostUSD: usd(0.01)},
-		{Provider: aggMarker + "b", Model: "m2", TaskCategory: "mini", SessionID: "s2",
+		{Provider: aggMarker + "b", Model: "m2", Route: "mini", SessionID: "s2",
 			LatencyMS: 5, Status: "error", ErrorCode: "provider_error"},
 		// Test-connection probe: excluded from every aggregate.
-		{Provider: aggMarker + "a", Model: "m1", TaskCategory: "coding", Purpose: "test",
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", Purpose: "test",
 			Usage:     &stream.Usage{InputTokens: 999999, OutputTokens: 999999},
 			LatencyMS: 9999, Status: "ok", CostUSD: usd(99.0)},
 	}

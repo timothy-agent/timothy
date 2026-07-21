@@ -35,22 +35,22 @@ ON CONFLICT (name) DO NOTHING;
 -- To serve everything from AWS:
 --   UPDATE providers SET enabled = true  WHERE name = 'bedrock';
 --   UPDATE providers SET enabled = false WHERE name <> 'bedrock';
-UPDATE task_routes
+UPDATE routes
 SET chain = chain || jsonb_build_array(jsonb_build_object(
       'provider_id', (SELECT id FROM providers WHERE name = 'bedrock'),
-      'model', CASE WHEN task_category IN ('mini', 'summarize', 'realtime')
+      'model', CASE WHEN name IN ('mini', 'summarize', 'realtime')
                     THEN 'us.amazon.nova-lite-v1:0'
                     ELSE 'us.amazon.nova-pro-v1:0' END))
-WHERE task_category IN ('reasoning', 'coding', 'research', 'mini', 'summarize', 'realtime')
+WHERE name IN ('reasoning', 'default', 'research', 'mini', 'summarize', 'realtime')
   AND NOT chain @> jsonb_build_array(jsonb_build_object(
       'provider_id', (SELECT id FROM providers WHERE name = 'bedrock')));
 
 -- Give the embedding route its first chain — it was seeded empty in
 -- 0002 pending an embedding-capable provider. Only fills a still-empty
 -- chain; a user-configured chain is never overwritten. Enable with:
---   UPDATE task_routes SET enabled = true WHERE task_category = 'embedding';
-UPDATE task_routes
+--   UPDATE routes SET enabled = true WHERE name = 'embedding';
+UPDATE routes
 SET chain = jsonb_build_array(jsonb_build_object(
       'provider_id', (SELECT id FROM providers WHERE name = 'bedrock'),
       'model', 'amazon.titan-embed-text-v1'))
-WHERE task_category = 'embedding' AND chain = '[]'::jsonb;
+WHERE name = 'embedding' AND chain = '[]'::jsonb;

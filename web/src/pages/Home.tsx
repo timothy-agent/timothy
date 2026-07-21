@@ -9,10 +9,9 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Composer } from '../components/Composer'
-import { categories } from '../lib/chat'
 import { usePendingMemories } from '../lib/memory'
 
-const categoryKey = 'timothy.category'
+const agentKey = 'timothy.agent'
 
 // ChatIntent carries a home-screen action into the chat page: `send`
 // fires immediately, `draft` only prefills the composer, `skillHint`
@@ -20,7 +19,7 @@ const categoryKey = 'timothy.category'
 export interface ChatIntent {
   send?: string
   draft?: string
-  category?: string
+  agent?: string
   skillHint?: string
 }
 
@@ -38,19 +37,17 @@ export function Home() {
   const navigate = useNavigate()
   const pending = usePendingMemories()
   const [draft, setDraft] = useState('')
-  const [category, setCategory] = useState(
-    () => localStorage.getItem(categoryKey) ?? categories[0],
-  )
+  const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
 
-  const pickCategory = (c: string) => {
-    setCategory(c)
-    localStorage.setItem(categoryKey, c)
+  const pickAgent = (a: string) => {
+    setAgent(a)
+    localStorage.setItem(agentKey, a)
   }
 
   const send = () => {
     const message = draft.trim()
     if (!message) return
-    navigate('/chat', { state: { send: message, category } satisfies ChatIntent })
+    navigate('/chat', { state: { send: message, agent } satisfies ChatIntent })
   }
 
   const groups: { title: string; tiles: Tile[] }[] = [
@@ -92,8 +89,8 @@ export function Home() {
             draft={draft}
             onDraft={setDraft}
             onSend={send}
-            category={category}
-            onCategory={pickCategory}
+            agent={agent}
+            onAgent={pickAgent}
             autoFocus
             placeholder="Ask anything…"
           />

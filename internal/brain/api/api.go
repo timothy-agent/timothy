@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
@@ -64,7 +65,7 @@ var memoryRoutePatterns = []string{
 // is the reverse proxy to memoryd's management routes, admin the
 // proxy to the gateway's internal control plane, conns the local
 // connector control plane (nil leaves any of them unmounted).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, conns *connectors.Manager, goog *connectors.Google, token string, log *slog.Logger) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, token string, log *slog.Logger) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
@@ -73,6 +74,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	}
 	a.registerAdmin(srv.Handle, admin)
 	a.registerSettings(srv.Handle, flags)
+	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog)
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))

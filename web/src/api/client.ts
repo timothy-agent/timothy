@@ -1,4 +1,5 @@
 import type {
+  AdminAgent,
   AdminConnector,
   AdminProvider,
   AdminRoute,
@@ -279,7 +280,7 @@ export async function usageSeries(
   from: Date,
   to: Date,
   bucket: 'hour' | 'day' | 'week',
-  group: 'provider' | 'model' | 'category',
+  group: 'provider' | 'model' | 'route',
 ): Promise<UsagePoint[]> {
   const { points } = await request<{ points: UsagePoint[] }>(
     `/v1/admin/usage/series?${rangeParams(from, to, { bucket, group })}`,
@@ -481,6 +482,36 @@ export async function testSecretBackend(
   })
 }
 
+// --- agents (who serves a session) ---
+
+export async function listAgents(): Promise<AdminAgent[]> {
+  const { agents } = await request<{ agents: AdminAgent[] }>('/v1/admin/agents')
+  return agents ?? []
+}
+
+export async function createAgent(a: Partial<AdminAgent>): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/admin/agents', {
+    method: 'POST',
+    body: JSON.stringify(a),
+  })
+  return id
+}
+
+export async function patchAgent(id: string, patch: Partial<AdminAgent>): Promise<void> {
+  await request<void>(`/v1/admin/agents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function setDefaultAgent(id: string): Promise<void> {
+  await request<void>(`/v1/admin/agents/${id}/default`, { method: 'PUT' })
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await request<void>(`/v1/admin/agents/${id}`, { method: 'DELETE' })
+}
+
 // --- connectors (integrations) ---
 
 export async function listConnectors(): Promise<AdminConnector[]> {
@@ -531,10 +562,10 @@ export async function listRoutes(): Promise<AdminRoute[]> {
 }
 
 export async function patchRoute(
-  category: string,
-  patch: { chain?: ChainEntry[]; enabled?: boolean },
+  name: string,
+  patch: { chain?: ChainEntry[]; strategy?: string; enabled?: boolean },
 ): Promise<void> {
-  await request<void>(`/v1/admin/routes/${category}`, {
+  await request<void>(`/v1/admin/routes/${name}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   })

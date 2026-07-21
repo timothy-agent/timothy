@@ -206,7 +206,7 @@ func TestAgentToolCallThenAnswer(t *testing.T) {
 	}}
 	a, audit, events, _ := testAgent(t, gw)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestAgentParallelCallsRunConcurrently(t *testing.T) {
 	a, _, _, _ := testAgent(t, gw, slow)
 
 	start := time.Now()
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestAgentStepCeilingForcesSynthesis(t *testing.T) {
 	gw := &scriptedGateway{scripts: scripts}
 	a, _, _, _ := testAgent(t, gw)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestAgentForcesSynthesisOnRepeatedIdenticalCalls(t *testing.T) {
 	gw := &scriptedGateway{scripts: scripts}
 	a, _, _, _ := testAgent(t, gw)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestAgentCeilingTerminatesEvenIfModelKeepsCalling(t *testing.T) {
 	gw := &scriptedGateway{scripts: scripts}
 	a, _, events, _ := testAgent(t, gw)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestAgentFlushesUsageOnGatewayError(t *testing.T) {
 	}}
 	a, _, _, _ := testAgent(t, gw)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestAgentPerToolOffloadThreshold(t *testing.T) {
 	a, _, _, _ := testAgent(t, gw, small)
 	a.SetOffloadThreshold("chatty", 50)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestAgentOffloadsBigResults(t *testing.T) {
 	}}
 	a, _, _, _ := testAgent(t, gw, big)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestAgentRetrieveOutputBetweenThresholdAndCap(t *testing.T) {
 	}}
 	a, _, _, _ := testAgent(t, gw, mid)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +566,7 @@ func TestAgentRedactsLoadSkillDigest(t *testing.T) {
 	}}
 	a, _, _, _ := testAgent(t, gw, loadSkill)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding", Messages: []provider.Message{{Role: "user", Content: "load the travel skill"}}})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "load the travel skill"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +603,7 @@ func TestAgentPermissionDenyBecomesFeedback(t *testing.T) {
 	a, audit, _, _ := testAgent(t, gw)
 	a.perms = denyPerms{}
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +654,7 @@ func TestAgentInteractiveApprovalPaths(t *testing.T) {
 		ask := askPerms{}
 		a.perms = &grantRecordingPerms{ask: ask, rec: perms}
 
-		ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding"})
+		ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -752,7 +752,7 @@ func TestAgentResearchCoercion(t *testing.T) {
 	}}
 	a, _, _, _ := testAgent(t, gw)
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "research"})
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "research"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,7 +804,7 @@ func TestSwapToolsChangesSurfaceForNewTurns(t *testing.T) {
 		{Name: connector.Name, Description: connector.Description, InputSchema: connector.InputSchema},
 	})
 
-	ch, err := a.Start(t.Context(), Request{SessionID: "s1", TaskCategory: "coding",
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding",
 		Messages: []provider.Message{{Role: "user", Content: "file it"}}})
 	if err != nil {
 		t.Fatal(err)

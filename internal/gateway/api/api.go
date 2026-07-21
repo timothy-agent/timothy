@@ -44,7 +44,8 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 }
 
 type streamRequest struct {
-	TaskCategory string             `json:"task_category"`
+	Route string             `json:"route"`
+	Agent        string             `json:"agent,omitempty"` // serving agent, for the ledger
 	Purpose      string             `json:"purpose,omitempty"` // why: chat|distill|title|compaction|...
 	ModelHint    string             `json:"model_hint,omitempty"`
 	System       string             `json:"system,omitempty"`
@@ -72,8 +73,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.TaskCategory == "" || len(req.Messages) == 0 {
-		jsonError(w, http.StatusBadRequest, "bad_request", "task_category and messages are required")
+	if req.Route == "" || len(req.Messages) == 0 {
+		jsonError(w, http.StatusBadRequest, "bad_request", "route and messages are required")
 		return
 	}
 
@@ -82,7 +83,17 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
 		return
 	}
-	attempts, err := snap.Resolve(req.TaskCategory, req.ModelHint)
+	// Stickiness: staying on the provider that served this session's
+	// last successful turn keeps its prompt cache warm (D-018).
+	var sticky router.Sticky
+	if req.SessionID != "" {
+		if src, ok := a.ledger.(stickySource); ok {
+			if p, m, ok := src.LastSuccess(r.Context(), req.SessionID, req.Route); ok {
+				sticky = router.Sticky{ProviderName: p, Model: m}
+			}
+		}
+	}
+	attempts, err := snap.Resolve(req.Route, req.ModelHint, sticky)
 	if err != nil {
 		var nre *router.NoRouteError
 		if errors.As(err, &nre) {
@@ -124,7 +135,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		res := streamAttempt(r.Context(), att, completion, ledger.Entry{
 			ID:       ledger.NewID(),
 			Provider: att.ProviderName, Model: att.Model,
-			TaskCategory: req.TaskCategory, Purpose: req.Purpose,
+			Route: req.Route, Agent: req.Agent, Purpose: req.Purpose,
 			SessionID: req.SessionID, LaneID: req.LaneID,
 		}, send)
 
@@ -149,6 +160,12 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+// stickySource is the optional ledger capability behind session
+// stickiness; the in-memory test recorders simply don't implement it.
+type stickySource interface {
+	LastSuccess(ctx context.Context, sessionID, route string) (providerName, model string, ok bool)
+}
+
 // attemptResult is one provider attempt's outcome.
 type attemptResult struct {
 	streamed bool   // any content event reached the client
@@ -157,9 +174,24 @@ type attemptResult struct {
 	entry    ledger.Entry
 }
 
+// noFailoverCodes are request-shape failures: the request itself is
+// bad, so the next provider would reject it identically. Everything
+// else — 5xx, timeouts, connection errors, 401/403 (bad key for THIS
+// provider), 429 — advances the chain.
+var noFailoverCodes = map[string]bool{
+	"invalid_request": true,
+	"http_400":        true,
+	"http_404":        true,
+	"http_413":        true,
+	"http_422":        true,
+}
+
 // failedOver reports whether the chain may move to the next entry:
-// only when the failure happened before anything reached the client.
-func (r attemptResult) failedOver() bool { return r.failed && !r.streamed }
+// only when the failure happened before anything reached the client,
+// and only for failures a different provider could actually fix.
+func (r attemptResult) failedOver() bool {
+	return r.failed && !r.streamed && !noFailoverCodes[r.entry.ErrorCode]
+}
 
 // streamAttempt runs one provider attempt, relaying events to send
 // until the provider channel closes, and derives the ledger status.
@@ -254,7 +286,7 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
 		return
 	}
-	attempts, err := snap.Resolve("embedding", req.ModelHint)
+	attempts, err := snap.Resolve("embedding", req.ModelHint, router.Sticky{})
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, "no_route", err.Error())
 		return
@@ -273,7 +305,7 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		entry := ledger.Entry{
 			Provider: att.ProviderName, Model: att.Model,
-			TaskCategory: "embedding", Purpose: req.Purpose, SessionID: req.SessionID,
+			Route: "embedding", Purpose: req.Purpose, SessionID: req.SessionID,
 		}
 
 		vecs, usage, err := emb.Embed(r.Context(), att.Model, req.Texts)

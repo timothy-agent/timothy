@@ -2,18 +2,18 @@ import { ArrowUp01Icon, Cancel01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef } from 'react'
 import { skillLabels } from '../lib/skills'
-import { CategoryPicker } from './CategoryPicker'
+import { AgentPicker } from './AgentPicker'
 
 // Composer is the one message box: the chat page's docked input and
 // the home page's hero input are the same component so behavior
-// (autogrow, Enter-to-send, category pill) never drifts.
+// (autogrow, Enter-to-send, agent pill) never drifts.
 export function Composer({
   draft,
   onDraft,
   onSend,
-  category,
-  onCategory,
-  hideCategoryPicker = false,
+  agent,
+  onAgent,
+  hideAgentPicker = false,
   skillHint,
   onRemoveSkillHint,
   disabled = false,
@@ -23,9 +23,9 @@ export function Composer({
   draft: string
   onDraft: (v: string) => void
   onSend: () => void
-  category: string
-  onCategory: (c: string) => void
-  hideCategoryPicker?: boolean
+  agent: string
+  onAgent: (a: string) => void
+  hideAgentPicker?: boolean
   skillHint?: string
   onRemoveSkillHint?: () => void
   disabled?: boolean
@@ -79,7 +79,7 @@ export function Composer({
         }}
       />
       <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
-        {hideCategoryPicker ? <span /> : <CategoryPicker value={category} onChange={onCategory} />}
+        {hideAgentPicker ? <span /> : <AgentPicker value={agent} onChange={onAgent} />}
         <button
           type="button"
           onClick={onSend}

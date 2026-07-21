@@ -120,7 +120,7 @@ func (s *Store) Load(ctx context.Context) error {
 		return fmt.Errorf("router: providers rows: %w", err)
 	}
 
-	routeRows, err := tx.Query(ctx, `SELECT task_category, chain, enabled FROM task_routes`)
+	routeRows, err := tx.Query(ctx, `SELECT name, chain, strategy, enabled FROM routes`)
 	if err != nil {
 		return fmt.Errorf("router: query routes: %w", err)
 	}
@@ -132,11 +132,11 @@ func (s *Store) Load(ctx context.Context) error {
 			row       RouteRow
 			chainJSON []byte
 		)
-		if err := routeRows.Scan(&row.TaskCategory, &chainJSON, &row.Enabled); err != nil {
+		if err := routeRows.Scan(&row.Name, &chainJSON, &row.Strategy, &row.Enabled); err != nil {
 			return fmt.Errorf("router: scan route: %w", err)
 		}
 		if err := json.Unmarshal(chainJSON, &row.Chain); err != nil {
-			return fmt.Errorf("router: route %s chain: %w", row.TaskCategory, err)
+			return fmt.Errorf("router: route %s chain: %w", row.Name, err)
 		}
 		routes = append(routes, row)
 	}
@@ -148,7 +148,52 @@ func (s *Store) Load(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("router: build snapshot: %w", err)
 	}
+	// Ledger stats feed scored strategies; a failure only degrades
+	// scoring to declared prices, never the snapshot itself.
+	if stats, err := loadStats(ctx, tx); err != nil {
+		s.log.Warn("router: ledger stats unavailable; scored strategies use prices only", "error", err)
+	} else {
+		snap.SetStats(stats)
+	}
 	s.snap.Store(snap)
 	s.log.Info("routing config loaded", "providers", len(provRows), "routes", len(routes))
 	return nil
+}
+
+// loadStats aggregates the last hour of the cost ledger per
+// provider+model with exponential time decay (τ = 30 min), so scored
+// strategies react to recent reality without whiplashing on one bad
+// request. Test probes are excluded — a connection test is not
+// serving traffic.
+func loadStats(ctx context.Context, tx pgx.Tx) (map[string]ModelStats, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT provider, model,
+		       COALESCE(SUM(CASE WHEN status = 'ok' THEN w END) / NULLIF(SUM(w), 0), 0),
+		       COALESCE(SUM(w * latency_ms) / NULLIF(SUM(CASE WHEN status = 'ok' THEN w END), 0), 0),
+		       COALESCE(SUM(w * tps) / NULLIF(SUM(CASE WHEN status = 'ok' THEN w END), 0), 0)
+		FROM (
+			SELECT provider, model, status, latency_ms,
+			       COALESCE(output_tokens, 0) * 1000.0 / GREATEST(latency_ms, 1) AS tps,
+			       EXP(-EXTRACT(EPOCH FROM (now() - ts)) / 1800.0) AS w
+			FROM cost_ledger
+			WHERE ts > now() - interval '60 minutes'
+			  AND purpose IS DISTINCT FROM 'test'
+		) recent
+		GROUP BY provider, model`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ModelStats{}
+	for rows.Next() {
+		var (
+			prov, model string
+			st          ModelStats
+		)
+		if err := rows.Scan(&prov, &model, &st.Uptime, &st.LatencyMS, &st.TokensPerS); err != nil {
+			return nil, err
+		}
+		out[prov+"/"+model] = st
+	}
+	return out, rows.Err()
 }

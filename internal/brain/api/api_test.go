@@ -122,7 +122,7 @@ func (d *memDir) Append(_ context.Context, id, kind string, payload any) (int64,
 }
 
 func (d *memDir) SetTitleIfEmpty(context.Context, string, string) error { return nil }
-func (d *memDir) SetLastCategory(context.Context, string, string) error { return nil }
+func (d *memDir) SetLastRoute(context.Context, string, string, string) error { return nil }
 
 // fakeGateway yields a canned event sequence, or fails when err set.
 type fakeGateway struct {
@@ -152,7 +152,7 @@ func testAPI(t *testing.T, token string, events []stream.StreamEvent) (*API, *me
 	t.Helper()
 	dir := newMemDir()
 	gw := &fakeGateway{events: events}
-	svc := chat.New(gw, dir, nil, nil, staticBudget(60_000), nil, nil, discard())
+	svc := chat.New(gw, dir, nil, nil, staticBudget(60_000), nil, nil, nil, discard())
 	return &API{svc: svc, dir: dir, token: token, log: discard()}, dir, gw
 }
 
@@ -461,14 +461,14 @@ func TestMessagesEndpointStreamsAndPersists(t *testing.T) {
 	a, dir, gw := testAPI(t, "tok", okEvents())
 	id, _ := dir.Create(t.Context(), "t")
 
-	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hello","task_category":"mini"}`)
+	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hello","route":"mini"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
 	}
 	if got := w.Header().Get("X-Session-Id"); got != id {
 		t.Fatalf("X-Session-Id = %q, want %s", got, id)
 	}
-	if gw.got.TaskCategory != "mini" || !strings.Contains(gw.got.System, "Timothy") {
+	if gw.got.Route != "mini" || !strings.Contains(gw.got.System, "Timothy") {
 		t.Fatalf("gateway request = %+v", gw.got)
 	}
 
@@ -509,7 +509,7 @@ func TestChatErrorCarriesSessionID(t *testing.T) {
 	id, _ := dir.Create(t.Context(), "t")
 	// gateway with error
 	gw := &fakeGateway{err: context.DeadlineExceeded}
-	a.svc = chat.New(gw, dir, nil, nil, staticBudget(60_000), nil, nil, discard())
+	a.svc = chat.New(gw, dir, nil, nil, staticBudget(60_000), nil, nil, nil, discard())
 
 	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hi"}`)
 	if w.Code != http.StatusBadGateway {

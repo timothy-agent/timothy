@@ -17,8 +17,13 @@ vi.mock('../api/client', async (importOriginal) => {
     getSecretBackendConfig: vi.fn(),
     getSettings: vi.fn(),
     patchSettingValues: vi.fn(),
+    createAgent: vi.fn(),
+    deleteAgent: vi.fn(),
+    listAgents: vi.fn(),
     listProviders: vi.fn(),
     listRoutes: vi.fn(),
+    patchAgent: vi.fn(),
+    setDefaultAgent: vi.fn(),
     listSecretBackends: vi.fn(),
     setDefaultSecretBackend: vi.fn(),
     patchBudget: vi.fn(),
@@ -41,7 +46,9 @@ import {
   createProvider,
   getSecretBackendConfig,
   getSettings,
+  listAgents,
   listProviders,
+  listRoutes,
   listSecretBackends,
   patchProvider,
   patchSettingValues,
@@ -85,6 +92,10 @@ beforeEach(() => {
   ])
   vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
   vi.mocked(getSecretBackendConfig).mockResolvedValue({})
+  vi.mocked(listAgents).mockResolvedValue([
+    { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
+  ])
+  vi.mocked(listRoutes).mockResolvedValue([])
   vi.mocked(listSecretBackends).mockResolvedValue([
     { backend: 'db', configured: true, default: true },
     { backend: 'vault', configured: false, default: false },
@@ -99,9 +110,10 @@ describe('Settings tabs', () => {
     expect(screen.queryByText('Connect a provider')).toBeNull()
   })
 
-  it('defaults to Providers', async () => {
+  it('defaults to Agents', async () => {
     renderPage()
-    expect(await screen.findByText('Connect a provider')).toBeTruthy()
+    expect(await screen.findByText('general')).toBeTruthy()
+    expect(screen.getByText(/who serves a session/)).toBeTruthy()
   })
 })
 
@@ -148,7 +160,11 @@ describe('Secrets tab default backend', () => {
 
   it('claims the default for a configured backend', async () => {
     vi.mocked(getSecretBackendConfig).mockResolvedValue({ address: 'http://vault:8200' })
-    vi.mocked(listSecretBackends).mockResolvedValue([
+    vi.mocked(listAgents).mockResolvedValue([
+    { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
+  ])
+  vi.mocked(listRoutes).mockResolvedValue([])
+  vi.mocked(listSecretBackends).mockResolvedValue([
       { backend: 'db', configured: true, default: true },
       { backend: 'vault', configured: true, default: false },
       { backend: 'asm', configured: false, default: false },
@@ -166,7 +182,7 @@ describe('Secrets tab default backend', () => {
 
 describe('Providers tab', () => {
   it('renders configured cards and the preset tile grid', async () => {
-    renderPage()
+    renderPage('/settings?tab=providers')
     expect(await screen.findByText('Your providers · 1')).toBeTruthy()
     expect(screen.getByText('healthy')).toBeTruthy()
     // Every preset is offered as a tile.
@@ -176,7 +192,7 @@ describe('Providers tab', () => {
   })
 
   it('opens a preset-aware dialog: bedrock asks for region, not a key', async () => {
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: /AWS Bedrock/ }))
     const dialog = within(await screen.findByRole('dialog'))
     expect(dialog.getByText('Connect AWS Bedrock')).toBeTruthy()
@@ -191,7 +207,7 @@ describe('Providers tab', () => {
     vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'llama-3.3-70b-versatile' })
     vi.mocked(createProvider).mockResolvedValue('p2')
 
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
     fireEvent.change(screen.getByPlaceholderText('gsk_…'), { target: { value: ' gsk_abc\u200B ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Validate & add' }))
@@ -213,13 +229,17 @@ describe('Providers tab', () => {
   })
 
   it('asks for a reference, not a key, when the default backend is external', async () => {
-    vi.mocked(listSecretBackends).mockResolvedValue([
+    vi.mocked(listAgents).mockResolvedValue([
+    { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
+  ])
+  vi.mocked(listRoutes).mockResolvedValue([])
+  vi.mocked(listSecretBackends).mockResolvedValue([
       { backend: 'db', configured: true, default: false },
       { backend: 'vault', configured: true, default: true },
       { backend: 'asm', configured: false, default: false },
     ])
 
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
     const dialog = within(await screen.findByRole('dialog'))
     const input = await dialog.findByPlaceholderText(/Vault path/)
@@ -237,7 +257,7 @@ describe('Providers tab', () => {
       detail: 'upstream status 401',
     })
 
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Validate & add' }))
 
@@ -251,7 +271,7 @@ describe('Models editor', () => {
     vi.mocked(availableModels).mockResolvedValue([{ id: 'gpt-4o' }, { id: 'o3-mini' }])
     vi.mocked(patchProvider).mockResolvedValue()
 
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: '+ add model' }))
     // Declared models are filtered out of the choices.
     const picker = await screen.findByRole('combobox', { name: 'available models' })
@@ -274,7 +294,7 @@ describe('Models editor', () => {
     )
     vi.mocked(patchProvider).mockResolvedValue()
 
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: '+ add model' }))
     expect(await screen.findByText(/doesn’t list its models/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText('model id'), { target: { value: 'my-model' } })
@@ -293,7 +313,7 @@ describe('Models editor', () => {
   it('removes a model and moves the default to the first survivor', async () => {
     vi.mocked(patchProvider).mockResolvedValue()
 
-    renderPage()
+    renderPage('/settings?tab=providers')
     fireEvent.click(await screen.findByRole('button', { name: 'Remove gpt-4o' }))
 
     await waitFor(() =>

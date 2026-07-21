@@ -14,7 +14,6 @@ import { PermissionModal } from '../components/PermissionModal'
 import {
   answerPermission as clearPermission,
   applyEvent,
-  categories,
   emptyAssistant,
   type AssistantState,
 } from '../lib/chat'
@@ -22,14 +21,14 @@ import { useSessions } from '../lib/sessions'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
 import type { ChatIntent } from './Home'
 
-const categoryKey = 'timothy.category'
+const agentKey = 'timothy.agent'
 
 export function Chat({
   onNeedToken,
   basePath = '/chat',
   lockedSkillHint,
   emptyHeading = 'What can I help with?',
-  emptySubtext = 'Ask anything. The category picker steers which model serves you.',
+  emptySubtext = 'Ask anything. The agent picker chooses who serves you.',
   placeholder,
 }: {
   onNeedToken: () => void
@@ -51,12 +50,12 @@ export function Chat({
   const { refresh } = useSessions()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
-  // Locked pages fix their own category and never touch the shared
+  // Locked pages fix their own agent and never touch the shared
   // localStorage preference — a research page reading (or clobbering)
-  // whatever category general chat last used would be a leak either
-  // direction.
-  const [category, setCategory] = useState(
-    () => (lockedSkillHint ? 'research' : (localStorage.getItem(categoryKey) ?? categories[0])),
+  // whatever agent general chat last used would be a leak either
+  // direction. Empty string = the server-side default agent.
+  const [agent, setAgent] = useState(
+    () => (lockedSkillHint ? 'researcher' : (localStorage.getItem(agentKey) ?? '')),
   )
   // A skill picked from the home screen: pinned, not text the user
   // can accidentally mangle. Rides every turn until removed. Locked
@@ -107,7 +106,7 @@ export function Chat({
       .then(({ session, items }) => {
         if (stale) return
         setItems(fromTranscript(items))
-        if (session.last_category) setCategory(session.last_category)
+        if (session.agent) setAgent(session.agent)
       })
       .catch((err: unknown) => {
         if (stale) return
@@ -129,9 +128,9 @@ export function Chat({
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  const pickCategory = (c: string) => {
-    setCategory(c)
-    localStorage.setItem(categoryKey, c)
+  const pickAgent = (a: string) => {
+    setAgent(a)
+    localStorage.setItem(agentKey, a)
   }
 
   const updateLast = (fn: (m: AssistantState) => AssistantState) =>
@@ -143,7 +142,7 @@ export function Chat({
       return next
     })
 
-  const sendMessage = async (text: string, cat: string, hint = skillHint) => {
+  const sendMessage = async (text: string, agentName: string, hint = skillHint) => {
     const message = text.trim()
     if (!message || streaming) return
     setDraft('')
@@ -167,7 +166,7 @@ export function Chat({
     }
     try {
       await chatStream(
-        { session_id: sessionRef.current, message, task_category: cat, skill_hint: hint },
+        { session_id: sessionRef.current, message, agent: agentName, skill_hint: hint },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
           updateLast((m) => applyEvent(m, ev))
@@ -197,7 +196,7 @@ export function Chat({
     }
   }
 
-  const send = () => void sendMessage(draft, category)
+  const send = () => void sendMessage(draft, agent)
 
   // Consume a home-screen intent exactly once: `send` fires the
   // message immediately, `draft` prefills the composer, `skillHint`
@@ -207,13 +206,13 @@ export function Chat({
   useEffect(() => {
     if (lockedSkillHint || intentConsumedRef.current) return
     const intent = location.state as ChatIntent | null
-    if (!intent || (!intent.send && !intent.draft && !intent.category && !intent.skillHint)) return
+    if (!intent || (!intent.send && !intent.draft && !intent.agent && !intent.skillHint)) return
     intentConsumedRef.current = true
     window.history.replaceState(null, '') // don't refire on back/refresh
-    const cat = intent.category ?? category
-    if (intent.category) pickCategory(intent.category)
+    const who = intent.agent ?? agent
+    if (intent.agent) pickAgent(intent.agent)
     if (intent.skillHint) setSkillHint(intent.skillHint)
-    if (intent.send) void sendMessage(intent.send, cat, intent.skillHint)
+    if (intent.send) void sendMessage(intent.send, who, intent.skillHint)
     else if (intent.draft) setDraft(intent.draft)
     // Mount-time only by design: the intent rides the navigation that
     // created this page instance; the ref guards strict-mode replays.
@@ -277,9 +276,9 @@ export function Chat({
           draft={draft}
           onDraft={setDraft}
           onSend={send}
-          category={category}
-          onCategory={pickCategory}
-          hideCategoryPicker={Boolean(lockedSkillHint)}
+          agent={agent}
+          onAgent={pickAgent}
+          hideAgentPicker={Boolean(lockedSkillHint)}
           skillHint={skillHint}
           onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
           disabled={streaming}

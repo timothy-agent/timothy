@@ -54,7 +54,7 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	}
 	sweep := func(ctx context.Context, db execer) {
 		_, _ = db.Exec(ctx,
-			"DELETE FROM task_routes WHERE task_category LIKE $1 || '%'", adminMarker)
+			"DELETE FROM routes WHERE name LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx,
 			"DELETE FROM providers WHERE name LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx,
@@ -265,9 +265,9 @@ func seedRoute(t *testing.T, pool *pgpool.Pool, category, providerID string) str
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	_, err = db.Exec(t.Context(), `INSERT INTO task_routes (task_category, chain, enabled)
+	_, err = db.Exec(t.Context(), `INSERT INTO routes (name, chain, enabled)
 		VALUES ($1, jsonb_build_array(jsonb_build_object('provider_id', $2::text, 'model', 'm1')), true)
-		ON CONFLICT (task_category) DO UPDATE SET chain = EXCLUDED.chain, enabled = true`,
+		ON CONFLICT (name) DO UPDATE SET chain = EXCLUDED.chain, enabled = true`,
 		category, providerID)
 	if err != nil {
 		t.Fatalf("seed route: %v", err)
@@ -320,7 +320,7 @@ func TestRoutePatchValidatesProviderRefs(t *testing.T) {
 		t.Fatalf("Routes: %v", err)
 	}
 	for _, r := range routes {
-		if r.TaskCategory == cat {
+		if r.Name == cat {
 			if len(r.Chain) != 2 || r.Chain[0].Model != "m2" {
 				t.Fatalf("chain = %+v, want reordered [m2 m1]", r.Chain)
 			}

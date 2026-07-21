@@ -91,10 +91,10 @@ func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
 			Models: []router.ModelInfo{{ID: "m2"}}},
 	}
 	routes := []router.RouteRow{
-		{TaskCategory: "coding", Chain: []router.ChainEntry{
+		{Name: "coding", Chain: []router.ChainEntry{
 			{ProviderID: "p1", Model: "m1"}, {ProviderID: "p2", Model: "m2"},
 		}, Enabled: true},
-		{TaskCategory: "embedding", Chain: []router.ChainEntry{
+		{Name: "embedding", Chain: []router.ChainEntry{
 			{ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}
@@ -138,7 +138,7 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(snapshotFor(t, oaiOK(t, "hello").URL, oaiFail(t).URL))
 
-	w := postJSON(t, a.handleStream, `{"task_category":"coding","session_id":"s1","messages":[{"role":"user","content":"hi"}]}`)
+	w := postJSON(t, a.handleStream, `{"route":"coding","session_id":"s1","messages":[{"role":"user","content":"hi"}]}`)
 
 	events := sseEvents(t, w.Body.String())
 	var text string
@@ -180,7 +180,7 @@ func TestStreamFailoverToSecondProvider(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(snapshotFor(t, oaiFail(t).URL, oaiOK(t, "backup").URL))
 
-	w := postJSON(t, a.handleStream, `{"task_category":"coding","messages":[{"role":"user","content":"hi"}]}`)
+	w := postJSON(t, a.handleStream, `{"route":"coding","messages":[{"role":"user","content":"hi"}]}`)
 
 	events := sseEvents(t, w.Body.String())
 	var text string
@@ -212,7 +212,7 @@ func TestStreamChainExhausted(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(snapshotFor(t, oaiFail(t).URL, oaiFail(t).URL))
 
-	w := postJSON(t, a.handleStream, `{"task_category":"coding","messages":[{"role":"user","content":"hi"}]}`)
+	w := postJSON(t, a.handleStream, `{"route":"coding","messages":[{"role":"user","content":"hi"}]}`)
 
 	events := sseEvents(t, w.Body.String())
 	if len(events) != 1 || events[0].Type != stream.EventError || events[0].Err.Code != "chain_exhausted" {
@@ -233,12 +233,12 @@ func TestStreamValidation(t *testing.T) {
 	if w := postJSON(t, a.handleStream, `{"messages":[{"role":"user","content":"x"}]}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("missing category: code = %d", w.Code)
 	}
-	if w := postJSON(t, a.handleStream, `{"task_category":"nope","messages":[{"role":"user","content":"x"}]}`); w.Code != http.StatusBadGateway {
+	if w := postJSON(t, a.handleStream, `{"route":"nope","messages":[{"role":"user","content":"x"}]}`); w.Code != http.StatusBadGateway {
 		t.Fatalf("unknown category: code = %d", w.Code)
 	}
 
 	empty := &API{store: &fakeSource{}, ledger: &memRecorder{}, log: discard()}
-	if w := postJSON(t, empty.handleStream, `{"task_category":"coding","messages":[{"role":"user","content":"x"}]}`); w.Code != http.StatusServiceUnavailable {
+	if w := postJSON(t, empty.handleStream, `{"route":"coding","messages":[{"role":"user","content":"x"}]}`); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no snapshot: code = %d", w.Code)
 	}
 }
@@ -263,7 +263,7 @@ func TestEmbedHappyPath(t *testing.T) {
 	}
 
 	entries := rec.all()
-	if len(entries) != 1 || entries[0].Status != "ok" || entries[0].TaskCategory != "embedding" {
+	if len(entries) != 1 || entries[0].Status != "ok" || entries[0].Route != "embedding" {
 		t.Fatalf("entries = %+v", entries)
 	}
 	if entries[0].Usage == nil || entries[0].Usage.InputTokens != 7 {
@@ -284,7 +284,7 @@ func TestEmbedSkipsIncapableDriverAtResolve(t *testing.T) {
 			Models: []router.ModelInfo{{ID: "m1"}}},
 	}
 	routes := []router.RouteRow{
-		{TaskCategory: "embedding", Chain: []router.ChainEntry{
+		{Name: "embedding", Chain: []router.ChainEntry{
 			{ProviderID: "p0", Model: "m0"}, {ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}

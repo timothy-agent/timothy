@@ -181,7 +181,7 @@ func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (strin
 	ctx, cancel := context.WithTimeout(ctx, llmTimeout)
 	defer cancel()
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
-		TaskCategory: "mini",
+		Route: "mini",
 		Purpose:      "memory-consolidate",
 		System:       mergeSystem,
 		Messages:     []provider.Message{{Role: "user", Content: strings.Join(lines, "\n")}},

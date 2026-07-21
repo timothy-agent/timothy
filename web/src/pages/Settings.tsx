@@ -1,4 +1,5 @@
 import { useSearchParams } from 'react-router'
+import { AgentsTab } from '../components/settings/AgentsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { FeaturesTab } from '../components/settings/FeaturesTab'
 import { ProvidersTab } from '../components/settings/ProvidersTab'
@@ -8,9 +9,10 @@ import { SecretsTab } from '../components/settings/SecretsTab'
 // Tabs are URL-synced (?tab=…): a refresh or shared link lands on the
 // same tab instead of resetting to Providers.
 const tabs = [
+  { key: 'agents', label: 'Agents', render: AgentsTab },
   { key: 'providers', label: 'Providers', render: ProvidersTab },
   { key: 'connectors', label: 'Connectors', render: ConnectorsTab },
-  { key: 'routes', label: 'Task allocation', render: RoutesTab },
+  { key: 'routes', label: 'Routing', render: RoutesTab },
   { key: 'secrets', label: 'Secrets', render: SecretsTab },
   { key: 'features', label: 'Features', render: FeaturesTab },
 ] as const

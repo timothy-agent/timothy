@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -22,9 +23,9 @@ import (
 )
 
 const (
-	// defaultCategory serves plain chat turns when the caller picks
+	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
-	defaultCategory = "coding"
+	defaultRoute = "default"
 	// Each persistence stage gets its OWN deadline: LLM-backed stages
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
@@ -53,7 +54,7 @@ type SessionLog interface {
 	Events(ctx context.Context, sessionID string) ([]session.Event, error)
 	Append(ctx context.Context, sessionID, kind string, payload any) (int64, error)
 	SetTitleIfEmpty(ctx context.Context, id, title string) error
-	SetLastCategory(ctx context.Context, id, category string) error
+	SetLastRoute(ctx context.Context, id, route, agent string) error
 }
 
 // Distill extracts turn residue; loop.DistillTurn curried with the
@@ -85,6 +86,7 @@ type Service struct {
 	compactor   Compactor
 	memory      MemoryExtract  // nil: long-term memory off
 	recall      MemoryRetrieve // nil: no memory injection
+	agents      AgentResolver  // nil: zero-value agent (everything allowed)
 	budget      func(context.Context) int
 	packs       []skills.Skill
 	skillAllow  func(context.Context, string) bool // nil: all packs allowed
@@ -107,7 +109,11 @@ func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 // gates packs per turn, nil allows all. The assembled system prompt
 // only changes when a setting does, so provider prompt caches (D-018)
 // stay warm in the steady state.
-func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget func(context.Context) int, packs []skills.Skill, skillAllow func(context.Context, string) bool, logger *slog.Logger) *Service {
+// AgentResolver returns the profile serving a named agent; empty name
+// resolves the default. False = unknown (non-empty) name.
+type AgentResolver func(ctx context.Context, name string) (agents.Agent, bool)
+
+func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget func(context.Context) int, packs []skills.Skill, skillAllow func(context.Context, string) bool, resolver AgentResolver, logger *slog.Logger) *Service {
 	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion)
 	bodies := make(map[string]string, len(packs))
 	for _, p := range packs {
@@ -117,30 +123,48 @@ func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budge
 		gw: gw, log: log, distill: distill, compactor: compactor, budget: budget,
 		packs:       packs,
 		skillAllow:  skillAllow,
+		agents:      resolver,
 		skillBodies: bodies,
 		flushEvery:  2 * time.Second, logger: logger,
 	}
 }
 
-// allowedPacks filters the loaded packs through the runtime allowlist.
-func (s *Service) allowedPacks(ctx context.Context) []skills.Skill {
-	if s.skillAllow == nil {
-		return s.packs
-	}
+// allowedPacks filters the loaded packs through the global runtime
+// allowlist AND the serving agent's own skill list (empty = all).
+func (s *Service) allowedPacks(ctx context.Context, profile agents.Agent) []skills.Skill {
 	out := make([]skills.Skill, 0, len(s.packs))
 	for _, p := range s.packs {
-		if s.skillAllow(ctx, p.Name) {
-			out = append(out, p)
+		if s.skillAllow != nil && !s.skillAllow(ctx, p.Name) {
+			continue
 		}
+		if !profileAllows(profile.Skills, p.Name) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
+}
+
+// profileAllows checks one agent allowlist: empty admits everything.
+func profileAllows(allow []string, name string) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	for _, n := range allow {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Request is one chat turn.
 type Request struct {
 	SessionID    string `json:"session_id,omitempty"`
 	Message      string `json:"message"`
-	TaskCategory string `json:"task_category,omitempty"`
+	// Agent names who serves this turn; empty = the default agent.
+	Agent string `json:"agent,omitempty"`
+	Route string `json:"route,omitempty"`
 	ModelHint    string `json:"model_hint,omitempty"`
 	// SkillHint names a skill pack to force-load for this turn — set
 	// when the user picked one explicitly (a UI chip, not parsed
@@ -158,17 +182,31 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if strings.TrimSpace(req.Message) == "" {
 		return "", nil, fmt.Errorf("chat: %w: message is required", ErrBadRequest)
 	}
+	profile := agents.Agent{Memory: true}
+	if s.agents != nil {
+		var known bool
+		profile, known = s.agents(ctx, req.Agent)
+		if !known {
+			return "", nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, req.Agent)
+		}
+	}
 	var skillBody string
 	if req.SkillHint != "" {
 		body, ok := s.skillBodies[req.SkillHint]
-		if !ok || (s.skillAllow != nil && !s.skillAllow(ctx, req.SkillHint)) {
+		if !ok || (s.skillAllow != nil && !s.skillAllow(ctx, req.SkillHint)) ||
+			!profileAllows(profile.Skills, req.SkillHint) {
 			return "", nil, fmt.Errorf("chat: %w: unknown skill %q", ErrBadRequest, req.SkillHint)
 		}
 		skillBody = body
 	}
-	category := req.TaskCategory
-	if category == "" {
-		category = defaultCategory
+	// Routing precedence: explicit request override, then the agent's
+	// route, then the default chain.
+	route := req.Route
+	if route == "" {
+		route = profile.Route
+	}
+	if route == "" {
+		route = defaultRoute
 	}
 
 	sessionID := req.SessionID
@@ -187,7 +225,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	firstExchange := !hasUserMessage(events)
 
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Category: category, ModelHint: req.ModelHint,
+		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: req.ModelHint,
 	}); err != nil {
 		return sessionID, nil, err
 	}
@@ -219,30 +257,37 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// (D-011 poisoning defense); the skill body is instructions the
 	// user explicitly selected, deterministically loaded rather than
 	// left to the model's load_skill judgment.
-	system := assembleSystem(skills.Index(s.allowedPacks(ctx)))
+	system := assembleSystem(skills.Index(s.allowedPacks(ctx, profile)))
+	// The agent overlay is stable for a given agent, so it sits ahead
+	// of the per-turn tail and stays inside the cacheable prefix.
+	if profile.PromptOverlay != "" {
+		system += "\n\n# Agent: " + profile.Name + "\n\n" + profile.PromptOverlay
+	}
 	if skillBody != "" {
 		system += "\n\n# Skill: " + req.SkillHint + "\n\n" + skillBody
 	}
-	if s.recall != nil {
+	if s.recall != nil && profile.Memory {
 		if block := s.recall(ctx, sessionID, req.Message); block != "" {
 			system += "\n\n" + block
 		}
 	}
 
 	upstream, err := s.gw.Stream(ctx, gwclient.StreamRequest{
-		TaskCategory: category,
-		Purpose:      "chat",
-		ModelHint:    req.ModelHint,
-		System:       system,
-		Messages:     msgs,
-		SessionID:    sessionID,
+		Route:     route,
+		Agent:     profile.Name,
+		ToolAllow: profile.Tools,
+		Purpose:   "chat",
+		ModelHint: req.ModelHint,
+		System:    system,
+		Messages:  msgs,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return sessionID, nil, err
 	}
 
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, req.Message, category, firstExchange, upstream, out)
+	go s.relay(ctx, sessionID, req.Message, route, profile, firstExchange, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -250,7 +295,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 // then persists it. Persistence uses a cancel-detached context: a
 // client disconnect or brain shutdown mid-turn must still leave a
 // durable pending_state (the kill-test contract).
-func (s *Service) relay(ctx context.Context, sessionID, userText, category string, firstExchange bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, firstExchange bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -290,7 +335,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, category strin
 			}
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, category, firstExchange, text.String(), reasoning.String(), meta, usage, sawDone, flushed)
+		s.persistTurn(sessionID, userText, route, profile, firstExchange, text.String(), reasoning.String(), meta, usage, sawDone, flushed)
 	}
 
 	ticker := time.NewTicker(s.flushEvery)
@@ -331,7 +376,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, category strin
 	}
 }
 
-func (s *Service) persistTurn(sessionID, userText, category string, firstExchange bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, firstExchange bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -381,7 +426,7 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 		s.logger.Error("persist assistant turn", "session_id", sessionID, "error", err)
 		return
 	}
-	if err := s.log.SetLastCategory(wctx, sessionID, category); err != nil {
+	if err := s.log.SetLastRoute(wctx, sessionID, route, profile.Name); err != nil {
 		s.logger.Warn("persist last category", "session_id", sessionID, "error", err)
 	}
 
@@ -407,7 +452,7 @@ func (s *Service) persistTurn(sessionID, userText, category string, firstExchang
 	// text (some providers end tool turns without a message) — the
 	// user's words alone can carry facts. Detached context — the turn
 	// is already over.
-	if s.memory != nil {
+	if s.memory != nil && profile.Memory {
 		mtext := "user: " + userText
 		if tm != nil {
 			if residue, err := json.Marshal(tm); err == nil {
@@ -441,7 +486,7 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 	input := userText + "\n\n" + truncateRunes(reply, 200)
 
 	events, err := s.gw.Stream(ctx, gwclient.StreamRequest{
-		TaskCategory: "mini",
+		Route: "mini",
 		Purpose:      "title",
 		System:       titleSystem,
 		Messages:     []provider.Message{{Role: "user", Content: input}},

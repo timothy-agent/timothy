@@ -22,7 +22,7 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("POST /internal/admin/providers/validate", http.HandlerFunc(h.validate))
 	srv.Handle("GET /internal/admin/providers/health", http.HandlerFunc(h.health))
 	srv.Handle("GET /internal/admin/routes", http.HandlerFunc(h.routes))
-	srv.Handle("PATCH /internal/admin/routes/{category}", http.HandlerFunc(h.patchRoute))
+	srv.Handle("PATCH /internal/admin/routes/{name}", http.HandlerFunc(h.patchRoute))
 	srv.Handle("PATCH /internal/admin/usage/budget", http.HandlerFunc(h.patchBudget))
 	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
 	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
@@ -166,7 +166,7 @@ func (h *adminAPI) patchRoute(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if err := h.adm.PatchRoute(r.Context(), r.PathValue("category"), patch); err != nil {
+	if err := h.adm.PatchRoute(r.Context(), r.PathValue("name"), patch); err != nil {
 		fail(w, err)
 		return
 	}

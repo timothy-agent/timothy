@@ -178,7 +178,7 @@ func (e *Extractor) proposeOnce(ctx context.Context, req Request) (string, error
 	defer cancel()
 
 	events, err := e.gw.Stream(ctx, gwclient.StreamRequest{
-		TaskCategory: "mini",
+		Route: "mini",
 		Purpose:      "memory-extract",
 		System:       system,
 		Messages:     []provider.Message{{Role: "user", Content: req.Text}},

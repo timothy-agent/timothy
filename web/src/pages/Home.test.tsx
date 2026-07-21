@@ -5,6 +5,7 @@ import type { ChatIntent } from './Home'
 import { Home } from './Home'
 
 vi.mock('../api/client', () => ({
+  listAgents: vi.fn().mockResolvedValue([]),
   listMemories: vi.fn(),
 }))
 
@@ -56,7 +57,8 @@ describe('Home', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(landed?.pathname).toBe('/chat')
     expect(landed?.state?.send).toBe('hello there')
-    expect(landed?.state?.category).toBeTruthy()
+    // Agent may be '' (server default) — the intent just carries it.
+    expect(landed?.state).toHaveProperty('agent')
   })
 
   it('an empty composer does not navigate', () => {

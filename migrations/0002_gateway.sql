@@ -14,12 +14,20 @@ CREATE TABLE IF NOT EXISTS providers (
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS task_routes (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    task_category text UNIQUE NOT NULL,
-    chain         jsonb NOT NULL DEFAULT '[]',
-    enabled       boolean NOT NULL DEFAULT false,
-    updated_at    timestamptz NOT NULL DEFAULT now()
+-- Routes are named provider/model fallback chains (D-033) — the
+-- routing primitive. Agents reference a route by name; system callers
+-- (embedding, summarize) use fixed names. strategy picks the chain
+-- order: 'ordered' keeps the written priority, 'auto' scores entries
+-- from recent ledger stats and declared prices, 'price'/'latency' are
+-- auto with that factor dominant.
+CREATE TABLE IF NOT EXISTS routes (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       text UNIQUE NOT NULL,
+    chain      jsonb NOT NULL DEFAULT '[]',
+    strategy   text NOT NULL DEFAULT 'ordered'
+        CHECK (strategy IN ('ordered', 'auto', 'price', 'latency')),
+    enabled    boolean NOT NULL DEFAULT false,
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS cost_ledger (
@@ -27,7 +35,8 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     ts                 timestamptz NOT NULL DEFAULT now(),
     provider           text NOT NULL,
     model              text NOT NULL,
-    task_category      text NOT NULL,
+    route              text NOT NULL,
+    agent              text NOT NULL DEFAULT '',
     session_id         text,
     lane_id            text,
     input_tokens       integer,
@@ -73,21 +82,22 @@ VALUES
    ]', 'XAI_API_KEY')
 ON CONFLICT (name) DO NOTHING;
 
--- Seed routes for every task category, chained cheap-capable-first
--- where it makes sense; disabled by default. The embedding chain
--- stays empty until an embedding-capable provider is configured.
+-- Seed the baseline routes, chained cheap-capable-first where it
+-- makes sense; disabled by default. 'default' serves plain chat, the
+-- rest are chains agents and system callers reference. The embedding
+-- chain stays empty until an embedding-capable provider is configured.
 -- NOTE: the chain subselects resolve provider UUIDs by name and rely
 -- on the provider INSERT above having run in this same migration; if
 -- a seed provider is ever renamed, these lookups return NULL and the
 -- chain entry becomes an "unknown provider id" skip at routing time —
 -- edit both places together.
-INSERT INTO task_routes (task_category, chain)
-SELECT category, chain FROM (
+INSERT INTO routes (name, chain)
+SELECT name, chain FROM (
   VALUES
     ('reasoning', (SELECT jsonb_build_array(
         jsonb_build_object('provider_id', (SELECT id FROM providers WHERE name = 'anthropic'), 'model', 'claude-opus-4-8'),
         jsonb_build_object('provider_id', (SELECT id FROM providers WHERE name = 'xai-grok'), 'model', 'grok-4.5')))),
-    ('coding', (SELECT jsonb_build_array(
+    ('default', (SELECT jsonb_build_array(
         jsonb_build_object('provider_id', (SELECT id FROM providers WHERE name = 'anthropic'), 'model', 'claude-sonnet-5'),
         jsonb_build_object('provider_id', (SELECT id FROM providers WHERE name = 'zai-glm'), 'model', 'glm-4.7')))),
     ('mini', (SELECT jsonb_build_array(
@@ -99,5 +109,5 @@ SELECT category, chain FROM (
     ('realtime', (SELECT jsonb_build_array(
         jsonb_build_object('provider_id', (SELECT id FROM providers WHERE name = 'anthropic'), 'model', 'claude-haiku-4-5-20251001')))),
     ('embedding', '[]'::jsonb)
-) AS seeds(category, chain)
-ON CONFLICT (task_category) DO NOTHING;
+) AS seeds(name, chain)
+ON CONFLICT (name) DO NOTHING;
