@@ -1,4 +1,5 @@
 import { useSearchParams } from 'react-router'
+import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { FeaturesTab } from '../components/settings/FeaturesTab'
 import { ProvidersTab } from '../components/settings/ProvidersTab'
 import { RoutesTab } from '../components/settings/RoutesTab'
@@ -8,6 +9,7 @@ import { SecretsTab } from '../components/settings/SecretsTab'
 // same tab instead of resetting to Providers.
 const tabs = [
   { key: 'providers', label: 'Providers', render: ProvidersTab },
+  { key: 'connectors', label: 'Connectors', render: ConnectorsTab },
   { key: 'routes', label: 'Task allocation', render: RoutesTab },
   { key: 'secrets', label: 'Secrets', render: SecretsTab },
   { key: 'features', label: 'Features', render: FeaturesTab },

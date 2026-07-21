@@ -1,4 +1,5 @@
 import type {
+  AdminConnector,
   AdminProvider,
   AdminRoute,
   AvailableModel,
@@ -453,6 +454,50 @@ export async function testSecretBackend(
   return request<{ ok: boolean; error?: string }>(`/v1/admin/secret-backends/${backend}/test`, {
     method: 'POST',
   })
+}
+
+// --- connectors (integrations) ---
+
+export async function listConnectors(): Promise<AdminConnector[]> {
+  const { connectors } = await request<{ connectors: AdminConnector[] }>('/v1/admin/connectors')
+  return connectors ?? []
+}
+
+export async function createConnector(c: Partial<AdminConnector>): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/admin/connectors', {
+    method: 'POST',
+    body: JSON.stringify(c),
+  })
+  return id
+}
+
+export async function patchConnector(
+  id: string,
+  patch: Partial<Pick<AdminConnector, 'config' | 'credential_ref' | 'enabled'>>,
+): Promise<void> {
+  await request<void>(`/v1/admin/connectors/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function deleteConnector(id: string): Promise<void> {
+  await request<void>(`/v1/admin/connectors/${id}`, { method: 'DELETE' })
+}
+
+export async function testConnector(id: string): Promise<{ ok: boolean; error?: string }> {
+  return request<{ ok: boolean; error?: string }>(`/v1/admin/connectors/${id}/test`, {
+    method: 'POST',
+  })
+}
+
+// connectorOAuthStart returns the Google consent URL to send the
+// browser to; the callback lands back on /settings?tab=connectors.
+export async function connectorOAuthStart(id: string): Promise<string> {
+  const { url } = await request<{ url: string }>(`/v1/admin/connectors/${id}/oauth/start`, {
+    method: 'POST',
+  })
+  return url
 }
 
 export async function listRoutes(): Promise<AdminRoute[]> {
