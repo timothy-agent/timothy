@@ -151,7 +151,7 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 			t.Fatalf("read fixture: %v", err)
 		}
 		data := base64.URLEncoding.EncodeToString(raw)
-		fmt.Fprintf(w, `{"size":%d,"data":%q}`, len(raw), data)
+		_, _ = fmt.Fprintf(w, `{"size":%d,"data":%q}`, len(raw), data)
 	})
 	mux.HandleFunc("POST /gmail/v1/users/me/messages/send", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
