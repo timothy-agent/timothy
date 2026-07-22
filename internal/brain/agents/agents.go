@@ -116,6 +116,23 @@ func (s *Store) List(ctx context.Context) ([]Agent, error) {
 	return out, rows.Err()
 }
 
+// Enabled returns every enabled agent from the same short cache Resolve
+// reads — the candidate set for auto-dispatch (D-034 follow-up). A
+// degraded read (DB outage, or no agent configured at all) has no real
+// agent to offer, so it returns empty rather than the synthetic
+// zero-value profile load() substitutes to keep chat serving.
+func (s *Store) Enabled(ctx context.Context) []Agent {
+	byName, _ := s.load(ctx)
+	out := make([]Agent, 0, len(byName))
+	for _, a := range byName {
+		if a.Name == "" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // Resolve returns the enabled agent serving this name; empty name (or
 // a vanished agent) resolves to the default. The bool reports whether
 // the requested name actually resolved — false only when a non-empty

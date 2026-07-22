@@ -79,6 +79,27 @@ func TestAgentCRUDAndResolve(t *testing.T) {
 	if !ok || a.Route != "research" || a.PromptOverlay != "overlay" || len(a.Tools) != 1 {
 		t.Fatalf("Resolve = %+v ok=%v", a, ok)
 	}
+
+	// Enabled is the auto-dispatch candidate set: the seeded default
+	// plus this enabled fixture, never a disabled agent, never the
+	// synthetic zero-value fallback (it carries an empty Name).
+	disabledName := marker + "off"
+	if _, err := s.Create(ctx, Agent{Name: disabledName, Enabled: false}); err != nil {
+		t.Fatalf("Create disabled: %v", err)
+	}
+	byName := map[string]bool{}
+	for _, e := range s.Enabled(ctx) {
+		if e.Name == "" {
+			t.Fatal("Enabled returned an entry with an empty name")
+		}
+		byName[e.Name] = true
+	}
+	if !byName[name] || !byName["general"] {
+		t.Fatalf("Enabled() = %v, want %s and general present", byName, name)
+	}
+	if byName[disabledName] {
+		t.Fatalf("Enabled() included disabled agent %s", disabledName)
+	}
 	// Unknown names fall back to the default but report false.
 	if _, ok := s.Resolve(ctx, marker+"ghost"); ok {
 		t.Fatal("unknown agent resolved as known")

@@ -760,6 +760,88 @@ func TestCollapseRepeatedTail(t *testing.T) {
 	}
 }
 
+// The "auto" sentinel resolves through SetAutoDispatch's candidates
+// and classify BEFORE the normal agent lookup — the resolved name (not
+// "auto" itself) is what reaches the resolver, the gateway request,
+// and persistence.
+func TestChatAutoDispatchesAgent(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		switch name {
+		case "", "general":
+			return agents.Agent{Name: "general", Route: "default"}, true
+		case "researcher":
+			return agents.Agent{Name: "researcher", Route: "research"}, true
+		default:
+			return agents.Agent{}, false
+		}
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	candidates := []agents.Agent{
+		{Name: "general", Description: "everyday tasks"},
+		{Name: "researcher", Description: "consults sources"},
+	}
+	svc.SetAutoDispatch(
+		func(context.Context) []agents.Agent { return candidates },
+		func(context.Context, string) (string, error) { return "2", nil }, // picks researcher
+	)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's the RFC say?", Agent: autoAgentName})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := chatRequest(t, gw)
+	if sent.Agent != "researcher" || sent.Route != "research" {
+		t.Fatalf("agent/route = %s/%s, want researcher/research (auto-dispatched)", sent.Agent, sent.Route)
+	}
+
+	events, err := log.Events(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var msg session.UserMessage
+	for _, ev := range events {
+		if ev.Kind == session.KindUserMessage {
+			_ = json.Unmarshal(ev.Payload, &msg)
+		}
+	}
+	if msg.Agent != "researcher" {
+		t.Fatalf("persisted user message agent = %q, want researcher (never the raw auto sentinel)", msg.Agent)
+	}
+}
+
+// Without SetAutoDispatch wired, the "auto" sentinel falls back to the
+// default agent — dispatch is an ergonomics layer, never a hard gate
+// on serving a session; an unwired server must not turn every "Auto"
+// composer choice into a hard error.
+func TestChatAutoWithoutDispatchWiredFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		if name == "" {
+			return agents.Agent{Name: "general", Route: "default"}, true
+		}
+		return agents.Agent{}, false
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: autoAgentName})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := chatRequest(t, gw)
+	if sent.Agent != "general" {
+		t.Fatalf("agent = %q, want general (fallback default)", sent.Agent)
+	}
+}
+
 // The serving agent's profile shapes the whole turn: its route and
 // name ride the gateway request, its tool allowlist travels for the
 // loop, its overlay joins the system prompt, and memory off suppresses

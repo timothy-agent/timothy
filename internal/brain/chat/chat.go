@@ -23,6 +23,14 @@ import (
 )
 
 const (
+	// autoAgentName is the request sentinel meaning "pick an agent for
+	// me" (D-034 follow-up): the composer's "Auto" choice, resolved
+	// through candidates+classify before the normal agent lookup.
+	autoAgentName = "auto"
+	// classifyRoute serves the auto-dispatch classification call —
+	// same cheap side-call route as auto-title, distillation, and
+	// extraction.
+	classifyRoute = "mini"
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
 	defaultRoute = "default"
@@ -84,9 +92,11 @@ type Service struct {
 	log         SessionLog
 	distill     Distill
 	compactor   Compactor
-	memory      MemoryExtract  // nil: long-term memory off
-	recall      MemoryRetrieve // nil: no memory injection
-	agents      AgentResolver  // nil: zero-value agent (everything allowed)
+	memory      MemoryExtract   // nil: long-term memory off
+	recall      MemoryRetrieve  // nil: no memory injection
+	agents      AgentResolver   // nil: zero-value agent (everything allowed)
+	candidates  AgentCandidates // nil: auto-dispatch falls back to default
+	classify    agents.Classify // nil: auto-dispatch falls back to default
 	budget      func(context.Context) int
 	packs       []skills.Skill
 	skillAllow  func(context.Context, string) bool // nil: all packs allowed
@@ -102,6 +112,15 @@ func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
 // SetMemoryRetrieve wires per-turn memory recall. Optional.
 func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 
+// SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
+// request naming the autoAgentName sentinel resolves through candidates
+// and classify instead of the named agent. Optional — nil candidates
+// or classify makes the sentinel resolve to the default agent, same as
+// an empty name.
+func (s *Service) SetAutoDispatch(candidates AgentCandidates, classify agents.Classify) {
+	s.candidates, s.classify = candidates, classify
+}
+
 // New builds the service. packs are the loaded skill definitions: their
 // one-line index goes into the system prompt, and their bodies back
 // skill_hint (nil/empty = no skills). budget resolves the projected
@@ -112,6 +131,11 @@ func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 // AgentResolver returns the profile serving a named agent; empty name
 // resolves the default. False = unknown (non-empty) name.
 type AgentResolver func(ctx context.Context, name string) (agents.Agent, bool)
+
+// AgentCandidates lists the enabled agents auto-dispatch (D-034
+// follow-up) chooses among; nil or empty means dispatch always falls
+// back to the default agent.
+type AgentCandidates func(ctx context.Context) []agents.Agent
 
 func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget func(context.Context) int, packs []skills.Skill, skillAllow func(context.Context, string) bool, resolver AgentResolver, logger *slog.Logger) *Service {
 	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion)
@@ -126,6 +150,45 @@ func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budge
 		agents:      resolver,
 		skillBodies: bodies,
 		flushEvery:  2 * time.Second, logger: logger,
+	}
+}
+
+// dispatchAgent resolves the "auto" sentinel to a real agent name via
+// agents.Dispatch. classify is built here (not injected verbatim as
+// Classify) so it always drains through this service's own Gateway —
+// a fresh call, not a lingering handle from setup time.
+func (s *Service) dispatchAgent(ctx context.Context, message string) string {
+	if s.candidates == nil || s.classify == nil {
+		return ""
+	}
+	candidates := s.candidates(ctx)
+	return agents.Dispatch(ctx, s.classify, message, candidates, "")
+}
+
+// ClassifyOverGateway builds an agents.Classify that asks classifyRoute
+// for a one-shot text reply — the same cheap side-call shape as
+// auto-title, distillation, and extraction use. Exported so main can
+// wire it via SetAutoDispatch using the raw gateway client, bypassing
+// the tool loop that only engages for Purpose=="chat".
+func ClassifyOverGateway(gw Gateway) agents.Classify {
+	return func(ctx context.Context, prompt string) (string, error) {
+		events, err := gw.Stream(ctx, gwclient.StreamRequest{
+			Route:     classifyRoute,
+			Purpose:   "agent_dispatch",
+			System:    "Answer with only what is requested — no prose, no explanation.",
+			Messages:  []provider.Message{{Role: "user", Content: prompt}},
+			MaxTokens: 20,
+		})
+		if err != nil {
+			return "", err
+		}
+		var b strings.Builder
+		for ev := range events {
+			if ev.Type == stream.EventChunk {
+				b.WriteString(ev.Text)
+			}
+		}
+		return b.String(), nil
 	}
 }
 
@@ -182,12 +245,16 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if strings.TrimSpace(req.Message) == "" {
 		return "", nil, fmt.Errorf("chat: %w: message is required", ErrBadRequest)
 	}
+	agentName := req.Agent
+	if agentName == autoAgentName {
+		agentName = s.dispatchAgent(ctx, req.Message)
+	}
 	profile := agents.Agent{Memory: true}
 	if s.agents != nil {
 		var known bool
-		profile, known = s.agents(ctx, req.Agent)
+		profile, known = s.agents(ctx, agentName)
 		if !known {
-			return "", nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, req.Agent)
+			return "", nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, agentName)
 		}
 	}
 	var skillBody string

@@ -153,6 +153,7 @@ func main() {
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
 		agentReg.Resolve, app.Log)
+	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return

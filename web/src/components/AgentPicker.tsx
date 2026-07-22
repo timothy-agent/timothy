@@ -1,4 +1,9 @@
-import { AiBrain01Icon, ArrowDown01Icon, Tick02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import {
+  AiBrain01Icon,
+  ArrowDown01Icon,
+  SparklesIcon,
+  Tick02Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
 import { listAgents } from '../api/client'
@@ -10,6 +15,12 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
+
+// Sentinel value meaning "let the system pick" (D-034 follow-up) —
+// matches the backend's autoAgentName. Not a real agent row: the
+// picker synthesizes its entry, chat.Service resolves it per turn via
+// agents.Dispatch before the normal agent lookup.
+export const AUTO_AGENT = 'auto'
 
 // Module-level cache: the picker renders in every composer; the agent
 // list changes rarely and a stale list self-heals on the next mount.
@@ -40,8 +51,10 @@ export function AgentPicker({
   onChange: (v: string) => void
 }) {
   const agents = useAgents()
-  const current =
-    agents.find((a) => a.name === value) ?? agents.find((a) => a.is_default) ?? null
+  const isAuto = value === AUTO_AGENT
+  const current = isAuto
+    ? null
+    : (agents.find((a) => a.name === value) ?? agents.find((a) => a.is_default) ?? null)
 
   return (
     <DropdownMenu>
@@ -49,8 +62,8 @@ export function AgentPicker({
         aria-label="Agent"
         className="flex h-8 items-center gap-1.5 rounded-full border border-zinc-950/10 px-3 text-sm text-zinc-700 transition hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-200 dark:hover:bg-zinc-700/50"
       >
-        <HugeiconsIcon icon={AiBrain01Icon} className="size-4" />
-        <span className="capitalize">{current?.name ?? 'Agent'}</span>
+        <HugeiconsIcon icon={isAuto ? SparklesIcon : AiBrain01Icon} className="size-4" />
+        <span className="capitalize">{isAuto ? 'Auto' : (current?.name ?? 'Agent')}</span>
         <HugeiconsIcon icon={ArrowDown01Icon} className="size-3.5 opacity-60" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[min(92vw,22rem)] p-1.5">
@@ -60,6 +73,19 @@ export function AgentPicker({
             Who serves your next message. Agents are configured in Settings.
           </p>
         </DropdownMenuLabel>
+        <DropdownMenuItem
+          onSelect={() => onChange(AUTO_AGENT)}
+          data-selected={isAuto || undefined}
+          className="items-start gap-3 rounded-lg px-2.5 py-2 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+        >
+          <div className="min-w-0 flex-1">
+            <span className="text-sm font-medium">Auto</span>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Picks the best-fit agent for each message.
+            </p>
+          </div>
+          {isAuto && <HugeiconsIcon icon={Tick02Icon} className="mt-1 size-4 shrink-0" />}
+        </DropdownMenuItem>
         {agents.map((a) => {
           const selected = a.name === (current?.name ?? '')
           return (
