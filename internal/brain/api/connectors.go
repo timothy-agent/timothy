@@ -54,15 +54,15 @@ func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 func (h *connectorAPI) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if errCode := q.Get("error"); errCode != "" {
-		http.Redirect(w, r, "/settings?tab=connectors&oauth_error="+url.QueryEscape(errCode), http.StatusFound)
+		http.Redirect(w, r, "/settings/connectors?oauth_error="+url.QueryEscape(errCode), http.StatusFound)
 		return
 	}
 	name, err := h.goog.HandleCallback(r.Context(), q.Get("state"), q.Get("code"))
 	if err != nil {
-		http.Redirect(w, r, "/settings?tab=connectors&oauth_error="+url.QueryEscape(err.Error()), http.StatusFound)
+		http.Redirect(w, r, "/settings/connectors?oauth_error="+url.QueryEscape(err.Error()), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/settings?tab=connectors&oauth_connected="+url.QueryEscape(name), http.StatusFound)
+	http.Redirect(w, r, "/settings/connectors?oauth_connected="+url.QueryEscape(name), http.StatusFound)
 }
 
 // failConnector maps the package's sentinel errors onto HTTP statuses;
