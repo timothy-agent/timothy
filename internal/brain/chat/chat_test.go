@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -892,5 +893,82 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	}
 	if recalled || strings.Contains(sent.System, "MEMORY BLOCK") {
 		t.Fatal("memory recall ran for a memory-off agent")
+	}
+}
+
+// A failed attempt (no EventDone) leaves the user_message durable with
+// nothing after it — persistTurn only appends assistant_turn on
+// sawDone. Retry must reuse that message, not append a second one.
+func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{{Type: stream.EventError, Err: &stream.StreamError{Code: "boom", Message: "boom"}}}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question", Route: "mini"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 2 })
+	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join([]string{session.KindSessionStarted, session.KindUserMessage}, ",") {
+		t.Fatalf("kinds after failed attempt = %v, want a dangling user_message", kinds)
+	}
+
+	gw.mu.Lock()
+	gw.events = okEvents("the answer")
+	gw.mu.Unlock()
+
+	_, ch, err = s.Retry(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	kinds := log.kinds("s1")
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindAssistantTurn}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds after retry = %v, want %v (no duplicated user_message)", kinds, want)
+	}
+
+	sent := chatRequest(t, gw)
+	if sent.Route != "mini" {
+		t.Fatalf("retried route = %q, want mini (the original message's persisted route)", sent.Route)
+	}
+
+	events, _ := log.Events(t.Context(), "s1")
+	var turn session.AssistantTurn
+	if err := json.Unmarshal(events[2].Payload, &turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if turn.LLM.Message != "the answer" {
+		t.Fatalf("turn = %+v", turn)
+	}
+}
+
+// Retry on a session whose last event isn't a dangling user_message —
+// no messages at all, or a turn that already completed — has nothing
+// to retry and must reject rather than silently no-op or duplicate.
+func TestRetryRejectsWhenNothingToRetry(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	s := newService(&fakeGW{}, log)
+
+	if _, _, err := s.Retry(t.Context(), "s1"); !errors.Is(err, ErrNoRetryableTurn) {
+		t.Fatalf("Retry on empty session: err = %v, want ErrNoRetryableTurn", err)
+	}
+
+	gw := &fakeGW{events: okEvents("answer")}
+	s2 := newService(gw, log)
+	_, ch, err := s2.Chat(t.Context(), Request{SessionID: "s2", Message: "q", Route: "mini"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s2")) == 3 })
+
+	if _, _, err := s2.Retry(t.Context(), "s2"); !errors.Is(err, ErrNoRetryableTurn) {
+		t.Fatalf("Retry on a completed turn: err = %v, want ErrNoRetryableTurn", err)
 	}
 }

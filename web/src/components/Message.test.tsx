@@ -86,6 +86,26 @@ describe('AssistantMessage', () => {
 
     expect(screen.getByTestId('error')).toHaveTextContent('chain_exhausted: all failed')
   })
+
+  it('shows a retry button only when onRetry is given, and calls it on click', () => {
+    const msg = play([
+      { type: 'error', error: { code: 'chain_exhausted', message: 'all failed', retryable: false } },
+      { type: 'meta', session_id: 's' },
+    ])
+    const { rerender } = render(<AssistantMessage msg={msg} />)
+    expect(screen.queryByTestId('retry-button')).not.toBeInTheDocument()
+
+    const onRetry = vi.fn()
+    rerender(<AssistantMessage msg={msg} onRetry={onRetry} />)
+    fireEvent.click(screen.getByTestId('retry-button'))
+    expect(onRetry).toHaveBeenCalledOnce()
+  })
+
+  it('omits the retry button when there is no error, even with onRetry given', () => {
+    const msg = play([{ type: 'chunk', text: 'all good' }, { type: 'meta', session_id: 's' }])
+    render(<AssistantMessage msg={msg} onRetry={vi.fn()} />)
+    expect(screen.queryByTestId('retry-button')).not.toBeInTheDocument()
+  })
 })
 
 describe('replay-only components', () => {

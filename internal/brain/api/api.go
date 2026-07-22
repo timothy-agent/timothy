@@ -90,6 +90,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	srv.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
 	srv.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
+	srv.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
 	srv.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
 	// Deprecated shim: same behavior, session_id in the body.
 	srv.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
@@ -312,7 +313,9 @@ func (a *API) handleMessages(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "get_failed", err.Error())
 		return
 	}
-	a.streamTurn(w, r, req)
+	a.streamTurn(w, r, func(ctx context.Context) (string, <-chan stream.StreamEvent, error) {
+		return a.svc.Chat(ctx, req)
+	})
 }
 
 // handleChatShim keeps the original /v1/chat contract alive for one
@@ -326,7 +329,32 @@ func (a *API) handleChatShim(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Deprecation", "true")
 	w.Header().Set("Link", `</v1/sessions/{id}/messages>; rel="successor-version"`)
-	a.streamTurn(w, r, req)
+	a.streamTurn(w, r, func(ctx context.Context) (string, <-chan stream.StreamEvent, error) {
+		return a.svc.Chat(ctx, req)
+	})
+}
+
+// handleRetry re-runs the session's last turn without re-persisting
+// the user message: Chat already leaves it durable even on failure
+// (chat.Service.Retry's doc explains why), so a naive resend of
+// /messages would double it. Same terminal SSE contract as /messages.
+func (a *API) handleRetry(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if !validSessionID(sessionID) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
+	if _, err := a.dir.Get(r.Context(), sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			jsonError(w, http.StatusNotFound, "not_found", "no such session")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
+	a.streamTurn(w, r, func(ctx context.Context) (string, <-chan stream.StreamEvent, error) {
+		return a.svc.Retry(ctx, sessionID)
+	})
 }
 
 // meta is brain's terminal SSE event: session identity plus whatever
@@ -347,11 +375,18 @@ type meta struct {
 	LedgerID  string        `json:"ledger_id,omitempty"`
 }
 
-func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, req chat.Request) {
-	sessionID, events, err := a.svc.Chat(r.Context(), req)
+// streamTurn runs run (chat.Service.Chat or Retry) and relays its
+// terminal-contract channel to the client as SSE; both callers only
+// differ in how the turn starts, not in how it streams or ends.
+func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, run func(context.Context) (string, <-chan stream.StreamEvent, error)) {
+	sessionID, events, err := run(r.Context())
 	if err != nil {
 		if errors.Is(err, chat.ErrBadRequest) {
 			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		if errors.Is(err, chat.ErrNoRetryableTurn) {
+			jsonError(w, http.StatusConflict, "no_retryable_turn", err.Error())
 			return
 		}
 		// session_id rides the error when a row was already created so

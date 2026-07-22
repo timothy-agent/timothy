@@ -296,6 +296,53 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}); err != nil {
 		return sessionID, nil, err
 	}
+	return s.runTurn(ctx, sessionID, req.Message, req.ModelHint, req.SkillHint, skillBody, route, profile, firstExchange)
+}
+
+// ErrNoRetryableTurn marks a Retry call whose session isn't in a
+// retryable state — its last event isn't a user message left dangling
+// by a failed attempt (persistTurn only completes a turn on sawDone).
+var ErrNoRetryableTurn = errors.New("no retryable turn")
+
+// Retry re-runs generation for a session's last turn WITHOUT persisting
+// a second user_message: Chat unconditionally appends before streaming
+// (line above), so a failed attempt already leaves that message durable
+// with no assistant_turn after it. Retry reuses it verbatim — same
+// route/agent/model_hint the original request resolved to, since those
+// live on the persisted UserMessage, not the transient Request. A
+// skill_hint is NOT persisted (it's a rare, deliberate one-off pick),
+// so a retried turn never re-loads one.
+func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan stream.StreamEvent, error) {
+	events, err := s.log.Events(ctx, sessionID)
+	if err != nil {
+		return sessionID, nil, err
+	}
+	last, ok := lastUserMessage(events)
+	if !ok {
+		return sessionID, nil, fmt.Errorf("chat: %w: session has no retryable turn", ErrNoRetryableTurn)
+	}
+	firstExchange := isOnlyUserMessage(events)
+
+	profile := agents.Agent{Memory: true}
+	if s.agents != nil {
+		var known bool
+		profile, known = s.agents(ctx, last.Agent)
+		if !known {
+			return sessionID, nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, last.Agent)
+		}
+	}
+	route := last.Route
+	if route == "" {
+		route = defaultRoute
+	}
+	return s.runTurn(ctx, sessionID, last.Text, last.ModelHint, "", "", route, profile, firstExchange)
+}
+
+// runTurn is the shared tail of Chat and Retry: compact, project
+// context, assemble the system prompt, stream, and relay. The caller
+// has already ensured exactly the right user_message sits durable at
+// the end of the log — this never appends one itself.
+func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, firstExchange bool) (string, <-chan stream.StreamEvent, error) {
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
@@ -308,7 +355,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		}
 		cancel()
 	}
-	events, err = s.log.Events(ctx, sessionID)
+	events, err := s.log.Events(ctx, sessionID)
 	if err != nil {
 		return sessionID, nil, err
 	}
@@ -331,10 +378,10 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		system += "\n\n# Agent: " + profile.Name + "\n\n" + profile.PromptOverlay
 	}
 	if skillBody != "" {
-		system += "\n\n# Skill: " + req.SkillHint + "\n\n" + skillBody
+		system += "\n\n# Skill: " + skillHint + "\n\n" + skillBody
 	}
 	if s.recall != nil && profile.Memory {
-		if block := s.recall(ctx, sessionID, req.Message); block != "" {
+		if block := s.recall(ctx, sessionID, userText); block != "" {
 			system += "\n\n" + block
 		}
 	}
@@ -344,7 +391,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		Agent:     profile.Name,
 		ToolAllow: profile.Tools,
 		Purpose:   "chat",
-		ModelHint: req.ModelHint,
+		ModelHint: modelHint,
 		System:    system,
 		Messages:  msgs,
 		SessionID: sessionID,
@@ -354,7 +401,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}
 
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, req.Message, route, profile, firstExchange, upstream, out)
+	go s.relay(ctx, sessionID, userText, route, profile, firstExchange, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -627,4 +674,33 @@ func hasUserMessage(events []session.Event) bool {
 		}
 	}
 	return false
+}
+
+// lastUserMessage returns the log's last event when — and only when —
+// it is a user_message: the signature of a turn that never completed
+// (persistTurn only appends assistant_turn on sawDone). Any other
+// trailing kind means there's nothing dangling to retry.
+func lastUserMessage(events []session.Event) (session.UserMessage, bool) {
+	if len(events) == 0 || events[len(events)-1].Kind != session.KindUserMessage {
+		return session.UserMessage{}, false
+	}
+	var msg session.UserMessage
+	if err := json.Unmarshal(events[len(events)-1].Payload, &msg); err != nil {
+		return session.UserMessage{}, false
+	}
+	return msg, true
+}
+
+// isOnlyUserMessage reports whether events carries exactly one
+// user_message — the auto-title condition Chat computes as
+// firstExchange BEFORE appending its own; Retry checks the same thing
+// against the message already sitting in the log.
+func isOnlyUserMessage(events []session.Event) bool {
+	n := 0
+	for _, ev := range events {
+		if ev.Kind == session.KindUserMessage {
+			n++
+		}
+	}
+	return n == 1
 }

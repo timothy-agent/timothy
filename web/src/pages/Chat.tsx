@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { answerPermission, ChatError, chatStream, getTranscript } from '../api/client'
+import { answerPermission, ChatError, chatStream, getTranscript, retryStream } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { Composer } from '../components/Composer'
 import {
@@ -198,6 +198,43 @@ export function Chat({
 
   const send = () => void sendMessage(draft, agent)
 
+  // retryLast re-runs the last (failed) turn: the session already
+  // carries the dangling user message server-side (chat.Service.Retry),
+  // so this resets the existing assistant item in place rather than
+  // appending a new user+assistant pair like sendMessage does.
+  const retryLast = async () => {
+    const sessionId = sessionRef.current
+    if (!sessionId || streaming) return
+    setStreaming(true)
+    pinnedRef.current = true
+    updateLast(() => emptyAssistant())
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    try {
+      await retryStream(
+        sessionId,
+        (ev: ChatEvent) => updateLast((m) => applyEvent(m, ev)),
+        { signal: controller.signal },
+      )
+      refresh()
+    } catch (err) {
+      if (controller.signal.aborted) return
+      if (err instanceof ChatError) {
+        if (err.status === 401 || err.status === 503) onNeedToken()
+        updateLast((m) => ({ ...m, streaming: false, error: err.message }))
+      } else {
+        updateLast((m) => ({ ...m, streaming: false, error: String(err) }))
+      }
+    } finally {
+      abortRef.current = null
+      if (!controller.signal.aborted) {
+        setStreaming(false)
+        updateLast((m) => ({ ...m, streaming: false }))
+      }
+    }
+  }
+
   // Consume a home-screen intent exactly once: `send` fires the
   // message immediately, `draft` prefills the composer, `skillHint`
   // pins the chip. sendMessage takes hint explicitly here rather than
@@ -248,7 +285,7 @@ export function Chat({
             Could not load this session: {loadError}
           </div>
         )}
-        {items.map((item) => {
+        {items.map((item, i) => {
           switch (item.role) {
             case 'user':
               return <UserMessage key={item.id} text={item.text} />
@@ -259,7 +296,16 @@ export function Chat({
             case 'interrupted':
               return <InterruptedMessage key={item.id} text={item.text} />
             default:
-              return <AssistantMessage key={item.id} msg={item} />
+              return (
+                <AssistantMessage
+                  key={item.id}
+                  msg={item}
+                  // Retry only ever targets the trailing dangling turn
+                  // (the session's last event server-side) — never a
+                  // mid-transcript message.
+                  onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                />
+              )
           }
         })}
         <div ref={bottomRef} />

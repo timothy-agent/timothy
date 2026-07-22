@@ -103,28 +103,51 @@ export interface ChatStreamOptions {
 export async function chatStream(
   req: ChatRequest,
   onEvent: (ev: ChatEvent) => void,
-  { signal, onSession }: ChatStreamOptions = {},
+  opts: ChatStreamOptions = {},
 ): Promise<void> {
   const { session_id, ...body } = req
   const url = session_id ? `/v1/sessions/${session_id}/messages` : '/v1/chat'
+  return postSSE(url, session_id ? body : req, onEvent, opts)
+}
+
+// retryStream re-runs a session's last (failed) turn: the session
+// already carries the dangling user message server-side, so this
+// posts no body — retry has nothing new to say, just "try again".
+export async function retryStream(
+  sessionId: string,
+  onEvent: (ev: ChatEvent) => void,
+  opts: ChatStreamOptions = {},
+): Promise<void> {
+  return postSSE(`/v1/sessions/${sessionId}/messages/retry`, undefined, onEvent, opts)
+}
+
+// postSSE is chatStream and retryStream's shared body: POST, surface a
+// structured ChatError on failure, then relay the SSE stream until the
+// terminal meta event.
+async function postSSE(
+  url: string,
+  body: unknown,
+  onEvent: (ev: ChatEvent) => void,
+  { signal, onSession }: ChatStreamOptions,
+): Promise<void> {
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${getToken()}`,
     },
-    body: JSON.stringify(session_id ? body : req),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
     signal,
   })
   if (!res.ok || !res.body) {
-    const body = await res.text().catch(() => '')
+    const text = await res.text().catch(() => '')
     let code: string | undefined
-    let message = body
+    let message = text
     let sessionId: string | undefined
     try {
-      const parsed = JSON.parse(body) as { error?: string; message?: string; session_id?: string }
+      const parsed = JSON.parse(text) as { error?: string; message?: string; session_id?: string }
       code = parsed.error
-      message = parsed.message ?? body
+      message = parsed.message ?? text
       sessionId = parsed.session_id || undefined
     } catch {
       // Non-JSON error body: keep the raw text.

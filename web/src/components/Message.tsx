@@ -159,7 +159,16 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
-export function AssistantMessage({ msg }: { msg: AssistantState }) {
+export function AssistantMessage({
+  msg,
+  onRetry,
+}: {
+  msg: AssistantState
+  // Present only for the trailing item when it's safe to retry (an
+  // error and not mid-stream) — Chat.tsx decides that, this component
+  // just renders whatever it's handed.
+  onRetry?: () => void
+}) {
   const tokens = msg.meta?.usage
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
     : null
@@ -210,9 +219,21 @@ export function AssistantMessage({ msg }: { msg: AssistantState }) {
         </Badge>
       ))}
       {msg.error && (
-        <Badge variant="destructive" data-testid="error">
-          {msg.error}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="destructive" data-testid="error">
+            {msg.error}
+          </Badge>
+          {onRetry && (
+            <button
+              type="button"
+              data-testid="retry-button"
+              onClick={onRetry}
+              className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              retry
+            </button>
+          )}
+        </div>
       )}
       {!msg.streaming && (Boolean(msg.meta?.provider) || msg.text !== '') && (
         <div className="flex items-center gap-1.5">

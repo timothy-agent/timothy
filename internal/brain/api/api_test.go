@@ -174,6 +174,7 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	m.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
 	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
+	m.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
 	m.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
 	m.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
 	return m
@@ -484,6 +485,70 @@ func TestMessagesEndpointStreamsAndPersists(t *testing.T) {
 
 	if w = doMux(a, http.MethodPost, "/v1/sessions/missing/messages", `{"message":"x"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("missing session message: %d", w.Code)
+	}
+}
+
+// TestRetryEndpoint covers the surface the tools-picker-adjacent retry
+// feature adds: a failed /messages call leaves a dangling user_message
+// (chat.Service never appends the assistant turn without EventDone),
+// and /messages/retry must reuse it — no request body, no duplicate.
+func TestRetryEndpoint(t *testing.T) {
+	t.Parallel()
+	a, dir, gw := testAPI(t, "tok", []stream.StreamEvent{
+		{Type: stream.EventError, Err: &stream.StreamError{Code: "chain_exhausted", Message: "boom"}},
+	})
+	id, _ := dir.Create(t.Context(), "t")
+
+	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hello","route":"mini"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial send code = %d body=%s", w.Code, w.Body.String())
+	}
+
+	// A session with no dangling turn (never messaged, or already
+	// completed) has nothing to retry.
+	if w := doMux(a, http.MethodPost, "/v1/sessions/missing/messages/retry", ``); w.Code != http.StatusNotFound {
+		t.Fatalf("retry on missing session: code = %d", w.Code)
+	}
+
+	gw.events = okEvents()
+	w = doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages/retry", ``)
+	if w.Code != http.StatusOK {
+		t.Fatalf("retry code = %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Session-Id"); got != id {
+		t.Fatalf("X-Session-Id = %q, want %s", got, id)
+	}
+	if gw.got.Route != "mini" {
+		t.Fatalf("retried route = %q, want mini (the original message's persisted route)", gw.got.Route)
+	}
+
+	// persistTurn runs after the SSE body closes (close(out) unblocks
+	// the client write, persistence follows), so the assistant_turn
+	// isn't guaranteed durable the instant doMux returns.
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindAssistantTurn}
+	deadline := time.Now().Add(5 * time.Second)
+	var kinds []string
+	for {
+		events, err := dir.Events(t.Context(), id)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		kinds = nil
+		for _, ev := range events {
+			kinds = append(kinds, ev.Kind)
+		}
+		if strings.Join(kinds, ",") == strings.Join(want, ",") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds after retry = %v, want %v (no duplicated user_message)", kinds, want)
+	}
+
+	// The turn just completed — nothing left dangling to retry again.
+	if w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages/retry", ``); w.Code != http.StatusConflict {
+		t.Fatalf("retry after completion: code = %d, want 409", w.Code)
 	}
 }
 
