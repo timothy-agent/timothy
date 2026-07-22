@@ -523,21 +523,34 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	ctx := t.Context()
 	db, _ := pool.Get()
 
-	saved := map[string][]byte{}
+	type saved struct {
+		chain   []byte
+		enabled bool
+	}
+	origs := map[string]saved{}
 	for _, name := range []string{"default", "summarize", "embedding"} {
-		var chain []byte
-		if err := db.QueryRow(ctx, `SELECT chain FROM routes WHERE name = $1`, name).Scan(&chain); err != nil {
-			t.Fatalf("read %s chain: %v", name, err)
+		var s saved
+		if err := db.QueryRow(ctx, `SELECT chain, enabled FROM routes WHERE name = $1`, name).Scan(&s.chain, &s.enabled); err != nil {
+			t.Fatalf("read %s route: %v", name, err)
 		}
-		saved[name] = chain
+		origs[name] = s
 	}
 	defer func() {
-		for name, chain := range saved {
-			if _, err := db.Exec(ctx, `UPDATE routes SET chain = $2 WHERE name = $1`, name, chain); err != nil {
-				t.Errorf("restore %s chain: %v", name, err)
+		for name, s := range origs {
+			if _, err := db.Exec(ctx, `UPDATE routes SET chain = $2, enabled = $3 WHERE name = $1`, name, s.chain, s.enabled); err != nil {
+				t.Errorf("restore %s route: %v", name, err)
 			}
 		}
 	}()
+
+	// Force every fixed route disabled first — a seeded (was-empty)
+	// chain must flip enabled on; an appended (already-had-a-chain)
+	// fallback must leave it exactly as found.
+	for _, name := range []string{"default", "summarize", "embedding"} {
+		if _, err := db.Exec(ctx, `UPDATE routes SET chain = '[]', enabled = false WHERE name = $1`, name); err != nil {
+			t.Fatalf("reset %s route: %v", name, err)
+		}
+	}
 
 	id, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "bootstrap", Kind: "api", Driver: "openaicompat",
@@ -570,6 +583,16 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 		if last.ProviderID != id || last.Model != tc.wantModel {
 			t.Fatalf("%s chain tail = %+v, want provider %s model %s", tc.route, last, id, tc.wantModel)
 		}
+		if !byName[tc.route].Enabled {
+			t.Fatalf("%s enabled = false, want true: seeding an empty chain must make the route usable", tc.route)
+		}
+	}
+
+	// Disable default again (chain now non-empty) to prove the next
+	// bootstrap — a fallback append, not a seed — leaves enabled alone
+	// instead of silently re-enabling a route an operator turned off.
+	if _, err := db.Exec(ctx, `UPDATE routes SET enabled = false WHERE name = 'default'`); err != nil {
+		t.Fatalf("disable default: %v", err)
 	}
 
 	// A second, distinct provider appends as a further fallback —
@@ -598,6 +621,9 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 		last := r.Chain[len(r.Chain)-1]
 		if last.ProviderID != secondID || last.Model != "chat-cheap" {
 			t.Fatalf("default chain tail = %+v, want second provider's chat-cheap appended last", last)
+		}
+		if r.Enabled {
+			t.Fatalf("default enabled = true, want false: appending a fallback must not override an operator's disable")
 		}
 	}
 }

@@ -335,12 +335,27 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 	}
 	updates := router.BootstrapChain(p, existing)
 	for name, chain := range updates {
-		if _, err := db.Exec(ctx, `UPDATE routes SET chain = $2, updated_at = now() WHERE name = $1`,
-			name, jsonOr(chain, "[]")); err != nil {
+		// A route seeded from empty was unusable before (disabled by
+		// default, D-033) — bootstrap must flip it on, or the whole
+		// point of auto-fill (a freshly connected provider "just
+		// works") silently fails with a permanent no_route error.
+		// Appending a fallback to an already-configured route leaves
+		// enabled untouched: that route's on/off state is an
+		// operator decision bootstrap has no business overriding.
+		seeded := len(existing[name]) == 0
+		var err error
+		if seeded {
+			_, err = db.Exec(ctx, `UPDATE routes SET chain = $2, enabled = true, updated_at = now() WHERE name = $1`,
+				name, jsonOr(chain, "[]"))
+		} else {
+			_, err = db.Exec(ctx, `UPDATE routes SET chain = $2, updated_at = now() WHERE name = $1`,
+				name, jsonOr(chain, "[]"))
+		}
+		if err != nil {
 			a.log.Warn("route bootstrap: write chain", "route", name, "error", err)
 			continue
 		}
-		a.audit(ctx, "bootstrap", "route", name, nil, map[string]any{"chain": chain, "provider": p.ID})
+		a.audit(ctx, "bootstrap", "route", name, nil, map[string]any{"chain": chain, "provider": p.ID, "enabled": seeded})
 	}
 }
 
