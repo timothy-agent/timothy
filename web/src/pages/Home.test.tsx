@@ -5,11 +5,11 @@ import type { ChatIntent } from './Home'
 import { Home } from './Home'
 
 vi.mock('../api/client', () => ({
-  listAgents: vi.fn().mockResolvedValue([]),
+  listAgents: vi.fn(),
   listMemories: vi.fn(),
 }))
 
-import { listMemories } from '../api/client'
+import { listAgents, listMemories } from '../api/client'
 
 let landed: { pathname: string; state: ChatIntent | null } | null = null
 
@@ -27,27 +27,53 @@ function renderHome() {
         <Route path="/chat" element={<ChatProbe />} />
         <Route path="/memory" element={<div>memory page</div>} />
         <Route path="/research" element={<div>research page</div>} />
+        <Route path="/analytics" element={<div>analytics page</div>} />
       </Routes>
     </MemoryRouter>,
   )
+}
+
+const generalAgent = {
+  id: 'a1',
+  name: 'general',
+  description: 'Everyday chat',
+  prompt_overlay: '',
+  route: '',
+  skills: [],
+  tools: [],
+  memory: true,
+  is_default: true,
+  enabled: true,
+}
+const researchAgent = {
+  id: 'a2',
+  name: 'research',
+  description: 'Deep research with citations',
+  prompt_overlay: '',
+  route: '',
+  skills: ['research-brief'],
+  tools: [],
+  memory: true,
+  is_default: false,
+  enabled: true,
 }
 
 afterEach(cleanup)
 beforeEach(() => {
   landed = null
   vi.clearAllMocks()
+  vi.mocked(listAgents).mockResolvedValue([generalAgent, researchAgent])
   vi.mocked(listMemories).mockResolvedValue([])
   localStorage.clear()
 })
 
 describe('Home', () => {
-  it('shows the capability groups', () => {
+  it('shows the agent cards', async () => {
     renderHome()
-    for (const title of ['Chat', 'Memory', 'Skills', 'Workspace']) {
-      expect(screen.getByRole('heading', { name: title })).toBeTruthy()
-    }
-    expect(screen.getByRole('button', { name: /New chat/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Research/ })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Agents' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: /general/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /research/ })).toBeTruthy()
+    expect(screen.getByText('Default')).toBeTruthy()
   })
 
   it('submitting the composer starts a chat with the message', () => {
@@ -68,15 +94,22 @@ describe('Home', () => {
     expect(landed).toBeNull()
   })
 
-  it('the Research tile navigates to the dedicated research page', () => {
+  it('clicking an agent card starts a chat with that agent selected', async () => {
     renderHome()
-    fireEvent.click(screen.getByRole('button', { name: /Research/ }))
-    expect(screen.getByText('research page')).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: /research/ }))
+    expect(landed?.pathname).toBe('/chat')
+    expect(landed?.state?.agent).toBe('research')
   })
 
-  it('memory tiles navigate to the memory page', () => {
+  it('the Memory shortcut navigates to the memory page', () => {
     renderHome()
-    fireEvent.click(screen.getByRole('button', { name: /Queue/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Memory' }))
     expect(screen.getByText('memory page')).toBeTruthy()
+  })
+
+  it('the Analytics shortcut navigates to the analytics page', () => {
+    renderHome()
+    fireEvent.click(screen.getByRole('button', { name: 'Analytics' }))
+    expect(screen.getByText('analytics page')).toBeTruthy()
   })
 })

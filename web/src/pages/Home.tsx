@@ -1,13 +1,12 @@
 import {
   Analytics01Icon,
-  Brain02Icon,
   BubbleChatIcon,
   InboxIcon,
-  SearchList01Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
+import { useAgents } from '../components/AgentPicker'
 import { Composer } from '../components/Composer'
 import { usePendingMemories } from '../lib/memory'
 
@@ -23,19 +22,14 @@ export interface ChatIntent {
   skillHint?: string
 }
 
-interface Tile {
-  label: string
-  icon: typeof BubbleChatIcon
-  to?: string
-  intent?: ChatIntent
-  badge?: number
-}
-
 // Home is the workspace launcher: a hero composer that starts a chat,
-// and the capability map — only what exists today, stubs say so.
+// and the agent picker as the actual capability map — agents-first,
+// since who answers (their prompt, route, skills, tools, memory) is
+// the thing that varies, not a fixed set of feature tiles.
 export function Home() {
   const navigate = useNavigate()
   const pending = usePendingMemories()
+  const agents = useAgents()
   const [draft, setDraft] = useState('')
   const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
 
@@ -50,36 +44,14 @@ export function Home() {
     navigate('/chat', { state: { send: message, agent } satisfies ChatIntent })
   }
 
-  const groups: { title: string; tiles: Tile[] }[] = [
-    {
-      title: 'Chat',
-      tiles: [{ label: 'New chat', icon: BubbleChatIcon, to: '/chat' }],
-    },
-    {
-      title: 'Memory',
-      tiles: [
-        { label: 'Queue', icon: InboxIcon, to: '/memory', badge: pending },
-        { label: 'Browse', icon: Brain02Icon, to: '/memory' },
-      ],
-    },
-    {
-      title: 'Skills',
-      tiles: [{ label: 'Research', icon: SearchList01Icon, to: '/research' }],
-    },
-    {
-      title: 'Workspace',
-      tiles: [{ label: 'Dashboard', icon: Analytics01Icon, to: '/dashboard' }],
-    },
-  ]
-
-  const open = (tile: Tile) => {
-    if (tile.intent) navigate('/chat', { state: tile.intent })
-    else if (tile.to) navigate(tile.to)
+  const openAgent = (name: string) => {
+    pickAgent(name)
+    navigate('/chat', { state: { agent: name } satisfies ChatIntent })
   }
 
   return (
     <div className="flex h-full flex-col items-center overflow-y-auto px-4">
-      <div className="mt-[max(3rem,14vh)] w-full max-w-2xl text-center">
+      <div className="mt-[max(3rem,12vh)] w-full max-w-2xl text-center">
         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Timothy</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Ask anything. Chats remember what matters.
@@ -97,34 +69,75 @@ export function Home() {
         </div>
       </div>
 
-      <div className="mt-14 mb-10 flex w-full max-w-5xl flex-col gap-10 lg:flex-row lg:justify-center lg:gap-0 lg:divide-x lg:divide-border">
-        {groups.map((group) => (
-          <section key={group.title} className="lg:px-10 lg:first:pl-0 lg:last:pr-0">
-            <h2 className="text-center text-xs font-medium tracking-wider text-muted-foreground uppercase">
-              {group.title}
-            </h2>
-            <div className="mt-5 flex flex-wrap justify-center gap-x-8 gap-y-6">
-              {group.tiles.map((tile) => (
-                <button
-                  key={tile.label}
-                  type="button"
-                  onClick={() => open(tile)}
-                  className="group flex w-16 flex-col items-center gap-2"
-                >
-                  <span className="relative flex size-11 items-center justify-center rounded-xl border border-transparent text-zinc-600 transition group-hover:border-border group-hover:bg-zinc-100 dark:text-zinc-300 dark:group-hover:bg-zinc-800">
-                    <HugeiconsIcon icon={tile.icon} className="size-5.5" />
-                    {tile.badge != null && tile.badge > 0 && (
-                      <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-medium text-white">
-                        {tile.badge}
-                      </span>
-                    )}
+      <div className="mt-14 w-full max-w-4xl">
+        <h2 className="text-center text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Agents
+        </h2>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {agents.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => openAgent(a.name)}
+              className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-sm transition hover:border-brand hover:shadow-md"
+            >
+              <div className="flex items-center gap-2">
+                <span className="truncate text-sm font-semibold capitalize">{a.name}</span>
+                {a.is_default && (
+                  <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
+                    Default
                   </span>
-                  <span className="text-xs text-zinc-600 dark:text-zinc-300">{tile.label}</span>
-                </button>
-              ))}
+                )}
+              </div>
+              {a.description && (
+                <p className="line-clamp-2 text-sm text-muted-foreground">{a.description}</p>
+              )}
+            </button>
+          ))}
+          {agents.length === 0 && (
+            <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+              No agents configured yet — the default agent will serve new chats.
             </div>
-          </section>
-        ))}
+          )}
+        </div>
+      </div>
+
+      <div className="mt-10 mb-10 flex items-center gap-8">
+        <button
+          type="button"
+          onClick={() => navigate('/memory')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="relative flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <HugeiconsIcon icon={InboxIcon} className="size-5.5" />
+            {pending > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-medium text-brand-foreground">
+                {pending}
+              </span>
+            )}
+          </span>
+          <span className="text-xs text-muted-foreground">Memory</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/research')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <HugeiconsIcon icon={BubbleChatIcon} className="size-5.5" />
+          </span>
+          <span className="text-xs text-muted-foreground">Research</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/analytics')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <HugeiconsIcon icon={Analytics01Icon} className="size-5.5" />
+          </span>
+          <span className="text-xs text-muted-foreground">Analytics</span>
+        </button>
       </div>
     </div>
   )
