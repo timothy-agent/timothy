@@ -5,7 +5,7 @@ import { listConnectors, patchConnector, testConnector } from '../../api/client'
 import type { AdminConnector } from '../../api/types'
 import { Button } from '../ui/button'
 import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
-import { connectorPresets } from './connectorPresets'
+import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Toggle } from './shared'
 import { errText } from './util'
 
@@ -110,7 +110,7 @@ function ConnectorCard({
   onChanged: () => void
   onManage: () => void
 }) {
-  const preset = connectorPresets.find((p) => matchesPreset(connector, p)) ?? connectorPresets.find((p) => p.id === 'custom-mcp')!
+  const preset = connectorPresets.find((p) => matchesPreset(connector, p)) ?? unknownPreset
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
 

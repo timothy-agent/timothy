@@ -50,26 +50,15 @@ export const connectorPresets: ConnectorPreset[] = [
     tokenPlaceholder: 'ghp_… or github_pat_…',
     tokenHint: 'A personal access token; fine-grained tokens work. github.com/settings/tokens',
   },
-  {
-    id: 'grafana',
-    name: 'Grafana',
-    kind: 'mcp',
-    description: 'Metrics, logs, alerts — via MCP',
-    logo: 'grafana',
-    brandColor: '#F46800',
-    endpoint: '',
-    endpointHint: 'Your Grafana MCP server endpoint, e.g. https://grafana.internal/mcp',
-    tokenPlaceholder: 'service account token',
-    tokenHint: 'A Grafana service-account token with the roles the tools need.',
-  },
-  {
-    id: 'custom-mcp',
-    name: 'Custom MCP server',
-    kind: 'mcp',
-    description: 'Any streamable-HTTP MCP endpoint',
-    brandColor: '#4B5563',
-    endpoint: '',
-    endpointHint: 'The server’s streamable-HTTP endpoint',
-    tokenHint: 'Optional — leave empty for servers without auth.',
-  },
 ]
+
+// Fallback for connectors that predate a preset removal / don't match
+// any current preset — keeps ConnectorLogo/name rendering safe without
+// needing a dummy entry in the list above.
+export const unknownPreset: ConnectorPreset = {
+  id: 'unknown',
+  name: 'Custom',
+  kind: 'mcp',
+  description: '',
+  brandColor: '#4B5563',
+}

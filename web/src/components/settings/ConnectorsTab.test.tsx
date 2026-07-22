@@ -25,12 +25,12 @@ import {
   testConnector,
 } from '../../api/client'
 
-const githubConnector: AdminConnector = {
+const calendarConnector: AdminConnector = {
   id: 'c1',
-  name: 'github',
-  kind: 'mcp',
-  config: { endpoint: 'https://api.githubcopilot.com/mcp/' },
-  credential_ref: 'GITHUB_MCP_TOKEN',
+  name: 'google-calendar',
+  kind: 'google',
+  config: { scopes: ['https://www.googleapis.com/auth/calendar'] },
+  credential_ref: 'GOOGLE_CALENDAR_GOOGLE_OAUTH',
   enabled: true,
 }
 
@@ -49,7 +49,7 @@ function renderTab(entry = '/settings/connectors') {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+  vi.mocked(listConnectors).mockResolvedValue([calendarConnector])
   vi.mocked(listSecretBackends).mockResolvedValue([
     { backend: 'db', configured: true, default: true },
     { backend: 'vault', configured: false, default: false },
@@ -62,8 +62,8 @@ describe('Connectors tab', () => {
   it('renders configured cards and the preset tile grid', async () => {
     renderTab()
     expect(await screen.findByText('Your connectors · 1')).toBeTruthy()
-    expect(screen.getByText('https://api.githubcopilot.com/mcp/')).toBeTruthy()
-    for (const name of ['Gmail', 'Google Calendar', 'Grafana', 'Custom MCP server']) {
+    expect(screen.getByText('calendar')).toBeTruthy()
+    for (const name of ['Gmail', 'Google Calendar', 'GitHub']) {
       expect(screen.getByRole('button', { name: new RegExp(name) })).toBeTruthy()
     }
   })
@@ -84,12 +84,9 @@ describe('Connectors tab', () => {
     vi.mocked(patchConnector).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /Grafana/ }))
-    fireEvent.change(await screen.findByPlaceholderText('https://…/mcp'), {
-      target: { value: 'https://grafana.internal/mcp' },
-    })
-    fireEvent.change(screen.getByPlaceholderText('service account token'), {
-      target: { value: 'glsa_abc' },
+    fireEvent.click(await screen.findByRole('button', { name: /GitHub/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), {
+      target: { value: 'ghp_abc' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
@@ -98,12 +95,12 @@ describe('Connectors tab', () => {
     fireEvent.click(addButton)
 
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('c2', { enabled: true }))
-    expect(setSecret).toHaveBeenCalledWith('GRAFANA_MCP_TOKEN', 'glsa_abc')
+    expect(setSecret).toHaveBeenCalledWith('GITHUB_MCP_TOKEN', 'ghp_abc')
     expect(createConnector).toHaveBeenCalledWith({
-      name: 'grafana',
+      name: 'github',
       kind: 'mcp',
-      config: { endpoint: 'https://grafana.internal/mcp' },
-      credential_ref: 'GRAFANA_MCP_TOKEN',
+      config: { endpoint: 'https://api.githubcopilot.com/mcp/' },
+      credential_ref: 'GITHUB_MCP_TOKEN',
       enabled: false,
     })
   })
@@ -114,19 +111,17 @@ describe('Connectors tab', () => {
     vi.mocked(testConnector).mockResolvedValue({ ok: false, error: 'status 401' })
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /Custom MCP server/ }))
-    fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: 'my server' } })
-    fireEvent.change(screen.getByPlaceholderText('https://…/mcp'), {
-      target: { value: 'https://x.example/mcp' },
+    fireEvent.click(await screen.findByRole('button', { name: /GitHub/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), {
+      target: { value: 'bad-token' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
     expect(await screen.findByText(/Connection failed: status 401/)).toBeTruthy()
     expect(patchConnector).not.toHaveBeenCalled()
     expect((screen.getByRole('button', { name: 'Add connector' }) as HTMLButtonElement).disabled).toBe(true)
-    // Name got slugified for the tool-name prefix.
     expect(createConnector).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'my-server', enabled: false }),
+      expect.objectContaining({ name: 'github', enabled: false }),
     )
   })
 

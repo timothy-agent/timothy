@@ -22,7 +22,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
-import { connectorPresets } from './connectorPresets'
+import { connectorPresets, unknownPreset } from './connectorPresets'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { Field } from './shared'
 import { errText, secretField } from './util'
@@ -103,7 +103,7 @@ export function ConnectorEdit() {
   if (connector === null) return <Navigate to="/settings/connectors" replace />
   if (connector === undefined) return null
 
-  const preset = connectorPresets.find((p) => p.kind === connector.kind) ?? connectorPresets.find((p) => p.id === 'custom-mcp')!
+  const preset = connectorPresets.find((p) => p.kind === connector.kind) ?? unknownPreset
 
   return (
     <div className="mt-6 w-full space-y-6">
