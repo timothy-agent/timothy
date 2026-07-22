@@ -66,18 +66,36 @@ export const providerPresets: ProviderPreset[] = [
     validateModel: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
   },
   {
-    id: 'groq',
-    name: 'Groq',
+    id: 'glm',
+    name: 'GLM (Z.ai)',
     driver: 'openaicompat',
-    description: 'Fast open-model inference',
-    logo: 'groq',
-    brandColor: '#F55036',
-    baseURL: 'https://api.groq.com/openai/v1',
+    description: "Zhipu's GLM models",
+    // No logo: Z.ai/Zhipu's mark isn't in the simple-icons registry —
+    // falls back to the neutral glyph rather than guess at an
+    // unverified brand mark.
+    brandColor: '#4B5563',
+    baseURL: 'https://api.z.ai/api/paas/v4',
     requiresKey: true,
-    defaultRef: 'GROQ_API_KEY',
-    keyPlaceholder: 'gsk_…',
-    keyHint: 'Create one at console.groq.com — keys start with gsk_.',
-    validateModel: 'llama-3.3-70b-versatile',
+    defaultRef: 'ZAI_API_KEY',
+    keyPlaceholder: 'paste key',
+    keyHint: 'Create one at z.ai.',
+    validateModel: 'glm-5.2',
+  },
+  {
+    id: 'grok',
+    name: 'Grok (xAI)',
+    driver: 'openaicompat',
+    description: "xAI's Grok models",
+    // No logo: xAI's mark isn't in the simple-icons registry and their
+    // site blocks scraping — falls back to the neutral glyph rather
+    // than guess at an unverified brand mark.
+    brandColor: '#4B5563',
+    baseURL: 'https://api.x.ai/v1',
+    requiresKey: true,
+    defaultRef: 'XAI_API_KEY',
+    keyPlaceholder: 'xai-…',
+    keyHint: 'Create one at console.x.ai — keys start with xai-.',
+    validateModel: 'grok-4',
   },
   {
     id: 'mistral',

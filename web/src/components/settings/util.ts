@@ -8,6 +8,12 @@ export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+// stripPaste removes whitespace and zero-width characters that ride
+// along when a key is copied out of wrapped text.
+export function stripPaste(v: string): string {
+  return v.replace(/[\s​-‍⁠﻿]/g, '')
+}
+
 // secretField shapes a credential input for the store-wide default
 // backend: built-in storage takes the value itself (masked), an
 // external backend takes the reference of a secret already there.

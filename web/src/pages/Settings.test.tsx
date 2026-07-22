@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatError } from '../api/client'
 import type { AdminProvider } from '../api/types'
@@ -73,10 +73,12 @@ const openaiProvider: AdminProvider = {
   enabled: true,
 }
 
-function renderPage(initialEntry = '/settings') {
+function renderPage(initialEntry = '/settings/providers') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <Settings />
+      <Routes>
+        <Route path="/settings/*" element={<Settings />} />
+      </Routes>
     </MemoryRouter>,
   )
 }
@@ -87,6 +89,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listProviders).mockResolvedValue([openaiProvider])
+  vi.mocked(availableModels).mockResolvedValue([])
   vi.mocked(providersHealth).mockResolvedValue([
     { name: 'OpenAI', enabled: true, healthy: true },
   ])
@@ -104,16 +107,15 @@ beforeEach(() => {
 })
 
 describe('Settings tabs', () => {
-  it('URL-syncs the active tab', async () => {
-    renderPage('/settings?tab=secrets')
+  it('routes to the active tab', async () => {
+    renderPage('/settings/secrets')
     expect(await screen.findByText('HashiCorp Vault')).toBeTruthy()
-    expect(screen.queryByText('Connect a provider')).toBeNull()
+    expect(screen.queryByText('Your providers')).toBeNull()
   })
 
-  it('defaults to Agents', async () => {
-    renderPage()
-    expect(await screen.findByText('general')).toBeTruthy()
-    expect(screen.getByText(/who serves a session/)).toBeTruthy()
+  it('defaults to Providers', async () => {
+    renderPage('/settings')
+    expect(await screen.findByText('healthy')).toBeTruthy()
   })
 })
 
@@ -129,7 +131,7 @@ describe('Features tab agent settings', () => {
     })
     vi.mocked(patchSettingValues).mockResolvedValue()
 
-    renderPage('/settings?tab=features')
+    renderPage('/settings/features')
     const budget = await screen.findByLabelText('Session token budget')
     expect((budget as HTMLInputElement).value).toBe('120000')
 
@@ -149,7 +151,7 @@ describe('Features tab agent settings', () => {
 
 describe('Secrets tab default backend', () => {
   it('shows the built-in storage card carrying the default badge', async () => {
-    renderPage('/settings?tab=secrets')
+    renderPage('/settings/secrets')
     expect(await screen.findByText('Timothy storage')).toBeTruthy()
     expect(screen.getByText('default')).toBeTruthy()
     // Unconfigured backends cannot claim the default.
@@ -161,17 +163,17 @@ describe('Secrets tab default backend', () => {
   it('claims the default for a configured backend', async () => {
     vi.mocked(getSecretBackendConfig).mockResolvedValue({ address: 'http://vault:8200' })
     vi.mocked(listAgents).mockResolvedValue([
-    { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
-  ])
-  vi.mocked(listRoutes).mockResolvedValue([])
-  vi.mocked(listSecretBackends).mockResolvedValue([
+      { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
+    ])
+    vi.mocked(listRoutes).mockResolvedValue([])
+    vi.mocked(listSecretBackends).mockResolvedValue([
       { backend: 'db', configured: true, default: true },
       { backend: 'vault', configured: true, default: false },
       { backend: 'asm', configured: false, default: false },
     ])
     vi.mocked(setDefaultSecretBackend).mockResolvedValue()
 
-    renderPage('/settings?tab=secrets')
+    renderPage('/settings/secrets')
     const enabled = (await screen.findAllByRole('button', { name: 'Make default' })).find(
       (b) => !(b as HTMLButtonElement).disabled,
     )
@@ -182,102 +184,133 @@ describe('Secrets tab default backend', () => {
 
 describe('Providers tab', () => {
   it('renders configured cards and the preset tile grid', async () => {
-    renderPage('/settings?tab=providers')
+    renderPage('/settings/providers')
     expect(await screen.findByText('Your providers · 1')).toBeTruthy()
     expect(screen.getByText('healthy')).toBeTruthy()
     // Every preset is offered as a tile.
-    for (const name of ['AWS Bedrock', 'Groq', 'Mistral', 'OpenRouter', 'Ollama', 'Custom endpoint']) {
-      expect(screen.getByRole('button', { name: new RegExp(name) })).toBeTruthy()
+    for (const name of ['AWS Bedrock', 'GLM (Z.ai)', 'Grok (xAI)', 'Mistral', 'OpenRouter', 'Ollama', 'Custom endpoint']) {
+      expect(screen.getByRole('button', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeTruthy()
     }
   })
 
-  it('opens a preset-aware dialog: bedrock asks for region, not a key', async () => {
-    renderPage('/settings?tab=providers')
+  it('navigates to its own add page: bedrock asks for region, not a key', async () => {
+    renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: /AWS Bedrock/ }))
-    const dialog = within(await screen.findByRole('dialog'))
-    expect(dialog.getByText('Connect AWS Bedrock')).toBeTruthy()
-    expect(dialog.getByText('Region')).toBeTruthy()
-    expect(dialog.getByText('AWS profile (optional)')).toBeTruthy()
-    // The card behind the dialog has a key editor; the bedrock dialog must not.
-    expect(dialog.queryByText('API key')).toBeNull()
+    expect(await screen.findByText('Add AWS Bedrock')).toBeTruthy()
+    expect(screen.getByText('Region')).toBeTruthy()
+    expect(screen.getByText('AWS profile (optional)')).toBeTruthy()
+    // The card behind the list has a key editor; the bedrock page must not.
+    expect(screen.queryByText('API key')).toBeNull()
   })
 
-  it('stores the key, validates, then creates enabled with the model declared', async () => {
+  it('disables Add until a test passes, then stores the key and creates enabled', async () => {
     vi.mocked(setSecret).mockResolvedValue()
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'llama-3.3-70b-versatile' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-5.2' })
     vi.mocked(createProvider).mockResolvedValue('p2')
 
-    renderPage('/settings?tab=providers')
-    fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
-    fireEvent.change(screen.getByPlaceholderText('gsk_…'), { target: { value: ' gsk_abc\u200B ' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Validate & add' }))
+    renderPage('/settings/providers')
+    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    const addButton = await screen.findByRole('button', { name: 'Add provider' })
+    expect((addButton as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(/API key/), { target: { value: ' gsk_abc​ ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
 
     await waitFor(() => expect(createProvider).toHaveBeenCalled())
     // Pasted key is stripped of whitespace/zero-width chars.
-    expect(setSecret).toHaveBeenCalledWith('GROQ_API_KEY', 'gsk_abc')
+    expect(setSecret).toHaveBeenCalledWith('ZAI_API_KEY', 'gsk_abc')
     expect(validateProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ driver: 'openaicompat', base_url: 'https://api.groq.com/openai/v1' }),
-      'llama-3.3-70b-versatile',
+      expect.objectContaining({ driver: 'openaicompat', base_url: 'https://api.z.ai/api/paas/v4' }),
+      'glm-5.2',
     )
     expect(createProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         enabled: true,
-        default_model: 'llama-3.3-70b-versatile',
-        models: [{ id: 'llama-3.3-70b-versatile' }],
+        default_model: 'glm-5.2',
+        models: [{ id: 'glm-5.2' }],
       }),
     )
   })
 
+  it('shows an inline error when testing without a key', async () => {
+    renderPage('/settings/providers')
+    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/An API key is required to test this provider/)).toBeTruthy()
+    expect(validateProvider).not.toHaveBeenCalled()
+  })
+
+  it('re-locks Add after editing a field past a passing test', async () => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-5.2' })
+
+    renderPage('/settings/providers')
+    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    const addButton = await screen.findByRole('button', { name: 'Add provider' })
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+
+    fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_changed' } })
+    expect((addButton as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('asks for a reference, not a key, when the default backend is external', async () => {
     vi.mocked(listAgents).mockResolvedValue([
-    { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
-  ])
-  vi.mocked(listRoutes).mockResolvedValue([])
-  vi.mocked(listSecretBackends).mockResolvedValue([
+      { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
+    ])
+    vi.mocked(listRoutes).mockResolvedValue([])
+    vi.mocked(listSecretBackends).mockResolvedValue([
       { backend: 'db', configured: true, default: false },
       { backend: 'vault', configured: true, default: true },
       { backend: 'asm', configured: false, default: false },
     ])
 
-    renderPage('/settings?tab=providers')
-    fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
-    const dialog = within(await screen.findByRole('dialog'))
-    const input = await dialog.findByPlaceholderText(/Vault path/)
+    renderPage('/settings/providers')
+    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    const input = await screen.findByPlaceholderText(/Vault path/)
     // A reference is not a secret: no password masking.
     expect((input as HTMLInputElement).type).toBe('text')
-    expect(dialog.getByText(/paste the path of the secret/)).toBeTruthy()
+    expect(screen.getByText(/paste the path of the secret/)).toBeTruthy()
   })
 
-  it('keeps the dialog open and skips create when validation fails', async () => {
+  it('keeps Add disabled and skips create when validation fails', async () => {
     vi.mocked(setSecret).mockResolvedValue()
     vi.mocked(validateProvider).mockResolvedValue({
       ok: false,
       latency_ms: 5000,
-      model: 'llama-3.3-70b-versatile',
+      model: 'glm-5.2',
       detail: 'upstream status 401',
     })
 
-    renderPage('/settings?tab=providers')
-    fireEvent.click(await screen.findByRole('button', { name: /Groq/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Validate & add' }))
+    renderPage('/settings/providers')
+    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
-    expect(await screen.findByText(/Validation failed after 5000 ms/)).toBeTruthy()
+    expect(await screen.findByText(/Failed after 5000 ms/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
     expect(createProvider).not.toHaveBeenCalled()
   })
 })
 
-describe('Models editor', () => {
-  it('adds a model from the provider listing and patches the row', async () => {
+describe('Provider manage page', () => {
+  it('navigates to the manage page from the card', async () => {
+    renderPage('/settings/providers')
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
+    expect(await screen.findByRole('heading', { name: 'OpenAI' })).toBeTruthy()
+  })
+
+  it('adds a model by id and patches the row', async () => {
     vi.mocked(availableModels).mockResolvedValue([{ id: 'gpt-4o' }, { id: 'o3-mini' }])
     vi.mocked(patchProvider).mockResolvedValue()
 
-    renderPage('/settings?tab=providers')
-    fireEvent.click(await screen.findByRole('button', { name: '+ add model' }))
-    // Declared models are filtered out of the choices.
-    const picker = await screen.findByRole('combobox', { name: 'available models' })
-    fireEvent.click(picker)
-    expect(screen.queryByRole('option', { name: 'gpt-4o' })).toBeNull()
-    fireEvent.click(await screen.findByRole('option', { name: 'o3-mini' }))
+    renderPage('/settings/providers/p1')
+    fireEvent.change(await screen.findByPlaceholderText('model id'), { target: { value: 'o3-mini' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
 
     await waitFor(() =>
@@ -288,16 +321,23 @@ describe('Models editor', () => {
     )
   })
 
-  it('falls back to manual entry when the driver cannot list models', async () => {
+  it('offers ids from the provider listing as suggestions, minus already-declared ones', async () => {
+    vi.mocked(availableModels).mockResolvedValue([{ id: 'gpt-4o' }, { id: 'o3-mini' }])
+
+    renderPage('/settings/providers/p1')
+    fireEvent.focus(await screen.findByPlaceholderText('model id'))
+    expect(await screen.findByRole('option', { name: /o3-mini/ })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /^gpt-4o$/ })).toBeNull()
+  })
+
+  it('still allows manual entry when the driver cannot list models', async () => {
     vi.mocked(availableModels).mockRejectedValue(
       new ChatError(422, 'driver bedrock cannot list models', 'unsupported'),
     )
     vi.mocked(patchProvider).mockResolvedValue()
 
-    renderPage('/settings?tab=providers')
-    fireEvent.click(await screen.findByRole('button', { name: '+ add model' }))
-    expect(await screen.findByText(/doesn’t list its models/)).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('model id'), { target: { value: 'my-model' } })
+    renderPage('/settings/providers/p1')
+    fireEvent.change(await screen.findByPlaceholderText('model id'), { target: { value: 'my-model' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
 
     await waitFor(() =>
@@ -313,7 +353,7 @@ describe('Models editor', () => {
   it('removes a model and moves the default to the first survivor', async () => {
     vi.mocked(patchProvider).mockResolvedValue()
 
-    renderPage('/settings?tab=providers')
+    renderPage('/settings/providers/p1')
     fireEvent.click(await screen.findByRole('button', { name: 'Remove gpt-4o' }))
 
     await waitFor(() =>
