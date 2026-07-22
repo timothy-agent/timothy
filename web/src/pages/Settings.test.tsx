@@ -154,9 +154,9 @@ describe('Secrets tab default backend', () => {
     renderPage('/settings/secrets')
     expect(await screen.findByText('Timothy storage')).toBeTruthy()
     expect(screen.getByText('default')).toBeTruthy()
-    // Unconfigured backends cannot claim the default.
+    // Unconfigured backends cannot claim the default: vault, asm, file.
     const buttons = screen.getAllByRole('button', { name: 'Make default' })
-    expect(buttons.length).toBe(2)
+    expect(buttons.length).toBe(3)
     for (const b of buttons) expect((b as HTMLButtonElement).disabled).toBe(true)
   })
 

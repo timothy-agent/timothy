@@ -1,5 +1,10 @@
 // backendLabel names a secret's storage in UI copy.
-const backendLabels: Record<string, string> = { db: 'encrypted', vault: 'vault', asm: 'aws' }
+const backendLabels: Record<string, string> = {
+  db: 'encrypted',
+  vault: 'vault',
+  asm: 'aws',
+  file: 'file mount',
+}
 export function backendLabel(b: string): string {
   return backendLabels[b] ?? b
 }
@@ -33,6 +38,12 @@ export function secretField(
         type: 'text',
         placeholder: 'ASM name or ARN, optional #json_key',
         hint: 'Default backend is AWS Secrets Manager — paste the secret name, not the secret itself.',
+      }
+    case 'file':
+      return {
+        type: 'text',
+        placeholder: 'filename in the mounted secrets directory',
+        hint: 'Default backend is a file mount — enter the filename, not the secret itself.',
       }
     default:
       return { type: 'password', placeholder: dbPlaceholder, hint: '' }

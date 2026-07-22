@@ -60,6 +60,12 @@ export function SecretsTab() {
         onBackendsChanged={refresh}
         onError={setError}
       />
+      <FileCard
+        isDefault={state('file')?.default ?? false}
+        onMakeDefault={() => makeDefault('file')}
+        onBackendsChanged={refresh}
+        onError={setError}
+      />
     </div>
   )
 }
@@ -120,7 +126,7 @@ function StorageCard({
 // useBackendCard holds the shared load/save/test/remove machinery for
 // one external secret backend's card.
 function useBackendCard(
-  backend: 'vault' | 'asm',
+  backend: 'vault' | 'asm' | 'file',
   onLoaded: (cfg: Record<string, string>) => void,
   onError: (msg: string) => void,
   onChanged: () => void,
@@ -468,6 +474,61 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
             </Field>
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+// FileCard is the non-third-party external option: secrets read from
+// files mounted into the container (Docker/Kubernetes secrets
+// convention). No credentials of its own — the mount itself is the
+// trust boundary, set up outside Timothy — so unlike Vault/ASM there's
+// nothing to paste here beyond the directory path.
+function FileCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: BackendCardProps) {
+  const [cfg, setCfg] = useState({ dir: '' })
+  const card = useBackendCard(
+    'file',
+    (c) => setCfg((v) => ({ ...v, ...c })),
+    onError,
+    onBackendsChanged,
+  )
+
+  const save = () =>
+    card.run(async () => {
+      await putSecretBackendConfig('file', cfg)
+      card.setConfigured(true)
+      onBackendsChanged()
+      return 'saved'
+    })
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <BackendCardHeader
+        title="File mount"
+        subtitle="Reads one file per secret from a directory mounted into the container — no third-party service, no credentials of its own."
+        configured={card.configured}
+        status={card.status}
+        busy={card.busy}
+        canSave
+        isDefault={isDefault}
+        onMakeDefault={onMakeDefault}
+        onSave={save}
+        onTest={card.test}
+        onRemove={card.remove}
+      />
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <Field label="Directory">
+          <Input
+            value={cfg.dir}
+            onChange={(e) => setCfg((v) => ({ ...v, dir: e.target.value }))}
+            placeholder="/run/secrets (default)"
+            className="mt-1 h-8"
+          />
+        </Field>
+        <p className="self-end pb-1.5 text-xs text-muted-foreground sm:col-span-2">
+          Each secret is a file in this directory named by its reference; the file&apos;s content
+          is the value. Mount it read-only.
+        </p>
       </div>
     </div>
   )

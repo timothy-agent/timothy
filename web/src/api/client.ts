@@ -452,7 +452,7 @@ export async function setDefaultSecretBackend(backend: string): Promise<void> {
 }
 
 export async function getSecretBackendConfig(
-  backend: 'vault' | 'asm',
+  backend: 'vault' | 'asm' | 'file',
 ): Promise<Record<string, string>> {
   const { config } = await request<{ config: Record<string, string> }>(
     `/v1/admin/secret-backends/${backend}`,
@@ -461,7 +461,7 @@ export async function getSecretBackendConfig(
 }
 
 export async function putSecretBackendConfig(
-  backend: 'vault' | 'asm',
+  backend: 'vault' | 'asm' | 'file',
   config: Record<string, string>,
 ): Promise<void> {
   await request<void>(`/v1/admin/secret-backends/${backend}`, {
@@ -470,12 +470,12 @@ export async function putSecretBackendConfig(
   })
 }
 
-export async function deleteSecretBackendConfig(backend: 'vault' | 'asm'): Promise<void> {
+export async function deleteSecretBackendConfig(backend: 'vault' | 'asm' | 'file'): Promise<void> {
   await request<void>(`/v1/admin/secret-backends/${backend}`, { method: 'DELETE' })
 }
 
 export async function testSecretBackend(
-  backend: 'vault' | 'asm',
+  backend: 'vault' | 'asm' | 'file',
 ): Promise<{ ok: boolean; error?: string }> {
   return request<{ ok: boolean; error?: string }>(`/v1/admin/secret-backends/${backend}/test`, {
     method: 'POST',

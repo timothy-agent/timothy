@@ -296,7 +296,9 @@ function CredentialSection({
               ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
               : defaultBackend === 'asm'
                 ? 'The key stays in AWS Secrets Manager; only its name is saved. The default backend is set in the Secrets tab.'
-                : 'Encrypted with the master key and kept in Timothy’s database.'}
+                : defaultBackend === 'file'
+                  ? 'The key stays in the mounted file; only its filename is saved. The default backend is set in the Secrets tab.'
+                  : 'Encrypted with the master key and kept in Timothy’s database.'}
           </p>
           <details className="pt-1">
             <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
