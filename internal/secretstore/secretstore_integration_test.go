@@ -120,21 +120,36 @@ func TestVaultResolve(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// Sweep leftovers from a crashed run, then save the shared vault
+	// config so it can be restored — a dev database may hold a real one.
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name LIKE 'TEST_VAULT_%'`)
+	origCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	// A defer, not t.Cleanup — it runs while t.Context() and the pool
+	// are still alive, so the sweep cannot be silently lost.
+	defer func() {
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("delete vault config: %v", err)
+		}
+		if _, err := db.Exec(ctx, `DELETE FROM secrets WHERE ref_name LIKE 'TEST_VAULT_%'`); err != nil {
+			t.Errorf("sweep vault secrets: %v", err)
+		}
+	}()
+
 	cfg := `{"address":"` + srv.URL + `","mount":"kv","token_ref":"` + ref + `_TOKEN"}`
 	if _, err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
 		t.Fatalf("SetBackendConfig: %v", err)
 	}
-	t.Cleanup(func() {
-		// A transient pool failure here must not panic the run — the
-		// next run's setup sweep gets another chance at the leftovers.
-		db, err := s.db.Get()
-		if err != nil {
-			t.Logf("cleanup skipped: %v", err)
-			return
-		}
-		_, _ = db.Exec(context.Background(), `DELETE FROM secret_backend_config WHERE backend = 'vault'`)
-		_, _ = db.Exec(context.Background(), `DELETE FROM secrets WHERE ref_name LIKE 'TEST_VAULT_%'`)
-	})
 	if err := s.Set(ctx, ref+"_TOKEN", "vault-tok"); err != nil {
 		t.Fatalf("Set token: %v", err)
 	}

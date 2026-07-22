@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -37,7 +40,23 @@ func integrationOutputs(t *testing.T) *Outputs {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// Sweep at setup too — a run that dies before t.Cleanup registers
+	// leaks its fixtures.
+	sweepOutputsFixtures(ctx, t, db)
 	return NewOutputs(pool)
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func sweepOutputsFixtures(ctx context.Context, t *testing.T, db execer) {
+	t.Helper()
+	_, _ = db.Exec(ctx, `DELETE FROM tool_outputs
+		WHERE session_id IN (SELECT id FROM sessions WHERE title = 'outputs test')`)
+	_, _ = db.Exec(ctx, `DELETE FROM session_grants
+		WHERE session_id IN (SELECT id FROM sessions WHERE title = 'outputs test')`)
+	_, _ = db.Exec(ctx, "DELETE FROM sessions WHERE title = 'outputs test'")
 }
 
 func newSessionID(t *testing.T, o *Outputs) string {
@@ -52,6 +71,19 @@ func newSessionID(t *testing.T, o *Outputs) string {
 	).Scan(&id); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	t.Cleanup(func() {
+		// t.Context is canceled before cleanups run and the pool may
+		// already be closed — use an independent connection.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		sweepOutputsFixtures(ctx, t, conn)
+	})
 	return id
 }
 

@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -138,11 +141,26 @@ func seedGolden(t *testing.T) (*Searcher, map[string]string) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// Sweep at setup AND teardown. The teardown runs after t.Context()
+	// is canceled and the pool may already be closed, so it uses an
+	// independent connection.
+	sweepGolden := func(ctx context.Context, db interface {
+		Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	}) {
+		_, _ = db.Exec(ctx, "DELETE FROM memories WHERE content LIKE $1 || '%'", goldenMarker)
+		_, _ = db.Exec(ctx, "DELETE FROM entities WHERE name IN ('Marta','Atlas','Lisbon','Vault')")
+	}
+	sweepGolden(ctx, db)
 	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM memories WHERE content LIKE $1 || '%'", goldenMarker)
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM entities WHERE name IN ('Marta','Atlas','Lisbon','Vault')")
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		sweepGolden(cctx, conn)
 	})
 
 	st := store.New(pool, log)

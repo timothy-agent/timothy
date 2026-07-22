@@ -35,9 +35,14 @@ func TestRecordWritesRows(t *testing.T) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), "DELETE FROM cost_ledger WHERE provider = 'itest-provider'")
-	})
+	// Sweep at setup (crashed-run leftovers) and via defer — it runs
+	// while t.Context() and the pool are still alive, unlike t.Cleanup.
+	_, _ = db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider = 'itest-provider'")
+	defer func() {
+		if _, err := db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider = 'itest-provider'"); err != nil {
+			t.Errorf("sweep itest-provider ledger rows: %v", err)
+		}
+	}()
 
 	l := New(pool, log)
 	cost := 0.001234

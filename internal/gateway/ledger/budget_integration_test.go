@@ -35,12 +35,29 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), "DELETE FROM spend_budgets")
-		_, _ = db.Exec(context.Background(), "DELETE FROM cost_ledger WHERE provider = 'itest-budget'")
-	})
+	// Sweep leftovers from a crashed run first.
+	_, _ = db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider = 'itest-budget'")
 
 	s := NewBudgetStore(pool)
+
+	// The day/month budget scopes are shared state (a dev database may
+	// hold real limits): save and restore them. A defer, not t.Cleanup —
+	// it runs while t.Context() and the pool are still alive.
+	orig, err := s.Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits (orig): %v", err)
+	}
+	defer func() {
+		if err := s.Set(ctx, "day", orig.Day); err != nil {
+			t.Errorf("restore day budget: %v", err)
+		}
+		if err := s.Set(ctx, "month", orig.Month); err != nil {
+			t.Errorf("restore month budget: %v", err)
+		}
+		if _, err := db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider = 'itest-budget'"); err != nil {
+			t.Errorf("sweep itest-budget ledger rows: %v", err)
+		}
+	}()
 
 	// Round-trip: set both, read back, clear one.
 	day, month := 0.9, 1e9

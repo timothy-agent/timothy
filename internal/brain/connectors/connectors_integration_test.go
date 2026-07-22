@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -39,13 +42,28 @@ func testStore(t *testing.T) (*Store, *pgpool.Pool) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	sweep := func(ctx context.Context) {
+	type execer interface {
+		Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	}
+	sweep := func(ctx context.Context, db execer) {
 		_, _ = db.Exec(ctx, "DELETE FROM connectors WHERE name LIKE $1 || '%'", marker)
 		_, _ = db.Exec(ctx, `DELETE FROM admin_audit WHERE entity = 'connector'
 			AND (after::text LIKE '%' || $1 || '%' OR before::text LIKE '%' || $1 || '%')`, marker)
 	}
-	sweep(ctx)
-	t.Cleanup(func() { sweep(context.Background()) })
+	sweep(ctx, db)
+	t.Cleanup(func() {
+		// The pool dies with t.Context(), which is canceled before
+		// cleanups run — sweep over a fresh one-shot connection.
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		sweep(cctx, conn)
+	})
 	return NewStore(pool, log), pool
 }
 

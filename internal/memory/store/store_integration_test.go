@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
@@ -40,11 +42,31 @@ func testStore(t *testing.T) *Store {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// Sweep at setup AND teardown. The teardown runs after t.Context()
+	// is canceled and the pool may already be closed, so it uses an
+	// independent connection.
+	sweepMemoryFixtures(ctx, db)
 	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM memories WHERE content LIKE $1 || '%'", testMarker)
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		sweepMemoryFixtures(cctx, conn)
 	})
 	return New(pool, log)
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func sweepMemoryFixtures(ctx context.Context, db execer) {
+	_, _ = db.Exec(ctx, "DELETE FROM memories WHERE content LIKE $1 || '%'", testMarker)
+	_, _ = db.Exec(ctx, "DELETE FROM entities WHERE name LIKE 'itest-entity-%'")
 }
 
 func mem(content string) Memory {
@@ -258,14 +280,8 @@ func TestUpsertEntityIdempotent(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	db, err := s.db.Get()
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
+	// Entity rows are swept by testStore's fixture sweep.
 	name := "itest-entity-" + t.Name()
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), "DELETE FROM entities WHERE name = $1", name)
-	})
 
 	first, err := s.UpsertEntity(ctx, "project", name)
 	if err != nil {

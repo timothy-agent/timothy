@@ -57,11 +57,18 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 			"DELETE FROM routes WHERE name LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx,
 			"DELETE FROM providers WHERE name LIKE $1 || '%'", adminMarker)
+		// budget and secret-backend audit rows carry no fixture marker
+		// (their payloads are bare scope/backend names, and the restore
+		// write re-records the real config), so those entities sweep
+		// whole — a few lost trail rows about real budget or backend
+		// flips beat fixture rows accumulating forever.
 		_, _ = db.Exec(ctx,
-			"DELETE FROM admin_audit WHERE entity = 'budget' OR entity_id LIKE $1 || '%' OR after::text LIKE '%' || $1 || '%'", adminMarker)
+			`DELETE FROM admin_audit
+			 WHERE entity IN ('budget', 'secret_backend', 'secret_backend_default')
+			 OR entity_id LIKE $1 || '%'
+			 OR before::text LIKE '%' || $1 || '%' OR after::text LIKE '%' || $1 || '%'`, adminMarker)
 		_, _ = db.Exec(ctx,
 			"DELETE FROM cost_ledger WHERE provider LIKE $1 || '%'", adminMarker)
-		_, _ = db.Exec(ctx, "DELETE FROM spend_budgets")
 		_, _ = db.Exec(ctx, "DELETE FROM secrets WHERE ref_name LIKE $1 || '%'", adminMarker)
 	}
 	sweep(ctx, db)
@@ -343,6 +350,21 @@ func TestConnectionProbeBooksAsTestOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	// Probe audit rows carry only the provider UUID (no marker), so the
+	// shared sweep cannot match them — delete by the id captured here.
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		if _, err := conn.Exec(cctx, "DELETE FROM admin_audit WHERE entity_id = $1", id); err != nil {
+			t.Errorf("cleanup probe audit rows: %v", err)
+		}
+	})
 	res, err := adm.Test(ctx, id, "")
 	if err != nil {
 		t.Fatalf("Test: %v", err)
@@ -377,10 +399,30 @@ func TestPatchBudgetValidatesAndAudits(t *testing.T) {
 	adm, _, pool := testAdmin(t)
 	ctx := t.Context()
 	db, _ := pool.Get()
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), "DELETE FROM spend_budgets")
-		_, _ = db.Exec(context.Background(), "DELETE FROM admin_audit WHERE entity = 'budget'")
-	})
+
+	// The day/month budget scopes are shared state (a dev database may
+	// hold real limits): start from a clean slate, restore afterwards.
+	// A defer, not t.Cleanup — it runs while the pool is still alive.
+	// Audit rows are the shared sweep's job (entity = 'budget').
+	orig, err := ledger.NewBudgetStore(pool).Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits (orig): %v", err)
+	}
+	if _, err := db.Exec(ctx, "DELETE FROM spend_budgets"); err != nil {
+		t.Fatalf("clear budgets: %v", err)
+	}
+	defer func() {
+		if _, err := db.Exec(ctx, "DELETE FROM spend_budgets"); err != nil {
+			t.Errorf("sweep budgets: %v", err)
+		}
+		s := ledger.NewBudgetStore(pool)
+		if err := s.Set(ctx, "day", orig.Day); err != nil {
+			t.Errorf("restore day budget: %v", err)
+		}
+		if err := s.Set(ctx, "month", orig.Month); err != nil {
+			t.Errorf("restore month budget: %v", err)
+		}
+	}()
 
 	// Any invalid key rejects the whole patch before writes.
 	limit := 5.0
@@ -454,18 +496,32 @@ func TestSecretSetDeleteAuditsAndReloads(t *testing.T) {
 }
 
 func TestSecretExternalBackendConfig(t *testing.T) {
-	adm, _, pool := testAdmin(t)
+	adm, _, _ := testAdmin(t)
 	ctx := t.Context()
-	db, _ := pool.Get()
 	ref := adminMarker + "vault-secret"
 
+	// Shared table: restore the pre-test vault config. A defer, not
+	// t.Cleanup — it runs while t.Context() and the pool are alive.
+	origCfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig (orig): %v", err)
+	}
+	defer func() {
+		if string(origCfg) != "{}" {
+			if err := adm.SetSecretBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("remove test vault config: %v", err)
+		}
+	}()
+
+	// The fixture address carries the marker so its audit rows match
+	// the shared sweep.
 	if err := adm.SetSecretBackendConfig(ctx, "vault",
-		[]byte(`{"address":"http://vault:8200","mount":"kv"}`)); err != nil {
+		[]byte(`{"address":"http://`+adminMarker+`vault.invalid:8200","mount":"kv"}`)); err != nil {
 		t.Fatalf("SetSecretBackendConfig: %v", err)
 	}
-	t.Cleanup(func() {
-		db.Exec(ctx, `DELETE FROM secret_backend_config WHERE backend = 'vault'`)
-	})
 	raw, err := adm.SecretBackendConfig(ctx, "vault")
 	if err != nil {
 		t.Fatalf("SecretBackendConfig: %v", err)
@@ -474,7 +530,7 @@ func TestSecretExternalBackendConfig(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("config %s: %v", raw, err)
 	}
-	want := map[string]string{"address": "http://vault:8200", "mount": "kv", "token_ref": "VAULT_TOKEN"}
+	want := map[string]string{"address": "http://" + adminMarker + "vault.invalid:8200", "mount": "kv", "token_ref": "VAULT_TOKEN"}
 	for k, v := range want {
 		if cfg[k] != v {
 			t.Errorf("config[%s] = %q, want %q", k, cfg[k], v)

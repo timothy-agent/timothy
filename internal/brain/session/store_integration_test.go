@@ -39,6 +39,12 @@ func integrationStore(t *testing.T) (*Store, string) {
 		t.Fatalf("migrate: %v", err)
 	}
 
+	// Sweep leftovers from a crashed run (its cleanup never registered).
+	_, _ = db.Exec(ctx, `DELETE FROM session_events WHERE session_id IN
+		(SELECT id FROM sessions WHERE title IN ('integration test session', 'cursor-tie-test'))`)
+	_, _ = db.Exec(ctx,
+		"DELETE FROM sessions WHERE title IN ('integration test session', 'cursor-tie-test')")
+
 	s := NewStore(pool)
 	id, err := s.Create(ctx, "integration test session")
 	if err != nil {

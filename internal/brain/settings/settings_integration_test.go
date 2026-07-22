@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -35,15 +37,52 @@ func testStore(t *testing.T) *Store {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	// Sweep at setup AND teardown: the teardown runs after t.Context()
-	// is canceled (dead pool → silent failure), so the next run's setup
-	// must clean leftovers itself.
-	sweep := func(ctx context.Context) {
-		_, _ = db.Exec(ctx, "DELETE FROM settings")
-		_, _ = db.Exec(ctx, "DELETE FROM admin_audit WHERE entity = 'setting'")
+	// The settings table is shared state (a dev database holds the
+	// user's real switches): snapshot it, run the test against a clean
+	// slate, and restore the snapshot afterwards. The teardown runs
+	// after t.Context() is canceled and the pool may be closed, so it
+	// uses an independent connection.
+	type row struct {
+		key   string
+		value []byte
 	}
-	sweep(ctx)
-	t.Cleanup(func() { sweep(context.Background()) })
+	var saved []row
+	rows, err := db.Query(ctx, "SELECT key, value FROM settings")
+	if err != nil {
+		t.Fatalf("snapshot settings: %v", err)
+	}
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.key, &r.value); err != nil {
+			t.Fatalf("scan setting: %v", err)
+		}
+		saved = append(saved, r)
+	}
+	rows.Close()
+	_, _ = db.Exec(ctx, "DELETE FROM settings")
+	_, _ = db.Exec(ctx, "DELETE FROM admin_audit WHERE entity = 'setting'")
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		if _, err := conn.Exec(cctx, "DELETE FROM settings"); err != nil {
+			t.Errorf("cleanup settings: %v", err)
+		}
+		if _, err := conn.Exec(cctx, "DELETE FROM admin_audit WHERE entity = 'setting'"); err != nil {
+			t.Errorf("cleanup setting audit: %v", err)
+		}
+		for _, r := range saved {
+			if _, err := conn.Exec(cctx,
+				"INSERT INTO settings (key, value) VALUES ($1, $2)", r.key, r.value); err != nil {
+				t.Errorf("restore setting %s: %v", r.key, err)
+			}
+		}
+	})
 	return New(pool, log)
 }
 

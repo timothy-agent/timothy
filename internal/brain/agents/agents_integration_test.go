@@ -42,6 +42,7 @@ func testStore(t *testing.T) *Store {
 	// Sweep at setup AND teardown; the teardown uses a fresh one-shot
 	// connection because the pool dies with t.Context().
 	_, _ = db.Exec(ctx, "DELETE FROM agents WHERE name LIKE $1 || '%'", marker)
+	_, _ = db.Exec(ctx, "DELETE FROM admin_audit WHERE entity = 'agent'")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

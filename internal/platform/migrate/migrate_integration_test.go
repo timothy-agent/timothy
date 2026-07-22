@@ -39,9 +39,12 @@ func discard() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// cleanup sweeps the fixture versions/tables immediately (a crashed
+// run never executed its teardown) and again at teardown. This raw
+// pgxpool outlives t.Context(), so the teardown sweep really runs.
 func cleanup(t *testing.T, pool *pgxpool.Pool, versions []string, tables []string) {
 	t.Helper()
-	t.Cleanup(func() {
+	sweep := func() {
 		ctx := context.Background()
 		for _, v := range versions {
 			_, _ = pool.Exec(ctx, "DELETE FROM schema_migrations WHERE version = $1", v)
@@ -49,7 +52,9 @@ func cleanup(t *testing.T, pool *pgxpool.Pool, versions []string, tables []strin
 		for _, tbl := range tables {
 			_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS "+tbl)
 		}
-	})
+	}
+	sweep()
+	t.Cleanup(sweep)
 }
 
 func TestRunAppliesAndIsIdempotent(t *testing.T) {

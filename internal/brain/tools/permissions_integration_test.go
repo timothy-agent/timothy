@@ -5,8 +5,11 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func integrationPermissions(t *testing.T) (*Permissions, string) {
@@ -19,6 +22,28 @@ func integrationPermissions(t *testing.T) (*Permissions, string) {
 func shellCall(command string) json.RawMessage {
 	raw, _ := json.Marshal(map[string]string{"command": command})
 	return raw
+}
+
+// sweepAllowlist removes the fixture patterns this file seeds.
+func sweepAllowlist(ctx context.Context, db execer) {
+	_, _ = db.Exec(ctx,
+		"DELETE FROM project_allowlist WHERE tool = 'shell' AND pattern IN ('git status*', 'rm*')")
+}
+
+// cleanupAllowlist sweeps on an independent connection: t.Context is
+// canceled before cleanups run and the pool may already be closed.
+func cleanupAllowlist(t *testing.T) func() {
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		sweepAllowlist(ctx, conn)
+	}
 }
 
 func TestResolveNoGrantAsks(t *testing.T) {
@@ -91,15 +116,15 @@ func TestResolveProjectAllowlistAllows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
+	// Sweep at setup too — a run that dies before t.Cleanup registers
+	// leaks its fixtures.
+	sweepAllowlist(t.Context(), db)
 	if _, err := db.Exec(t.Context(),
 		"INSERT INTO project_allowlist (tool, pattern) VALUES ('shell', 'git status*') ON CONFLICT DO NOTHING",
 	); err != nil {
 		t.Fatalf("seed allowlist: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM project_allowlist WHERE tool = 'shell' AND pattern = 'git status*'")
-	})
+	t.Cleanup(cleanupAllowlist(t))
 
 	res, err := p.Resolve(t.Context(), sid, "shell", shellCall("git status --short"))
 	if err != nil {
@@ -115,10 +140,6 @@ func TestResolveProjectAllowlistAllows(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed rm allowlist: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM project_allowlist WHERE tool = 'shell' AND pattern = 'rm*'")
-	})
 	res, err = p.Resolve(t.Context(), sid, "shell", shellCall("rm -rf build/"))
 	if err != nil {
 		t.Fatalf("Resolve rm: %v", err)
