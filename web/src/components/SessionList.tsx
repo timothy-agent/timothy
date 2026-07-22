@@ -10,18 +10,11 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import { updateSession } from '../api/client'
 import type { SessionMeta } from '../api/types'
 import { groupByDay, useSessions } from '../lib/sessions'
 import { Badge } from './ui/badge'
-import { Button } from './ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +35,7 @@ export function SessionList() {
   const { sessions, query, setQuery, refresh, hasMore, loadMore } = useSessions()
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const [renaming, setRenaming] = useState<SessionMeta | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -58,11 +51,24 @@ export function SessionList() {
     return () => obs.disconnect()
   }, [hasMore, loadMore])
 
-  const rename = async () => {
-    if (!renaming || title.trim() === '') return
-    await updateSession(renaming.id, { title: title.trim() }).catch(() => {})
-    setRenaming(null)
-    refresh()
+  const startRename = (s: SessionMeta) => {
+    setTitle(s.title)
+    setEditingId(s.id)
+  }
+
+  const commitRename = async () => {
+    const id = editingId
+    const trimmed = title.trim()
+    setEditingId(null)
+    if (!id || trimmed === '') return
+    try {
+      await updateSession(id, { title: trimmed })
+      refresh()
+    } catch (err) {
+      toast.error('Could not rename session', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
 
   const archive = async (s: SessionMeta) => {
@@ -112,16 +118,34 @@ export function SessionList() {
           <SidebarMenu className="gap-3">
             {dated.map(({ session: s, label }) => (
               <SidebarMenuItem key={s.id}>
-                <SidebarMenuButton asChild isActive={pathname === `/chat/${s.id}`} className="h-auto flex-col items-start gap-0.5 py-1.5">
-                  <Link to={`/chat/${s.id}`}>
-                    <span className="flex w-full items-center gap-1.5">
-                      <HugeiconsIcon icon={BubbleChatIcon} className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate font-medium">{s.title || 'New session'}</span>
-                      {s.archived && <Badge variant="outline">archived</Badge>}
-                    </span>
-                    <span className="pl-5 text-xs text-muted-foreground">{label}</span>
-                  </Link>
-                </SidebarMenuButton>
+                {editingId === s.id ? (
+                  <div className="flex items-center gap-1.5 px-2 py-1.5">
+                    <HugeiconsIcon icon={BubbleChatIcon} className="size-3.5 shrink-0 text-muted-foreground" />
+                    <Input
+                      aria-label="Session title"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      onBlur={() => void commitRename()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                        if (e.key === 'Escape') setEditingId(null)
+                      }}
+                      autoFocus
+                      className="h-6 px-1 text-sm"
+                    />
+                  </div>
+                ) : (
+                  <SidebarMenuButton asChild isActive={pathname === `/chat/${s.id}`} className="h-auto flex-col items-start gap-0.5 py-1.5">
+                    <Link to={`/chat/${s.id}`}>
+                      <span className="flex w-full items-center gap-1.5">
+                        <HugeiconsIcon icon={BubbleChatIcon} className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate font-medium">{s.title || 'New session'}</span>
+                        {s.archived && <Badge variant="outline">archived</Badge>}
+                      </span>
+                      <span className="pl-5 text-xs text-muted-foreground">{label}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <SidebarMenuAction showOnHover aria-label={`Actions for ${s.title || 'session'}`}>
@@ -129,12 +153,7 @@ export function SessionList() {
                     </SidebarMenuAction>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent side="right" align="start">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setTitle(s.title)
-                        setRenaming(s)
-                      }}
-                    >
+                    <DropdownMenuItem onClick={() => startRename(s)}>
                       <HugeiconsIcon icon={PencilEdit01Icon} />
                       Rename
                     </DropdownMenuItem>
@@ -154,29 +173,6 @@ export function SessionList() {
         <p className="px-4 py-1 text-xs text-muted-foreground">No sessions match.</p>
       )}
       {hasMore && <div ref={sentinelRef} className="h-px" data-testid="sessions-sentinel" />}
-
-      <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Rename session</DialogTitle>
-          </DialogHeader>
-          <Input
-            aria-label="Session title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void rename()
-            }}
-            autoFocus
-          />
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setRenaming(null)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void rename()}>Save</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }
