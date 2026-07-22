@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,30 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
+
+func TestPlainTextPrefersOverHTML(t *testing.T) {
+	t.Parallel()
+	parts := []gmailPart{
+		{MimeType: "text/html", Body: gmailBody{Data: base64.URLEncoding.EncodeToString([]byte("<p>html</p>"))}},
+		{MimeType: "text/plain", Body: gmailBody{Data: base64.URLEncoding.EncodeToString([]byte("plain"))}},
+	}
+	if got := plainText(parts); got != "plain" {
+		t.Fatalf("plainText = %q, want %q", got, "plain")
+	}
+}
+
+func TestHTMLPartFallsBackWhenNoPlainPart(t *testing.T) {
+	t.Parallel()
+	parts := []gmailPart{
+		{MimeType: "text/html", Body: gmailBody{Data: base64.URLEncoding.EncodeToString([]byte("<p>only html</p>"))}},
+	}
+	if plainText(parts) != "" {
+		t.Fatal("plainText should find nothing when there's no text/plain part")
+	}
+	if got := htmlPart(parts); string(got) != "<p>only html</p>" {
+		t.Fatalf("htmlPart = %q, want the raw decoded HTML bytes", got)
+	}
+}
 
 // fakeSecrets is an in-memory SecretRW.
 type fakeSecrets struct {
@@ -79,16 +104,54 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 	}
 	mux.HandleFunc("GET /gmail/v1/users/me/messages", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
+		if r.URL.Query().Get("q") == "from:nowhere.invalid" {
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"messages":[{"id":"m1"}]}`))
 	})
 	mux.HandleFunc("GET /gmail/v1/users/me/messages/{id}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
-		body := base64.URLEncoding.EncodeToString([]byte("hello body"))
-		// Fixed id: echoing the path value trips gosec's taint pass.
-		_, _ = fmt.Fprintf(w, `{"id":"m1","snippet":"snip","payload":{"headers":[
-			{"name":"From","value":"a@x"},{"name":"To","value":"b@y"},
-			{"name":"Subject","value":"hi"},{"name":"Date","value":"today"}],
-			"parts":[{"mimeType":"text/plain","body":{"data":%q}}]}}`, body)
+		id := r.PathValue("id")
+		switch id {
+		case "m2": // HTML-only: a booking confirmation with no text/plain part.
+			body := base64.URLEncoding.EncodeToString([]byte(
+				`<html><body><p>Booking ref 817917166</p><p>Total: <b>EUR 214.50</b></p></body></html>`))
+			// Fixed id: echoing the path value trips gosec's taint pass.
+			_, _ = fmt.Fprintf(w, `{"id":"m2","snippet":"snip2","payload":{"headers":[
+				{"name":"From","value":"noreply@kiwi.com"},{"name":"To","value":"b@y"},
+				{"name":"Subject","value":"Your booking"},{"name":"Date","value":"today"}],
+				"parts":[{"mimeType":"text/html","body":{"data":%q}}]}}`, body)
+		case "m3": // has a PDF attachment.
+			// Fixed id: echoing the path value trips gosec's taint pass.
+			_, _ = fmt.Fprintf(w, `{"id":"m3","snippet":"snip3","payload":{"headers":[
+				{"name":"From","value":"noreply@agoda.com"},{"name":"To","value":"b@y"},
+				{"name":"Subject","value":"Your receipt"},{"name":"Date","value":"today"}],
+				"parts":[
+					{"mimeType":"text/plain","body":{"data":%q}},
+					{"mimeType":"application/pdf","filename":"receipt.pdf","body":{"attachmentId":"att-1","size":41240}}
+				]}}`, base64.URLEncoding.EncodeToString([]byte("see attached receipt")))
+		default:
+			body := base64.URLEncoding.EncodeToString([]byte("hello body"))
+			// Fixed id: echoing the path value trips gosec's taint pass.
+			_, _ = fmt.Fprintf(w, `{"id":"m1","snippet":"snip","payload":{"headers":[
+				{"name":"From","value":"a@x"},{"name":"To","value":"b@y"},
+				{"name":"Subject","value":"hi"},{"name":"Date","value":"today"}],
+				"parts":[{"mimeType":"text/plain","body":{"data":%q}}]}}`, body)
+		}
+	})
+	mux.HandleFunc("GET /gmail/v1/users/me/messages/{id}/attachments/{attachmentId}", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.PathValue("attachmentId") != "att-1" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		raw, err := os.ReadFile("testdata/sample.pdf")
+		if err != nil {
+			t.Fatalf("read fixture: %v", err)
+		}
+		data := base64.URLEncoding.EncodeToString(raw)
+		fmt.Fprintf(w, `{"size":%d,"data":%q}`, len(raw), data)
 	})
 	mux.HandleFunc("POST /gmail/v1/users/me/messages/send", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
@@ -116,6 +179,18 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{"id":"ev-1","htmlLink":"https://cal/ev-1"}`))
 	})
+	// Fakes the markitdown sidecar: echoes back a recognizable marker
+	// plus the filename/mimetype headers it was called with, so tests
+	// can assert gmail_read/gmail_read_attachment actually reached it
+	// (rather than asserting real markitdown behavior — that's covered
+	// by the sidecar's own build/run, not this Go test).
+	mux.HandleFunc("POST /convert", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		body, _ := io.ReadAll(r.Body)
+		out := fmt.Sprintf("converted(filename=%s, mimetype=%s): %s",
+			r.Header.Get("X-Filename"), r.Header.Get("X-Mimetype"), body)
+		_ = json.NewEncoder(w).Encode(map[string]string{"markdown": out})
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -142,6 +217,7 @@ func testGoogle(t *testing.T, f *fakeGoogle, row Connector) (*Google, *fakeSecre
 	g.TokenURL = srv.URL + "/token"
 	g.GmailBase = srv.URL
 	g.CalendarBase = srv.URL
+	g.MarkItDownURL = srv.URL
 	return g, secrets
 }
 
@@ -267,9 +343,9 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 		scopes string
 		want   int
 	}{
-		{`["https://www.googleapis.com/auth/gmail.modify"]`, 3},
+		{`["https://www.googleapis.com/auth/gmail.modify"]`, 4},
 		{`["https://www.googleapis.com/auth/calendar"]`, 2},
-		{bothScopes, 5},
+		{bothScopes, 6},
 	} {
 		row := googleRow(tc.scopes)
 		g, _ := testGoogle(t, f, row)
@@ -343,6 +419,112 @@ func TestGmailToolsRoundTrip(t *testing.T) {
 		if h != "Bearer at-live" {
 			t.Fatalf("auth header = %q", h)
 		}
+	}
+}
+
+// TestGmailSearchZeroResultsSuggestsBroadening pins a real search-
+// coverage miss found in production: a from:-scoped query missed a
+// real email (the sender's exact address differed from what was
+// guessed), and the model gave up instead of retrying broader. A zero-
+// result response must actively suggest broadening — not just state
+// nothing matched — since the model won't always recall a long tool
+// description many turns after reading it.
+func TestGmailSearchZeroResultsSuggestsBroadening(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+
+	out, err := toolByName(t, src, "gmail_search").Execute(t.Context(),
+		json.RawMessage(`{"query":"from:nowhere.invalid"}`))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if !strings.Contains(out, "retry broader") {
+		t.Fatalf("out = %q, want it to suggest broadening the search", out)
+	}
+}
+
+// TestGmailReadFallsBackToMarkItDownForHTMLOnlyBody pins the fix for
+// HTML-only mail (booking confirmations, receipts): gmail_read used to
+// fall back to the truncated snippet whenever a message had no
+// text/plain part. It must now hand the text/html part to markitdown
+// instead — asserted here against the fake sidecar (real conversion
+// behavior lives in the sidecar's own build/run, not this Go test).
+func TestGmailReadFallsBackToMarkItDownForHTMLOnlyBody(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+
+	out, err := toolByName(t, src, "gmail_read").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(out, "converted(filename=body.html, mimetype=text/html)") {
+		t.Fatalf("read = %q, want it routed through markitdown", out)
+	}
+	if !strings.Contains(out, "Booking ref 817917166") {
+		t.Fatalf("read = %q, want the original HTML content forwarded", out)
+	}
+	if strings.Contains(out, "snip2") {
+		t.Fatalf("read = %q, want the converted body, not the snippet fallback", out)
+	}
+}
+
+// TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown pins the
+// fix for PDF-only receipts (a Kiwi/Agoda-style booking whose amount
+// lives only in a PDF attachment): gmail_read must surface the
+// attachment filename, and gmail_read_attachment must look up the real
+// (long, opaque) Gmail attachment id itself — the model only ever
+// supplies the short, copyable filename.
+func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+
+	out, err := toolByName(t, src, "gmail_read").Execute(t.Context(), json.RawMessage(`{"id":"m3"}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(out, "receipt.pdf") {
+		t.Fatalf("read = %q, want it to list the attachment filename", out)
+	}
+	if strings.Contains(out, "att-1") {
+		t.Fatalf("read = %q, want the raw attachment id kept out of what the model sees", out)
+	}
+
+	out, err = toolByName(t, src, "gmail_read_attachment").Execute(t.Context(),
+		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`))
+	if err != nil {
+		t.Fatalf("read_attachment: %v", err)
+	}
+	if !strings.Contains(out, "converted(filename=receipt.pdf") {
+		t.Fatalf("read_attachment = %q, want it routed through markitdown with the given filename", out)
+	}
+}
+
+func TestGmailReadAttachmentRejectsUnknownFilename(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+
+	_, err := toolByName(t, src, "gmail_read_attachment").Execute(t.Context(),
+		json.RawMessage(`{"message_id":"m3","filename":"nope.pdf"}`))
+	if err == nil {
+		t.Fatal("expected an error for an unknown attachment filename")
+	}
+}
+
+func TestFindAttachmentMatchesByFilename(t *testing.T) {
+	t.Parallel()
+	parts := []gmailPart{
+		{Filename: "a.pdf", Body: gmailBody{AttachmentID: "id-a"}},
+		{Filename: "b.docx", Body: gmailBody{AttachmentID: "id-b"}},
+	}
+	if id, ok := findAttachment(parts, "b.docx"); !ok || id != "id-b" {
+		t.Fatalf("findAttachment(b.docx) = (%q, %v), want (id-b, true)", id, ok)
+	}
+	if _, ok := findAttachment(parts, "missing.pdf"); ok {
+		t.Fatal("findAttachment should not match a filename that isn't present")
 	}
 }
 

@@ -26,7 +26,7 @@ func (g *Google) Builder() Builder {
 		}
 		src := &googleSource{g: g, cfg: cfg, ref: c.CredentialRef}
 		if src.hasScope("gmail") {
-			src.toolList = append(src.toolList, src.gmailSearch(), src.gmailRead(), src.gmailSend())
+			src.toolList = append(src.toolList, src.gmailSearch(), src.gmailRead(), src.gmailReadAttachment(), src.gmailSend())
 		}
 		if src.hasScope("calendar") {
 			src.toolList = append(src.toolList, src.calendarListEvents(), src.calendarCreateEvent())
@@ -112,7 +112,8 @@ func (s *googleSource) api(ctx context.Context, method, apiURL string, body, out
 type gmailMessage struct {
 	ID      string `json:"id"`
 	Payload struct {
-		Headers []struct {
+		MimeType string `json:"mimeType"`
+		Headers  []struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`
 		} `json:"headers"`
@@ -124,12 +125,15 @@ type gmailMessage struct {
 
 type gmailPart struct {
 	MimeType string      `json:"mimeType"`
+	Filename string      `json:"filename"`
 	Body     gmailBody   `json:"body"`
 	Parts    []gmailPart `json:"parts"`
 }
 
 type gmailBody struct {
-	Data string `json:"data"`
+	Data         string `json:"data"`
+	AttachmentID string `json:"attachmentId"`
+	Size         int    `json:"size"`
 }
 
 func (m *gmailMessage) header(name string) string {
@@ -157,10 +161,46 @@ func plainText(parts []gmailPart) string {
 	return ""
 }
 
+// htmlPart returns the first text/html part's decoded bytes — the
+// fallback source for HTML-only mail (common for booking confirmations
+// and receipts), which has no text/plain alternative for plainText to
+// find.
+func htmlPart(parts []gmailPart) []byte {
+	for _, p := range parts {
+		if p.MimeType == "text/html" && p.Body.Data != "" {
+			raw, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(strings.TrimRight(p.Body.Data, "="))
+			if err == nil {
+				return raw
+			}
+		}
+		if inner := htmlPart(p.Parts); inner != nil {
+			return inner
+		}
+	}
+	return nil
+}
+
 func (s *googleSource) gmailSearch() *tools.Tool {
 	return &tools.Tool{
-		Name:        "gmail_search",
-		Description: "Search the connected Gmail account. query uses Gmail search syntax (from:, subject:, is:unread, newer_than:7d, ...). Returns up to max_results (default 10) messages as id, date, from, subject, snippet. Use gmail_read with an id for the full body.",
+		Name: "gmail_search",
+		Description: `Search the connected Gmail account. query uses Gmail search syntax
+(from:, subject:, is:unread, newer_than:7d, after:YYYY/MM/DD, ...).
+Returns up to max_results (default 10) messages as id, date, from,
+subject, snippet. Use gmail_read with an id for the full body.
+
+A zero-result search does NOT mean the email doesn't exist — Gmail's
+from: matching is stricter than it looks, and a query combining from:
+with keyword/subject terms narrows twice, compounding a near-miss into
+zero. If a targeted search returns nothing, retry BROADER before
+concluding the email isn't there:
+1. Drop keyword/subject filters, keep only from: and a date range.
+2. If from: with a bare domain (e.g. from:example.com) misses, try
+   the FULL sender address you're looking for, or a shorter substring
+   of the domain, or just the company name as a plain keyword with no
+   from: operator at all.
+3. Widen the date range (after:/before:/newer_than:) — a mistaken
+   assumption about when an email arrived is a common miss.
+4. Try in:anywhere if you suspect it's archived or in another label.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"Gmail search query"},
 			"max_results":{"type":"integer","minimum":1,"maximum":25}
@@ -187,7 +227,9 @@ func (s *googleSource) gmailSearch() *tools.Tool {
 				return "", err
 			}
 			if len(list.Messages) == 0 {
-				return "no messages matched", nil
+				return "no messages matched — before concluding the email doesn't exist, retry broader: " +
+					"drop from:/subject: keyword combinations (they narrow twice), try the full sender " +
+					"address or just the company name as a plain keyword, or widen the date range", nil
 			}
 			var b strings.Builder
 			for _, m := range list.Messages {
@@ -205,10 +247,49 @@ func (s *googleSource) gmailSearch() *tools.Tool {
 	}
 }
 
+// gmailAttachment names one attachment found while walking a message's
+// MIME tree, ready to hand to gmail_read_attachment.
+type gmailAttachment struct {
+	Filename     string
+	AttachmentID string
+}
+
+// attachments walks the MIME tree collecting every part that names a
+// file AND carries an attachment id — inline images with no filename,
+// and body parts with data inlined directly rather than referenced by
+// id, are not attachments in the sense gmail_read_attachment needs.
+func attachments(parts []gmailPart) []gmailAttachment {
+	var out []gmailAttachment
+	for _, p := range parts {
+		if p.Filename != "" && p.Body.AttachmentID != "" {
+			out = append(out, gmailAttachment{Filename: p.Filename, AttachmentID: p.Body.AttachmentID})
+		}
+		out = append(out, attachments(p.Parts)...)
+	}
+	return out
+}
+
+// findAttachment returns the attachment id for a given filename.
+// gmail_read_attachment takes a filename, never the raw Gmail
+// attachment id: that id is a 300-400+ char opaque token, and models
+// reliably truncate it when copying it into a tool call — every
+// real-world attempt failed with "Invalid attachment token" before
+// this fix. Re-fetching the message and matching by filename (short,
+// human-readable, copies correctly) trades one extra API call for a
+// tool that actually works.
+func findAttachment(parts []gmailPart, filename string) (string, bool) {
+	for _, a := range attachments(parts) {
+		if a.Filename == filename {
+			return a.AttachmentID, true
+		}
+	}
+	return "", false
+}
+
 func (s *googleSource) gmailRead() *tools.Tool {
 	return &tools.Tool{
 		Name:        "gmail_read",
-		Description: "Read one email's full content by message id (from gmail_search). Returns headers and the plain-text body.",
+		Description: "Read one email's full content by message id (from gmail_search). Returns headers and the body — plain text when available, otherwise the HTML body rendered to readable text (common for booking confirmations and receipts) — plus a list of attachment filenames, if any. Use gmail_read_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"Gmail message id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -224,12 +305,73 @@ func (s *googleSource) gmailRead() *tools.Tool {
 				s.g.GmailBase+"/gmail/v1/users/me/messages/"+url.PathEscape(in.ID)+"?format=full", nil, &msg); err != nil {
 				return "", err
 			}
-			body := plainText(append(msg.Payload.Parts, gmailPart{MimeType: "text/plain", Body: msg.Payload.Body}))
+			allParts := append(msg.Payload.Parts, gmailPart{MimeType: msg.Payload.MimeType, Body: msg.Payload.Body})
+			body := plainText(allParts)
 			if body == "" {
-				body = "(no text/plain body; snippet: " + msg.Snippet + ")"
+				if raw := htmlPart(allParts); raw != nil {
+					if text, err := convertToMarkdown(ctx, s.g.Client, s.g.MarkItDownURL, "body.html", "text/html", raw); err == nil {
+						body = text
+					}
+				}
 			}
-			return fmt.Sprintf("from: %s\nto: %s\ndate: %s\nsubject: %s\n\n%s",
-				msg.header("From"), msg.header("To"), msg.header("Date"), msg.header("Subject"), body), nil
+			if body == "" {
+				body = "(no text/plain or text/html body; snippet: " + msg.Snippet + ")"
+			}
+			out := fmt.Sprintf("from: %s\nto: %s\ndate: %s\nsubject: %s\n\n%s",
+				msg.header("From"), msg.header("To"), msg.header("Date"), msg.header("Subject"), body)
+			if atts := attachments(msg.Payload.Parts); len(atts) > 0 {
+				var b strings.Builder
+				b.WriteString("\n\nattachments:\n")
+				for _, a := range atts {
+					fmt.Fprintf(&b, "- %s\n", a.Filename)
+				}
+				out += strings.TrimRight(b.String(), "\n")
+			}
+			return out, nil
+		},
+	}
+}
+
+func (s *googleSource) gmailReadAttachment() *tools.Tool {
+	return &tools.Tool{
+		Name:        "gmail_read_attachment",
+		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from gmail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"message_id":{"type":"string","description":"Gmail message id"},
+			"filename":{"type":"string","description":"Attachment filename from gmail_read's attachments list"}
+		},"required":["message_id","filename"],"additionalProperties":false}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var in struct {
+				MessageID string `json:"message_id"`
+				Filename  string `json:"filename"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			// The real Gmail attachment id is a 300-400+ char opaque
+			// token — never asked of the caller, since models reliably
+			// truncate it when copying into a tool call. Re-fetch the
+			// message and match by filename instead.
+			var msg gmailMessage
+			if err := s.api(ctx, http.MethodGet,
+				s.g.GmailBase+"/gmail/v1/users/me/messages/"+url.PathEscape(in.MessageID)+"?format=full", nil, &msg); err != nil {
+				return "", err
+			}
+			attachmentID, ok := findAttachment(msg.Payload.Parts, in.Filename)
+			if !ok {
+				return "", fmt.Errorf("no attachment named %q on this message; check gmail_read's attachments list", in.Filename)
+			}
+			var att gmailBody
+			if err := s.api(ctx, http.MethodGet,
+				s.g.GmailBase+"/gmail/v1/users/me/messages/"+url.PathEscape(in.MessageID)+
+					"/attachments/"+url.PathEscape(attachmentID), nil, &att); err != nil {
+				return "", err
+			}
+			raw, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(strings.TrimRight(att.Data, "="))
+			if err != nil {
+				return "", fmt.Errorf("decode attachment: %w", err)
+			}
+			return convertToMarkdown(ctx, s.g.Client, s.g.MarkItDownURL, in.Filename, "", raw)
 		},
 	}
 }

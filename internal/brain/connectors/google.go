@@ -67,6 +67,11 @@ type Google struct {
 	TokenURL     string
 	GmailBase    string
 	CalendarBase string
+	// MarkItDownURL is the markitdown sidecar's base address (compose-
+	// internal, e.g. http://markitdown:8000); empty disables HTML-only
+	// body rendering and PDF attachment reading with a clear error
+	// instead of a silent snippet fallback.
+	MarkItDownURL string
 
 	mu     sync.Mutex
 	states map[string]oauthState
