@@ -57,19 +57,35 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 			"DELETE FROM routes WHERE name LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx,
 			"DELETE FROM providers WHERE name LIKE $1 || '%'", adminMarker)
-		// budget and secret-backend audit rows carry no fixture marker
-		// (their payloads are bare scope/backend names, and the restore
-		// write re-records the real config), so those entities sweep
-		// whole — a few lost trail rows about real budget or backend
-		// flips beat fixture rows accumulating forever.
+		// budget, secret-backend, and route-bootstrap audit rows carry no
+		// fixture marker (their payloads are bare scope/backend names or
+		// a provider UUID, and route-bootstrap's restore write re-records
+		// the real chain), so those entities sweep whole — a few lost
+		// trail rows about real budget/backend/route changes beat fixture
+		// rows accumulating forever.
 		_, _ = db.Exec(ctx,
 			`DELETE FROM admin_audit
 			 WHERE entity IN ('budget', 'secret_backend', 'secret_backend_default')
+			 OR (entity = 'route' AND action = 'bootstrap')
 			 OR entity_id LIKE $1 || '%'
 			 OR before::text LIKE '%' || $1 || '%' OR after::text LIKE '%' || $1 || '%'`, adminMarker)
 		_, _ = db.Exec(ctx,
 			"DELETE FROM cost_ledger WHERE provider LIKE $1 || '%'", adminMarker)
 		_, _ = db.Exec(ctx, "DELETE FROM secrets WHERE ref_name LIKE $1 || '%'", adminMarker)
+		// Any test creating a chat/embeddings-capable provider now
+		// bootstraps it into default/summarize/embedding as a side
+		// effect (D-033 follow-up); deleting the provider row leaves a
+		// dangling chain entry the shared routes never asked for. Strip
+		// any entry whose provider_id no longer exists — cheaper and
+		// more robust than every fixture test knowing about bootstrap.
+		_, _ = db.Exec(ctx, `
+			UPDATE routes SET chain = (
+				SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+				FROM jsonb_array_elements(chain) e
+				WHERE EXISTS (SELECT 1 FROM providers WHERE id = (e->>'provider_id')::uuid)
+			)
+			WHERE name IN ('default', 'summarize', 'embedding')
+			  AND chain <> '[]'::jsonb`)
 	}
 	sweep(ctx, db)
 	t.Cleanup(func() {
@@ -492,6 +508,97 @@ func TestSecretSetDeleteAuditsAndReloads(t *testing.T) {
 	}
 	if configured, _, err := adm.SecretStatus(ctx, ref); err != nil || configured {
 		t.Fatalf("SecretStatus after Delete: configured=%v err=%v", configured, err)
+	}
+}
+
+// TestCreateBootstrapsFixedRoutes pins the Create-time wiring of
+// router.BootstrapChain: default/summarize get the cheapest chat-
+// capable model, embedding gets the cheapest embeddings-capable one,
+// and re-creating a provider with the same model does not duplicate
+// the chain entry. default/summarize/embedding are shared, real
+// routes (not marker-scoped) — save and restore their chains so the
+// test never leaves the dev database's routing altered.
+func TestCreateBootstrapsFixedRoutes(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+
+	saved := map[string][]byte{}
+	for _, name := range []string{"default", "summarize", "embedding"} {
+		var chain []byte
+		if err := db.QueryRow(ctx, `SELECT chain FROM routes WHERE name = $1`, name).Scan(&chain); err != nil {
+			t.Fatalf("read %s chain: %v", name, err)
+		}
+		saved[name] = chain
+	}
+	defer func() {
+		for name, chain := range saved {
+			if _, err := db.Exec(ctx, `UPDATE routes SET chain = $2 WHERE name = $1`, name, chain); err != nil {
+				t.Errorf("restore %s chain: %v", name, err)
+			}
+		}
+	}()
+
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "bootstrap", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "chat-cheap",
+		Models: []router.ModelInfo{
+			{ID: "chat-cheap", Capabilities: []string{"chat"}, Prices: &router.ModelPrices{InputPerMTok: 1}},
+			{ID: "chat-pricey", Capabilities: []string{"chat"}, Prices: &router.ModelPrices{InputPerMTok: 9}},
+			{ID: "embed-only", Capabilities: []string{"embeddings"}, Prices: &router.ModelPrices{InputPerMTok: 0.1}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	routes, err := adm.Routes(ctx)
+	if err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	byName := map[string]Route{}
+	for _, r := range routes {
+		byName[r.Name] = r
+	}
+	for _, tc := range []struct{ route, wantModel string }{
+		{"default", "chat-cheap"},
+		{"summarize", "chat-cheap"},
+		{"embedding", "embed-only"},
+	} {
+		chain := byName[tc.route].Chain
+		last := chain[len(chain)-1]
+		if last.ProviderID != id || last.Model != tc.wantModel {
+			t.Fatalf("%s chain tail = %+v, want provider %s model %s", tc.route, last, id, tc.wantModel)
+		}
+	}
+
+	// A second, distinct provider appends as a further fallback —
+	// existing entries (including the one just bootstrapped) untouched.
+	before := len(byName["default"].Chain)
+	secondID, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "bootstrap2", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "chat-cheap",
+		Models: []router.ModelInfo{{ID: "chat-cheap", Capabilities: []string{"chat"},
+			Prices: &router.ModelPrices{InputPerMTok: 1}}},
+	})
+	if err != nil {
+		t.Fatalf("Create second provider: %v", err)
+	}
+	routes, err = adm.Routes(ctx)
+	if err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	for _, r := range routes {
+		if r.Name != "default" {
+			continue
+		}
+		if len(r.Chain) != before+1 {
+			t.Fatalf("default chain length = %d, want %d (existing + one fallback)", len(r.Chain), before+1)
+		}
+		last := r.Chain[len(r.Chain)-1]
+		if last.ProviderID != secondID || last.Model != "chat-cheap" {
+			t.Fatalf("default chain tail = %+v, want second provider's chat-cheap appended last", last)
+		}
 	}
 }
 

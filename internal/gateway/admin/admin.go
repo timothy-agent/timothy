@@ -282,7 +282,8 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 }
 
 // Create inserts a provider (disabled by default is the caller's
-// choice), audits, and reloads the snapshot.
+// choice), audits, bootstraps the fixed system routes' chains from its
+// model metadata, and reloads the snapshot.
 func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 	if err := validateProvider(p); err != nil {
 		return "", err
@@ -301,8 +302,46 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
 	a.audit(ctx, "create", "provider", id, nil, p)
+	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, Models: p.Models})
 	a.reload(ctx)
 	return id, nil
+}
+
+// bootstrapRoutes fills the fixed system routes' chains from a newly
+// connected provider's model metadata (D-033 follow-up): cheapest
+// capable model seeds an empty chain, appends as last fallback
+// otherwise, existing order untouched. Best-effort — a failure here
+// must never fail provider creation; the user can always wire routes
+// by hand from the Routing tab.
+func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
+	db, err := a.db.Get()
+	if err != nil {
+		a.log.Warn("route bootstrap skipped", "error", err)
+		return
+	}
+	existing := map[string][]router.ChainEntry{}
+	for _, name := range []string{"default", "summarize", "embedding"} {
+		var chainJSON []byte
+		if err := db.QueryRow(ctx, `SELECT chain FROM routes WHERE name = $1`, name).Scan(&chainJSON); err != nil {
+			a.log.Warn("route bootstrap: read route", "route", name, "error", err)
+			continue
+		}
+		var chain []router.ChainEntry
+		if err := json.Unmarshal(chainJSON, &chain); err != nil {
+			a.log.Warn("route bootstrap: decode chain", "route", name, "error", err)
+			continue
+		}
+		existing[name] = chain
+	}
+	updates := router.BootstrapChain(p, existing)
+	for name, chain := range updates {
+		if _, err := db.Exec(ctx, `UPDATE routes SET chain = $2, updated_at = now() WHERE name = $1`,
+			name, jsonOr(chain, "[]")); err != nil {
+			a.log.Warn("route bootstrap: write chain", "route", name, "error", err)
+			continue
+		}
+		a.audit(ctx, "bootstrap", "route", name, nil, map[string]any{"chain": chain, "provider": p.ID})
+	}
 }
 
 // Patch applies a partial update. Only fields present in the request
