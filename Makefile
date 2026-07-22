@@ -8,7 +8,8 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
-.PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs
+.PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
+	brain gateway memoryd web dev
 
 build:
 	$(GO_RUN) go build ./...
@@ -58,6 +59,15 @@ skills-validate:
 
 up:
 	$(COMPOSE) up -d --build
+
+# Per-service rebuild+restart for when only one service changed:
+#   make brain / make gateway / make memoryd / make web
+brain gateway memoryd web:
+	$(COMPOSE) up -d --build $@
+
+# Vite dev server with hot reload on :3301 (proxies /v1 to brain).
+dev:
+	$(COMPOSE) --profile dev up -d web-dev
 
 down:
 	$(COMPOSE) down
