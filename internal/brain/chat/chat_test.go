@@ -328,6 +328,55 @@ func TestChatAutoTitlesFirstExchange(t *testing.T) {
 	}
 }
 
+// A session whose first exchange fails outright (chain exhausted, a
+// dropped stream) never reaches autoTitle — persistTurn returns before
+// it on !sawDone. The old firstExchange gate then locked the session
+// out of titling forever: it only ever fired once, keyed on "is this
+// message #1", which the SECOND message already fails. hasCompletedTurn
+// fixes this by keying on "has ANY turn completed yet" instead, so
+// titling keeps being retried across failed attempts until one lands.
+func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{{Type: stream.EventError, Err: &stream.StreamError{Code: "boom", Message: "boom"}}}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "first try"})
+	if err != nil {
+		t.Fatalf("Chat 1: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 2 }) // session_started, user_message only
+
+	log.mu.Lock()
+	title := log.titles["s1"]
+	log.mu.Unlock()
+	if title != "" {
+		t.Fatalf("title = %q after a turn that never completed, want empty", title)
+	}
+
+	gw.mu.Lock()
+	gw.events = okEvents("second answer")
+	gw.mu.Unlock()
+	_, ch, err = s.Chat(t.Context(), Request{SessionID: "s1", Message: "second try"})
+	if err != nil {
+		t.Fatalf("Chat 2: %v", err)
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		return log.titles["s1"] != ""
+	})
+	log.mu.Lock()
+	title = log.titles["s1"]
+	log.mu.Unlock()
+	if title != "second answer" {
+		t.Fatalf("title = %q, want the second (first-completed) exchange's text", title)
+	}
+}
+
 func TestChatValidatesMessage(t *testing.T) {
 	t.Parallel()
 	s := newService(&fakeGW{}, newFakeLog())

@@ -289,14 +289,20 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if err != nil {
 		return sessionID, nil, err
 	}
-	firstExchange := !hasUserMessage(events)
+	// needsTitle, not "is this literally message #1": a session whose
+	// earlier turns all failed (chain exhausted, a dropped stream) has
+	// never had a live shot at autoTitle, since persistTurn only calls
+	// it on a completed turn. Keying off "no PRIOR turn ever completed"
+	// instead of "no PRIOR message exists" makes titling retry on every
+	// later message too, until one finally succeeds.
+	needsTitle := !hasCompletedTurn(events)
 
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
 		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: req.ModelHint,
 	}); err != nil {
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, req.Message, req.ModelHint, req.SkillHint, skillBody, route, profile, firstExchange)
+	return s.runTurn(ctx, sessionID, req.Message, req.ModelHint, req.SkillHint, skillBody, route, profile, needsTitle)
 }
 
 // ErrNoRetryableTurn marks a Retry call whose session isn't in a
@@ -321,7 +327,7 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if !ok {
 		return sessionID, nil, fmt.Errorf("chat: %w: session has no retryable turn", ErrNoRetryableTurn)
 	}
-	firstExchange := isOnlyUserMessage(events)
+	needsTitle := !hasCompletedTurn(events)
 
 	profile := agents.Agent{Memory: true}
 	if s.agents != nil {
@@ -335,14 +341,14 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if route == "" {
 		route = defaultRoute
 	}
-	return s.runTurn(ctx, sessionID, last.Text, last.ModelHint, "", "", route, profile, firstExchange)
+	return s.runTurn(ctx, sessionID, last.Text, last.ModelHint, "", "", route, profile, needsTitle)
 }
 
 // runTurn is the shared tail of Chat and Retry: compact, project
 // context, assemble the system prompt, stream, and relay. The caller
 // has already ensured exactly the right user_message sits durable at
 // the end of the log — this never appends one itself.
-func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, firstExchange bool) (string, <-chan stream.StreamEvent, error) {
+func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool) (string, <-chan stream.StreamEvent, error) {
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
@@ -401,7 +407,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	}
 
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, userText, route, profile, firstExchange, upstream, out)
+	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -409,7 +415,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 // then persists it. Persistence uses a cancel-detached context: a
 // client disconnect or brain shutdown mid-turn must still leave a
 // durable pending_state (the kill-test contract).
-func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, firstExchange bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -449,7 +455,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			}
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, route, profile, firstExchange, text.String(), reasoning.String(), meta, usage, sawDone, flushed)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed)
 	}
 
 	ticker := time.NewTicker(s.flushEvery)
@@ -490,7 +496,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	}
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, firstExchange bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -585,7 +591,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		}
 		cancel()
 	}
-	if firstExchange {
+	if needsTitle {
 		s.autoTitle(sessionID, userText, text)
 	}
 }
@@ -667,9 +673,15 @@ func collapseRepeatedTail(s string) string {
 	return t
 }
 
-func hasUserMessage(events []session.Event) bool {
+// hasCompletedTurn reports whether events carries at least one
+// assistant_turn — the only kind persistTurn appends on sawDone.
+// Gates auto-title: a session with no completed turn yet has never had
+// a live shot at being titled (a turn that only ever failed skips
+// autoTitle entirely), so retitling keeps being attempted on every
+// later message or retry until one finally succeeds.
+func hasCompletedTurn(events []session.Event) bool {
 	for _, ev := range events {
-		if ev.Kind == session.KindUserMessage {
+		if ev.Kind == session.KindAssistantTurn {
 			return true
 		}
 	}
@@ -689,18 +701,4 @@ func lastUserMessage(events []session.Event) (session.UserMessage, bool) {
 		return session.UserMessage{}, false
 	}
 	return msg, true
-}
-
-// isOnlyUserMessage reports whether events carries exactly one
-// user_message — the auto-title condition Chat computes as
-// firstExchange BEFORE appending its own; Retry checks the same thing
-// against the message already sitting in the log.
-func isOnlyUserMessage(events []session.Event) bool {
-	n := 0
-	for _, ev := range events {
-		if ev.Kind == session.KindUserMessage {
-			n++
-		}
-	}
-	return n == 1
 }
