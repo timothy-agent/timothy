@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -135,6 +137,85 @@ func TestValidBackendRef(t *testing.T) {
 	} {
 		if err := validBackendRef(bad); err == nil {
 			t.Errorf("validBackendRef(%q) = nil, want error", bad)
+		}
+	}
+}
+
+func TestNormalizeBackendConfigFile(t *testing.T) {
+	got, err := normalizeBackendConfig("file", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg FileConfig
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dir != defaultFileDir {
+		t.Errorf("default dir = %q, want %q", cfg.Dir, defaultFileDir)
+	}
+
+	got, err = normalizeBackendConfig("file", json.RawMessage(`{"dir":"/mnt/secrets"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dir != "/mnt/secrets" {
+		t.Errorf("dir = %q, want /mnt/secrets", cfg.Dir)
+	}
+
+	if _, err := normalizeBackendConfig("file", json.RawMessage(`{"dir":"relative/path"}`)); err == nil {
+		t.Fatal("relative dir: want error")
+	}
+}
+
+func TestValidExternalBackendAcceptsFile(t *testing.T) {
+	if err := validExternalBackend("file"); err != nil {
+		t.Errorf("validExternalBackend(file) = %v, want nil", err)
+	}
+	if err := validExternalBackend("nope"); err == nil {
+		t.Fatal("unknown backend: want error")
+	}
+}
+
+func TestReadFileSecret(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "api_key"), []byte("sk-live-123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "no_newline"), []byte("sk-no-nl"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readFileSecret(dir, "api_key")
+	if err != nil || got != "sk-live-123" {
+		t.Fatalf("readFileSecret = (%q, %v), want (sk-live-123, nil)", got, err)
+	}
+	// Only ONE trailing newline is trimmed — interior/multiple trailing
+	// whitespace is preserved as part of the value, not guessed at.
+	got, err = readFileSecret(dir, "no_newline")
+	if err != nil || got != "sk-no-nl" {
+		t.Fatalf("readFileSecret (no trailing newline) = (%q, %v), want (sk-no-nl, nil)", got, err)
+	}
+
+	if _, err := readFileSecret(dir, "missing"); err == nil {
+		t.Fatal("missing file: want error")
+	}
+}
+
+func TestReadFileSecretRejectsPathEscapes(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{
+		"",
+		"../outside",
+		"a/../../b",
+		"sub/dir/file",
+		"/etc/passwd",
+		`C:\Windows\file`,
+	} {
+		if _, err := readFileSecret(dir, bad); err == nil {
+			t.Errorf("readFileSecret(%q) = nil, want error (path escape)", bad)
 		}
 	}
 }

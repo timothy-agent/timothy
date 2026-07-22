@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -31,6 +33,17 @@ type VaultConfig struct {
 	// AppRole fields; SecretIDRef names the stored secret_id.
 	RoleID      string `json:"role_id"`
 	SecretIDRef string `json:"secret_id_ref"`
+}
+
+// FileConfig connects the file backend to a directory of secret files
+// mounted into the container — Docker/Kubernetes secrets convention:
+// one file per secret, named by its ref, holding the raw value with an
+// optional trailing newline. No credentials of its own: the mount
+// itself is the trust boundary, set up outside Timothy.
+type FileConfig struct {
+	// Dir is the mount directory secret files live under. Defaults to
+	// /run/secrets, the Docker/Compose/Kubernetes convention.
+	Dir string `json:"dir"`
 }
 
 // ASMConfig connects the asm backend to AWS Secrets Manager. Region
@@ -62,7 +75,8 @@ const (
 	defaultVaultSecretIDRef = "VAULT_SECRET_ID"
 	//nolint:gosec // G101: a ref NAME in the secret store, not a credential value.
 	defaultASMSecretKeyRef = "AWS_SECRET_ACCESS_KEY"
-	backendHTTPTimeout      = 10 * time.Second
+	backendHTTPTimeout     = 10 * time.Second
+	defaultFileDir         = "/run/secrets"
 )
 
 // backendRefPattern bounds what a backend_ref may look like (vault
@@ -210,7 +224,7 @@ func (s *Store) Backends(ctx context.Context) ([]BackendStatus, error) {
 		return nil, fmt.Errorf("secretstore: list backends: %w", err)
 	}
 	out := []BackendStatus{{Backend: "db", Configured: true}}
-	for _, b := range []string{"vault", "asm"} {
+	for _, b := range []string{"vault", "asm", "file"} {
 		if isDefault, ok := state[b]; ok {
 			out = append(out, BackendStatus{Backend: b, Configured: true, Default: isDefault})
 		} else {
@@ -337,13 +351,26 @@ func (s *Store) TestBackend(ctx context.Context, backend string) error {
 			return fmt.Errorf("secretstore: asm test (needs secretsmanager:ListSecrets; resolution itself only needs GetSecretValue): %w", err)
 		}
 		return nil
+	case "file":
+		cfg, err := s.fileConfig(ctx)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(cfg.Dir)
+		if err != nil {
+			return fmt.Errorf("secretstore: file backend: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("secretstore: file backend: %s is not a directory", cfg.Dir)
+		}
+		return nil
 	default:
 		return validExternalBackend(backend)
 	}
 }
 
 func validExternalBackend(backend string) error {
-	if backend != "vault" && backend != "asm" {
+	if backend != "vault" && backend != "asm" && backend != "file" {
 		return fmt.Errorf("secretstore: unknown backend %q", backend)
 	}
 	return nil
@@ -419,6 +446,18 @@ func normalizeBackendConfig(backend string, cfg json.RawMessage) (json.RawMessag
 			return nil, fmt.Errorf("secretstore: asm config: auth must be chain, profile or keys")
 		}
 		return json.Marshal(a)
+	case "file":
+		var f FileConfig
+		if err := json.Unmarshal(cfg, &f); err != nil {
+			return nil, fmt.Errorf("secretstore: file config: %w", err)
+		}
+		if f.Dir == "" {
+			f.Dir = defaultFileDir
+		}
+		if !filepath.IsAbs(f.Dir) {
+			return nil, fmt.Errorf("secretstore: file config: dir must be an absolute path")
+		}
+		return json.Marshal(f)
 	default:
 		return nil, validExternalBackend(backend)
 	}
@@ -443,6 +482,50 @@ func (s *Store) vaultConfig(ctx context.Context) (VaultConfig, error) {
 		cfg.TokenRef = defaultVaultTokenRef
 	}
 	return cfg, nil
+}
+
+func (s *Store) fileConfig(ctx context.Context) (FileConfig, error) {
+	raw, err := s.GetBackendConfig(ctx, "file")
+	if err != nil {
+		return FileConfig{}, err
+	}
+	var cfg FileConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return FileConfig{}, fmt.Errorf("secretstore: file config: %w", err)
+	}
+	if cfg.Dir == "" {
+		cfg.Dir = defaultFileDir
+	}
+	return cfg, nil
+}
+
+// resolveFile reads a secret file from the configured mount directory.
+func (s *Store) resolveFile(ctx context.Context, backendRef string) (string, error) {
+	cfg, err := s.fileConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	return readFileSecret(cfg.Dir, backendRef)
+}
+
+// readFileSecret reads backendRef as a secret file under dir.
+// backendRef must be a bare filename — never a path with its own
+// directory components, so a stored ref can't escape the mount via
+// "../" traversal or an absolute path. The file's content is trimmed
+// of a single trailing newline (the common `printf`/`echo`-without-
+// `-n` case); interior whitespace is preserved as part of the value.
+func readFileSecret(dir, backendRef string) (string, error) {
+	if backendRef == "" || strings.ContainsAny(backendRef, "/\\") || strings.Contains(backendRef, "..") {
+		return "", fmt.Errorf("secretstore: file backend_ref must be a bare filename, got %q", backendRef)
+	}
+	path := filepath.Join(dir, backendRef)
+	//nolint:gosec // G304: backendRef is validated above to be a bare filename,
+	// no separators or "..", so path cannot escape dir.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("secretstore: file %s: %w", path, err)
+	}
+	return strings.TrimSuffix(string(data), "\n"), nil
 }
 
 // dbSecret decrypts a db-backed secret directly — never via Resolve —

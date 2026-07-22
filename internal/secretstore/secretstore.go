@@ -89,6 +89,8 @@ func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
 		return s.resolveVault(ctx, r.backendRef)
 	case "asm":
 		return s.resolveASM(ctx, r.backendRef)
+	case "file":
+		return s.resolveFile(ctx, r.backendRef)
 	default:
 		return "", fmt.Errorf("secretstore: unknown backend %q for %s", r.backend, refName)
 	}

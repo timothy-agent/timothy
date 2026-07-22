@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS secret_backend_config (
     config     jsonb NOT NULL DEFAULT '{}'::jsonb,
     is_default boolean NOT NULL DEFAULT false,
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT secret_backend_config_check CHECK (backend IN ('db', 'vault', 'asm'))
+    CONSTRAINT secret_backend_config_check CHECK (backend IN ('db', 'vault', 'asm', 'file'))
 );
 
 -- At most one default, enforced by the database not the application.
