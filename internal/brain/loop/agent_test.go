@@ -829,3 +829,76 @@ func TestSwapToolsChangesSurfaceForNewTurns(t *testing.T) {
 		t.Fatalf("Tools() = %+v, want only github_create_issue", got)
 	}
 }
+
+// TestForceRouteSwitchesRouteAfterMatchingToolAndStaysSticky pins the
+// sensitive-tool-output routing mechanism: a tool whose name ends with
+// a registered suffix (connector tools are namespaced
+// "<connector-name>_gmail_read", the connector name is user-chosen)
+// pins every LATER step in the turn to the forced route, while the
+// FIRST step (before the tool ran) still uses the turn's own route.
+// It also confirms the forced route survives a SECOND matching tool
+// call (stays sticky, doesn't reset).
+func TestForceRouteSwitchesRouteAfterMatchingToolAndStaysSticky(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"personal_gmail_read", `{}`}),
+		toolCallStep([2]string{"personal_gmail_read", `{}`}),
+		finalStep("done"),
+	}}
+	sensitive := &tools.Tool{
+		Name:        "personal_gmail_read",
+		Description: "reads a fake email",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "email body", nil
+		},
+	}
+	a, _, _, _ := testAgent(t, gw, sensitive)
+	a.SetForceRoute("gmail_read", "local")
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "check my email"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(gw.requests))
+	}
+	if gw.requests[0].Route != "default" {
+		t.Fatalf("step 1 route = %q, want default (before the sensitive tool ran)", gw.requests[0].Route)
+	}
+	if gw.requests[1].Route != "local" {
+		t.Fatalf("step 2 route = %q, want local (forced after gmail_read ran)", gw.requests[1].Route)
+	}
+	if gw.requests[2].Route != "local" {
+		t.Fatalf("step 3 route = %q, want local (sticky through a second matching call)", gw.requests[2].Route)
+	}
+}
+
+// TestForceRouteIgnoresNonMatchingTools confirms an unrelated tool
+// call never triggers the override — only a name ending in a
+// registered suffix does.
+func TestForceRouteIgnoresNonMatchingTools(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.SetForceRoute("gmail_read", "local")
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	for i, req := range gw.requests {
+		if req.Route != "default" {
+			t.Fatalf("request %d route = %q, want default (echo never matches gmail_read)", i, req.Route)
+		}
+	}
+}

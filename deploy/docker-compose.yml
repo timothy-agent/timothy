@@ -49,6 +49,27 @@ services:
       - ../deploy/searxng:/etc/searxng:ro
     # internal-only: no published ports; brain is the sole caller
 
+  markitdown:
+    <<: *service
+    build:
+      context: ../markitdown-svc
+    # internal-only: no published ports, no auth; brain is the sole
+    # caller, same trust boundary as searxng.
+
+  # Local model runner: an OpenAI-compatible endpoint at /v1, registered
+  # in Settings as a regular "openaicompat" provider — no gateway code
+  # needed. Pull a model once with:
+  #   docker compose exec ollama ollama pull qwen2.5:14b
+  ollama:
+    <<: *service
+    image: ollama/ollama@sha256:c3886c198155aa7d45a29851100cc16f5d6ea6777d635ddd0597fe95874161af
+    volumes:
+      - ollama-models:/root/.ollama
+    # internal-only by default; uncomment to reach it from the host
+    # (e.g. `ollama pull` from your Mac instead of via compose exec):
+    # ports:
+    #   - "${OLLAMA_PORT:-11434}:11434"
+
   brain:
     <<: *go-service
     build:
@@ -74,6 +95,15 @@ services:
       WORKSPACE_ROOT: /workspace
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
+      # Converts Gmail attachments (PDFs) and HTML-only email bodies to
+      # markdown/text; compose-internal only.
+      MARKITDOWN_URL: http://markitdown:8000
+      # Optional: a route name (configured in Settings → Routing,
+      # normally chained only to a local Ollama provider) that gmail_read
+      # and gmail_read_attachment force the rest of their turn onto —
+      # keeps real email content off third-party providers. Empty: those
+      # tools' output is processed on whatever route the turn started on.
+      SENSITIVE_TOOL_ROUTE: ${SENSITIVE_TOOL_ROUTE:-}
     volumes:
       - workspace:/workspace
     ports:
@@ -82,6 +112,8 @@ services:
       postgres:
         condition: service_healthy
       searxng:
+        condition: service_started
+      markitdown:
         condition: service_started
 
   gateway:
@@ -178,6 +210,7 @@ volumes:
   pgdata:
   web_node_modules:
   workspace:
+  ollama-models:
 
 networks:
   timothy:

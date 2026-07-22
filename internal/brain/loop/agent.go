@@ -83,16 +83,26 @@ type Agent struct {
 	toolMu sync.RWMutex
 	exec   Executor
 	defs   []provider.ToolDef
+
+	// forceRouteBySuffix maps a tool name SUFFIX to a route its output
+	// must be processed under — e.g. a route chained only to a
+	// local/trusted provider, for tools whose results carry sensitive
+	// data (raw email content) that should never reach a third-party
+	// model. Suffix, not exact name: connector tools are namespaced
+	// "<connector-name>_<tool-name>" and the connector name is user-
+	// chosen, so "gmail_read" must match regardless of prefix.
+	forceRouteBySuffix map[string]string
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
 	return &Agent{
 		gw: gw, exec: exec, perms: perms, outputs: outputs, audit: audit,
 		events: events, broker: broker, defs: defs,
-		maxSteps:       tools.DefaultMaxSteps,
-		offloadAt:      tools.DefaultOffloadThreshold,
-		offloadPerTool: map[string]int{},
-		logger:         logger,
+		maxSteps:           tools.DefaultMaxSteps,
+		offloadAt:          tools.DefaultOffloadThreshold,
+		offloadPerTool:     map[string]int{},
+		forceRouteBySuffix: map[string]string{},
+		logger:             logger,
 	}
 }
 
@@ -124,6 +134,20 @@ func (a *Agent) Tools() []provider.ToolDef {
 // raise it; a chatty tool can lower it.
 func (a *Agent) SetOffloadThreshold(tool string, bytes int) {
 	a.offloadPerTool[tool] = bytes
+}
+
+// SetForceRoute pins a tool's output to route for the rest of the
+// turn: once a tool whose name ENDS WITH suffix is called, every
+// subsequent LLM step in the SAME turn uses route instead of the
+// turn's normal route — sticky, never un-forced mid-turn, since the
+// sensitive content is already in context by then. The turn's FIRST
+// step (before any tool has run) still uses the turn's own route; this
+// only takes effect after. suffix, not the exact registered name:
+// connector tools are namespaced "<connector-name>_<tool-name>" with a
+// user-chosen connector name, so "gmail_read" matches regardless of
+// which connector name serves it.
+func (a *Agent) SetForceRoute(suffix, route string) {
+	a.forceRouteBySuffix[suffix] = route
 }
 
 // Request is one turn's loop input.
@@ -171,6 +195,9 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	coerced := false
 	var repeats tools.RepeatGuard
 	stuck := false
+	// route is req.Route until a tool with a forced route runs; from
+	// then on it's sticky for the rest of the turn (see SetForceRoute).
+	route := req.Route
 
 	for step := 1; ; step++ {
 		directive := tools.CeilingFor(step, a.maxSteps)
@@ -181,7 +208,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			directive = tools.StepForceSynthesis
 		}
 		sreq := gwclient.StreamRequest{
-			Route: req.Route,
+			Route: route,
 			Agent:        req.Agent,
 			Purpose:      "chat",
 			ModelHint:    req.ModelHint,
@@ -285,6 +312,13 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 
 		toolCallCount += len(calls)
 		stuck = repeats.Record(calls)
+		for _, c := range calls {
+			for suffix, forced := range a.forceRouteBySuffix {
+				if strings.HasSuffix(c.Name, suffix) {
+					route = forced
+				}
+			}
+		}
 		results := a.executeAll(ctx, exec, req.SessionID, calls, emit)
 
 		msgs = append(msgs, provider.Message{

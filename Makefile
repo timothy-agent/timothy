@@ -9,7 +9,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web dev
+	brain gateway memoryd web markitdown ollama dev
 
 build:
 	$(GO_RUN) go build ./...
@@ -61,8 +61,8 @@ up:
 	$(COMPOSE) up -d --build
 
 # Per-service rebuild+restart for when only one service changed:
-#   make brain / make gateway / make memoryd / make web
-brain gateway memoryd web:
+#   make brain / make gateway / make memoryd / make web / make markitdown / make ollama
+brain gateway memoryd web markitdown ollama:
 	$(COMPOSE) up -d --build $@
 
 # Vite dev server with hot reload on :3301 (proxies /v1 to brain).

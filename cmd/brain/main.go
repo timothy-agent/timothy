@@ -229,6 +229,11 @@ func buildConnectors(db *pgpool.Pool, log *slog.Logger) (*connectors.Manager, *c
 		log.Warn("TIMOTHY_PUBLIC_URL not set; google connectors cannot run their OAuth flow")
 	}
 	goog := connectors.NewGoogle(secrets, store, publicURL, log)
+	if markItDownURL := os.Getenv("MARKITDOWN_URL"); markItDownURL != "" {
+		goog.MarkItDownURL = markItDownURL
+	} else {
+		log.Warn("MARKITDOWN_URL not set; gmail_read falls back to a snippet for HTML-only mail, and gmail_read_attachment is unavailable")
+	}
 	return mgr, goog
 }
 
@@ -332,6 +337,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 		builtin.Shell(builtin.ShellConfig{WorkspaceRoot: workspace}),
 		builtin.RetrieveOutput(outputs),
 		builtin.Remember(remember),
+		builtin.ConvertCurrency(),
 	}
 	// Search is optional infra: only registered when a backend is
 	// configured, so an environment without SearXNG still runs clean.
@@ -352,6 +358,17 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	// Shell dumps grow fast; offload them sooner than the default so a
 	// long command output never bloats the context (D-019).
 	agent.SetOffloadThreshold("shell", 4<<10)
+	// Reading real email content is sensitive: once a Gmail read tool
+	// fires, pin the rest of the turn to a trusted route (e.g. one
+	// chained only to a local Ollama provider) instead of whatever
+	// route the turn started on — optional, since not everyone runs a
+	// local model.
+	if sensitiveRoute := os.Getenv("SENSITIVE_TOOL_ROUTE"); sensitiveRoute != "" {
+		agent.SetForceRoute("gmail_read", sensitiveRoute)
+		agent.SetForceRoute("gmail_read_attachment", sensitiveRoute)
+	} else {
+		log.Warn("SENSITIVE_TOOL_ROUTE not set; gmail_read/gmail_read_attachment output is processed on the turn's normal route, same as everything else")
+	}
 	return agent, broker, outputs, set, nil
 }
 
