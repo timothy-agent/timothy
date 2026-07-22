@@ -277,6 +277,14 @@ export interface AdminAgent {
   enabled: boolean
 }
 
+// AdminTool is one entry of the live tool surface (builtins +
+// connector tools) — feeds the agent editor's tools allowlist picker
+// so a name is chosen from what actually exists, never typed blind.
+export interface AdminTool {
+  name: string
+  description: string
+}
+
 // AdminConnector is one third-party integration the agent can call as
 // tools (MCP server or Google account). config is kind-specific; the
 // credential_ref names where its secret/tokens live.

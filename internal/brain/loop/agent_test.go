@@ -821,4 +821,11 @@ func TestSwapToolsChangesSurfaceForNewTurns(t *testing.T) {
 	if len(gw.requests) == 0 || len(gw.requests[0].Tools) != 1 || gw.requests[0].Tools[0].Name != "github_create_issue" {
 		t.Fatalf("first request tools = %+v, want only github_create_issue", gw.requests[0].Tools)
 	}
+
+	// Tools() reflects the same live swap — the surface a tools-
+	// allowlist picker would list.
+	got := a.Tools()
+	if len(got) != 1 || got[0].Name != "github_create_issue" || got[0].Description != "Create a GitHub issue" {
+		t.Fatalf("Tools() = %+v, want only github_create_issue", got)
+	}
 }

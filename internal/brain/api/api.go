@@ -21,6 +21,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 )
@@ -39,6 +40,13 @@ type Directory interface {
 // broker satisfies it. Nil disables the endpoint (404).
 type PermissionResolver interface {
 	Resolve(id, decision string) bool
+}
+
+// Toolset lists the live tool surface (builtins + connector tools);
+// loop.Agent satisfies it. Nil disables the endpoint (404) — an agent
+// tools-allowlist picker degrades to free text.
+type Toolset interface {
+	Tools() []provider.ToolDef
 }
 
 // API serves brain's public routes.
@@ -65,7 +73,7 @@ var memoryRoutePatterns = []string{
 // is the reverse proxy to memoryd's management routes, admin the
 // proxy to the gateway's internal control plane, conns the local
 // connector control plane (nil leaves any of them unmounted).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, token string, log *slog.Logger) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, toolset Toolset, token string, log *slog.Logger) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
@@ -76,6 +84,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	a.registerSettings(srv.Handle, flags)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog)
+	a.registerTools(srv.Handle, toolset)
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))

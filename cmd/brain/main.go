@@ -192,7 +192,7 @@ func main() {
 
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
-		agentReg, conns, goog, token, app.Log)
+		agentReg, conns, goog, agent, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

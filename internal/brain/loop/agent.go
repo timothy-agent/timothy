@@ -110,6 +110,15 @@ func (a *Agent) toolset() (Executor, []provider.ToolDef) {
 	return a.exec, a.defs
 }
 
+// Tools returns the live tool surface (builtins + connector tools,
+// SwapTools keeps it current) — for surfaces that need to list what's
+// available, like an agent's tools-allowlist picker, without executing
+// anything.
+func (a *Agent) Tools() []provider.ToolDef {
+	_, defs := a.toolset()
+	return defs
+}
+
 // SetOffloadThreshold overrides the offload size for one tool (D-019
 // "per-tool overridable"). A tool whose results are always small can
 // raise it; a chatty tool can lower it.

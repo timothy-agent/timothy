@@ -3,6 +3,7 @@ import type {
   AdminConnector,
   AdminProvider,
   AdminRoute,
+  AdminTool,
   AvailableModel,
   BudgetStatus,
   CacheRow,
@@ -487,6 +488,13 @@ export async function testSecretBackend(
 export async function listAgents(): Promise<AdminAgent[]> {
   const { agents } = await request<{ agents: AdminAgent[] }>('/v1/admin/agents')
   return agents ?? []
+}
+
+// listTools lists the live tool surface (builtins + connector tools),
+// feeding the agent editor's tools allowlist picker.
+export async function listTools(): Promise<AdminTool[]> {
+  const { tools } = await request<{ tools: AdminTool[] }>('/v1/admin/tools')
+  return tools ?? []
 }
 
 export async function createAgent(a: Partial<AdminAgent>): Promise<string> {

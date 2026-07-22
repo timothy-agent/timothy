@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from '../ui/select'
 import { Field, Toggle } from './shared'
+import { ToolsPicker } from './ToolsPicker'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 
 // slugify mirrors the backend's name rule: lowercase slug.
@@ -42,7 +43,7 @@ export function useAgentForm(agent?: AdminAgent) {
   const [overlay, setOverlay] = useState(agent?.prompt_overlay ?? '')
   const [route, setRoute] = useState(agent?.route ?? '')
   const [skillsText, setSkillsText] = useState(agent?.skills.join(', ') ?? '')
-  const [toolsText, setToolsText] = useState(agent?.tools.join(', ') ?? '')
+  const [tools, setTools] = useState<string[]>(agent?.tools ?? [])
   const [memory, setMemory] = useState(agent?.memory ?? true)
 
   const value: AgentFormValue = {
@@ -51,14 +52,14 @@ export function useAgentForm(agent?: AdminAgent) {
     overlay,
     route,
     skills: splitList(skillsText),
-    tools: splitList(toolsText),
+    tools,
     memory,
   }
 
   return {
     value,
     canSubmit: agent ? true : slugify(name) !== '',
-    fields: { name, setName, description, setDescription, overlay, setOverlay, route, setRoute, skillsText, setSkillsText, toolsText, setToolsText, memory, setMemory },
+    fields: { name, setName, description, setDescription, overlay, setOverlay, route, setRoute, skillsText, setSkillsText, tools, setTools, memory, setMemory },
   }
 }
 
@@ -140,13 +141,8 @@ export function AgentForm({
           className="mt-1.5 h-10"
         />
       </Field>
-      <Field label="Tools allowlist" hint="comma-separated; empty = all">
-        <Input
-          value={fields.toolsText}
-          onChange={(e) => fields.setToolsText(e.target.value)}
-          placeholder="web_search, web_fetch, shell"
-          className="mt-1.5 h-10"
-        />
+      <Field label="Tools allowlist" hint="pick from the live tool surface; empty = all">
+        <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>
     </div>
   )
