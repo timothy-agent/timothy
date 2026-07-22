@@ -24,6 +24,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
+import { modelCatalog } from './modelCatalog'
 import { matchPreset } from './presets'
 import { LogoSprite, ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
@@ -329,6 +330,7 @@ function CredentialSection({
 function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
   const [fetched, setFetched] = useState<string[]>([])
   const [entry, setEntry] = useState('')
+  const [embeddings, setEmbeddings] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const declared = useMemo(() => new Set(provider.models.map((m) => m.id)), [provider.models])
@@ -339,10 +341,18 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
       .catch(() => setFetched([])) // 422 (bedrock) or fetch failure → manual entry only
   }, [provider.id])
 
-  const suggestions: ModelSuggestion[] = useMemo(
-    () => fetched.filter((id) => !declared.has(id)).map((id) => ({ id })),
-    [fetched, declared],
-  )
+  const preset = useMemo(() => matchPreset(provider), [provider])
+
+  const suggestions: ModelSuggestion[] = useMemo(() => {
+    const seen = new Map<string, ModelSuggestion>()
+    for (const id of fetched) {
+      if (!declared.has(id)) seen.set(id, { id })
+    }
+    for (const m of modelCatalog[preset.id] ?? []) {
+      if (!declared.has(m.id) && !seen.has(m.id)) seen.set(m.id, { ...m, hint: 'catalog' })
+    }
+    return [...seen.values()]
+  }, [fetched, declared, preset])
 
   const patchModels = async (models: AdminModel[], defaultModel?: string) => {
     setSaving(true)
@@ -362,9 +372,11 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
   const add = async () => {
     const trimmed = entry.trim()
     if (!trimmed || declared.has(trimmed)) return
-    const models = [...provider.models, { id: trimmed }]
-    await patchModels(models, provider.default_model || trimmed)
+    const model: AdminModel = embeddings ? { id: trimmed, capabilities: ['embeddings'] } : { id: trimmed }
+    const models = [...provider.models, model]
+    await patchModels(models, embeddings ? undefined : provider.default_model || trimmed)
     setEntry('')
+    setEmbeddings(false)
   }
 
   const remove = async (id: string) => {
@@ -384,6 +396,11 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
             className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"
           >
             <span className="truncate font-mono">{m.id}</span>
+            {m.capabilities?.includes('embeddings') && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
+                embeddings
+              </span>
+            )}
             {provider.default_model === m.id ? (
               <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
                 default
@@ -431,6 +448,15 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
           Add
         </Button>
       </div>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={embeddings}
+          onChange={(e) => setEmbeddings(e.target.checked)}
+          className="size-4 rounded border-border"
+        />
+        Embeddings model — routes the embedding route to this instead of chat
+      </label>
     </section>
   )
 }

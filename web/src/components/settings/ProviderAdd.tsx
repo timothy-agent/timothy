@@ -8,6 +8,7 @@ import type { AdminProvider, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
+import { modelCatalog } from './modelCatalog'
 import { providerPresets, type ProviderPreset } from './presets'
 import { LogoSprite, ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
@@ -69,24 +70,36 @@ export function ProviderAdd() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
 
-  // Model suggestions: real ids declared on other providers already
-  // using this driver, plus the preset's own validated default — never
-  // a fabricated model catalog, since model availability changes too
-  // often to hardcode and get right.
+  // Model suggestions: real ids declared on other providers that share
+  // BOTH this driver and this base_url — same driver alone isn't
+  // enough (openaicompat covers OpenAI, GLM, Ollama, Grok, and more,
+  // none of whose models work against each other's endpoint) — plus
+  // the preset's own validated default, and the static catalog for
+  // this preset. Advisory only, never blocks a free-typed id.
   const modelSuggestions: ModelSuggestion[] = useMemo(() => {
     if (!preset) return []
     const seen = new Map<string, ModelSuggestion>()
+    const catalog = modelCatalog[preset.id] ?? []
+    const nameFor = (id: string) => catalog.find((m) => m.id === id)?.name
+    const targetBaseURL = (preset.driver === 'bedrock' ? region : baseURL).trim()
     for (const p of existing) {
-      if (p.driver !== preset.driver) continue
+      if (p.driver !== preset.driver || p.base_url.trim() !== targetBaseURL) continue
       for (const m of p.models) {
-        if (!seen.has(m.id)) seen.set(m.id, { id: m.id, hint: `on ${p.name}` })
+        if (!seen.has(m.id)) seen.set(m.id, { id: m.id, name: nameFor(m.id), hint: `on ${p.name}` })
       }
     }
     if (preset.validateModel && !seen.has(preset.validateModel)) {
-      seen.set(preset.validateModel, { id: preset.validateModel, hint: 'preset default' })
+      seen.set(preset.validateModel, {
+        id: preset.validateModel,
+        name: nameFor(preset.validateModel),
+        hint: 'preset default',
+      })
+    }
+    for (const m of catalog) {
+      if (!seen.has(m.id)) seen.set(m.id, { ...m, hint: 'catalog' })
     }
     return [...seen.values()]
-  }, [existing, preset])
+  }, [existing, preset, baseURL, region])
 
   if (!preset) return <Navigate to="/settings/providers" replace />
 

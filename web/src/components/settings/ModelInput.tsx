@@ -4,6 +4,7 @@ import { Popover, PopoverContent, PopoverAnchor } from '../ui/popover'
 
 export interface ModelSuggestion {
   id: string
+  name?: string
   hint?: string
 }
 
@@ -33,7 +34,11 @@ export function ModelInput({
 
   const filtered = useMemo(() => {
     const q = value.trim().toLowerCase()
-    const list = q ? suggestions.filter((s) => s.id.toLowerCase().includes(q)) : suggestions
+    const list = q
+      ? suggestions.filter(
+          (s) => s.id.toLowerCase().includes(q) || s.name?.toLowerCase().includes(q),
+        )
+      : suggestions
     return list.slice(0, 8)
   }, [suggestions, value])
 
@@ -87,7 +92,14 @@ export function ModelInput({
                 }}
                 className="flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted"
               >
-                <span className="truncate font-mono">{s.id}</span>
+                <span className="min-w-0 truncate">
+                  {s.name ?? s.id}
+                  {s.name && (
+                    <span className="ml-1.5 truncate font-mono text-xs text-muted-foreground">
+                      {s.id}
+                    </span>
+                  )}
+                </span>
                 {s.hint && <span className="shrink-0 text-xs text-muted-foreground">{s.hint}</span>}
               </button>
             </li>
