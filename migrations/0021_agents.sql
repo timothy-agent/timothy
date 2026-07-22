@@ -25,18 +25,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 -- per-turn agent so mid-session switches attribute correctly.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent text NOT NULL DEFAULT '';
 
--- Seed agents: a general default plus the two personas the old mode
--- picker's specialized tiers actually meant. Empty skills/tools =
--- everything allowed; route '' on general = the default route.
+-- Seed only the agents the code depends on: 'general' because exactly
+-- one default agent must exist, 'researcher' because the /research
+-- page locks sessions to that name. Empty skills/tools = everything
+-- allowed; route '' on general = the default route.
 INSERT INTO agents (name, description, prompt_overlay, route, is_default)
 VALUES
   ('general', 'Everyday questions and tasks on a strong all-round chain.', '', '', true),
   ('researcher',
    'Consults tools and sources before answering, never from memory alone.',
    'You are in research mode: consult tools and cite what you find before answering. Never answer purely from memory when a tool could verify.',
-   'research', false),
-  ('summarizer',
-   'Condenses long content faithfully on a cheap chain.',
-   'You condense content. Preserve every name, date, number, commitment, and open question; compress everything else aggressively.',
-   'summarize', false)
+   'research', false)
 ON CONFLICT (name) DO NOTHING;
