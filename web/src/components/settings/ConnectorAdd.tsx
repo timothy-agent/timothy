@@ -1,0 +1,292 @@
+import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useEffect, useState } from 'react'
+import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { toast } from 'sonner'
+import {
+  connectorOAuthStart,
+  createConnector,
+  patchConnector,
+  setSecret,
+  testConnector,
+} from '../../api/client'
+import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
+import { connectorPresets } from './connectorPresets'
+import { Field } from './shared'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { errText, secretField } from './util'
+
+// slugify turns a display name into a connector name (tool-name
+// prefix): lowercase slug, the backend rejects anything else.
+function slugify(v: string): string {
+  return v
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// ConnectorAdd is preset-aware and its own page: MCP presets are
+// created, tested, and enabled in one go with Add gated on a passing
+// test (same contract as adding a provider); Google presets take the
+// OAuth client and hand off to Google's consent screen instead — there
+// is no unsaved test to run before that redirect.
+export function ConnectorAdd() {
+  const { presetId } = useParams()
+  const navigate = useNavigate()
+  const preset = connectorPresets.find((p) => p.id === presetId)
+  const defaultBackend = useDefaultSecretBackend()
+
+  const [name, setName] = useState('')
+  const [endpoint, setEndpoint] = useState('')
+  const [token, setToken] = useState('')
+  const [clientID, setClientID] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  // The connector row is created (disabled) as part of testing an MCP
+  // preset — there's no unsaved-config validate endpoint like
+  // providers have. createdID tracks that row so a passing test's
+  // Add just enables it rather than creating a second one.
+  const [createdID, setCreatedID] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!preset) return
+    setName(slugify(preset.id === 'custom-mcp' ? '' : preset.name))
+    setEndpoint(preset.endpoint ?? '')
+    setToken('')
+    setClientID('')
+    setClientSecret('')
+    setBusy(false)
+    setTest(null)
+    setCreatedID(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.id])
+
+  if (!preset) return <Navigate to="/settings/connectors" replace />
+  const isGoogle = preset.kind === 'google'
+  const slug = slugify(name)
+  const refBase = slug.toUpperCase().replace(/-/g, '_')
+  const tested = test?.ok === true
+
+  const invalidate = () => {
+    setTest(null)
+    setCreatedID(null)
+  }
+
+  const runTest = async () => {
+    if (!slug) {
+      toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
+      return
+    }
+    if (!endpoint.trim()) {
+      toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
+      return
+    }
+    setBusy(true)
+    setTest(null)
+    try {
+      const tokenRef = `${refBase}_MCP_TOKEN`
+      if (token) await setSecret(tokenRef, token.trim())
+      const id = await createConnector({
+        name: slug,
+        kind: 'mcp',
+        config: { endpoint: endpoint.trim() },
+        credential_ref: token ? tokenRef : '',
+        enabled: false,
+      })
+      setCreatedID(id)
+      setTest(await testConnector(id))
+    } catch (err) {
+      setTest({ ok: false, error: errText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submit = async () => {
+    if (!tested || !createdID) return
+    setBusy(true)
+    try {
+      await patchConnector(createdID, { enabled: true })
+      toast.success('Connector added', { description: `${slug} is connected and tools are servable.` })
+      navigate('/settings/connectors')
+    } catch (err) {
+      toast.error('Could not enable connector', { description: errText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitGoogle = async () => {
+    setBusy(true)
+    try {
+      const secretRef = `${refBase}_GOOGLE_CLIENT_SECRET`
+      await setSecret(secretRef, clientSecret)
+      const id = await createConnector({
+        name: slug,
+        kind: 'google',
+        config: {
+          client_id: clientID.trim(),
+          client_secret_ref: secretRef,
+          scopes: preset.scopes,
+        },
+        credential_ref: `${refBase}_GOOGLE_OAUTH`,
+        enabled: false,
+      })
+      window.location.assign(await connectorOAuthStart(id))
+    } catch (err) {
+      toast.error('Could not connect Google account', { description: errText(err) })
+      setBusy(false)
+    }
+  }
+
+  const canTest = slug !== '' && endpoint.trim() !== ''
+  const canSubmitGoogle = slug !== '' && clientID.trim() !== '' && clientSecret !== ''
+
+  return (
+    <div className="mt-6 w-full space-y-6">
+      <ConnectorLogoSprite />
+      <Link
+        to="/settings/connectors"
+        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+      >
+        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+        Connectors
+      </Link>
+
+      <div className="flex items-center gap-4 border-b border-border pb-6">
+        <ConnectorLogo preset={preset} className="size-12" />
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Add {preset.name}</h1>
+          <p className="text-sm text-muted-foreground">kind: {preset.kind}</p>
+        </div>
+      </div>
+
+      <div className="grid max-w-3xl gap-5">
+        <Field label="Name" hint="lowercase slug — prefixes this connector's tool names">
+          <Input
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value)
+              invalidate()
+            }}
+            placeholder={preset.id === 'custom-mcp' ? 'my-server' : slugify(preset.name)}
+            className="mt-1.5 h-10"
+          />
+        </Field>
+
+        {isGoogle ? (
+          <>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="OAuth client ID">
+                <Input
+                  value={clientID}
+                  onChange={(e) => setClientID(e.target.value)}
+                  placeholder="….apps.googleusercontent.com"
+                  className="mt-1.5 h-10"
+                />
+              </Field>
+              <Field label="OAuth client secret">
+                <Input
+                  type={secretField(defaultBackend, '').type}
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder={secretField(defaultBackend, 'GOCSPX-…').placeholder}
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                />
+              </Field>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              From a Google Cloud OAuth client (Web application). Add{' '}
+              <span className="font-mono">{window.location.origin}/v1/connectors/oauth/callback</span>{' '}
+              to its authorized redirect URIs. Scopes:{' '}
+              {preset.scopes?.map((s) => s.split('/').pop()).join(', ')}. Saving redirects you to
+              Google to consent.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/connectors')}>
+                Cancel
+              </Button>
+              <Button disabled={!canSubmitGoogle || busy} onClick={() => void submitGoogle()}>
+                {busy ? 'Redirecting…' : 'Save & connect Google'}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Field label="Endpoint">
+              <Input
+                value={endpoint}
+                onChange={(e) => {
+                  setEndpoint(e.target.value)
+                  invalidate()
+                }}
+                placeholder="https://…/mcp"
+                className="mt-1.5 h-10"
+              />
+            </Field>
+            {preset.endpointHint && (
+              <p className="-mt-3 text-sm text-muted-foreground">{preset.endpointHint}</p>
+            )}
+            <div>
+              <Field label={preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'}>
+                <Input
+                  type={secretField(defaultBackend, '').type}
+                  value={token}
+                  onChange={(e) => {
+                    setToken(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder={secretField(defaultBackend, preset.tokenPlaceholder ?? 'token').placeholder}
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                />
+              </Field>
+              {(secretField(defaultBackend, '').hint || preset.tokenHint) && (
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  {secretField(defaultBackend, '').hint || preset.tokenHint}
+                </p>
+              )}
+            </div>
+
+            <div
+              className={
+                'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+                (tested
+                  ? 'border-good/30 bg-good-soft text-good'
+                  : test && !test.ok
+                    ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                    : 'border-border bg-muted/40 text-muted-foreground')
+              }
+            >
+              <span className="min-w-0 flex-1 font-medium">
+                {busy
+                  ? 'Testing connection…'
+                  : tested
+                    ? 'Connection OK — tools are servable.'
+                    : test && !test.ok
+                      ? `Connection failed: ${test.error}. The connector was saved disabled — fix and retry.`
+                      : 'Not tested yet — run a test before adding.'}
+              </span>
+              <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
+                {busy ? 'Testing…' : 'Test connection'}
+              </Button>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/connectors')}>
+                Cancel
+              </Button>
+              <Button disabled={!tested || busy} onClick={() => void submit()}>
+                Add connector
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}

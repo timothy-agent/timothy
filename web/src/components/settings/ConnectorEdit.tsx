@@ -1,0 +1,212 @@
+import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useCallback, useEffect, useState } from 'react'
+import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { toast } from 'sonner'
+import {
+  connectorOAuthStart,
+  deleteConnector,
+  listConnectors,
+  patchConnector,
+  setSecret,
+  testConnector,
+} from '../../api/client'
+import type { AdminConnector } from '../../api/types'
+import { Button } from '../ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog'
+import { Input } from '../ui/input'
+import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
+import { connectorPresets } from './connectorPresets'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { Field } from './shared'
+import { errText, secretField } from './util'
+
+export function ConnectorEdit() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const defaultBackend = useDefaultSecretBackend()
+
+  const [connector, setConnector] = useState<AdminConnector | null | undefined>(undefined)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [token, setToken] = useState('')
+  const [savingToken, setSavingToken] = useState(false)
+  const [oauthBusy, setOAuthBusy] = useState(false)
+
+  const refresh = useCallback(() => {
+    listConnectors()
+      .then((list) => setConnector(list.find((c) => c.id === id) ?? null))
+      .catch((err: unknown) => toast.error('Could not load connector', { description: errText(err) }))
+  }, [id])
+  useEffect(refresh, [refresh])
+
+  const remove = async () => {
+    if (!connector) return
+    try {
+      await deleteConnector(connector.id)
+      toast.success('Connector removed', { description: `${connector.name}'s tools are no longer available.` })
+      navigate('/settings/connectors')
+    } catch (err) {
+      toast.error('Could not remove connector', { description: errText(err) })
+      setConfirmDelete(false)
+    }
+  }
+
+  const runTest = async () => {
+    if (!connector) return
+    setTesting(true)
+    setTest(null)
+    try {
+      setTest(await testConnector(connector.id))
+    } catch (err) {
+      setTest({ ok: false, error: errText(err) })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const rotateToken = async () => {
+    if (!connector || !token) return
+    setSavingToken(true)
+    try {
+      const ref = connector.credential_ref || `${connector.name.toUpperCase().replace(/-/g, '_')}_MCP_TOKEN`
+      await setSecret(ref, token.trim())
+      if (!connector.credential_ref) await patchConnector(connector.id, { credential_ref: ref })
+      setToken('')
+      toast.success('Token saved')
+      refresh()
+    } catch (err) {
+      toast.error('Could not save token', { description: errText(err) })
+    } finally {
+      setSavingToken(false)
+    }
+  }
+
+  const reconnectGoogle = async () => {
+    if (!connector) return
+    setOAuthBusy(true)
+    try {
+      window.location.assign(await connectorOAuthStart(connector.id))
+    } catch (err) {
+      toast.error('Could not start Google re-connect', { description: errText(err) })
+      setOAuthBusy(false)
+    }
+  }
+
+  if (connector === null) return <Navigate to="/settings/connectors" replace />
+  if (connector === undefined) return null
+
+  const preset = connectorPresets.find((p) => p.kind === connector.kind) ?? connectorPresets.find((p) => p.id === 'custom-mcp')!
+
+  return (
+    <div className="mt-6 w-full space-y-6">
+      <ConnectorLogoSprite />
+      <Link
+        to="/settings/connectors"
+        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+      >
+        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+        Connectors
+      </Link>
+
+      <div className="flex items-center gap-4 border-b border-border pb-6">
+        <ConnectorLogo preset={preset} className="size-12" />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-xl font-semibold tracking-tight">{connector.name}</h1>
+          <p className="text-sm text-muted-foreground uppercase">{connector.kind}</p>
+        </div>
+        <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+          <HugeiconsIcon icon={Delete02Icon} />
+          Delete
+        </Button>
+      </div>
+
+      <div className="grid max-w-3xl gap-5">
+        <h2 className="text-sm font-semibold">Connection</h2>
+
+        <div
+          className={
+            'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+            (test?.ok
+              ? 'border-good/30 bg-good-soft text-good'
+              : test && !test.ok
+                ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                : 'border-border bg-muted/40 text-muted-foreground')
+          }
+        >
+          <span className="min-w-0 flex-1 font-medium">
+            {testing
+              ? 'Testing connection…'
+              : test?.ok
+                ? 'Connection OK — tools are servable.'
+                : test && !test.ok
+                  ? `Failed: ${test.error}`
+                  : 'Not tested yet.'}
+          </span>
+          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
+            {testing ? 'Testing…' : 'Test connection'}
+          </Button>
+        </div>
+
+        {connector.kind === 'google' ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Scopes: {(connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')}
+            </p>
+            <Button variant="outline" disabled={oauthBusy} onClick={() => void reconnectGoogle()}>
+              {oauthBusy ? 'Redirecting…' : 'Reconnect Google account'}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+            </p>
+            <Field label="Rotate bearer token">
+              <div className="mt-1.5 flex gap-2">
+                <Input
+                  type={secretField(defaultBackend, '').type}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="paste new token"
+                  className="h-10"
+                  autoComplete="off"
+                />
+                <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
+                  Save
+                </Button>
+              </div>
+            </Field>
+          </div>
+        )}
+      </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {connector.name}?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Removes the connector; its tools disappear from the agent on the next reload. Stored
+            credentials stay in the secret store until cleared there.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void remove()}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

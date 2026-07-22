@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminConnector } from '../../api/types'
 import { ConnectorsTab } from './ConnectorsTab'
@@ -36,10 +36,12 @@ const githubConnector: AdminConnector = {
 
 const assign = vi.fn()
 
-function renderTab(entry = '/settings?tab=connectors') {
+function renderTab(entry = '/settings/connectors') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
-      <ConnectorsTab />
+      <Routes>
+        <Route path="/settings/connectors/*" element={<ConnectorsTab />} />
+      </Routes>
     </MemoryRouter>,
   )
 }
@@ -67,11 +69,11 @@ describe('Connectors tab', () => {
   })
 
   it('shows the OAuth outcome banners from the callback redirect', async () => {
-    renderTab('/settings?tab=connectors&oauth_connected=personal')
+    renderTab('/settings/connectors?oauth_connected=personal')
     expect(await screen.findByText(/Google account connected to “personal”/)).toBeTruthy()
 
     cleanup()
-    renderTab('/settings?tab=connectors&oauth_error=access_denied')
+    renderTab('/settings/connectors?oauth_error=access_denied')
     expect(await screen.findByText(/Google connection failed: access_denied/)).toBeTruthy()
   })
 
@@ -83,14 +85,17 @@ describe('Connectors tab', () => {
 
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: /Grafana/ }))
-    const dialog = within(await screen.findByRole('dialog'))
-    fireEvent.change(dialog.getByPlaceholderText('https://…/mcp'), {
+    fireEvent.change(await screen.findByPlaceholderText('https://…/mcp'), {
       target: { value: 'https://grafana.internal/mcp' },
     })
-    fireEvent.change(dialog.getByPlaceholderText('service account token'), {
+    fireEvent.change(screen.getByPlaceholderText('service account token'), {
       target: { value: 'glsa_abc' },
     })
-    fireEvent.click(dialog.getByRole('button', { name: 'Add & test' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    const addButton = await screen.findByRole('button', { name: 'Add connector' })
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
 
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('c2', { enabled: true }))
     expect(setSecret).toHaveBeenCalledWith('GRAFANA_MCP_TOKEN', 'glsa_abc')
@@ -110,15 +115,15 @@ describe('Connectors tab', () => {
 
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: /Custom MCP server/ }))
-    const dialog = within(await screen.findByRole('dialog'))
-    fireEvent.change(dialog.getByLabelText(/Name/), { target: { value: 'my server' } })
-    fireEvent.change(dialog.getByPlaceholderText('https://…/mcp'), {
+    fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: 'my server' } })
+    fireEvent.change(screen.getByPlaceholderText('https://…/mcp'), {
       target: { value: 'https://x.example/mcp' },
     })
-    fireEvent.click(dialog.getByRole('button', { name: 'Add & test' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
-    expect(await dialog.findByText(/Connection failed: status 401/)).toBeTruthy()
+    expect(await screen.findByText(/Connection failed: status 401/)).toBeTruthy()
     expect(patchConnector).not.toHaveBeenCalled()
+    expect((screen.getByRole('button', { name: 'Add connector' }) as HTMLButtonElement).disabled).toBe(true)
     // Name got slugified for the tool-name prefix.
     expect(createConnector).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'my-server', enabled: false }),
@@ -132,12 +137,11 @@ describe('Connectors tab', () => {
 
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: /Gmail/ }))
-    const dialog = within(await screen.findByRole('dialog'))
-    fireEvent.change(dialog.getByPlaceholderText('….apps.googleusercontent.com'), {
+    fireEvent.change(await screen.findByPlaceholderText('….apps.googleusercontent.com'), {
       target: { value: 'cid.apps.googleusercontent.com' },
     })
-    fireEvent.change(dialog.getByPlaceholderText('GOCSPX-…'), { target: { value: 'GOCSPX-secret' } })
-    fireEvent.click(dialog.getByRole('button', { name: 'Save & connect Google' }))
+    fireEvent.change(screen.getByPlaceholderText('GOCSPX-…'), { target: { value: 'GOCSPX-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect Google' }))
 
     await waitFor(() =>
       expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=1'),
