@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import type { AssistantState, ToolRun } from '../lib/chat'
+import { cn } from '../lib/utils'
 import 'highlight.js/styles/github-dark.css'
 
 // SourcesPanel renders a research answer's citations as a distinct,
@@ -39,7 +40,19 @@ function SourcesPanel({ citations }: { citations: { title: string; url: string }
 }
 
 // CopyButton copies a message's raw text; the check confirms briefly.
-function CopyButton({ text, label }: { text: string; label: string }) {
+// By default it only shows on hover of an ancestor "message" group
+// (AssistantMessage's wrapper); alwaysVisible drops that dependency
+// for contexts with no such group (e.g. inside a collapsible details
+// block, already hidden until expanded).
+function CopyButton({
+  text,
+  label,
+  alwaysVisible = false,
+}: {
+  text: string
+  label: string
+  alwaysVisible?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(timer.current), [])
@@ -61,7 +74,10 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       data-testid="copy-button"
       data-copied={copied}
       onClick={() => void copy()}
-      className="rounded p-1 text-muted-foreground opacity-0 transition group-hover/message:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
+      className={cn(
+        'rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:opacity-100',
+        alwaysVisible ? 'bg-zinc-100 dark:bg-zinc-800' : 'opacity-0 group-hover/message:opacity-100',
+      )}
     >
       <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} className="size-3.5" />
     </button>
@@ -145,9 +161,14 @@ export function ToolBlock({ tool }: { tool: ToolRun }) {
           </pre>
         )}
         {tool.digest && (
-          <pre className="max-h-64 overflow-auto rounded bg-zinc-100 p-2 whitespace-pre-wrap text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-            {tool.digest}
-          </pre>
+          <div className="relative">
+            <pre className="max-h-64 overflow-auto rounded bg-zinc-100 p-2 pr-8 whitespace-pre-wrap text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+              {tool.digest}
+            </pre>
+            <div className="absolute top-1 right-1">
+              <CopyButton text={tool.digest} label="Copy tool response" alwaysVisible />
+            </div>
+          </div>
         )}
       </div>
     </details>

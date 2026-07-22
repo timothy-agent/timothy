@@ -166,6 +166,23 @@ describe('copy buttons', () => {
     vi.unstubAllGlobals()
   })
 
+  it('copies a tool response digest', () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    render(
+      <ToolBlock tool={{ id: 'c9', name: 'calculate', status: 'ok', digest: 'the answer is 42' }} />,
+    )
+    fireEvent.click(screen.getByTestId('copy-button'))
+    expect(writeText).toHaveBeenCalledWith('the answer is 42')
+    vi.unstubAllGlobals()
+  })
+
+  it('omits the copy button when a tool has no digest yet', () => {
+    render(<ToolBlock tool={{ id: 'c9', name: 'shell', status: 'running' }} />)
+    expect(screen.queryByTestId('copy-button')).toBeNull()
+  })
+
   it('confirms the copy then reverts after two seconds', async () => {
     vi.useFakeTimers()
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -246,6 +263,7 @@ describe('tool calls', () => {
     )
     expect(screen.getByTestId('tool-status')).toHaveTextContent('error')
   })
+
 
   it('parks visibly while a permission request is pending', () => {
     const msg = play([
