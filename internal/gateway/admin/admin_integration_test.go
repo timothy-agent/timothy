@@ -166,11 +166,27 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 	if err := adm.PatchRoute(ctx, adminMarker+"cat", RoutePatch{Enabled: &off}); err != nil {
 		t.Fatalf("disable route: %v", err)
 	}
+	// This provider declares a chat-capable model, so Create also
+	// bootstrapped it into the shared default/summarize routes and
+	// (D-033 follow-up) enabled them — a second, unrelated enabled
+	// reference Delete's guard sees just as validly as the scoped one
+	// above. Strip it the same way the shared sweep does for
+	// leftovers, but inline: this test's own Delete call needs it gone
+	// NOW, not at teardown.
+	db, _ := pool.Get()
+	if _, err := db.Exec(ctx, `
+		UPDATE routes SET chain = (
+			SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+			FROM jsonb_array_elements(chain) e
+			WHERE e->>'provider_id' <> $1
+		)
+		WHERE name IN ('default', 'summarize', 'embedding')`, id); err != nil {
+		t.Fatalf("strip bootstrapped chain refs: %v", err)
+	}
 	if err := adm.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	db, _ := pool.Get()
 	var actions []string
 	rows, err := db.Query(ctx, `SELECT action FROM admin_audit WHERE entity_id = $1 ORDER BY ts`, id)
 	if err != nil {
