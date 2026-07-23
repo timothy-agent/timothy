@@ -104,11 +104,12 @@ export const providerPresets: ProviderPreset[] = [
     description: 'Local models, no key needed',
     logo: 'ollama',
     brandColor: '#4B5563',
-    // The gateway runs in Docker; host.docker.internal reaches an
-    // Ollama serving on the host machine.
-    baseURL: 'http://host.docker.internal:11434/v1',
+    // The gateway runs in Docker; the ollama compose service is the
+    // one actually deployed (see deploy/docker-compose.yml) — reached
+    // by its service name on the shared network, not the host.
+    baseURL: 'http://ollama:11434/v1',
     requiresKey: false,
-    validateModel: 'llama3.2',
+    validateModel: 'qwen2.5:7b',
   },
   {
     id: 'custom',

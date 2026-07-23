@@ -85,6 +85,7 @@ export const modelCatalog: Record<string, CatalogModel[]> = {
     { id: 'llama3.2', name: 'Llama 3.2', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
     { id: 'llama3.1', name: 'Llama 3.1', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
     { id: 'qwen2.5', name: 'Qwen 2.5', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
+    { id: 'qwen2.5:7b', name: 'Qwen 2.5 7B', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
     { id: 'mistral', name: 'Mistral', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
     { id: 'deepseek-r1', name: 'DeepSeek R1', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
     { id: 'gemma2', name: 'Gemma 2', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
