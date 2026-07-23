@@ -29,8 +29,10 @@ const (
 	autoAgentName = "auto"
 	// classifyRoute serves the auto-dispatch classification call —
 	// same cheap side-call route as auto-title, distillation, and
-	// extraction.
-	classifyRoute = "mini"
+	// extraction. "local" is a real, always-provisioned fixed route
+	// (migrations/0022_local_route.sql); "mini" was never seeded by
+	// any migration and every call on it failed with no_route.
+	classifyRoute = "local"
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
 	defaultRoute = "default"
@@ -606,7 +608,7 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 	input := userText + "\n\n" + truncateRunes(reply, 200)
 
 	events, err := s.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: "mini",
+		Route: classifyRoute,
 		Purpose:      "title",
 		System:       titleSystem,
 		Messages:     []provider.Message{{Role: "user", Content: input}},

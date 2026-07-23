@@ -55,8 +55,11 @@ func distillOnce(ctx context.Context, gw Gateway, sessionID, turnText string) (*
 	ctx, cancel := context.WithTimeout(ctx, distillTimeout)
 	defer cancel()
 
+	// "local" is the real, always-provisioned fixed route
+	// (migrations/0022_local_route.sql); "mini" was never seeded by
+	// any migration and every call on it failed with no_route.
 	events, err := gw.Stream(ctx, gwclient.StreamRequest{
-		Route: "mini",
+		Route: "local",
 		Purpose:      "distill",
 		System:       distillSystem,
 		Messages:     []provider.Message{{Role: "user", Content: turnText}},
