@@ -108,7 +108,7 @@ func BaselineDiff(ctx context.Context, worktree, baseCommit string) (string, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, baselineDiffTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "git", "diff", baseCommit)
+	cmd := exec.CommandContext(cctx, "git", "diff", baseCommit) //nolint:gosec // baseCommit is a git commit hash captured by our own Provision, not user input
 	cmd.Dir = worktree
 	out, err := cmd.Output()
 	if err != nil {

@@ -47,7 +47,7 @@ func NewWorkspace(root string, log *slog.Logger) *Workspace {
 // plain directory, no git.
 func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoPath string) (workspace, worktree, branch, baseCommit string, err error) {
 	workspace = filepath.Join(w.root, missionID)
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
 	}
 
@@ -59,7 +59,7 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoPa
 	worktree = filepath.Join(workspace, "wt")
 	gctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(gctx, "git", "worktree", "add", "-b", branch, worktree)
+	cmd := exec.CommandContext(gctx, "git", "worktree", "add", "-b", branch, worktree) //nolint:gosec // branch is Slug()-derived (alphanumeric+hyphen only), not raw user input
 	cmd.Dir = repoPath
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", "", "", "", fmt.Errorf("worktree: git worktree add: %w: %s", err, string(out))
@@ -136,7 +136,7 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 	if out, err := runGit(cctx, worktree, "add", "-A"); err != nil {
 		return fmt.Errorf("worktree: commit add: %w: %s", err, out)
 	}
-	cmd := exec.CommandContext(cctx, "git",
+	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // commitName/commitEmail are package constants; message is driver-built from mission id/iteration, not user input
 		"-c", "user.name="+commitName, "-c", "user.email="+commitEmail,
 		"commit", "-m", message, "--allow-empty")
 	cmd.Dir = worktree
@@ -156,7 +156,7 @@ func (w *Workspace) Teardown(ctx context.Context, workspace, worktree, kind stri
 		// git worktree remove must run from the main repo, not the
 		// worktree being removed — but it also works from any directory
 		// git can resolve the worktree path from, so run it unanchored.
-		cmd := exec.CommandContext(cctx, "git", "worktree", "remove", "--force", worktree)
+		cmd := exec.CommandContext(cctx, "git", "worktree", "remove", "--force", worktree) //nolint:gosec // worktree is a path this package created under its own workspace root, not user input
 		if out, err := cmd.CombinedOutput(); err != nil {
 			w.log.Warn("worktree: remove failed, falling back to rmdir", "worktree", worktree, "error", err, "output", string(out))
 		}
@@ -187,7 +187,7 @@ func (w *Workspace) VerifyWorkspace(recorded, actual string) error {
 }
 
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // callers pass only fixed subcommands/internally-derived paths, never raw user input
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err

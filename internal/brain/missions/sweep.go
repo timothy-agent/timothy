@@ -9,12 +9,16 @@ import (
 // workSlotSweepInterval is how often the idle-over-cap sweep retries
 // claiming a work slot for missions parked idle because the
 // concurrency cap was full when they last tried.
+//
+//nolint:unused // wired into cmd/brain/main.go in M3 alongside the scheduler
 const workSlotSweepInterval = 30 * time.Second
 
 // recoverWorking runs once at service boot: every mission Store
 // reports via RecoverWorking (status='working' at process start,
 // meaning the prior process died mid-Advance) gets re-Driven — this is
 // what makes driveTimeBound and any hard crash NOT a dead end.
+//
+//nolint:unused // wired into cmd/brain/main.go in M3 alongside the scheduler
 func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logger) {
 	missions, err := store.RecoverWorking(ctx)
 	if err != nil {
@@ -34,6 +38,8 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 // runWorkSlotSweep retries missions parked idle over the work-slot cap
 // every workSlotSweepInterval via ClaimWorkSlot, kicking off a Drive
 // for whichever gets claimed. Runs until ctx is done.
+//
+//nolint:unused // wired into cmd/brain/main.go in M3 alongside the scheduler
 func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, log *slog.Logger) {
 	ticker := time.NewTicker(workSlotSweepInterval)
 	defer ticker.Stop()
