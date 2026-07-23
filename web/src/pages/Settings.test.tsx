@@ -188,7 +188,7 @@ describe('Providers tab', () => {
     expect(await screen.findByText('Your providers · 1')).toBeTruthy()
     expect(screen.getByText('healthy')).toBeTruthy()
     // Every preset is offered as a tile.
-    for (const name of ['AWS Bedrock', 'GLM (Z.ai)', 'Grok (xAI)', 'Mistral', 'OpenRouter', 'Ollama', 'Custom endpoint']) {
+    for (const name of ['AWS Bedrock', 'GLM (Z.ai)', 'Grok (xAI)', 'Ollama', 'Custom endpoint']) {
       expect(screen.getByRole('button', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeTruthy()
     }
   })

@@ -15,8 +15,8 @@ import (
 
 // OpenAICompatConfig configures one OpenAI-compatible provider
 // instance. One driver covers every conforming chat/completions
-// endpoint (Z.AI GLM, xAI Grok, OpenRouter, local runtimes); instances
-// differ only by base URL, key, and headers.
+// endpoint (Z.AI GLM, xAI Grok, local runtimes); instances differ only
+// by base URL, key, and headers.
 type OpenAICompatConfig struct {
 	Name    string
 	BaseURL string            // e.g. https://api.x.ai/v1 — no trailing slash
