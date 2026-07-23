@@ -644,7 +644,7 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 		return TestResult{}, fmt.Errorf("provider %s has no default model; pass one", p.Name)
 	}
 
-	res := a.probe(ctx, drv, p.Name, model)
+	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model))
 	a.audit(ctx, "test", "provider", id, nil, res)
 	return res, nil
 }
@@ -678,7 +678,7 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 	}
 	drv, _ := reg.Get(p.Name)
 
-	res := a.probe(ctx, drv, p.Name, model)
+	res := a.probe(ctx, drv, p.Name, model, nil)
 	a.audit(ctx, "validate", "provider", p.Name, nil, res)
 	return res, nil
 }
@@ -726,7 +726,7 @@ func (a *Admin) credentialLookup() func(string) string {
 // probe runs one one-token completion against drv and books it under
 // purpose='test'. Shared by Test (persisted provider) and Validate
 // (unsaved config).
-func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string) TestResult {
+func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string, prices *router.ModelPrices) TestResult {
 	tctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
 	start := time.Now()
@@ -753,6 +753,7 @@ func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, 
 		}
 		if res.OK {
 			entry.Status = "ok"
+			entry.CostUSD = ledger.Cost(prices, entry.Usage)
 		} else {
 			entry.Status, entry.ErrorCode = "error", "provider_error"
 		}

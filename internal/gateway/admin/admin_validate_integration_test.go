@@ -3,11 +3,16 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 )
@@ -87,6 +92,58 @@ func TestValidateProbesWithoutPersisting(t *testing.T) {
 	}
 	if _, err := adm.Validate(ctx, Provider{Name: name, Kind: "api", Driver: "openaicompat", BaseURL: srv.URL}, ""); err == nil {
 		t.Fatal("missing model accepted")
+	}
+}
+
+func TestConnectionProbePricesACostedModel(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	srv := stubOpenAI(t)
+	name := adminMarker + "priced-probe"
+
+	id, err := adm.Create(ctx, Provider{
+		Name: name, Kind: "api", Driver: "openaicompat", BaseURL: srv.URL,
+		DefaultModel: "m-alpha",
+		Models: []router.ModelInfo{
+			{ID: "m-alpha", Prices: &router.ModelPrices{InputPerMTok: 1, OutputPerMTok: 2}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		if _, err := conn.Exec(cctx, "DELETE FROM admin_audit WHERE entity_id = $1", id); err != nil {
+			t.Errorf("cleanup probe audit rows: %v", err)
+		}
+	})
+
+	res, err := adm.Test(ctx, id, "m-alpha")
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("Test = %+v, want ok", res)
+	}
+
+	// stubOpenAI reports 2 prompt + 1 completion token; at $1/$2 per
+	// million that's (2*1 + 1*2) / 1e6.
+	const want = (2*1.0 + 1*2.0) / 1_000_000.0
+	db, _ := pool.Get()
+	var got float64
+	if err := db.QueryRow(ctx, `SELECT cost_usd FROM cost_ledger
+		WHERE provider = $1 ORDER BY ts DESC LIMIT 1`, name).Scan(&got); err != nil {
+		t.Fatalf("ledger row: %v", err)
+	}
+	if got != want {
+		t.Fatalf("cost_usd = %v, want %v", got, want)
 	}
 }
 

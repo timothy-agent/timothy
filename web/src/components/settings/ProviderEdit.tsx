@@ -372,7 +372,12 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
   const add = async () => {
     const trimmed = entry.trim()
     if (!trimmed || declared.has(trimmed)) return
-    const model: AdminModel = embeddings ? { id: trimmed, capabilities: ['embeddings'] } : { id: trimmed }
+    const prices = (modelCatalog[preset.id] ?? []).find((m) => m.id === trimmed)?.prices
+    const model: AdminModel = {
+      id: trimmed,
+      ...(embeddings ? { capabilities: ['embeddings'] } : {}),
+      ...(prices ? { prices } : {}),
+    }
     const models = [...provider.models, model]
     await patchModels(models, embeddings ? undefined : provider.default_model || trimmed)
     setEntry('')

@@ -75,6 +75,27 @@ describe('ProviderEdit models section', () => {
     )
   })
 
+  it('carries catalog pricing onto a model that matches a priced catalog entry', async () => {
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage()
+
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: 'amazon.nova-lite-v1:0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p1', {
+        models: [
+          {
+            id: 'amazon.nova-lite-v1:0',
+            prices: { input_per_mtok: 0.06, output_per_mtok: 0.24 },
+          },
+        ],
+        default_model: 'amazon.nova-lite-v1:0',
+      }),
+    )
+  })
+
   it('adds an embeddings model with the capability flag and leaves default_model untouched', async () => {
     vi.mocked(patchProvider).mockResolvedValue()
     renderPage()

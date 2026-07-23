@@ -157,6 +157,8 @@ export function ProviderAdd() {
     if (!tested) return
     setBusy(true)
     try {
+      const trimmedModel = model.trim()
+      const prices = (modelCatalog[preset.id] ?? []).find((m) => m.id === trimmedModel)?.prices
       await createProvider({
         name: name.trim(),
         kind: 'api',
@@ -164,8 +166,8 @@ export function ProviderAdd() {
         base_url: isBedrock ? region.trim() : baseURL.trim(),
         credential_ref: effectiveRef.trim(),
         headers: {},
-        default_model: model.trim(),
-        models: [{ id: model.trim() }],
+        default_model: trimmedModel,
+        models: [{ id: trimmedModel, ...(prices ? { prices } : {}) }],
         enabled: true,
       })
       toast.success('Provider added', { description: `${name.trim()} is connected and ready to route to.` })

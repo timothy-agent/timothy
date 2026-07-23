@@ -230,7 +230,7 @@ describe('Providers tab', () => {
       expect.objectContaining({
         enabled: true,
         default_model: 'glm-5.2',
-        models: [{ id: 'glm-5.2' }],
+        models: [{ id: 'glm-5.2', prices: { input_per_mtok: 1.4, output_per_mtok: 4.4 } }],
       }),
     )
   })
