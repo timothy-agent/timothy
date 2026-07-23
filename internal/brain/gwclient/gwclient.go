@@ -21,20 +21,21 @@ import (
 
 // StreamRequest mirrors the gateway's /v1/stream request contract.
 type StreamRequest struct {
-	Route string             `json:"route"`
+	Route string `json:"route"`
 	// Agent attributes the call in the cost ledger. ToolAllow is
 	// loop-internal (never serialized): the serving agent's tool
 	// allowlist, empty = all tools.
-	Agent     string   `json:"agent,omitempty"`
-	ToolAllow []string `json:"-"`
-	Purpose      string             `json:"purpose,omitempty"` // ledger tag: why this call happened
-	ModelHint    string             `json:"model_hint,omitempty"`
-	System       string             `json:"system,omitempty"`
-	Messages     []provider.Message `json:"messages"`
-	Tools        []provider.ToolDef `json:"tools,omitempty"`
-	MaxTokens    int                `json:"max_tokens,omitempty"`
-	Effort       string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
-	SessionID    string             `json:"session_id,omitempty"`
+	Agent     string             `json:"agent,omitempty"`
+	ToolAllow []string           `json:"-"`
+	Purpose   string             `json:"purpose,omitempty"` // ledger tag: why this call happened
+	ModelHint string             `json:"model_hint,omitempty"`
+	System    string             `json:"system,omitempty"`
+	Messages  []provider.Message `json:"messages"`
+	Tools     []provider.ToolDef `json:"tools,omitempty"`
+	MaxTokens int                `json:"max_tokens,omitempty"`
+	Effort    string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
+	SessionID string             `json:"session_id,omitempty"`
+	MissionID string             `json:"mission_id,omitempty"` // ledger tag: the mission this turn serves
 }
 
 // windowsTTL matches the gateway's own config poll cadence: a fresher

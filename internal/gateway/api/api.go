@@ -44,17 +44,17 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 }
 
 type streamRequest struct {
-	Route string             `json:"route"`
-	Agent        string             `json:"agent,omitempty"` // serving agent, for the ledger
-	Purpose      string             `json:"purpose,omitempty"` // why: chat|distill|title|compaction|...
-	ModelHint    string             `json:"model_hint,omitempty"`
-	System       string             `json:"system,omitempty"`
-	Messages     []provider.Message `json:"messages"`
-	Tools        []provider.ToolDef `json:"tools,omitempty"`
-	MaxTokens    int                `json:"max_tokens,omitempty"`
-	Effort       string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
-	SessionID    string             `json:"session_id,omitempty"`
-	LaneID       string             `json:"lane_id,omitempty"`
+	Route     string             `json:"route"`
+	Agent     string             `json:"agent,omitempty"`   // serving agent, for the ledger
+	Purpose   string             `json:"purpose,omitempty"` // why: chat|distill|title|compaction|...
+	ModelHint string             `json:"model_hint,omitempty"`
+	System    string             `json:"system,omitempty"`
+	Messages  []provider.Message `json:"messages"`
+	Tools     []provider.ToolDef `json:"tools,omitempty"`
+	MaxTokens int                `json:"max_tokens,omitempty"`
+	Effort    string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
+	SessionID string             `json:"session_id,omitempty"`
+	MissionID string             `json:"mission_id,omitempty"`
 }
 
 func jsonError(w http.ResponseWriter, status int, code, msg string) {
@@ -136,7 +136,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			ID:       ledger.NewID(),
 			Provider: att.ProviderName, Model: att.Model,
 			Route: req.Route, Agent: req.Agent, Purpose: req.Purpose,
-			SessionID: req.SessionID, LaneID: req.LaneID,
+			SessionID: req.SessionID, MissionID: req.MissionID,
 		}, send)
 
 		if res.failedOver() {

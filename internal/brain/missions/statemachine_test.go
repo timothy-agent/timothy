@@ -1,0 +1,273 @@
+package missions
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestStep(t *testing.T) {
+	budget := func(v float64) *float64 { return &v }
+
+	cases := []struct {
+		name  string
+		state StepState
+		input StepInput
+		cfg   Config
+		want  StepState
+	}{
+		{
+			name:  "cancel from working fails the mission",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking},
+			input: StepInput{Input: InputCancel},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseFailed, Status: StatusError},
+		},
+		{
+			name:  "cancel from waiting_for_input fails the mission",
+			state: StepState{Phase: PhaseExecute, Status: StatusWaitingForInput},
+			input: StepInput{Input: InputCancel},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseFailed, Status: StatusError},
+		},
+		{
+			name:  "cancel from paused fails the mission and clears the stale pause reason",
+			state: StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseBackoff},
+			input: StepInput{Input: InputCancel},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseFailed, Status: StatusError},
+		},
+		{
+			name:  "cancel from done is a no-op (already terminal)",
+			state: StepState{Phase: PhaseDone, Status: StatusDone},
+			input: StepInput{Input: InputCancel},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseDone, Status: StatusDone},
+		},
+		{
+			name:  "cancel from failed is a no-op (already terminal)",
+			state: StepState{Phase: PhaseFailed, Status: StatusError},
+			input: StepInput{Input: InputCancel},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseFailed, Status: StatusError},
+		},
+		{
+			name:  "budget exhausted pauses regardless of input, pre-empting review_approve",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, SpentUSD: 10, BudgetUSD: budget(10)},
+			input: StepInput{Input: InputReviewApprove},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseBudget, SpentUSD: 10, BudgetUSD: budget(10)},
+		},
+		{
+			name:  "spend under budget does not pause",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, SpentUSD: 5, BudgetUSD: budget(10), LastUnit: true},
+			input: StepInput{Input: InputReviewApprove},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseDone, Status: StatusDone, SpentUSD: 5, BudgetUSD: budget(10), LastUnit: true},
+		},
+		{
+			name:  "nil budget never pauses on spend",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, SpentUSD: 1_000_000},
+			input: StepInput{Input: InputWorkerRetry, GapFingerprint: ""},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, SpentUSD: 1_000_000, Iteration: 1},
+		},
+		{
+			name:  "budget check does not apply to a terminal mission",
+			state: StepState{Phase: PhaseDone, Status: StatusDone, SpentUSD: 999, BudgetUSD: budget(1)},
+			input: StepInput{Input: InputResume},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseDone, Status: StatusDone, SpentUSD: 999, BudgetUSD: budget(1)},
+		},
+		{
+			name:  "phase_complete advances research to plan",
+			state: StepState{Phase: PhaseResearch, Status: StatusWorking, Iteration: 2, ConsecutiveFailures: 1},
+			input: StepInput{Input: InputPhaseComplete},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle},
+		},
+		{
+			name:  "phase_complete advances plan to execute",
+			state: StepState{Phase: PhasePlan, Status: StatusWorking},
+			input: StepInput{Input: InputPhaseComplete},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusIdle},
+		},
+		{
+			name:  "phase_complete advances execute to review",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking},
+			input: StepInput{Input: InputPhaseComplete},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseReview, Status: StatusIdle},
+		},
+		{
+			name:  "phase_complete on review is a no-op (review resolves via approve/rework, not phase_complete)",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, Iteration: 3},
+			input: StepInput{Input: InputPhaseComplete},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseReview, Status: StatusWorking, Iteration: 3},
+		},
+		{
+			name:  "worker_blocked parks the mission waiting for input",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking},
+			input: StepInput{Input: InputWorkerBlocked, Message: "which endpoint?"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusWaitingForInput},
+		},
+		{
+			name:  "worker_failed below backoff threshold just retries",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1},
+			input: StepInput{Input: InputWorkerFailed},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
+		},
+		{
+			name:  "worker_failed 3rd consecutive time pauses with backoff",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2},
+			input: StepInput{Input: InputWorkerFailed},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseBackoff, MaxIterations: 8, ConsecutiveFailures: 3, Iteration: 1},
+		},
+		{
+			name:  "worker_failed hitting max_iterations hard-fails instead of pausing",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 1, ConsecutiveFailures: 0},
+			input: StepInput{Input: InputWorkerFailed},
+			cfg:   Config{BackoffFailures: 10, StallRounds: 10},
+			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, ConsecutiveFailures: 1, Iteration: 1},
+		},
+		{
+			name:  "worker_retry costs an iteration and resets consecutive failures",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
+			input: StepInput{Input: InputWorkerRetry},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 0, Iteration: 2},
+		},
+		{
+			name:  "worker_retry hitting max_iterations hard-fails",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 1, Iteration: 0},
+			input: StepInput{Input: InputWorkerRetry},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, Iteration: 1, ConsecutiveFailures: 0},
+		},
+		{
+			name:  "review_approve on a non-last unit returns to execute",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, LastUnit: false, StallCount: 1, LastGapFingerprint: "x"},
+			input: StepInput{Input: InputReviewApprove},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusIdle, LastUnit: false},
+		},
+		{
+			name:  "review_approve on the last unit completes the mission",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, LastUnit: true, StallCount: 1, LastGapFingerprint: "x"},
+			input: StepInput{Input: InputReviewApprove},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseDone, Status: StatusDone, LastUnit: true},
+		},
+		{
+			name:  "review_rework with a new fingerprint returns to execute, stall count resets to 1",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, StallCount: 0, LastGapFingerprint: ""},
+			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
+		},
+		{
+			name:  "review_rework with the SAME fingerprint twice pauses no_progress (stall)",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
+			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "abc"},
+		},
+		{
+			name:  "review_rework with a DIFFERENT fingerprint does not accumulate stall",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
+			input: StepInput{Input: InputReviewRework, GapFingerprint: "def"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "def"},
+		},
+		{
+			name:  "review_rework hitting max_iterations hard-fails instead of pausing",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 1, Iteration: 0, StallCount: 0},
+			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
+			cfg:   Config{BackoffFailures: 10, StallRounds: 10},
+			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
+		},
+		{
+			name:  "review_infra_failure pauses with infra reason",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking},
+			input: StepInput{Input: InputReviewInfraFailure},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseInfra},
+		},
+		{
+			name:  "resume from paused clears the pause reason and goes idle",
+			state: StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseBackoff, Iteration: 3, ConsecutiveFailures: 2},
+			input: StepInput{Input: InputResume},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusIdle, Iteration: 3, ConsecutiveFailures: 2},
+		},
+		{
+			name:  "resume from waiting_for_input clears and goes idle",
+			state: StepState{Phase: PhaseExecute, Status: StatusWaitingForInput},
+			input: StepInput{Input: InputResume},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusIdle},
+		},
+		{
+			name:  "resume on a terminal mission is a no-op",
+			state: StepState{Phase: PhaseDone, Status: StatusDone},
+			input: StepInput{Input: InputResume},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseDone, Status: StatusDone},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Step(tc.state, tc.input, tc.cfg)
+			if !reflect.DeepEqual(got.Next, tc.want) {
+				t.Fatalf("Step(%+v, %+v) = %+v, want %+v", tc.state, tc.input, got.Next, tc.want)
+			}
+		})
+	}
+}
+
+func TestParsePhase(t *testing.T) {
+	valid := []Phase{PhaseResearch, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed}
+	for _, p := range valid {
+		if got, ok := parsePhase(string(p)); !ok || got != p {
+			t.Fatalf("parsePhase(%q) = %q, %v; want %q, true", p, got, ok, p)
+		}
+	}
+	if _, ok := parsePhase("nonsense"); ok {
+		t.Fatal("parsePhase accepted an unrecognized value")
+	}
+	if _, ok := parsePhase(""); ok {
+		t.Fatal("parsePhase accepted empty string")
+	}
+}
+
+func TestParseStatus(t *testing.T) {
+	valid := []Status{StatusIdle, StatusWorking, StatusWaitingForInput, StatusPaused, StatusDone, StatusError}
+	for _, s := range valid {
+		if got, ok := parseStatus(string(s)); !ok || got != s {
+			t.Fatalf("parseStatus(%q) = %q, %v; want %q, true", s, got, ok, s)
+		}
+	}
+	if _, ok := parseStatus("nonsense"); ok {
+		t.Fatal("parseStatus accepted an unrecognized value")
+	}
+}
+
+func TestPhaseTerminal(t *testing.T) {
+	terminal := []Phase{PhaseDone, PhaseFailed}
+	for _, p := range terminal {
+		if !p.Terminal() {
+			t.Fatalf("%q.Terminal() = false, want true", p)
+		}
+	}
+	nonTerminal := []Phase{PhaseResearch, PhasePlan, PhaseExecute, PhaseReview}
+	for _, p := range nonTerminal {
+		if p.Terminal() {
+			t.Fatalf("%q.Terminal() = true, want false", p)
+		}
+	}
+}

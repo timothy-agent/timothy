@@ -22,17 +22,26 @@ import (
 
 // Agent is the API shape of one agents row. Empty Skills/Tools mean
 // "everything allowed"; empty Route means the default route.
+//
+// ReviewRoute, BudgetUSD, and ApprovalAllowlist are meaningless to a
+// chat-only agent and stay at their zero values for one; a
+// mission-capable agent (internal/brain/missions) sets all three —
+// missions reference this table directly rather than a parallel
+// agent_profiles table.
 type Agent struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	PromptOverlay string   `json:"prompt_overlay"`
-	Route         string   `json:"route"`
-	Skills        []string `json:"skills"`
-	Tools         []string `json:"tools"`
-	Memory        bool     `json:"memory"`
-	IsDefault     bool     `json:"is_default"`
-	Enabled       bool     `json:"enabled"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	PromptOverlay     string   `json:"prompt_overlay"`
+	Route             string   `json:"route"`
+	Skills            []string `json:"skills"`
+	Tools             []string `json:"tools"`
+	Memory            bool     `json:"memory"`
+	IsDefault         bool     `json:"is_default"`
+	Enabled           bool     `json:"enabled"`
+	ReviewRoute       string   `json:"review_route"`
+	BudgetUSD         *float64 `json:"budget_usd,omitempty"`
+	ApprovalAllowlist []string `json:"approval_allowlist"`
 }
 
 // namePattern mirrors connectors: a lowercase slug that survives in
@@ -72,24 +81,29 @@ func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
 }
 
-const agentColumns = `id, name, description, prompt_overlay, route, skills, tools, memory, is_default, enabled`
+const agentColumns = `id, name, description, prompt_overlay, route, skills, tools, memory, is_default, enabled, review_route, budget_usd, approval_allowlist`
 
 func scanAgent(row pgx.Row) (Agent, error) {
 	var (
-		a             Agent
-		skills, tools []byte
+		a                   Agent
+		skills, tools, appr []byte
 	)
 	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.PromptOverlay, &a.Route,
-		&skills, &tools, &a.Memory, &a.IsDefault, &a.Enabled); err != nil {
+		&skills, &tools, &a.Memory, &a.IsDefault, &a.Enabled,
+		&a.ReviewRoute, &a.BudgetUSD, &appr); err != nil {
 		return Agent{}, err
 	}
 	_ = json.Unmarshal(skills, &a.Skills)
 	_ = json.Unmarshal(tools, &a.Tools)
+	_ = json.Unmarshal(appr, &a.ApprovalAllowlist)
 	if a.Skills == nil {
 		a.Skills = []string{}
 	}
 	if a.Tools == nil {
 		a.Tools = []string{}
+	}
+	if a.ApprovalAllowlist == nil {
+		a.ApprovalAllowlist = []string{}
 	}
 	return a, nil
 }
@@ -206,12 +220,14 @@ func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("agents create: %w", err)
 	}
-	skills, tools := jsonArr(a.Skills), jsonArr(a.Tools)
+	skills, tools, appr := jsonArr(a.Skills), jsonArr(a.Tools), jsonArr(a.ApprovalAllowlist)
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO agents
-			(name, description, prompt_overlay, route, skills, tools, memory, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		a.Name, a.Description, a.PromptOverlay, a.Route, skills, tools, a.Memory, a.Enabled).Scan(&id)
+			(name, description, prompt_overlay, route, skills, tools, memory, enabled,
+			 review_route, budget_usd, approval_allowlist)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+		a.Name, a.Description, a.PromptOverlay, a.Route, skills, tools, a.Memory, a.Enabled,
+		a.ReviewRoute, a.BudgetUSD, appr).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("agents create: %w", err)
 	}
@@ -223,13 +239,16 @@ func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 // Patch applies a partial update. Name is immutable (it lives in
 // ledger rows and event payloads); is_default moves via SetDefault.
 type Patch struct {
-	Description   *string   `json:"description"`
-	PromptOverlay *string   `json:"prompt_overlay"`
-	Route         *string   `json:"route"`
-	Skills        *[]string `json:"skills"`
-	Tools         *[]string `json:"tools"`
-	Memory        *bool     `json:"memory"`
-	Enabled       *bool     `json:"enabled"`
+	Description       *string   `json:"description"`
+	PromptOverlay     *string   `json:"prompt_overlay"`
+	Route             *string   `json:"route"`
+	Skills            *[]string `json:"skills"`
+	Tools             *[]string `json:"tools"`
+	Memory            *bool     `json:"memory"`
+	Enabled           *bool     `json:"enabled"`
+	ReviewRoute       *string   `json:"review_route"`
+	BudgetUSD         *float64  `json:"budget_usd"`
+	ApprovalAllowlist *[]string `json:"approval_allowlist"`
 }
 
 func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
@@ -273,11 +292,22 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 		}
 		after.Enabled = *p.Enabled
 	}
+	if p.ReviewRoute != nil {
+		after.ReviewRoute = *p.ReviewRoute
+	}
+	if p.BudgetUSD != nil {
+		after.BudgetUSD = p.BudgetUSD
+	}
+	if p.ApprovalAllowlist != nil {
+		after.ApprovalAllowlist = *p.ApprovalAllowlist
+	}
 	if _, err := tx.Exec(ctx, `UPDATE agents SET description = $2, prompt_overlay = $3,
-			route = $4, skills = $5, tools = $6, memory = $7, enabled = $8, updated_at = now()
+			route = $4, skills = $5, tools = $6, memory = $7, enabled = $8,
+			review_route = $9, budget_usd = $10, approval_allowlist = $11, updated_at = now()
 		WHERE id = $1`,
 		id, after.Description, after.PromptOverlay, after.Route,
-		jsonArr(after.Skills), jsonArr(after.Tools), after.Memory, after.Enabled); err != nil {
+		jsonArr(after.Skills), jsonArr(after.Tools), after.Memory, after.Enabled,
+		after.ReviewRoute, after.BudgetUSD, jsonArr(after.ApprovalAllowlist)); err != nil {
 		return fmt.Errorf("agents patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

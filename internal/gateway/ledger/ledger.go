@@ -21,19 +21,19 @@ const writeTimeout = 5 * time.Second
 // so callers can reference the row before it is written; empty lets
 // the database assign one.
 type Entry struct {
-	ID           string
-	Provider     string
-	Model        string
-	Route string
-	Agent string
-	Purpose      string // optional: why the call happened (chat|distill|title|compaction|...)
-	SessionID    string // optional
-	LaneID       string // optional
-	Usage        *stream.Usage
-	LatencyMS    int64
-	Status       string // ok | error | incomplete
-	ErrorCode    string
-	CostUSD      *float64
+	ID        string
+	Provider  string
+	Model     string
+	Route     string
+	Agent     string
+	Purpose   string // optional: why the call happened (chat|distill|title|compaction|...)
+	SessionID string // optional
+	MissionID string // optional
+	Usage     *stream.Usage
+	LatencyMS int64
+	Status    string // ok | error | incomplete
+	ErrorCode string
+	CostUSD   *float64
 }
 
 // Recorder is what the API layer depends on; tests supply an in-memory
@@ -69,12 +69,12 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 		in, out, cr, cw = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens
 	}
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
-		(id, provider, model, route, agent, purpose, session_id, lane_id,
+		(id, provider, model, route, agent, purpose, session_id, mission_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
 		 latency_ms, status, error_code, cost_usd)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
 		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, NULLIF($15, ''), $16)`,
-		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.LaneID,
+		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
 		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.CostUSD)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)

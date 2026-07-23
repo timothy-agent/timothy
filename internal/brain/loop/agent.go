@@ -159,6 +159,7 @@ type Request struct {
 	ModelHint string
 	System    string
 	Messages  []provider.Message
+	MissionID string // ledger tag: set when this turn serves a mission, not chat
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -208,15 +209,16 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			directive = tools.StepForceSynthesis
 		}
 		sreq := gwclient.StreamRequest{
-			Route: route,
-			Agent:        req.Agent,
-			Purpose:      "chat",
-			ModelHint:    req.ModelHint,
-			System:       req.System,
-			Messages:     msgs,
-			Tools:        defs,
-			Effort:       effort,
-			SessionID:    req.SessionID,
+			Route:     route,
+			Agent:     req.Agent,
+			Purpose:   "chat",
+			ModelHint: req.ModelHint,
+			System:    req.System,
+			Messages:  msgs,
+			Tools:     defs,
+			Effort:    effort,
+			SessionID: req.SessionID,
+			MissionID: req.MissionID,
 		}
 		switch directive {
 		case tools.StepWarnFinalize:
