@@ -275,6 +275,13 @@ export interface AdminAgent {
   memory: boolean
   is_default: boolean
   enabled: boolean
+  // Mission-only fields (internal/brain/missions) — meaningless to a
+  // chat-only agent, absent or at zero values for one. Optional here
+  // since most call sites (chat agent picker etc.) never populate
+  // them.
+  review_route?: string
+  budget_usd?: number
+  approval_allowlist?: string[]
 }
 
 // AdminTool is one entry of the live tool surface (builtins +
@@ -283,6 +290,76 @@ export interface AdminAgent {
 export interface AdminTool {
   name: string
   description: string
+}
+
+// PlanUnit is one item of a mission's plan. passes is flipped only by
+// the harness (RunVerify), never claimed by the model.
+export interface PlanUnit {
+  title: string
+  verify_cmd: string
+  artifacts?: string[]
+  passes: boolean
+}
+
+export interface ProgressNote {
+  at: string
+  note: string
+}
+
+// Mission is one long-running, agent-driven unit of work
+// (internal/brain/missions): research -> plan -> execute -> review
+// under a state machine.
+export interface Mission {
+  id: string
+  goal: string
+  kind: 'coding' | 'research' | 'scheduled'
+  agent_id?: string
+  phase: 'research' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
+  status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
+  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | ''
+  pause_message?: string
+  workspace?: string
+  worktree?: string
+  branch?: string
+  base_commit?: string
+  spec: { units: PlanUnit[] }
+  progress: ProgressNote[]
+  iteration: number
+  max_iterations: number
+  consecutive_failures: number
+  last_gap_fingerprint?: string
+  stall_count: number
+  budget_usd?: number
+  route: string
+  review_route: string
+  pending_permission?: string
+  pending_permission_tool?: string
+  pending_permission_args?: string
+  pending_permission_danger?: string
+  pending_permission_rationale?: string
+  auto_approve_safe: boolean
+  schedule_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface MissionEvent {
+  mission_id: string
+  seq: number
+  kind: string
+  payload: unknown
+  provenance: string
+  fingerprint?: string
+  created_at: string
+}
+
+export interface Notification {
+  id: string
+  mission_id: string
+  kind: string
+  message: string
+  read: boolean
+  created_at: string
 }
 
 // AdminConnector is one third-party integration the agent can call as

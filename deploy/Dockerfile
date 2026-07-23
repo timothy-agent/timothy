@@ -17,8 +17,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Brain's shell tool needs /bin/sh; alpine provides busybox sh while
 # staying minimal. Select with build target runtime-shell. Everything
-# else keeps the distroless default (last stage).
+# else keeps the distroless default (last stage). curl is installed
+# explicitly: busybox wget is present by default, but plan/verify_cmd
+# content (model-authored) reaches for curl as the more common default,
+# and a missing binary fails a verify_cmd with a misleading exit code
+# instead of a clear "not found".
 FROM alpine:3.22.2 AS runtime-shell
+RUN apk add --no-cache curl
 COPY --from=build /out/app /app
 COPY skills/ /skills/
 RUN mkdir -p /workspace && chown nobody:nobody /workspace

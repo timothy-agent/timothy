@@ -12,6 +12,9 @@ import type {
   ChatRequest,
   LatencyRow,
   MemoryItem,
+  Mission,
+  MissionEvent,
+  Notification,
   ProviderHealth,
   RetrievedMemory,
   SessionMeta,
@@ -627,4 +630,66 @@ export async function patchSettingValues(changes: Record<string, string>): Promi
     method: 'PATCH',
     body: JSON.stringify(changes),
   })
+}
+
+// --- missions (long-running, agent-driven units of work) ---
+
+export interface CreateMissionInput {
+  goal: string
+  kind: 'coding' | 'research' | 'scheduled'
+  agent_id?: string
+  route?: string
+  review_route?: string
+  max_iterations?: number
+  budget_usd?: number
+  repo_path?: string
+  auto_approve_safe?: boolean
+}
+
+export async function listMissions(): Promise<Mission[]> {
+  const { missions } = await request<{ missions: Mission[] }>('/v1/missions')
+  return missions ?? []
+}
+
+export async function createMission(input: CreateMissionInput): Promise<{ id: string }> {
+  return request<{ id: string }>('/v1/missions', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function getMission(id: string): Promise<Mission> {
+  return request<Mission>(`/v1/missions/${id}`)
+}
+
+export async function missionEvents(id: string): Promise<MissionEvent[]> {
+  const { events } = await request<{ events: MissionEvent[] }>(`/v1/missions/${id}/events`)
+  return events ?? []
+}
+
+export async function resumeMission(id: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/resume`, { method: 'POST' })
+}
+
+export async function cancelMission(id: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/cancel`, { method: 'POST' })
+}
+
+export async function answerMissionPermission(
+  id: string,
+  decision: 'once' | 'session' | 'deny',
+): Promise<void> {
+  await request<void>(`/v1/missions/${id}/permission`, {
+    method: 'POST',
+    body: JSON.stringify({ decision }),
+  })
+}
+
+export async function listNotifications(): Promise<Notification[]> {
+  const { notifications } = await request<{ notifications: Notification[] }>('/v1/notifications')
+  return notifications ?? []
+}
+
+export async function markNotificationRead(id: string): Promise<void> {
+  await request<void>(`/v1/notifications/${id}/read`, { method: 'POST' })
 }

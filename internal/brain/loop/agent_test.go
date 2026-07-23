@@ -902,3 +902,134 @@ func TestForceRouteIgnoresNonMatchingTools(t *testing.T) {
 		}
 	}
 }
+
+// TestRequestExtraToolsCallableAndExecutable reproduces the missions
+// bug: a sentinel-style tool defined outside the shared agent registry
+// must still be (a) offered to the model as callable and (b)
+// executable, via Request.ExtraTools — without ever touching the
+// shared base registry other turns read.
+func TestRequestExtraToolsCallableAndExecutable(t *testing.T) {
+	t.Parallel()
+	var gotArgs json.RawMessage
+	sentinel := &tools.Tool{
+		Name:        "mission_status",
+		Description: "reports turn outcome",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"outcome":{"type":"string"}},"required":["outcome"]}`),
+		Execute: func(_ context.Context, args json.RawMessage) (string, error) {
+			gotArgs = args
+			return "status recorded", nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"mission_status", `{"outcome":"done"}`}),
+		finalStep("finished"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID:  "s1",
+		Route:      "default",
+		Messages:   []provider.Message{{Role: "user", Content: "go"}},
+		ExtraTools: []*tools.Tool{sentinel},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if got := ofType(evs, stream.EventToolResult); len(got) != 1 || got[0].ToolResult.Status != "ok" {
+		t.Fatalf("tool results = %+v, want one ok result for mission_status", got)
+	}
+	if string(gotArgs) != `{"outcome":"done"}` {
+		t.Fatalf("sentinel Execute args = %s, want the model's call forwarded through", gotArgs)
+	}
+
+	// The first request sent to the gateway must have listed
+	// mission_status as callable — this is the exact gap that let the
+	// model silently never call it.
+	var sawDef bool
+	for _, d := range gw.requests[0].Tools {
+		if d.Name == "mission_status" {
+			sawDef = true
+		}
+	}
+	if !sawDef {
+		t.Fatalf("mission_status not offered in first request's tool defs: %+v", gw.requests[0].Tools)
+	}
+}
+
+// TestRequestExtraToolsNotVisibleWithoutOptIn confirms a turn that
+// doesn't set ExtraTools never sees another turn's extra tool — the
+// isolation the missions package relies on to keep mission_status out
+// of chat sessions.
+func TestRequestExtraToolsNotVisibleWithoutOptIn(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		finalStep("done, no tools needed"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	for _, d := range gw.requests[0].Tools {
+		if d.Name == "mission_status" {
+			t.Fatalf("mission_status leaked into a plain request's tool defs: %+v", gw.requests[0].Tools)
+		}
+	}
+}
+
+// TestRequestExtraToolsOverrideBaseTool: an extra tool sharing a base
+// tool's name must REPLACE it for the turn — one def offered to the
+// model, and execution resolving to the turn-scoped implementation.
+// This is how a mission's workspace-rooted shell shadows the global
+// shell without touching the shared registry.
+func TestRequestExtraToolsOverrideBaseTool(t *testing.T) {
+	t.Parallel()
+	executed := false
+	override := &tools.Tool{
+		Name:        "echo",
+		Description: "turn-scoped echo",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			executed = true
+			return "override ran", nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID:  "s1",
+		Route:      "default",
+		Messages:   []provider.Message{{Role: "user", Content: "go"}},
+		ExtraTools: []*tools.Tool{override},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	count := 0
+	for _, d := range gw.requests[0].Tools {
+		if d.Name == "echo" {
+			count++
+			if d.Description != "turn-scoped echo" {
+				t.Fatalf("echo def = %q, want the override's def, not the base one", d.Description)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("model saw %d echo defs, want exactly 1", count)
+	}
+	if !executed {
+		t.Fatal("base echo executed instead of the turn-scoped override")
+	}
+}

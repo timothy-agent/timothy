@@ -93,6 +93,9 @@ services:
       TIMOTHY_PUBLIC_URL: ${TIMOTHY_PUBLIC_URL:-}
       # Where the shell tool runs; the only tree tools may touch.
       WORKSPACE_ROOT: /workspace
+      # Root for mission workspaces/worktrees; unset disables the
+      # missions feature entirely (API surface stays unmounted).
+      WORKSPACES: /workspace/missions
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to

@@ -4,6 +4,7 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -40,10 +42,7 @@ func testStore(t *testing.T) *Store {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	sweep := func(ctx context.Context) {
-		_, _ = db.Exec(ctx, "DELETE FROM missions WHERE goal LIKE $1 || '%'", marker)
-	}
-	sweep(ctx)
+	sweep(ctx, db)
 	t.Cleanup(func() {
 		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer ccancel()
@@ -53,9 +52,31 @@ func testStore(t *testing.T) *Store {
 			return
 		}
 		defer func() { _ = conn.Close(cctx) }()
-		_, _ = conn.Exec(cctx, "DELETE FROM missions WHERE goal LIKE $1 || '%'", marker)
+		sweep(cctx, conn)
 	})
 	return NewStore(pool, log)
+}
+
+// execer is the shared Exec surface between a pool connection and a
+// one-shot pgx.Conn — lets sweep run identically at setup (via the
+// pool) and teardown (via a fresh connection, since the pool dies with
+// t.Context()).
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// sweep clears every fixture row this package's tests create. Missions
+// spawned by a test schedule carry the schedule's mission_template
+// goal verbatim, not the marker prefix — delete them via the schedule
+// join FIRST, before deleting schedules (whose FK would otherwise
+// orphan them under ON DELETE CASCADE at an unpredictable order
+// relative to a concurrently running test).
+func sweep(ctx context.Context, db execer) {
+	_, _ = db.Exec(ctx, `DELETE FROM missions WHERE schedule_id IN (
+		SELECT id FROM schedules WHERE name LIKE $1 || '%'
+	)`, marker)
+	_, _ = db.Exec(ctx, "DELETE FROM schedules WHERE name LIKE $1 || '%'", marker)
+	_, _ = db.Exec(ctx, "DELETE FROM missions WHERE goal LIKE $1 || '%'", marker)
 }
 
 func TestMissionCRUD(t *testing.T) {
@@ -93,6 +114,95 @@ func TestMissionCRUD(t *testing.T) {
 	}
 }
 
+func TestSetAndClearPendingPermission(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "permission", Kind: "research", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := s.SetPendingPermission(ctx, id, "perm-1", "shell", `{"command":"rm -rf x"}`, "destructive", "deletes files"); err != nil {
+		t.Fatalf("SetPendingPermission: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PendingPermission != "perm-1" || m.PendingPermissionTool != "shell" ||
+		m.PendingPermissionDanger != "destructive" || m.PendingPermissionRationale != "deletes files" {
+		t.Fatalf("Get after SetPendingPermission = %+v, want the parked detail persisted", m)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	last := events[len(events)-1]
+	if last.Kind != "mission.permission_requested" {
+		t.Fatalf("last event kind = %q, want mission.permission_requested", last.Kind)
+	}
+	var payload struct {
+		Tool, Args, Danger, Rationale string
+	}
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal event payload: %v", err)
+	}
+	if payload.Tool != "shell" || payload.Args != `{"command":"rm -rf x"}` || payload.Danger != "destructive" {
+		t.Fatalf("event payload = %+v, want the tool/args/danger the mission parked on", payload)
+	}
+
+	if err := s.ClearPendingPermission(ctx, id); err != nil {
+		t.Fatalf("ClearPendingPermission: %v", err)
+	}
+	m, err = s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PendingPermission != "" || m.PendingPermissionTool != "" || m.PendingPermissionDanger != "" || m.PendingPermissionRationale != "" {
+		t.Fatalf("Get after ClearPendingPermission = %+v, want all permission fields empty", m)
+	}
+}
+
+func TestAppendProgress(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "progress", Kind: "research", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := s.AppendProgress(ctx, id, "first note"); err != nil {
+		t.Fatalf("AppendProgress: %v", err)
+	}
+	if err := s.AppendProgress(ctx, id, "second note"); err != nil {
+		t.Fatalf("AppendProgress: %v", err)
+	}
+
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(m.Progress) != 2 || m.Progress[0].Note != "first note" || m.Progress[1].Note != "second note" {
+		t.Fatalf("Get.Progress = %+v, want both notes in order — this is what WorkPacket.Render reads for the next worker turn's memory", m.Progress)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2 mission.progress events alongside the column writes", len(events))
+	}
+	for _, e := range events {
+		if e.Kind != "mission.progress" {
+			t.Fatalf("event kind = %q, want mission.progress", e.Kind)
+		}
+	}
+}
+
 func TestApplyTransitionAndEvents(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -124,6 +234,51 @@ func TestApplyTransitionAndEvents(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Kind != "mission.phase_started" || events[0].Seq != 1 {
 		t.Fatalf("Events = %+v, want one mission.phase_started at seq 1", events)
+	}
+}
+
+// TestApplyTransitionClearsPendingPermissionOnTerminal reproduces a
+// real bug: cancelling (or otherwise terminating) a mission parked on
+// a permission left the pending_permission_* columns populated —
+// the mission was dead, but its "Allow" banner kept showing in the
+// UI since nothing ever cleared them on the terminal transition.
+func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "cancel-parked", Kind: "research"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.SetPendingPermission(ctx, id, "perm-1", "shell", `{"command":"echo hi"}`, "safe", "no standing grant"); err != nil {
+		t.Fatalf("SetPendingPermission: %v", err)
+	}
+
+	// Non-terminal transition must NOT clear it — only a terminal one.
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8}}); err != nil {
+		t.Fatalf("ApplyTransition (non-terminal): %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PendingPermissionTool != "shell" {
+		t.Fatalf("PendingPermissionTool after non-terminal transition = %q, want unchanged (shell)", m.PendingPermissionTool)
+	}
+
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next:   StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "cancelled"}}},
+	}); err != nil {
+		t.Fatalf("ApplyTransition (terminal): %v", err)
+	}
+	m, err = s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PendingPermission != "" || m.PendingPermissionTool != "" || m.PendingPermissionArgs != "" ||
+		m.PendingPermissionDanger != "" || m.PendingPermissionRationale != "" {
+		t.Fatalf("Get after terminal transition = %+v, want all pending_permission fields cleared", m)
 	}
 }
 
@@ -227,6 +382,22 @@ func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 	ctx := t.Context()
 
 	const total, max = 10, 3
+	// The cap is global across the shared database: any real mission
+	// already 'working' (the suite runs against a live stack) consumes
+	// a slot, so the expected claim count is max minus that baseline —
+	// asserting a bare max flakes whenever a live mission is running.
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	baseline := 0
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM missions WHERE status = 'working'").Scan(&baseline); err != nil {
+		t.Fatalf("count working baseline: %v", err)
+	}
+	want := max - baseline
+	if want < 0 {
+		want = 0
+	}
 	ids := make([]string, total)
 	for i := range ids {
 		id, err := s.Create(ctx, Mission{Goal: marker + "slot", Kind: "research"})
@@ -259,17 +430,16 @@ func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 	for id := range claimed {
 		got = append(got, id)
 	}
-	if len(got) != max {
-		t.Fatalf("claimed %d slots, want exactly %d (cap)", len(got), max)
+	if len(got) != want {
+		t.Fatalf("claimed %d slots, want exactly %d (cap %d minus %d already working)", len(got), want, max, baseline)
 	}
 
-	db, _ := s.db.Get()
 	var working int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE status = 'working' AND goal LIKE $1 || '%'`, marker).Scan(&working); err != nil {
 		t.Fatalf("count working: %v", err)
 	}
-	if working != max {
-		t.Fatalf("working count = %d, want %d", working, max)
+	if working != want {
+		t.Fatalf("working count = %d, want %d", working, want)
 	}
 }
 

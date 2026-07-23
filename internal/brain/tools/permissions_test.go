@@ -36,6 +36,9 @@ func TestGuardSubject(t *testing.T) {
 		{name: "relative path", command: "grep -rn TODO src/"},
 		{name: "dev null", command: "grep x file > /dev/null"},
 		{name: "environment word", command: "grep environment docs/config.md"},
+		{name: "html closing tag", command: `echo "</head>" >> summary.md`},
+		{name: "html tag no quotes", command: "printf '<html>\\n</html>'"},
+		{name: "redirect outside workspace", command: "cat file 2>&1 >/etc/passwd", blocked: "outside the workspace"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,6 +153,38 @@ func TestResolveShortCircuits(t *testing.T) {
 		}
 		if !strings.Contains(res.Rationale, "rm") {
 			t.Fatalf("rationale %q does not name the rule", res.Rationale)
+		}
+	})
+}
+
+// TestSandboxAllowsGating covers the pieces of the sandbox downgrade
+// that need no database: rules that are not file-scoped must never
+// downgrade, and without a registered sandbox (nil db here) nothing
+// downgrades at all.
+func TestSandboxAllowsGating(t *testing.T) {
+	t.Parallel()
+	p := NewPermissions(nil, "/workspace")
+	ctx := context.Background()
+
+	t.Run("no sandbox registered keeps the ask", func(t *testing.T) {
+		t.Parallel()
+		if p.sandboxAllows(ctx, "s1", "rm -rf ./build", []string{"rm"}) {
+			t.Fatal("sandboxAllows = true with no sandbox registered")
+		}
+	})
+
+	t.Run("non-file-scoped rule keeps the ask before any lookup", func(t *testing.T) {
+		t.Parallel()
+		if p.sandboxAllows(ctx, "s1", "git push origin main", []string{"git-push"}) {
+			t.Fatal("sandboxAllows = true for git-push — not a file-scoped rule")
+		}
+	})
+
+	t.Run("opaque classification keeps the ask", func(t *testing.T) {
+		t.Parallel()
+		_, rules := ClassifyCommand("eval $CMD")
+		if p.sandboxAllows(ctx, "s1", "eval $CMD", rules) {
+			t.Fatal("sandboxAllows = true for an opaque command")
 		}
 	})
 }

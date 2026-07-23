@@ -6,26 +6,125 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 const (
 	reviewVerdictToolName = "review_verdict"
 	baselineDiffCap       = 256 << 10
 	baselineDiffTimeout   = 30 * time.Second
+
+	// reviewArtifactsCap bounds the total artifact bytes a reviewer
+	// sees — enough for real research/config artifacts, small enough
+	// to never balloon the review turn.
+	reviewArtifactsCap = 32 << 10
+	// reviewListingCap bounds the workspace file listing.
+	reviewListingCap = 2 << 10
 )
 
-// ReviewVerdictTool defines the reviewer's one tool call. The
-// reviewer's system prompt instructs it to REFUTE — approval is the
-// fallthrough the driver takes only on an explicit approve, never the
-// default read of an ambiguous response.
-func ReviewVerdictTool() provider.ToolDef {
-	return provider.ToolDef{
+// ReviewPacket is everything a reviewer turn judges: the mission's
+// goal and plan (an earlier failure mode was reviewers rejecting with
+// "missing original mission goal"), the ACTUAL artifact contents read
+// by the harness from the workspace (never the worker's description
+// of them), the baseline diff when a worktree exists, and the
+// worker's evidence text last.
+type ReviewPacket struct {
+	Goal      string
+	UnitTitle string
+	Plan      Spec
+	Diff      string
+	// Artifacts maps workspace-relative path -> file contents, read by
+	// the harness (ReadArtifacts), capped at reviewArtifactsCap total.
+	Artifacts map[string]string
+	// Listing is a flat file listing of the workspace (name + size) so
+	// the reviewer can see what exists even when a unit declares no
+	// artifacts.
+	Listing  string
+	Evidence string
+}
+
+// ReadArtifacts reads each declared artifact from workRoot, capped at
+// reviewArtifactsCap TOTAL across files; a file that would blow the
+// remaining budget is truncated with an honest marker. Missing or
+// unreadable files map to an error note rather than being dropped —
+// the reviewer must see the gap, not silently less material.
+func ReadArtifacts(workRoot string, artifacts []string) map[string]string {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(artifacts))
+	remaining := reviewArtifactsCap
+	for _, a := range artifacts {
+		rel := strings.TrimSpace(a)
+		if rel == "" {
+			continue
+		}
+		cleaned := filepath.Clean(rel)
+		if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			out[rel] = "[not readable: path escapes the workspace]"
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(workRoot, cleaned)) //nolint:gosec // path is workspace-relative, cleaned, and .. / absolute forms are rejected above
+		if err != nil {
+			out[rel] = "[not readable: " + err.Error() + "]"
+			continue
+		}
+		if len(b) > remaining {
+			out[rel] = string(b[:remaining]) + fmt.Sprintf("\n[truncated: file is %d bytes, review cap reached]", len(b))
+			remaining = 0
+			continue
+		}
+		out[rel] = string(b)
+		remaining -= len(b)
+	}
+	return out
+}
+
+// ListWorkspace returns a flat "path (size)" listing of regular files
+// under workRoot, capped — the reviewer's map of what actually exists
+// on disk, independent of what anyone claims.
+func ListWorkspace(workRoot string) string {
+	var b strings.Builder
+	_ = filepath.WalkDir(workRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || b.Len() >= reviewListingCap {
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, relErr := filepath.Rel(workRoot, path)
+		if relErr != nil {
+			return nil
+		}
+		info, infoErr := d.Info()
+		size := int64(0)
+		if infoErr == nil {
+			size = info.Size()
+		}
+		fmt.Fprintf(&b, "%s (%d bytes)\n", rel, size)
+		return nil
+	})
+	return b.String()
+}
+
+// ReviewVerdictTool defines the reviewer's one tool call — registered
+// per-turn via loop.Request.ExtraTools, never in the shared agent tool
+// surface. The reviewer's system prompt instructs it to REFUTE —
+// approval is the fallthrough the driver takes only on an explicit
+// approve, never the default read of an ambiguous response.
+func ReviewVerdictTool() *tools.Tool {
+	return &tools.Tool{
 		Name:        reviewVerdictToolName,
 		Description: "Report your review verdict. Call this exactly once. Look for reasons to reject before approving — approve only when you cannot find a real gap.",
 		InputSchema: json.RawMessage(`{
@@ -52,6 +151,9 @@ func ReviewVerdictTool() provider.ToolDef {
 			},
 			"required": ["decision"]
 		}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "verdict recorded", nil
+		},
 	}
 }
 

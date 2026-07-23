@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -35,20 +36,24 @@ func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, pause_message,
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_usd, route, review_route,
-	pending_permission, schedule_id, created_at, updated_at`
+	pending_permission, pending_permission_tool, pending_permission_args,
+	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
+	schedule_id, session_id, created_at, updated_at`
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
-		m                   Mission
-		agentID, scheduleID *string
-		phase, status       string
-		pendingPermission   *string
-		spec, progress      []byte
+		m                              Mission
+		agentID, scheduleID, sessionID *string
+		phase, status                  string
+		pendingPermission              *string
+		spec, progress                 []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetUSD, &m.Route, &m.ReviewRoute,
-		&pendingPermission, &scheduleID, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
+		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
+		&scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
 	if agentID != nil {
@@ -56,6 +61,9 @@ func scanMission(row pgx.Row) (Mission, error) {
 	}
 	if scheduleID != nil {
 		m.ScheduleID = *scheduleID
+	}
+	if sessionID != nil {
+		m.SessionID = *sessionID
 	}
 	if pendingPermission != nil {
 		m.PendingPermission = *pendingPermission
@@ -98,9 +106,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, spec)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8) RETURNING id`,
-		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetUSD, m.Route, m.ReviewRoute, spec,
+			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, spec, session_id, auto_approve_safe)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid, $10) RETURNING id`,
+		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetUSD, m.Route, m.ReviewRoute, spec, m.SessionID, m.AutoApproveSafe,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -169,6 +177,105 @@ func (s *Store) SetSpec(ctx context.Context, id string, spec Spec) error {
 	return nil
 }
 
+// AppendProgress adds one note to the mission's durable progress log
+// (read back by WorkPacket.Render so the NEXT fresh worker turn has
+// real memory of what happened, since workers carry no transcript of
+// their own) and appends the matching mission.progress event in the
+// same transaction, so the Timeline and the worker's own memory never
+// diverge.
+func (s *Store) AppendProgress(ctx context.Context, id, note string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions append progress: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("missions append progress begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	entry, err := json.Marshal(ProgressNote{At: time.Now().UTC(), Note: note})
+	if err != nil {
+		return fmt.Errorf("missions append progress: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE missions SET
+			progress = progress || jsonb_build_array($2::jsonb), updated_at = now()
+		WHERE id = $1`, id, entry); err != nil {
+		return fmt.Errorf("missions append progress: %w", err)
+	}
+	if err := appendEventTx(ctx, tx, id, "mission.progress", map[string]any{"note": note}, "live"); err != nil {
+		return fmt.Errorf("missions append progress: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// SetPendingPermission records a mission's turn parking on a tool-call
+// permission prompt (loop.PermBroker id plus the detail the UI needs
+// to render a real decision, not a bare "waiting" banner). Independent
+// of ApplyTransition — parking happens mid-turn, inside a single
+// Runner call, not at an Advance boundary. Also appends a
+// mission.permission_requested event in the same transaction — without
+// this, the Timeline shows nothing while a mission is parked, and the
+// tool/command detail is lost once ClearPendingPermission runs (the
+// pending_permission_* columns are live-only state, not history). Args
+// are truncated the same way progress notes are — a shell command can
+// be arbitrarily large, and the log only needs enough to identify what
+// was approved, not a byte-for-byte replay.
+func (s *Store) SetPendingPermission(ctx context.Context, id, permissionID, tool, args, danger, rationale string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set pending permission: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("missions set pending permission begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `UPDATE missions SET
+			pending_permission = $2, pending_permission_tool = $3, pending_permission_args = $4,
+			pending_permission_danger = $5, pending_permission_rationale = $6, updated_at = now()
+		WHERE id = $1`, id, permissionID, tool, args, danger, rationale); err != nil {
+		return fmt.Errorf("missions set pending permission: %w", err)
+	}
+	payload := map[string]any{"tool": tool, "args": truncate(args, 2000), "danger": danger, "rationale": rationale}
+	if err := appendEventTx(ctx, tx, id, "mission.permission_requested", payload, "live"); err != nil {
+		return fmt.Errorf("missions set pending permission: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// ClearPendingPermission drops a mission's parked-permission state
+// once the broker resolves it (decision or timeout-deny) — the same
+// Runner call that parked continues past this point on its own.
+func (s *Store) ClearPendingPermission(ctx context.Context, id string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions clear pending permission: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET
+			pending_permission = '', pending_permission_tool = '', pending_permission_args = '',
+			pending_permission_danger = '', pending_permission_rationale = '', updated_at = now()
+		WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("missions clear pending permission: %w", err)
+	}
+	return nil
+}
+
+// SetLastEvidence records the worker's most recent mission_status
+// evidence text, read back by the next review round — durable (not
+// process-local like gatekeepers) since losing it on restart would
+// silently degrade a research mission's review back to diff-only.
+func (s *Store) SetLastEvidence(ctx context.Context, id, evidence string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set last evidence: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET last_evidence = $2, updated_at = now() WHERE id = $1`,
+		id, evidence); err != nil {
+		return fmt.Errorf("missions set last evidence: %w", err)
+	}
+	return nil
+}
+
 // Events returns a mission's full event log in seq order.
 func (s *Store) Events(ctx context.Context, id string) ([]Event, error) {
 	db, err := s.db.Get()
@@ -207,13 +314,34 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
+	// pause_message is cleared unconditionally: the state machine's
+	// Transition never carries a message string (only scanMission's
+	// read-time degrade-on-corruption path ever produces one, in
+	// memory only), so any value sitting in the column is leftover from
+	// an out-of-band write (e.g. manual DB surgery during an incident)
+	// and must not survive the mission's next legitimate transition —
+	// otherwise a stale message keeps showing in the UI long after the
+	// mission has moved on.
+	//
+	// A transition landing on a terminal phase (cancel, or the state
+	// machine's own done/failed) also clears any pending_permission*
+	// detail — a dead mission can never resolve a park (the API's
+	// answer-permission handler checks phase first and would already
+	// reject it), so leaving the columns populated only stales the
+	// Timeline's "Allow" banner for a mission that's no longer running.
+	clearPending := t.Next.Phase.Terminal()
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
-			phase = $2, status = $3, pause_reason = $4, iteration = $5, max_iterations = $6,
-			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, updated_at = now()
+			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
+			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, updated_at = now(),
+			pending_permission = CASE WHEN $10 THEN '' ELSE pending_permission END,
+			pending_permission_tool = CASE WHEN $10 THEN '' ELSE pending_permission_tool END,
+			pending_permission_args = CASE WHEN $10 THEN '' ELSE pending_permission_args END,
+			pending_permission_danger = CASE WHEN $10 THEN '' ELSE pending_permission_danger END,
+			pending_permission_rationale = CASE WHEN $10 THEN '' ELSE pending_permission_rationale END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
-		t.Next.LastGapFingerprint, t.Next.StallCount,
+		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

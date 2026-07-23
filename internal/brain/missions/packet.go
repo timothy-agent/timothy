@@ -28,7 +28,7 @@ type WorkPacket struct {
 // messages, an earlier note); both pass through NeutralizeSlot before
 // insertion — self-injection hardening.
 func (p WorkPacket) Render() (system, user string) {
-	system = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question)."
+	system = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which require interactive approval and will stall you. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it."
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal: %s\n", NeutralizeSlot(p.Goal))
@@ -42,6 +42,15 @@ func (p WorkPacket) Render() (system, user string) {
 				status = "verified"
 			}
 			fmt.Fprintf(&b, "- [%s] %s\n", status, NeutralizeSlot(u.Title))
+			// The EXACT artifact paths the harness will check — a worker
+			// that invents its own filename (http-429 vs http429) fails
+			// verification without ever seeing why.
+			for _, a := range u.Artifacts {
+				fmt.Fprintf(&b, "  must produce (exact path): %s\n", NeutralizeSlot(a))
+			}
+			if u.VerifyCmd != "" {
+				fmt.Fprintf(&b, "  verified by: %s\n", NeutralizeSlot(u.VerifyCmd))
+			}
 		}
 		b.WriteString("\n")
 	}

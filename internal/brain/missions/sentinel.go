@@ -1,11 +1,12 @@
 package missions
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
 
-	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 // missionStatusToolName is the one tool call a worker turn must end
@@ -14,9 +15,14 @@ import (
 // question.
 const missionStatusToolName = "mission_status"
 
-// MissionStatusTool defines the worker's end-of-turn sentinel call.
-func MissionStatusTool() provider.ToolDef {
-	return provider.ToolDef{
+// MissionStatusTool defines the worker's end-of-turn sentinel call —
+// registered per-turn via loop.Request.ExtraTools, never in the shared
+// agent tool surface, so chat sessions never see it. Execute itself
+// does nothing but acknowledge the call; the driver reads the actual
+// verdict from the tool call's captured arguments (runner.go), not
+// from this return value.
+func MissionStatusTool() *tools.Tool {
+	return &tools.Tool{
 		Name:        missionStatusToolName,
 		Description: "Report this turn's outcome. Call this exactly once, as your final action. DONE means you believe the current unit is complete and ready for the harness to verify and review — it is a request for verification, not a claim that the work is accepted. RETRY means you hit a problem and are explaining what you learned before the next attempt. BLOCKED means you need a specific answer from the user before you can continue.",
 		InputSchema: json.RawMessage(`{
@@ -42,6 +48,9 @@ func MissionStatusTool() provider.ToolDef {
 			},
 			"required": ["outcome"]
 		}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "status recorded", nil
+		},
 	}
 }
 

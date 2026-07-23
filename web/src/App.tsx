@@ -5,6 +5,7 @@ import {
   Home01Icon,
   Key01Icon,
   Moon02Icon,
+  RocketIcon,
   Search01Icon,
   Settings02Icon,
   Sun03Icon,
@@ -48,12 +49,15 @@ import { Chat } from './pages/Chat'
 import { Analytics } from './pages/Analytics'
 import { Home } from './pages/Home'
 import { Memory } from './pages/Memory'
+import { MissionDetail } from './pages/MissionDetail'
+import { Missions } from './pages/Missions'
 import { Research } from './pages/Research'
 import { Settings } from './pages/Settings'
 
 const nav = [
   { label: 'Home', href: '/', icon: Home01Icon },
   { label: 'Chat', href: '/chat', icon: BubbleChatIcon },
+  { label: 'Missions', href: '/missions', icon: RocketIcon },
   { label: 'Memory', href: '/memory', icon: Brain02Icon },
   { label: 'Analytics', href: '/analytics', icon: Analytics01Icon },
   { label: 'Settings', href: '/settings', icon: Settings02Icon },
@@ -65,6 +69,7 @@ const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark t
 function isActive(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/'
   if (href === '/chat') return pathname === '/chat' || pathname.startsWith('/chat/')
+  if (href === '/missions') return pathname === '/missions' || pathname.startsWith('/missions/')
   if (href === '/settings') return pathname.startsWith('/settings')
   return pathname === href
 }
@@ -313,6 +318,8 @@ function App() {
                 <Route path="/analytics" element={<Analytics />} />
                 {/* Old bookmarks: the page lived at /dashboard before the rename. */}
                 <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
+                <Route path="/missions" element={<Missions />} />
+                <Route path="/missions/:id" element={<MissionDetail />} />
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/settings/*" element={<Settings />} />
                 {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}

@@ -119,6 +119,11 @@ type StepInput struct {
 	Input          Input
 	GapFingerprint string // set on InputReviewRework
 	Message        string // set on InputWorkerBlocked / pause explanations
+	// Reason is WHY this input happened (a worker's retry analysis, an
+	// error string, flattened review findings) — carried into the
+	// transition's event payloads so a mission's failure cause is
+	// readable from its event log alone, never only from process logs.
+	Reason string
 }
 
 // EventDraft is one event Step decided must be appended; the Store
@@ -180,14 +185,14 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 	case InputPhaseComplete:
 		return stepPhaseComplete(s)
 	case InputWorkerRetry:
-		return stepWorkerRetry(s)
+		return stepWorkerRetry(s, in)
 	case InputWorkerBlocked:
 		return Transition{
 			Next:   withStatus(s, StatusWaitingForInput),
 			Events: []EventDraft{{Kind: "mission.blocked", Payload: map[string]any{"question": in.Message}}},
 		}
 	case InputWorkerFailed:
-		return stepWorkerFailed(s, cfg)
+		return stepWorkerFailed(s, in, cfg)
 	case InputReviewApprove:
 		return stepReviewApprove(s)
 	case InputReviewRework:
@@ -195,7 +200,7 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 	case InputReviewInfraFailure:
 		return Transition{
 			Next:   withPause(s, PauseInfra),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra)}}},
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
 		}
 	default:
 		// Unrecognized input: no-op rather than a panic or a silent
@@ -255,38 +260,38 @@ func stepPhaseComplete(s StepState) Transition {
 // stepWorkerFailed counts consecutive failures toward the backoff
 // brake; a fresh success (any non-failed input) resets the counter
 // elsewhere (the driver clears ConsecutiveFailures on progress).
-func stepWorkerFailed(s StepState, cfg Config) Transition {
+func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 	s.ConsecutiveFailures++
 	s.Iteration++
 	if s.ConsecutiveFailures >= cfg.BackoffFailures {
 		return Transition{
 			Next:   withPause(s, PauseBackoff),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff)}}},
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff), "detail": in.Reason}}},
 		}
 	}
 	if s.Iteration >= s.MaxIterations {
 		return Transition{
 			Next:   withPhaseFailed(s),
-			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations"}}},
+			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
 		}
 	}
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry"}}}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: map[string]any{"cause": "worker_failed", "reason": in.Reason}}}}
 }
 
 // stepWorkerRetry is a worker's own self-reported RETRY (failure
 // analysis, distinct from a harness-detected WorkerFailed): it costs
 // an iteration but does not count toward the backoff brake — the
 // worker is still making an attempt, not silently failing.
-func stepWorkerRetry(s StepState) Transition {
+func stepWorkerRetry(s StepState, in StepInput) Transition {
 	s.Iteration++
 	s.ConsecutiveFailures = 0
 	if s.Iteration >= s.MaxIterations {
 		return Transition{
 			Next:   withPhaseFailed(s),
-			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations"}}},
+			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
 		}
 	}
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry"}}}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: map[string]any{"cause": "worker_retry", "reason": in.Reason}}}}
 }
 
 // stepReviewApprove clears the stall counter (progress was made) and
@@ -321,7 +326,7 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 	if s.StallCount >= cfg.StallRounds {
 		return Transition{
 			Next:   withPause(s, PauseNoProgress),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress)}}},
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},
 		}
 	}
 	s.Phase = PhaseExecute
@@ -330,8 +335,8 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 	if s.Iteration >= s.MaxIterations {
 		return Transition{
 			Next:   withPhaseFailed(s),
-			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations"}}},
+			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
 		}
 	}
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.review_verdict", Payload: map[string]any{"decision": "rework"}}}}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.review_verdict", Payload: map[string]any{"decision": "rework", "reason": in.Reason}}}}
 }

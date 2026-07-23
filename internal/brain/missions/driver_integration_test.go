@@ -45,7 +45,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 		},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
-	d := NewDriver(store, runner, workspace, nil, log)
+	d := NewDriver(store, runner, workspace, nil, nil, nil, log)
 
 	// The scripted worker "does the work" by actually creating the file
 	// the verify_cmd checks for — RunVerify runs for real against the

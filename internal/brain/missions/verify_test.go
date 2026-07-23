@@ -2,6 +2,8 @@ package missions
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,5 +65,41 @@ func TestRunVerifyExcerptTruncatesFromEnd(t *testing.T) {
 	}
 	if strings.Contains(res.Excerpt, "line 1\n") {
 		t.Fatal("excerpt contains the first line — truncation kept the head instead of the tail")
+	}
+}
+
+func TestCheckArtifacts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "summary.md"), []byte("429 means Too Many Requests"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty.md"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "adir"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name      string
+		artifacts []string
+		problems  int
+	}{
+		{"present and non-empty passes", []string{"summary.md"}, 0},
+		{"missing file fails", []string{"nope.md"}, 1},
+		{"empty file fails", []string{"empty.md"}, 1},
+		{"directory fails", []string{"adir"}, 1},
+		{"absolute path fails", []string{"/etc/passwd"}, 1},
+		{"escape via .. fails", []string{"../outside.md"}, 1},
+		{"blank entries skipped", []string{"", "  ", "summary.md"}, 0},
+		{"one good one bad reports only the bad", []string{"summary.md", "nope.md"}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			problems := CheckArtifacts(root, tc.artifacts)
+			if len(problems) != tc.problems {
+				t.Fatalf("CheckArtifacts(%v) = %v, want %d problem(s)", tc.artifacts, problems, tc.problems)
+			}
+		})
 	}
 }
