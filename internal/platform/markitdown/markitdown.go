@@ -1,4 +1,8 @@
-package connectors
+// Package markitdown is the client for the markitdown sidecar
+// (markitdown-svc/): one POST /convert per file, raw bytes in,
+// markdown out. Compose-internal, no auth — the sidecar is only
+// reachable inside the compose network.
+package markitdown
 
 import (
 	"bytes"
@@ -10,13 +14,14 @@ import (
 	"time"
 )
 
-const markItDownTimeout = 60 * time.Second
+const convertTimeout = 60 * time.Second
 
-// convertToMarkdown posts raw file bytes to the markitdown sidecar and
-// returns the converted markdown. baseURL empty means the sidecar
-// isn't configured — callers fall back to whatever they'd otherwise
-// do (the snippet, in gmail_read's case).
-func convertToMarkdown(ctx context.Context, client *http.Client, baseURL, filename, mimeType string, raw []byte) (string, error) {
+// Convert posts raw file bytes to the markitdown sidecar and returns
+// the converted markdown. baseURL empty means the sidecar isn't
+// configured — callers fall back to whatever they'd otherwise do.
+// filename and mimeType are hints for the converter; either may be
+// empty when unknown.
+func Convert(ctx context.Context, client *http.Client, baseURL, filename, mimeType string, raw []byte) (string, error) {
 	if baseURL == "" {
 		return "", fmt.Errorf("markitdown is not configured")
 	}
@@ -32,7 +37,7 @@ func convertToMarkdown(ctx context.Context, client *http.Client, baseURL, filena
 	if c == nil {
 		c = http.DefaultClient
 	}
-	cctx, cancel := context.WithTimeout(ctx, markItDownTimeout)
+	cctx, cancel := context.WithTimeout(ctx, convertTimeout)
 	defer cancel()
 	req = req.WithContext(cctx)
 

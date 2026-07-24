@@ -73,6 +73,12 @@ type CompletionRequest struct {
 	// their provider's reasoning-effort control where one exists and
 	// ignore it otherwise.
 	Effort string
+	// FinalAttempt tells the driver no other chain entry follows this
+	// one: spend the full in-provider retry budget. When false (more
+	// providers remain), transient failures get one quick retry and
+	// then surface — the chain is the retry, and re-hammering a
+	// rate-limited provider only delays failover.
+	FinalAttempt bool
 }
 
 // Provider is one configured LLM provider. Stream returns quickly; all

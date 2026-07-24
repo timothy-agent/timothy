@@ -14,32 +14,68 @@ import (
 
 // Mission is the API/DB shape of one missions row.
 type Mission struct {
-	ID                  string         `json:"id"`
-	Goal                string         `json:"goal"`
-	Kind                string         `json:"kind"` // coding | research | scheduled
-	AgentID             string         `json:"agent_id,omitempty"`
-	Phase               Phase          `json:"phase"`
-	Status              Status         `json:"status"`
-	PauseReason         PauseReason    `json:"pause_reason,omitempty"`
-	PauseMessage        string         `json:"pause_message,omitempty"`
-	Workspace           string         `json:"workspace,omitempty"`
-	Worktree            string         `json:"worktree,omitempty"`
-	Branch              string         `json:"branch,omitempty"`
-	BaseCommit          string         `json:"base_commit,omitempty"`
-	Spec                Spec           `json:"spec"`
-	Progress            []ProgressNote `json:"progress"`
-	Iteration           int            `json:"iteration"`
-	MaxIterations       int            `json:"max_iterations"`
-	ConsecutiveFailures int            `json:"consecutive_failures"`
-	LastGapFingerprint  string         `json:"last_gap_fingerprint,omitempty"`
-	StallCount          int            `json:"stall_count"`
-	BudgetUSD           *float64       `json:"budget_usd,omitempty"`
-	Route               string         `json:"route"`
-	ReviewRoute         string         `json:"review_route"`
-	PendingPermission   string         `json:"pending_permission,omitempty"`
-	ScheduleID          string         `json:"schedule_id,omitempty"`
-	CreatedAt           time.Time      `json:"created_at"`
-	UpdatedAt           time.Time      `json:"updated_at"`
+	ID           string         `json:"id"`
+	Goal         string         `json:"goal"`
+	Kind         string         `json:"kind"` // coding | research | scheduled
+	AgentID      string         `json:"agent_id,omitempty"`
+	Phase        Phase          `json:"phase"`
+	Status       Status         `json:"status"`
+	PauseReason  PauseReason    `json:"pause_reason,omitempty"`
+	PauseMessage string         `json:"pause_message,omitempty"`
+	Workspace    string         `json:"workspace,omitempty"`
+	Worktree     string         `json:"worktree,omitempty"`
+	Branch       string         `json:"branch,omitempty"`
+	BaseCommit   string         `json:"base_commit,omitempty"`
+	Spec         Spec           `json:"spec"`
+	Progress     []ProgressNote `json:"progress"`
+	// LastEvidence is the most recent worker mission_status call's
+	// evidence text — carried from execute into review so a
+	// research/scheduled mission (whose baseline diff is always empty,
+	// having touched no tracked files) still gives the reviewer
+	// something real to judge instead of nothing.
+	LastEvidence        string   `json:"last_evidence,omitempty"`
+	Iteration           int      `json:"iteration"`
+	MaxIterations       int      `json:"max_iterations"`
+	ConsecutiveFailures int      `json:"consecutive_failures"`
+	LastGapFingerprint  string   `json:"last_gap_fingerprint,omitempty"`
+	StallCount          int      `json:"stall_count"`
+	BudgetUSD           *float64 `json:"budget_usd,omitempty"`
+	Route               string   `json:"route"`
+	ReviewRoute         string   `json:"review_route"`
+	// EscalationRoute, when non-empty, is the route worker turns switch
+	// to after a worker failure or review rework — instead of burning
+	// iterations on a model that already proved too weak for the unit.
+	// Empty disables escalation.
+	EscalationRoute string `json:"escalation_route,omitempty"`
+	PendingPermission   string   `json:"pending_permission,omitempty"`
+	// PendingPermissionTool/Args/Danger/Rationale describe the parked
+	// tool call for the UI — set alongside PendingPermission whenever a
+	// worker/reviewer/planner turn parks on stream.EventPermissionRequest,
+	// cleared together once the broker resolves it. Bypasses the state
+	// machine entirely (SetPendingPermission/ClearPendingPermission),
+	// same as SetSpec/SetProvisioned: parking happens mid-turn, not at
+	// an Advance boundary.
+	PendingPermissionTool      string `json:"pending_permission_tool,omitempty"`
+	PendingPermissionArgs      string `json:"pending_permission_args,omitempty"`
+	PendingPermissionDanger    string `json:"pending_permission_danger,omitempty"`
+	PendingPermissionRationale string `json:"pending_permission_rationale,omitempty"`
+	// AutoApproveSafe, when true (the default for new missions), grants
+	// the hidden session standing approval for any shell call the
+	// danger classifier rates safe — a mission runs for hours
+	// unattended, and per-command-shape approval built for a human
+	// watching a chat session would otherwise park it on every novel
+	// (but harmless) shell invocation. Destructive-classified commands
+	// still always ask: tools.Permissions.Resolve forces that
+	// regardless of any grant, so this cannot weaken that guarantee.
+	AutoApproveSafe bool   `json:"auto_approve_safe"`
+	ScheduleID      string `json:"schedule_id,omitempty"`
+	// SessionID is a hidden, non-chat-facing session row this mission's
+	// worker/reviewer/planner turns run under — loop.Agent's tool-call
+	// bookkeeping (session_events, audit) hard-requires a real session
+	// id, which a mission otherwise has no reason to have.
+	SessionID string    `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Spec is the mission's plan: an ordered list of units, each verified
@@ -49,12 +85,17 @@ type Spec struct {
 }
 
 // PlanUnit is one item of the plan. Passes is flipped only by the
-// harness (RunVerify), never by model output, and only on verify_cmd's
-// exit-code evidence.
+// harness (RunVerify + CheckArtifacts), never by model output, and
+// only on that harness-run evidence.
 type PlanUnit struct {
 	Title     string `json:"title"`
 	VerifyCmd string `json:"verify_cmd"`
-	Passes    bool   `json:"passes"`
+	// Artifacts are workspace-relative paths this unit must produce.
+	// The harness checks each exists and is non-empty BEFORE running
+	// verify_cmd — a tautological verify_cmd (echo 'done') can no
+	// longer fake completion when the declared artifact is missing.
+	Artifacts []string `json:"artifacts,omitempty"`
+	Passes    bool     `json:"passes"`
 }
 
 // ProgressNote is one append-only entry in the mission's progress log
@@ -74,6 +115,16 @@ type Event struct {
 	Provenance  string          `json:"provenance"`
 	Fingerprint string          `json:"fingerprint,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// Notification is one row from the notifications inbox.
+type Notification struct {
+	ID        string    `json:"id"`
+	MissionID string    `json:"mission_id"`
+	Kind      string    `json:"kind"`
+	Message   string    `json:"message"`
+	Read      bool      `json:"read"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Sentinel errors the HTTP layer maps onto status codes, mirroring

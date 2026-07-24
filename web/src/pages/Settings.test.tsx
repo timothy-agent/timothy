@@ -205,7 +205,7 @@ describe('Providers tab', () => {
 
   it('disables Add until a test passes, then stores the key and creates enabled', async () => {
     vi.mocked(setSecret).mockResolvedValue()
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-5.2' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-4.7-flash' })
     vi.mocked(createProvider).mockResolvedValue('p2')
 
     renderPage('/settings/providers')
@@ -224,13 +224,13 @@ describe('Providers tab', () => {
     expect(setSecret).toHaveBeenCalledWith('ZAI_API_KEY', 'gsk_abc')
     expect(validateProvider).toHaveBeenCalledWith(
       expect.objectContaining({ driver: 'openaicompat', base_url: 'https://api.z.ai/api/paas/v4' }),
-      'glm-5.2',
+      'glm-4.7-flash',
     )
     expect(createProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         enabled: true,
-        default_model: 'glm-5.2',
-        models: [{ id: 'glm-5.2', prices: { input_per_mtok: 1.4, output_per_mtok: 4.4 } }],
+        default_model: 'glm-4.7-flash',
+        models: [{ id: 'glm-4.7-flash', prices: { input_per_mtok: 0, output_per_mtok: 0 } }],
       }),
     )
   })
@@ -245,7 +245,7 @@ describe('Providers tab', () => {
 
   it('re-locks Add after editing a field past a passing test', async () => {
     vi.mocked(setSecret).mockResolvedValue()
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-5.2' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-4.7-flash' })
 
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
@@ -283,7 +283,7 @@ describe('Providers tab', () => {
     vi.mocked(validateProvider).mockResolvedValue({
       ok: false,
       latency_ms: 5000,
-      model: 'glm-5.2',
+      model: 'glm-4.7-flash',
       detail: 'upstream status 401',
     })
 

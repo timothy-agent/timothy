@@ -2,10 +2,16 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeStore is an in-memory driverStore for scripting Driver scenarios
@@ -25,6 +31,25 @@ func (f *fakeStore) put(id string, m Mission) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.missions[id] = m
+}
+
+func (f *fakeStore) Create(ctx context.Context, m Mission) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if m.ID == "" {
+		m.ID = fmt.Sprintf("fake-%d", len(f.missions)+1)
+	}
+	f.missions[m.ID] = m
+	return m.ID, nil
+}
+
+func (f *fakeStore) SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
+	f.missions[id] = m
+	return nil
 }
 
 func (f *fakeStore) Get(ctx context.Context, id string) (Mission, error) {
@@ -56,7 +81,8 @@ func (f *fakeStore) AppendEvent(ctx context.Context, id, kind string, payload ma
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq[id]++
-	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: kind})
+	raw, _ := json.Marshal(payload)
+	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: kind, Payload: raw})
 	return nil
 }
 
@@ -66,6 +92,26 @@ func (f *fakeStore) SetSpec(ctx context.Context, id string, spec Spec) error {
 	m := f.missions[id]
 	m.Spec = spec
 	f.missions[id] = m
+	return nil
+}
+
+func (f *fakeStore) SetLastEvidence(ctx context.Context, id, evidence string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.LastEvidence = evidence
+	f.missions[id] = m
+	return nil
+}
+
+func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.Progress = append(m.Progress, ProgressNote{Note: note})
+	f.missions[id] = m
+	f.seq[id]++
+	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: "mission.progress"})
 	return nil
 }
 
@@ -98,7 +144,7 @@ func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPa
 	return v, "worker output", nil
 }
 
-func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, diff string, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
+func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
 	v := r.reviewVerdicts[r.reviewIdx]
 	if r.reviewIdx < len(r.reviewVerdicts)-1 {
 		r.reviewIdx++
@@ -115,7 +161,7 @@ func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, researchNot
 }
 
 func testDriver(store driverStore, runner Runner) *Driver {
-	return NewDriver(store, runner, nil, nil, slog.Default())
+	return NewDriver(store, runner, nil, nil, nil, nil, slog.Default())
 }
 
 // driveN calls Advance up to n times, stopping early if it returns
@@ -149,6 +195,9 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDone || m.Status != StatusDone {
 		t.Fatalf("mission after happy path = %+v, want done/done", m)
+	}
+	if m.LastEvidence != "did it" {
+		t.Fatalf("mission.LastEvidence = %q, want the worker's evidence persisted for the reviewer", m.LastEvidence)
 	}
 }
 
@@ -270,6 +319,120 @@ func TestDriverGatekeeperCleanupOnTerminal(t *testing.T) {
 	}
 }
 
+// blockingRunner's RunWorker blocks on a channel until released,
+// letting a test force two concurrent Drive calls to overlap on the
+// same mission — reproducing the race where the work-slot sweep
+// claims a mission that a still-running Drive loop already owns.
+type blockingRunner struct {
+	release  chan struct{}
+	started  chan struct{}
+	starts   int32
+	verdict  WorkerVerdict
+	reviewV  ReviewVerdict
+	planSpec Spec
+}
+
+func (r *blockingRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
+	atomic.AddInt32(&r.starts, 1)
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	<-r.release
+	return r.verdict, "worker output", nil
+}
+
+func (r *blockingRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
+	return r.reviewV, &GatekeeperState{}, nil
+}
+
+func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error) {
+	return r.planSpec, nil
+}
+
+// TestDriverDriveIsSerializedPerMission reproduces a real bug: the
+// work-slot sweep's ClaimWorkSlot can claim a mission that is still
+// actively owned by an earlier Drive goroutine (Advance's own
+// transitions pass through status='idle' transiently between steps),
+// spawning a second concurrent Drive loop that races the first's
+// read-then-write Advance calls. A second Drive call for a mission
+// already being driven must no-op instead of starting a competing
+// loop.
+func TestDriverDriveIsSerializedPerMission(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+		Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
+	})
+	runner := &blockingRunner{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 1),
+		verdict: WorkerVerdict{Outcome: "done", Evidence: "did it"},
+		reviewV: ReviewVerdict{Approved: true},
+	}
+	d := testDriver(store, runner)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = d.Drive(context.Background(), "m1")
+	}()
+	<-runner.started // first Drive is now blocked inside RunWorker
+	go func() {
+		defer wg.Done()
+		_ = d.Drive(context.Background(), "m1") // must no-op, not race the first
+	}()
+	time.Sleep(20 * time.Millisecond) // give the second call a chance to (wrongly) start a competing Advance
+	close(runner.release)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&runner.starts); got != 1 {
+		t.Fatalf("RunWorker started %d times for one mission, want exactly 1 (second Drive must no-op while the first owns the mission)", got)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone || m.Status != StatusDone {
+		t.Fatalf("mission after single-owner drive = %+v, want done/done", m)
+	}
+}
+
+// TestDriverReviewApprovalContradictedByVerifyRoutesToRework
+// reproduces a real bug: the reviewer approves a unit whose evidence
+// doesn't hold up (e.g. a worker claiming a file exists when it never
+// wrote one) — the harness's own verify_cmd then fails. This must NOT
+// be treated as an infra fault (which just parks the mission for a
+// human to blindly resume forever); it must route through rework,
+// back to execute, so the worker gets another attempt with the actual
+// failure recorded as a progress note.
+func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "research", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md", VerifyCmd: "test -f /nonexistent-verify-target"}}},
+	})
+	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseExecute {
+		t.Fatalf("mission phase = %q, want execute (rework path), not stuck on an infra pause", m.Phase)
+	}
+	if m.PauseReason == PauseInfra {
+		t.Fatal("a failed verify_cmd after approval must not be classified as an infra fault")
+	}
+	if m.Iteration != 1 {
+		t.Fatalf("iteration = %d, want 1 (rework costs an iteration like any other rework)", m.Iteration)
+	}
+	if len(m.Progress) == 0 {
+		t.Fatal("expected a progress note explaining the verify failure to the next worker turn")
+	}
+	if !strings.Contains(m.Progress[len(m.Progress)-1].Note, "Verification failed") {
+		t.Fatalf("progress note = %q, want it to explain the verify failure", m.Progress[len(m.Progress)-1].Note)
+	}
+}
+
 func TestDriverBlockedParksForInput(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
@@ -286,5 +449,211 @@ func TestDriverBlockedParksForInput(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusWaitingForInput {
 		t.Fatalf("mission status = %q, want waiting_for_input", m.Status)
+	}
+}
+
+// fakeSessionCreator hands out sequential ids without a real
+// session.Store — Driver.Create only needs a non-empty string back.
+type fakeSessionCreator struct{ n int }
+
+func (f *fakeSessionCreator) Create(ctx context.Context, title string) (string, error) {
+	f.n++
+	return fmt.Sprintf("session-%d", f.n), nil
+}
+
+// fakeGranter records every Grant call for assertion — a real
+// sessionGranter for tests, not a mock of one.
+type fakeGranter struct {
+	calls []struct{ sessionID, tool, pattern string }
+}
+
+func (f *fakeGranter) Grant(ctx context.Context, sessionID, tool, pattern string, ttl time.Duration) error {
+	f.calls = append(f.calls, struct{ sessionID, tool, pattern string }{sessionID, tool, pattern})
+	return nil
+}
+
+func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
+	store := newFakeStore()
+	granter := &fakeGranter{}
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+
+	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true}, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(granter.calls) != 1 {
+		t.Fatalf("Grant calls = %d, want exactly 1", len(granter.calls))
+	}
+	call := granter.calls[0]
+	if call.tool != "shell" || call.pattern != "*" {
+		t.Fatalf("Grant call = %+v, want tool=shell pattern=*", call)
+	}
+	m, _ := store.Get(context.Background(), id)
+	if call.sessionID != m.SessionID {
+		t.Fatalf("Grant sessionID = %q, want the mission's own hidden session %q", call.sessionID, m.SessionID)
+	}
+}
+
+func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
+	store := newFakeStore()
+	granter := &fakeGranter{}
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+
+	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}, ""); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(granter.calls) != 0 {
+		t.Fatalf("Grant calls = %d, want 0 when AutoApproveSafe is false", len(granter.calls))
+	}
+}
+
+// TestDriverSkipsReviewWhenHarnessChecksPass: a non-coding mission
+// whose unit declares artifacts that pass the harness's own checks
+// completes WITHOUT an LLM review round — the reviewer is the least
+// reliable and most expensive link, and passing deterministic checks
+// already establish the unit holds up. The scriptedRunner has no
+// review verdicts scripted: any RunReview call would panic the test.
+func TestDriverSkipsReviewWhenHarnessChecksPass(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "summary.md"), []byte("real content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}}}
+	d := testDriver(store, runner)
+
+	driveN(t, d, "m1", 2)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone || m.Status != StatusDone {
+		t.Fatalf("mission = %+v, want done/done without a review round", m)
+	}
+}
+
+// TestDriverArtifactCheckBlocksTautologicalDone: the worker claims
+// done but never wrote the declared artifact — the harness check must
+// send it back to execute (self-retry), never let the claim stand.
+func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: t.TempDir(),
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it (no it didn't)"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseExecute || m.Spec.Units[0].Passes {
+		t.Fatalf("mission = phase %s passes %v, want back in execute with the unit NOT passed", m.Phase, m.Spec.Units[0].Passes)
+	}
+	if m.Iteration == 0 {
+		t.Fatal("a failed artifact check must cost an iteration")
+	}
+}
+
+// TestDriverCodingMissionsAlwaysReview: the skip gate must never apply
+// to coding missions — a diff can be wrong in ways existence checks
+// cannot see.
+func TestDriverCodingMissionsAlwaysReview(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Spec: Spec{Units: []PlanUnit{{Title: "write code", Artifacts: []string{"main.go"}}}},
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	d := testDriver(store, runner)
+
+	driveN(t, d, "m1", 3)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone {
+		t.Fatalf("mission = %+v, want done via a real review round", m)
+	}
+	if m.Phase == PhaseDone && runner.reviewIdx == 0 && len(runner.reviewVerdicts) == 1 {
+		// reviewIdx stays 0 when only one verdict exists and it was
+		// consumed; assert the review actually ran via phase history:
+		// a skipped review would have finished in 2 Advance calls with
+		// no review phase. The phase_started events record it.
+		found := false
+		for _, ev := range store.events["m1"] {
+			if ev.Kind == "mission.review_skipped" {
+				found = true
+			}
+		}
+		if found {
+			t.Fatal("coding mission skipped review — the gate must not apply to coding kind")
+		}
+	}
+	// An approval must leave a verdict event — otherwise a review that
+	// ran is indistinguishable from one that never happened.
+	approved := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.review_verdict" && strings.Contains(string(ev.Payload), `"decision":"approved"`) {
+			approved = true
+		}
+	}
+	if !approved {
+		t.Fatal("approved review left no mission.review_verdict event")
+	}
+}
+
+// TestDriverEscalatesRepeatedRework: a second review rejection with
+// the IDENTICAL gap fingerprint drops the resumed gatekeeper session,
+// so any subsequent round starts with fresh eyes instead of the same
+// session re-asserting its anchored verdict.
+func TestDriverEscalatesRepeatedRework(t *testing.T) {
+	findings := []Finding{{Title: "missing depth", File: "summary.md"}}
+	fp := GapFingerprint(findings)
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "research", Phase: PhaseReview, Status: StatusWorking,
+		MaxIterations: 8, Workspace: t.TempDir(), LastGapFingerprint: fp, StallCount: 1,
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary"}}},
+	})
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: findings}}}
+	d := testDriver(store, runner)
+	d.gatekeepers["m1"] = &GatekeeperState{}
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if _, ok := d.gatekeepers["m1"]; ok {
+		t.Fatal("gatekeeper state survived a repeated identical rework — must be dropped for fresh-eyes review")
+	}
+}
+
+// TestDriverModelFloorPausesImmediately: ErrModelFloor from the runner
+// must pause the mission as infra on the FIRST turn — not accrue
+// worker_failed rounds toward backoff.
+func TestDriverModelFloorPausesImmediately(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: amazon.nova-lite-v1:0", ErrModelFloor)}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
+		t.Fatalf("mission after below-floor turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
 	}
 }

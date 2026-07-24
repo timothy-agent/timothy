@@ -9,7 +9,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown ollama dev
+	brain gateway memoryd web markitdown ollama dev canary canary-coding
 
 build:
 	$(GO_RUN) go build ./...
@@ -74,3 +74,14 @@ down:
 
 logs:
 	$(COMPOSE) logs -f
+
+# Golden-mission regression gate: runs one research mission end-to-end
+# against the live stack and asserts it completes unattended (no parks,
+# harness-verified artifacts, bounded turns). Needs the stack up.
+canary:
+	./scripts/canary-mission.sh
+
+# Same gate for the coding path: worktree provisioning, LLM review,
+# artifact verified inside the worktree. Needs the stack up.
+canary-coding:
+	./scripts/canary-coding.sh

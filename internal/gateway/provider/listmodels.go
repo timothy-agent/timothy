@@ -23,7 +23,7 @@ type ModelLister interface {
 // listModels GETs url and decodes the OpenAI-style {"data": [{"id"}]}
 // envelope, which the Anthropic models endpoint shares.
 func listModels(ctx context.Context, client *http.Client, url string, header func(*http.Request)) ([]AvailableModel, error) {
-	resp, err := doWithRetry(ctx, client, func() (*http.Request, error) {
+	resp, err := doWithRetry(ctx, client, maxRetries, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err

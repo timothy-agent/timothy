@@ -28,10 +28,13 @@ const (
 	// through candidates+classify before the normal agent lookup.
 	autoAgentName = "auto"
 	// classifyRoute serves the auto-dispatch classification call —
-	// same cheap side-call route as auto-title, distillation, and
-	// extraction. "local" is a real, always-provisioned fixed route
+	// same cheap side-call route distillation and extraction still use.
+	// "local" is a real, always-provisioned fixed route
 	// (migrations/0022_local_route.sql); "mini" was never seeded by
-	// any migration and every call on it failed with no_route.
+	// any migration and every call on it failed with no_route. autoTitle
+	// uses defaultRoute instead — a session's name deserves the same
+	// model quality as the conversation it's naming, not the cheapest
+	// available one.
 	classifyRoute = "local"
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
@@ -608,10 +611,10 @@ func (s *Service) autoTitle(sessionID, userText, reply string) {
 	input := userText + "\n\n" + truncateRunes(reply, 200)
 
 	events, err := s.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: classifyRoute,
-		Purpose:      "title",
-		System:       titleSystem,
-		Messages:     []provider.Message{{Role: "user", Content: input}},
+		Route:    defaultRoute,
+		Purpose:  "title",
+		System:   titleSystem,
+		Messages: []provider.Message{{Role: "user", Content: input}},
 		// Reasoning models spend hundreds of tokens thinking before
 		// the first answer token; a tight cap truncates the stream
 		// mid-reasoning and yields an empty title.

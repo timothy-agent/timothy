@@ -1021,3 +1021,37 @@ func TestRetryRejectsWhenNothingToRetry(t *testing.T) {
 		t.Fatalf("Retry on a completed turn: err = %v, want ErrNoRetryableTurn", err)
 	}
 }
+
+// TestAutoTitleUsesDefaultRouteNotClassifyRoute pins a real behavior
+// change: a session's name deserves the same model quality as the
+// conversation it's naming, not the cheapest classification route
+// (which resolves to a small local model unfit for the job).
+func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("a good title")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		return log.titles["s1"] != ""
+	})
+
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	for _, r := range gw.requests {
+		if r.Purpose == "title" {
+			if r.Route != defaultRoute {
+				t.Fatalf("auto-title route = %q, want %q", r.Route, defaultRoute)
+			}
+			return
+		}
+	}
+	t.Fatal("no title request recorded")
+}

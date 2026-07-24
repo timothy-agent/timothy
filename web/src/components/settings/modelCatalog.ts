@@ -64,6 +64,9 @@ export const modelCatalog: Record<string, CatalogModel[]> = {
     // docs.z.ai direct pricing (verified earlier, cross-checked
     // against 2 sources) — OpenRouter re-sells this at a different
     // rate, not the number that matters for a direct GLM provider.
+    // glm-4.7-flash is Z.ai's free tier — distinct from the paid
+    // glm-4.7-flashx SKU, do not conflate the two.
+    { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', prices: { input_per_mtok: 0, output_per_mtok: 0 } },
     { id: 'glm-5.2', name: 'GLM-5.2', prices: { input_per_mtok: 1.4, output_per_mtok: 4.4 } },
     { id: 'glm-4.6', name: 'GLM-4.6', prices: { input_per_mtok: 0.6, output_per_mtok: 2.2 } },
     { id: 'glm-4.5', name: 'GLM-4.5', prices: { input_per_mtok: 0.6, output_per_mtok: 2.2 } },

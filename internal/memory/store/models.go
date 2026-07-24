@@ -51,11 +51,22 @@ type Memory struct {
 	Confidence      float32
 }
 
-// Entity is a named thing memories can reference.
+// Entity is a named thing memories can reference. MemoryCount is the
+// number of active memories referencing it (graph listings only; zero
+// for entities no active memory cites).
 type Entity struct {
-	ID   string
-	Type string
-	Name string
+	ID          string
+	Type        string
+	Name        string
+	MemoryCount int
+}
+
+// EntityEdge is one co-occurrence edge of the entity graph: Weight
+// active memories reference both Src and Dst. Src < Dst (deduped).
+type EntityEdge struct {
+	Src    string
+	Dst    string
+	Weight int
 }
 
 // Vector is a pgvector embedding, encoded as the extension's text

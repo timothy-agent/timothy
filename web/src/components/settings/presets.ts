@@ -79,7 +79,7 @@ export const providerPresets: ProviderPreset[] = [
     defaultRef: 'ZAI_API_KEY',
     keyPlaceholder: 'paste key',
     keyHint: 'Create one at z.ai.',
-    validateModel: 'glm-5.2',
+    validateModel: 'glm-4.7-flash',
   },
   {
     id: 'grok',

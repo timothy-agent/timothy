@@ -50,7 +50,7 @@ func TestWebFetchRefusesLocalAddresses(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := WebFetch()
+	tool := WebFetch(WebFetchConfig{})
 	args, _ := json.Marshal(map[string]string{"url": srv.URL})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil || !strings.Contains(err.Error(), "blocked address") {
@@ -60,7 +60,7 @@ func TestWebFetchRefusesLocalAddresses(t *testing.T) {
 
 func TestWebFetchRejectsBadSchemes(t *testing.T) {
 	t.Parallel()
-	tool := WebFetch()
+	tool := WebFetch(WebFetchConfig{})
 	for _, u := range []string{"file:///etc/passwd", "ftp://example.com", "gopher://x"} {
 		args, _ := json.Marshal(map[string]string{"url": u})
 		_, err := tool.Execute(context.Background(), args)
@@ -106,7 +106,7 @@ func TestFetchReadableTruncatesLongText(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := fetchReadable(context.Background(), srv.Client(), srv.URL)
+	got, err := fetchReadable(context.Background(), srv.Client(), "", srv.URL)
 	if err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestFetchReadableStripsUserinfo(t *testing.T) {
 	// Inject credentials into the URL; they must not become a header.
 	u, _ := url.Parse(srv.URL)
 	authed := u.Scheme + "://user:secret@" + u.Host + "/"
-	if _, err := fetchReadable(context.Background(), srv.Client(), authed); err != nil {
+	if _, err := fetchReadable(context.Background(), srv.Client(), "", authed); err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
 	if gotAuth != "" {
@@ -152,12 +152,99 @@ func TestFetchReadableRejectsNonTextAndErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchReadable(context.Background(), srv.Client(), srv.URL+"/bin"); err == nil ||
+	if _, err := fetchReadable(context.Background(), srv.Client(), "", srv.URL+"/bin"); err == nil ||
 		!strings.Contains(err.Error(), "unsupported content type") {
 		t.Fatalf("binary fetch err = %v", err)
 	}
-	if _, err := fetchReadable(context.Background(), srv.Client(), srv.URL+"/missing"); err == nil ||
+	if _, err := fetchReadable(context.Background(), srv.Client(), "", srv.URL+"/missing"); err == nil ||
 		!strings.Contains(err.Error(), "http 404") {
 		t.Fatalf("404 fetch err = %v", err)
+	}
+}
+
+// fakeMarkitdown returns a sidecar stub whose /convert response is
+// controlled by the handler.
+func fakeMarkitdown(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFetchReadableHTMLPrefersMarkitdown(t *testing.T) {
+	t.Parallel()
+	md := fakeMarkitdown(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Mimetype"); got != "text/html" {
+			t.Errorf("X-Mimetype = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"markdown": "# Plans\n\n| tier | price |\n|---|---|\n| basic | $5 |"}`))
+	})
+	page := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body><h1>Plans</h1><table><tr><td>basic</td><td>$5</td></tr></table></body></html>`))
+	})
+
+	got, err := fetchReadable(context.Background(), page.Client(), md.URL, page.URL)
+	if err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if !strings.Contains(got, "| tier | price |") {
+		t.Fatalf("got %q, want markitdown table structure", got)
+	}
+}
+
+func TestFetchReadableHTMLFallsBackWhenSidecarFails(t *testing.T) {
+	t.Parallel()
+	md := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "conversion failed", http.StatusUnprocessableEntity)
+	})
+	page := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><head><title>Pricing</title></head><body><p>Basic costs $5.</p></body></html>`))
+	})
+
+	got, err := fetchReadable(context.Background(), page.Client(), md.URL, page.URL)
+	if err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if !strings.Contains(got, "Basic costs") {
+		t.Fatalf("got %q, want DOM-extractor fallback content", got)
+	}
+}
+
+func TestFetchReadablePDF(t *testing.T) {
+	t.Parallel()
+	md := fakeMarkitdown(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Mimetype"); got != "application/pdf" {
+			t.Errorf("X-Mimetype = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"markdown": "# Q3 Report\n\nRevenue grew."}`))
+	})
+	pdf := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-1.7 fake"))
+	})
+
+	got, err := fetchReadable(context.Background(), pdf.Client(), md.URL, pdf.URL)
+	if err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if !strings.Contains(got, "Q3 Report") {
+		t.Fatalf("got %q, want converted PDF markdown", got)
+	}
+
+	// Without the sidecar, PDFs stay unsupported with a clear reason.
+	if _, err := fetchReadable(context.Background(), pdf.Client(), "", pdf.URL); err == nil ||
+		!strings.Contains(err.Error(), "markitdown sidecar") {
+		t.Fatalf("unconfigured pdf fetch err = %v", err)
+	}
+
+	// A sidecar failure on PDF is an error, not silent garbage.
+	broken := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "conversion failed", http.StatusUnprocessableEntity)
+	})
+	if _, err := fetchReadable(context.Background(), pdf.Client(), broken.URL, pdf.URL); err == nil ||
+		!strings.Contains(err.Error(), "pdf conversion failed") {
+		t.Fatalf("broken sidecar pdf fetch err = %v", err)
 	}
 }

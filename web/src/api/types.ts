@@ -141,6 +141,27 @@ export interface RetrievedMemory {
   score: number
 }
 
+// Entity graph (GET /v1/entities/graph): nodes are extracted entities
+// with their active-memory counts; edges are co-occurrences (weight =
+// shared active memories).
+export interface EntityNode {
+  id: string
+  type: string
+  name: string
+  memory_count: number
+}
+
+export interface EntityEdge {
+  src: string
+  dst: string
+  weight: number
+}
+
+export interface EntityGraphData {
+  entities: EntityNode[]
+  edges: EntityEdge[]
+}
+
 // Usage aggregates served by /v1/admin/usage/* — chart-ready, never
 // raw ledger rows.
 export interface UsageSummary {
@@ -151,6 +172,9 @@ export interface UsageSummary {
   cache_write_tokens: number
   requests: number
   errors: number
+  unpriced_requests: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
 }
 
 export interface UsagePoint {
@@ -161,6 +185,20 @@ export interface UsagePoint {
   output_tokens: number
   requests: number
   errors: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
+}
+
+// One mission's total ledger footprint. unpriced_requests counts turns
+// whose cost is unknown (NULL in the ledger) — cost_usd is then a
+// floor, not the whole bill.
+export interface MissionUsage {
+  mission_id: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+  unpriced_requests: number
 }
 
 export interface SessionUsage {
@@ -231,6 +269,26 @@ export interface ChainEntry {
   model: string
 }
 
+// RouteEntryStatus is the router's live view of one chain entry: the
+// usability gate verdict plus the ledger stats and normalized factors
+// behind scored strategies. Numeric fields are absent when the ledger
+// has no data (or the model is unpriced) — never a guessed 0.
+export interface RouteEntryStatus {
+  provider_id: string
+  provider_name?: string
+  model: string
+  usable: boolean
+  skip_reason?: string
+  score?: number
+  norm_price?: number
+  norm_latency?: number
+  norm_tps?: number
+  uptime?: number
+  latency_ms?: number
+  tokens_per_s?: number
+  output_per_mtok?: number
+}
+
 export interface AdminRoute {
   name: string
   chain: ChainEntry[]
@@ -238,6 +296,10 @@ export interface AdminRoute {
   // score entries from recent ledger stats and declared prices.
   strategy: string
   enabled: boolean
+  // Router try order with live stats — present for enabled routes once
+  // a snapshot is loaded. serving is the first usable resolved entry.
+  resolved?: RouteEntryStatus[]
+  serving?: ChainEntry
 }
 
 export interface ProviderHealth {
@@ -275,6 +337,13 @@ export interface AdminAgent {
   memory: boolean
   is_default: boolean
   enabled: boolean
+  // Mission-only fields (internal/brain/missions) — meaningless to a
+  // chat-only agent, absent or at zero values for one. Optional here
+  // since most call sites (chat agent picker etc.) never populate
+  // them.
+  review_route?: string
+  budget_usd?: number
+  approval_allowlist?: string[]
 }
 
 // AdminTool is one entry of the live tool surface (builtins +
@@ -283,6 +352,77 @@ export interface AdminAgent {
 export interface AdminTool {
   name: string
   description: string
+}
+
+// PlanUnit is one item of a mission's plan. passes is flipped only by
+// the harness (RunVerify), never claimed by the model.
+export interface PlanUnit {
+  title: string
+  verify_cmd: string
+  artifacts?: string[]
+  passes: boolean
+}
+
+export interface ProgressNote {
+  at: string
+  note: string
+}
+
+// Mission is one long-running, agent-driven unit of work
+// (internal/brain/missions): research -> plan -> execute -> review
+// under a state machine.
+export interface Mission {
+  id: string
+  goal: string
+  kind: 'coding' | 'research' | 'scheduled'
+  agent_id?: string
+  phase: 'research' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
+  status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
+  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | ''
+  pause_message?: string
+  workspace?: string
+  worktree?: string
+  branch?: string
+  base_commit?: string
+  spec: { units: PlanUnit[] }
+  progress: ProgressNote[]
+  iteration: number
+  max_iterations: number
+  consecutive_failures: number
+  last_gap_fingerprint?: string
+  stall_count: number
+  budget_usd?: number
+  route: string
+  review_route: string
+  escalation_route?: string
+  pending_permission?: string
+  pending_permission_tool?: string
+  pending_permission_args?: string
+  pending_permission_danger?: string
+  pending_permission_rationale?: string
+  auto_approve_safe: boolean
+  schedule_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface MissionEvent {
+  mission_id: string
+  seq: number
+  kind: string
+  payload: unknown
+  provenance: string
+  fingerprint?: string
+  created_at: string
+}
+
+export interface Notification {
+  id: string
+  mission_id: string
+  kind: string
+  message: string
+  read: boolean
+  created_at: string
 }
 
 // AdminConnector is one third-party integration the agent can call as

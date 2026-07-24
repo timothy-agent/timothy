@@ -21,6 +21,7 @@ func RegisterUsage(srv *httpserver.Server, agg *ledger.Aggregator, budgets *ledg
 	srv.Handle("GET /internal/admin/usage/latency", http.HandlerFunc(u.handleLatency))
 	srv.Handle("GET /internal/admin/usage/cache", http.HandlerFunc(u.handleCache))
 	srv.Handle("GET /internal/admin/usage/budget", http.HandlerFunc(u.handleBudget))
+	srv.Handle("GET /internal/admin/usage/mission", http.HandlerFunc(u.handleMission))
 }
 
 type usageAPI struct {
@@ -123,6 +124,20 @@ func (u *usageAPI) handleCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"providers": rows})
+}
+
+func (u *usageAPI) handleMission(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "id is required")
+		return
+	}
+	m, err := u.agg.Mission(r.Context(), id)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "usage_failed", err.Error())
+		return
+	}
+	writeJSON(w, m)
 }
 
 func (u *usageAPI) handleBudget(w http.ResponseWriter, r *http.Request) {

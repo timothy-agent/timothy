@@ -1,15 +1,10 @@
-import {
-  ArrowDown01Icon,
-  ArrowLeft01Icon,
-  ArrowUp01Icon,
-  Delete02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
+import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { listProviders, listRoutes, patchRoute, providersHealth } from '../../api/client'
-import type { AdminProvider, AdminRoute, ChainEntry, ProviderHealth } from '../../api/types'
+import { listProviders, listRoutes, patchRoute } from '../../api/client'
+import type { AdminProvider, AdminRoute, ChainEntry } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import {
@@ -19,21 +14,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
+import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
+import { reorder } from './pipeline/useReorderDrag'
 import { Field, Toggle } from './shared'
 import { errText } from './util'
+
+const scoredStrategies = ['auto', 'price', 'latency']
 
 export function RouteEdit() {
   const { name } = useParams()
   const [route, setRoute] = useState<AdminRoute | null | undefined>(undefined)
   const [providers, setProviders] = useState<AdminProvider[]>([])
-  const [health, setHealth] = useState<Record<string, ProviderHealth>>({})
 
   const refresh = useCallback(() => {
-    Promise.all([listRoutes(), listProviders(), providersHealth()])
-      .then(([routes, p, h]) => {
+    Promise.all([listRoutes(), listProviders()])
+      .then(([routes, p]) => {
         setRoute(routes.find((r) => r.name === name) ?? null)
         setProviders(p)
-        setHealth(Object.fromEntries(h.map((x) => [x.name, x])))
       })
       .catch((err: unknown) => toast.error('Could not load route', { description: errText(err) }))
   }, [name])
@@ -43,17 +40,47 @@ export function RouteEdit() {
   if (route === undefined) return null
 
   const nameOf = (id: string) => providers.find((p) => p.id === id)?.name ?? id.slice(0, 8)
-  const serving = route.enabled
-    ? route.chain.find((e) => {
-        const p = providers.find((x) => x.id === e.provider_id)
-        return p?.enabled && health[p.name]?.healthy
-      })
-    : undefined
+  const scored = scoredStrategies.includes(route.strategy)
+  const serving = route.serving
 
   const save = (patch: { chain?: ChainEntry[]; strategy?: string; enabled?: boolean }) => {
     patchRoute(route.name, patch).then(refresh, (err: unknown) =>
       toast.error('Could not update route', { description: errText(err) }),
     )
+  }
+
+  // Display order: the router's resolved order for scored strategies
+  // (what actually gets tried), written chain order otherwise — where
+  // resolved lines up index-for-index because ordered routes never
+  // re-sort. Chain entry references are preserved so edits map back.
+  const displayEntries: PipelineEntry[] = (() => {
+    if (scored && route.resolved) {
+      const pool = [...route.chain]
+      return route.resolved.map((s) => {
+        const i = pool.findIndex(
+          (c) => c.provider_id === s.provider_id && (c.model === s.model || c.model === ''),
+        )
+        const entry = i >= 0 ? pool.splice(i, 1)[0] : { provider_id: s.provider_id, model: s.model }
+        return { entry, status: s }
+      })
+    }
+    return route.chain.map((e, i) => ({ entry: e, status: route.resolved?.[i] }))
+  })()
+
+  // Reorder positions are display positions; drag and arrows are only
+  // live for ordered routes, where display order IS chain order.
+  const moveEntry = (from: number, to: number) => {
+    if (to < 0 || to >= route.chain.length || from === to) return
+    save({ chain: reorder(route.chain, from, to) })
+  }
+  const removeEntry = (displayIndex: number) => {
+    const target = displayEntries[displayIndex].entry
+    const i = route.chain.indexOf(target)
+    const chain =
+      i >= 0
+        ? route.chain.filter((_, j) => j !== i)
+        : route.chain.filter((c) => !(c.provider_id === target.provider_id && c.model === target.model))
+    save({ chain })
   }
 
   return (
@@ -94,60 +121,25 @@ export function RouteEdit() {
         <Toggle on={route.enabled} onChange={(v) => save({ enabled: v })} label={`${route.name} route enabled`} />
       </div>
 
-      <div className="max-w-2xl space-y-4">
-        <h2 className="text-sm font-semibold">Chain</h2>
-        <ol className="space-y-2">
-          {route.chain.map((e, i) => (
-            <li
-              key={`${e.provider_id}-${e.model}-${i}`}
-              className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-sm"
-            >
-              <span className="w-5 text-xs text-muted-foreground">{i + 1}.</span>
-              <span className="min-w-0 flex-1 truncate">
-                {nameOf(e.provider_id)} / <span className="font-mono">{e.model}</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <button
-                  type="button"
-                  aria-label={`Move ${e.model} up`}
-                  disabled={i === 0}
-                  onClick={() => {
-                    const chain = [...route.chain]
-                    ;[chain[i - 1], chain[i]] = [chain[i], chain[i - 1]]
-                    save({ chain })
-                  }}
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                >
-                  <HugeiconsIcon icon={ArrowUp01Icon} className="size-4" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Move ${e.model} down`}
-                  disabled={i === route.chain.length - 1}
-                  onClick={() => {
-                    const chain = [...route.chain]
-                    ;[chain[i], chain[i + 1]] = [chain[i + 1], chain[i]]
-                    save({ chain })
-                  }}
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                >
-                  <HugeiconsIcon icon={ArrowDown01Icon} className="size-4" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Remove ${e.model}`}
-                  onClick={() => save({ chain: route.chain.filter((_, j) => j !== i) })}
-                  className="text-muted-foreground hover:text-destructive"
-                >
-                  <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-                </button>
-              </span>
-            </li>
-          ))}
-          {route.chain.length === 0 && (
-            <li className="text-sm text-muted-foreground">No providers in this chain yet.</li>
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold">Chain</h2>
+          {scored ? (
+            <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+              auto-sorted by score
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">drag cards to set priority</span>
           )}
-        </ol>
+        </div>
+        <Pipeline
+          entries={displayEntries}
+          scored={scored}
+          serving={serving}
+          providers={providers}
+          onReorder={moveEntry}
+          onRemove={removeEntry}
+        />
         <AddChainEntry providers={providers} onAdd={(entry) => save({ chain: [...route.chain, entry] })} />
       </div>
     </div>

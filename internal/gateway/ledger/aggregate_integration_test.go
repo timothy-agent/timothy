@@ -137,6 +137,54 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 	}
 }
 
+func TestAggregateMissionUsage(t *testing.T) {
+	agg, led := testAggregator(t)
+	ctx := t.Context()
+	mission := aggMarker + "mission-1"
+
+	rows := []Entry{
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
+			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50},
+			LatencyMS: 100, Status: "ok", CostUSD: usd(0.10)},
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
+			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
+			LatencyMS: 100, Status: "ok", CostUSD: usd(0.20)},
+		// Unpriced turn: cost NULL by design, must count as unpriced.
+		{Provider: aggMarker + "a", Model: "m-local", Route: "coding", MissionID: mission,
+			Usage:     &stream.Usage{InputTokens: 40, OutputTokens: 20},
+			LatencyMS: 100, Status: "ok"},
+		// Another mission and a test probe: both excluded.
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: aggMarker + "other",
+			Usage:     &stream.Usage{InputTokens: 1000, OutputTokens: 1000},
+			LatencyMS: 100, Status: "ok", CostUSD: usd(9.0)},
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission, Purpose: "test",
+			Usage:     &stream.Usage{InputTokens: 999999, OutputTokens: 999999},
+			LatencyMS: 100, Status: "ok", CostUSD: usd(99.0)},
+	}
+	for _, e := range rows {
+		led.Record(ctx, e)
+	}
+
+	got, err := agg.Mission(ctx, mission)
+	if err != nil {
+		t.Fatalf("Mission: %v", err)
+	}
+	want := MissionUsage{MissionID: mission, CostUSD: 0.30,
+		InputTokens: 340, OutputTokens: 170, Requests: 3, UnpricedRequests: 1}
+	if got != want {
+		t.Fatalf("Mission = %+v, want %+v", got, want)
+	}
+
+	// A mission with no ledger rows is all zeros, not an error.
+	empty, err := agg.Mission(ctx, aggMarker+"never-ran")
+	if err != nil {
+		t.Fatalf("Mission(empty): %v", err)
+	}
+	if empty.Requests != 0 || empty.CostUSD != 0 {
+		t.Fatalf("empty mission = %+v, want zeros", empty)
+	}
+}
+
 func TestAggregateLatencyPercentiles(t *testing.T) {
 	agg, led := testAggregator(t)
 	from, to := seedAgg(t, led)

@@ -160,6 +160,13 @@ type Request struct {
 	System    string
 	Messages  []provider.Message
 	MissionID string // ledger tag: set when this turn serves a mission, not chat
+
+	// ExtraTools are tool defs available ONLY for this turn, on top of
+	// the agent's shared base set — e.g. the missions package's
+	// mission_status/review_verdict sentinel calls, which chat sessions
+	// must never see. Executed via extraExecutor, never merged into the
+	// shared registry other callers read.
+	ExtraTools []*tools.Tool
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -188,6 +195,26 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 
 	exec, defs := a.toolset()
 	defs = filterDefs(defs, req.ToolAllow)
+	if len(req.ExtraTools) > 0 {
+		var extraDefs []provider.ToolDef
+		exec, extraDefs = withExtraTools(exec, req.ExtraTools)
+		// An extra tool that shares a base tool's name REPLACES it for
+		// this turn (extraExecutor already resolves extras first): the
+		// model must see exactly one def per name, and it must be the
+		// turn-scoped one — e.g. a mission's workspace-rooted shell
+		// shadowing the global shell.
+		override := make(map[string]bool, len(extraDefs))
+		for _, d := range extraDefs {
+			override[d.Name] = true
+		}
+		kept := make([]provider.ToolDef, 0, len(defs))
+		for _, d := range defs {
+			if !override[d.Name] {
+				kept = append(kept, d)
+			}
+		}
+		defs = append(kept, extraDefs...)
+	}
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
 	var lastMeta *stream.Meta
@@ -546,4 +573,36 @@ func filterDefs(defs []provider.ToolDef, allow []string) []provider.ToolDef {
 		}
 	}
 	return out
+}
+
+// extraExecutor tries a turn's ExtraTools before falling back to the
+// shared base executor — extras are never merged into the shared
+// registry, so no other caller (chat, another turn) ever sees them.
+type extraExecutor struct {
+	base  Executor
+	extra map[string]*tools.Tool
+}
+
+func (e *extraExecutor) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if t, ok := e.extra[name]; ok {
+		return t.Execute(ctx, args)
+	}
+	return e.base.Execute(ctx, name, args)
+}
+
+// withExtraTools wraps base so calls to req.ExtraTools resolve without
+// touching the agent's shared registry, and derives the matching
+// []provider.ToolDef the model needs to see them as callable. Unlike
+// tools.Constrained, this does not schema-validate the call args
+// before Execute runs — ExtraTools come from this package's own
+// trusted callers (missions), whose Execute already parses/rejects
+// malformed args itself, not from arbitrary registered tools.
+func withExtraTools(base Executor, extra []*tools.Tool) (Executor, []provider.ToolDef) {
+	byName := make(map[string]*tools.Tool, len(extra))
+	defs := make([]provider.ToolDef, 0, len(extra))
+	for _, t := range extra {
+		byName[t.Name] = t
+		defs = append(defs, provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	return &extraExecutor{base: base, extra: byName}, defs
 }

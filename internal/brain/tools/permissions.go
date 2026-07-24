@@ -76,6 +76,17 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// prompt would demand consent for consent. The write is
 			// visible and reversible in the memory browser.
 			"remember": true,
+			// Mission protocol sentinels: pure argument parsing, zero
+			// side effects — their Execute just records a verdict for
+			// the harness. Asking a human to approve the harness's own
+			// protocol parked every mission's first turn for nothing.
+			"mission_status": true,
+			"review_verdict": true,
+			// write_file is root-confined by construction (relative
+			// paths only, .. rejected, root fixed at registration) —
+			// there is nothing for a prompt to guard that the tool
+			// doesn't already enforce harder.
+			"write_file": true,
 		},
 	}
 }
@@ -100,9 +111,11 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 	var matchedRules []string
 	if tool == "shell" {
 		danger, matchedRules = ClassifyCommand(subject)
-		if danger == DangerDestructive {
-			// Destructive commands are never auto-approved, no
-			// matter what the allowlists say.
+		if danger == DangerDestructive && !p.sandboxAllows(ctx, sessionID, subject, matchedRules) {
+			// Destructive commands are never auto-approved, no matter
+			// what the allowlists say — UNLESS the session has a
+			// registered sandbox and the command's destruction is
+			// provably confined to it (see sandboxAllows).
 			return Resolution{
 				Decision:  DecisionAsk,
 				Subject:   subject,
@@ -126,6 +139,80 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 		Danger:    danger,
 		Rationale: "no standing grant",
 	}, nil
+}
+
+// SandboxGrantTool is the reserved session_grants tool name whose
+// pattern column carries a session's sandbox root directory instead
+// of a command pattern. A mission's hidden session registers its own
+// workspace here (Grant(sessionID, SandboxGrantTool, root, ttl)):
+// destructive shell commands whose blast radius is provably confined
+// to that root skip the interactive prompt and fall through to normal
+// grant matching. Reusing session_grants keeps the mapping shared
+// across Permissions instances and process restarts with no schema
+// change; the "__" prefix keeps it from ever colliding with a real
+// tool name.
+const SandboxGrantTool = "__sandbox__"
+
+// sandboxDowngradeable names the danger rules whose destruction is
+// file-scoped — confined to whatever paths the command names. Rules
+// NOT here (sudo, docker, git-push, pipe-to-shell, pkg-install, dd,
+// mkfs, opaque forms...) always keep the prompt: their blast radius
+// is not a path inside the sandbox.
+var sandboxDowngradeable = map[string]bool{
+	"redirect-overwrite": true,
+	"append-redirect":    true,
+	"rm":                 true,
+	"rmdir":              true,
+	"mv":                 true,
+	"truncate":           true,
+	"shred":              true,
+	"find-exec":          true,
+	"chmod-recursive":    true,
+}
+
+// sandboxAllows reports whether a destructive-classified shell
+// command may skip the interactive prompt because (1) the session has
+// a registered sandbox root, (2) every matched danger rule is
+// file-scoped, and (3) every absolute path the command names sits
+// inside that root — relative paths resolve against the sandbox
+// itself, since a sandboxed session's shell runs rooted there. The
+// policy guard (.. rejection, off-limits paths) already ran before
+// this is consulted.
+func (p *Permissions) sandboxAllows(ctx context.Context, sessionID, subject string, matchedRules []string) bool {
+	for _, r := range matchedRules {
+		if !sandboxDowngradeable[r] {
+			return false
+		}
+	}
+	root := p.sandboxFor(ctx, sessionID)
+	if root == "" {
+		return false
+	}
+	for _, tok := range commandTokens(subject) {
+		if strings.HasPrefix(tok, "/") && !pathWithin(root, tok) {
+			return false
+		}
+	}
+	return true
+}
+
+// sandboxFor returns the session's registered sandbox root, or "".
+func (p *Permissions) sandboxFor(ctx context.Context, sessionID string) string {
+	if p.db == nil {
+		return ""
+	}
+	db, err := p.db.Get()
+	if err != nil {
+		return ""
+	}
+	var root string
+	err = db.QueryRow(ctx,
+		"SELECT pattern FROM session_grants WHERE session_id = $1 AND tool = $2 AND expires > now() ORDER BY expires DESC LIMIT 1",
+		sessionID, SandboxGrantTool).Scan(&root)
+	if err != nil {
+		return ""
+	}
+	return root
 }
 
 // Grant records an "allow for this session" answer.
@@ -279,7 +366,11 @@ func commandTokens(command string) []string {
 	fields := strings.Fields(strings.ReplaceAll(command, "=", " "))
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		f = strings.Trim(f, `'";|&()<>0123456789`)
+		// Redirect/fd syntax (>, <, 2>) only ever prefixes a path, never
+		// trails it — trimming from both ends would also strip a
+		// literal "<tag>" down to "/tag", a false absolute-path hit.
+		f = strings.TrimLeft(f, "<>0123456789")
+		f = strings.Trim(f, `'";|&()`)
 		if f != "" {
 			out = append(out, f)
 		}

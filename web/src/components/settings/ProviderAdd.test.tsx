@@ -63,6 +63,6 @@ describe('ProviderAdd model suggestions', () => {
     const input = await screen.findByPlaceholderText('model id')
     fireEvent.focus(input)
 
-    expect(await screen.findByText('glm-5.2')).toBeInTheDocument()
+    expect(await screen.findByText('glm-4.7-flash')).toBeInTheDocument()
   })
 })

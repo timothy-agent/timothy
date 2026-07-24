@@ -23,6 +23,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -30,10 +31,10 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
-	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
+	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/migrations"
 )
 
@@ -129,8 +130,9 @@ func main() {
 	mc := memclient.New(memorydURL)
 
 	searxngURL := os.Getenv("SEARXNG_URL")
+	markitdownURL := os.Getenv("MARKITDOWN_URL")
 
-	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, packs, flags.SkillAllowed, mc.Add, app.Log)
+	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -147,6 +149,11 @@ func main() {
 			swapAgentTools(agent, builtinSet, conns, app.Log)
 		})
 		go runConnectorReload(ctx, conns, app.Log)
+	}
+
+	missionStore, missionDriver, missionNotifier := buildMissions(app.DB, agent, store, workspace, app.Log)
+	if missionDriver != nil {
+		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, app.Log)
 	}
 
 	agentReg := agents.NewStore(app.DB, app.Log)
@@ -192,7 +199,7 @@ func main() {
 
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
-		agentReg, conns, goog, agent, token, app.Log)
+		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -235,6 +242,50 @@ func buildConnectors(db *pgpool.Pool, log *slog.Logger) (*connectors.Manager, *c
 		log.Warn("MARKITDOWN_URL not set; gmail_read falls back to a snippet for HTML-only mail, and gmail_read_attachment is unavailable")
 	}
 	return mgr, goog
+}
+
+// missionWorkSlotMax bounds how many missions may be status='working'
+// at once — a conservative default until this needs to be a runtime
+// setting.
+const missionWorkSlotMax = 4
+
+// buildMissions wires the mission engine (Store, Driver, Notifier,
+// Scheduler). Gated on WORKSPACES: no workspace root configured means
+// missions stay entirely inert — no goroutines started, nothing
+// scheduled, the API surface unmounted (registerMissions 404s on a nil
+// store).
+func buildMissions(db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier) {
+	root := os.Getenv("WORKSPACES")
+	if root == "" {
+		log.Info("WORKSPACES not set; missions disabled")
+		return nil, nil, nil
+	}
+	store := missions.NewStore(db, log)
+	workspace := missions.NewWorkspace(root, log)
+	parker := missions.NewStorePermissionParker(store, log)
+	// MISSION_MODEL_FLOOR lists model-name substrings (comma-separated)
+	// too weak to drive tool-using mission turns; a turn served by one
+	// pauses the mission immediately instead of burning its iteration
+	// budget. Unset = floor disabled.
+	var floorDeny []string
+	for _, s := range strings.Split(os.Getenv("MISSION_MODEL_FLOOR"), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			floorDeny = append(floorDeny, s)
+		}
+	}
+	runner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, log)
+	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
+	notifier := missions.NewNotifier(db, webhookURL, log)
+	// A second tools.Permissions instance, not the one buildAgent built —
+	// it's stateless besides the shared db/root (Grant/Resolve hit
+	// Postgres directly), so a fresh instance behaves identically. Used
+	// only to pre-authorize a mission's hidden session at creation.
+	perms := tools.NewPermissions(db, toolWorkspaceRoot)
+	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, log)
+
+	scheduler := missions.NewScheduler(db, store, log)
+	go scheduler.Run(context.Background())
+	return store, driver, notifier
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd
@@ -327,13 +378,13 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
 		builtin.ConvertTime(),
 		builtin.Calculator(),
-		builtin.WebFetch(),
+		builtin.WebFetch(builtin.WebFetchConfig{MarkitdownURL: markitdownURL}),
 		builtin.Shell(builtin.ShellConfig{WorkspaceRoot: workspace}),
 		builtin.RetrieveOutput(outputs),
 		builtin.Remember(remember),

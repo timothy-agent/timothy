@@ -476,12 +476,78 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Route is the API shape of one routes row.
+// Route is the API shape of one routes row. Chain/Strategy/Enabled are
+// DB truth (what PATCH edits); Resolved and Serving are derived from
+// the live snapshot — the router's actual try order with the stats and
+// scores behind it. Both are empty for disabled routes (the snapshot
+// holds enabled routes only) or when no snapshot is loaded yet.
 type Route struct {
 	Name     string              `json:"name"`
 	Chain    []router.ChainEntry `json:"chain"`
 	Strategy string              `json:"strategy"`
 	Enabled  bool                `json:"enabled"`
+	Resolved []RouteEntryStatus  `json:"resolved,omitempty"`
+	Serving  *router.ChainEntry  `json:"serving,omitempty"`
+}
+
+// RouteEntryStatus is one resolved chain entry with the router's gate
+// verdict and scoring factors. Nullable numerics are nil when the
+// ledger has no data (or the model is unpriced) — never a guessed 0.
+type RouteEntryStatus struct {
+	ProviderID    string   `json:"provider_id"`
+	ProviderName  string   `json:"provider_name,omitempty"`
+	Model         string   `json:"model"`
+	Usable        bool     `json:"usable"`
+	SkipReason    string   `json:"skip_reason,omitempty"`
+	Score         *float64 `json:"score,omitempty"`
+	NormPrice     *float64 `json:"norm_price,omitempty"`
+	NormLatency   *float64 `json:"norm_latency,omitempty"`
+	NormTPS       *float64 `json:"norm_tps,omitempty"`
+	Uptime        *float64 `json:"uptime,omitempty"`
+	LatencyMS     *float64 `json:"latency_ms,omitempty"`
+	TokensPerS    *float64 `json:"tokens_per_s,omitempty"`
+	OutputPerMTok *float64 `json:"output_per_mtok,omitempty"`
+}
+
+// resolvedForRoute maps the router's annotated try order to wire
+// shape and picks the first usable entry as the serving one.
+func resolvedForRoute(snap *router.Snapshot, name string) ([]RouteEntryStatus, *router.ChainEntry) {
+	detail := snap.ResolveDetail(name)
+	if len(detail) == 0 {
+		return nil, nil
+	}
+	opt := func(v, none float64) *float64 {
+		if v == none {
+			return nil
+		}
+		return &v
+	}
+	out := make([]RouteEntryStatus, len(detail))
+	var serving *router.ChainEntry
+	for i, d := range detail {
+		out[i] = RouteEntryStatus{
+			ProviderID:    d.Entry.ProviderID,
+			ProviderName:  d.ProviderName,
+			Model:         d.Model,
+			Usable:        d.Usable,
+			SkipReason:    d.SkipReason,
+			Uptime:        opt(d.Uptime, -1),
+			LatencyMS:     opt(d.LatencyMS, 0),
+			TokensPerS:    opt(d.TokensPerS, 0),
+			OutputPerMTok: opt(d.OutputPerMTok, 0),
+		}
+		if d.Scored {
+			out[i].Score = &detail[i].Score
+			out[i].NormPrice = opt(d.NormPrice, -1)
+			out[i].NormLatency = opt(d.NormLatency, -1)
+			out[i].NormTPS = opt(d.NormTPS, -1)
+		}
+		if serving == nil && d.Usable {
+			entry := d.Entry
+			serving = &entry
+		}
+	}
+	return out, serving
 }
 
 func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
@@ -509,7 +575,17 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if snap := a.store.Snapshot(); snap != nil {
+		for i := range out {
+			if out[i].Enabled {
+				out[i].Resolved, out[i].Serving = resolvedForRoute(snap, out[i].Name)
+			}
+		}
+	}
+	return out, nil
 }
 
 // RoutePatch reorders/replaces a route's chain, changes its strategy,

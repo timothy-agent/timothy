@@ -33,15 +33,21 @@ var groups = map[string]string{
 
 const notTest = `purpose IS DISTINCT FROM 'test'`
 
-// Summary is the header-tile answer: totals for a range.
+// Summary is the header-tile answer: totals for a range. Unpriced
+// fields count rows where cost_usd is NULL (D-013: unknown price is
+// recorded as NULL, never guessed) — without them, unpriced usage is
+// invisible because SUM(cost_usd) silently treats NULL as free.
 type Summary struct {
-	CostUSD          float64 `json:"cost_usd"`
-	InputTokens      int64   `json:"input_tokens"`
-	OutputTokens     int64   `json:"output_tokens"`
-	CacheReadTokens  int64   `json:"cache_read_tokens"`
-	CacheWriteTokens int64   `json:"cache_write_tokens"`
-	Requests         int64   `json:"requests"`
-	Errors           int64   `json:"errors"`
+	CostUSD              float64 `json:"cost_usd"`
+	InputTokens          int64   `json:"input_tokens"`
+	OutputTokens         int64   `json:"output_tokens"`
+	CacheReadTokens      int64   `json:"cache_read_tokens"`
+	CacheWriteTokens     int64   `json:"cache_write_tokens"`
+	Requests             int64   `json:"requests"`
+	Errors               int64   `json:"errors"`
+	UnpricedRequests     int64   `json:"unpriced_requests"`
+	UnpricedInputTokens  int64   `json:"unpriced_input_tokens"`
+	UnpricedOutputTokens int64   `json:"unpriced_output_tokens"`
 }
 
 func (a *Aggregator) Summary(ctx context.Context, from, to time.Time) (Summary, error) {
@@ -54,11 +60,15 @@ func (a *Aggregator) Summary(ctx context.Context, from, to time.Time) (Summary, 
 			COALESCE(SUM(cost_usd), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
-			COUNT(*), COUNT(*) FILTER (WHERE status = 'error')
+			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
+			COUNT(*) FILTER (WHERE cost_usd IS NULL),
+			COALESCE(SUM(input_tokens) FILTER (WHERE cost_usd IS NULL), 0),
+			COALESCE(SUM(output_tokens) FILTER (WHERE cost_usd IS NULL), 0)
 		FROM cost_ledger
 		WHERE ts >= $1 AND ts < $2 AND `+notTest,
 		from, to).Scan(&s.CostUSD, &s.InputTokens, &s.OutputTokens,
-		&s.CacheReadTokens, &s.CacheWriteTokens, &s.Requests, &s.Errors)
+		&s.CacheReadTokens, &s.CacheWriteTokens, &s.Requests, &s.Errors,
+		&s.UnpricedRequests, &s.UnpricedInputTokens, &s.UnpricedOutputTokens)
 	if err != nil {
 		return Summary{}, fmt.Errorf("usage summary: %w", err)
 	}
@@ -66,14 +76,19 @@ func (a *Aggregator) Summary(ctx context.Context, from, to time.Time) (Summary, 
 }
 
 // SeriesPoint is one (time bucket, group) cell of a stacked chart.
+// Unpriced token sums (rows where cost_usd is NULL) let the dashboard
+// estimate what unpriced usage would cost from its advisory catalog —
+// the estimate stays client-side, the server never guesses (D-013).
 type SeriesPoint struct {
-	Bucket       time.Time `json:"bucket"`
-	Group        string    `json:"group"`
-	CostUSD      float64   `json:"cost_usd"`
-	InputTokens  int64     `json:"input_tokens"`
-	OutputTokens int64     `json:"output_tokens"`
-	Requests     int64     `json:"requests"`
-	Errors       int64     `json:"errors"`
+	Bucket               time.Time `json:"bucket"`
+	Group                string    `json:"group"`
+	CostUSD              float64   `json:"cost_usd"`
+	InputTokens          int64     `json:"input_tokens"`
+	OutputTokens         int64     `json:"output_tokens"`
+	Requests             int64     `json:"requests"`
+	Errors               int64     `json:"errors"`
+	UnpricedInputTokens  int64     `json:"unpriced_input_tokens"`
+	UnpricedOutputTokens int64     `json:"unpriced_output_tokens"`
 }
 
 // Series returns bucketed usage grouped by provider, model, or
@@ -95,7 +110,9 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 			date_trunc('`+b+`', ts) AS bucket, `+col+`,
 			COALESCE(SUM(cost_usd), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-			COUNT(*), COUNT(*) FILTER (WHERE status = 'error')
+			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
+			COALESCE(SUM(input_tokens) FILTER (WHERE cost_usd IS NULL), 0),
+			COALESCE(SUM(output_tokens) FILTER (WHERE cost_usd IS NULL), 0)
 		FROM cost_ledger
 		WHERE ts >= $1 AND ts < $2 AND `+notTest+`
 		GROUP BY 1, 2 ORDER BY 1, 2`, from, to)
@@ -108,12 +125,43 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 	for rows.Next() {
 		var p SeriesPoint
 		if err := rows.Scan(&p.Bucket, &p.Group, &p.CostUSD,
-			&p.InputTokens, &p.OutputTokens, &p.Requests, &p.Errors); err != nil {
+			&p.InputTokens, &p.OutputTokens, &p.Requests, &p.Errors,
+			&p.UnpricedInputTokens, &p.UnpricedOutputTokens); err != nil {
 			return nil, fmt.Errorf("usage series: %w", err)
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// MissionUsage totals one mission's ledger footprint — every turn the
+// missions engine ran for it, across all its sessions.
+type MissionUsage struct {
+	MissionID        string  `json:"mission_id"`
+	CostUSD          float64 `json:"cost_usd"`
+	InputTokens      int64   `json:"input_tokens"`
+	OutputTokens     int64   `json:"output_tokens"`
+	Requests         int64   `json:"requests"`
+	UnpricedRequests int64   `json:"unpriced_requests"`
+}
+
+func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsage, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
+	}
+	m := MissionUsage{MissionID: missionID}
+	err = db.QueryRow(ctx, `SELECT
+			COALESCE(SUM(cost_usd), 0),
+			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+			COUNT(*), COUNT(*) FILTER (WHERE cost_usd IS NULL)
+		FROM cost_ledger
+		WHERE mission_id = $1 AND `+notTest, missionID).
+		Scan(&m.CostUSD, &m.InputTokens, &m.OutputTokens, &m.Requests, &m.UnpricedRequests)
+	if err != nil {
+		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
+	}
+	return m, nil
 }
 
 // SessionUsage ranks sessions by spend for the top-N table.

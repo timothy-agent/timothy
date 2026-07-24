@@ -28,6 +28,7 @@ import type {
   UsagePoint,
   UsageSummary,
 } from '../api/types'
+import { estimateUnpriced, totalEstimate } from '../lib/costEstimate'
 
 // Accessible categorical palette that reads on light and dark.
 const palette = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#f43f5e', '#06b6d4', '#a3a3a3']
@@ -126,6 +127,9 @@ export function Analytics() {
       cache_write_tokens: 0,
       requests: 0,
       errors: 0,
+      unpriced_requests: 0,
+      unpriced_input_tokens: 0,
+      unpriced_output_tokens: 0,
     }
 
     let live = true
@@ -182,6 +186,15 @@ export function Analytics() {
     }
     return [...byBucket.values()]
   }, [data])
+
+  // Advisory estimates for calls the ledger recorded without a price
+  // (cost_usd NULL). Computed client-side from the model catalog and
+  // always shown with a ≈ so they never masquerade as accounting.
+  const estimates = useMemo(
+    () => (data ? estimateUnpriced(data.byModel) : new Map<string, number>()),
+    [data],
+  )
+  const estimatedTotal = totalEstimate(estimates)
 
   const cacheHit = useMemo(() => {
     if (!data) return 0
@@ -293,6 +306,14 @@ export function Analytics() {
           ))}
         </div>
 
+        {s && s.unpriced_requests > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {compact(s.unpriced_requests)} call{s.unpriced_requests === 1 ? '' : 's'} in range
+            {' '}had no configured price and are excluded from spend
+            {estimatedTotal > 0 && <> — roughly ≈{money(estimatedTotal)} at catalog prices</>}.
+          </p>
+        )}
+
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Cost by provider</h2>
@@ -347,7 +368,7 @@ export function Analytics() {
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
-          <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} />
+          <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
           <BreakdownTable title="By route" rows={data ? totals(data.byRoute) : []} />
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Top sessions by cost</h2>
@@ -421,9 +442,11 @@ export function Analytics() {
 function BreakdownTable({
   title,
   rows,
+  estimates,
 }: {
   title: string
   rows: [string, { cost: number; requests: number; errors: number; tokens: number }][]
+  estimates?: Map<string, number>
 }) {
   return (
     <section className="rounded-xl border border-border p-4">
@@ -434,7 +457,17 @@ function BreakdownTable({
             <tr key={group} className="border-t border-border/60">
               <td className="max-w-36 truncate py-2 pr-2">{group}</td>
               <td className="py-2 text-right text-muted-foreground">{compact(t.tokens)} tok</td>
-              <td className="py-2 text-right font-medium">{money(t.cost)}</td>
+              <td className="py-2 text-right font-medium">
+                {money(t.cost)}
+                {(estimates?.get(group) ?? 0) > 0 && (
+                  <span
+                    className="ml-1 text-xs font-normal text-muted-foreground"
+                    title="Estimated from catalog prices for calls with no configured price."
+                  >
+                    +≈{money(estimates?.get(group) ?? 0)}
+                  </span>
+                )}
+              </td>
             </tr>
           ))}
           {rows.length === 0 && (
