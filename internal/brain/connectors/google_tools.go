@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 // Builder returns the Builder for kind='google'. The tool surface is
@@ -309,7 +310,7 @@ func (s *googleSource) gmailRead() *tools.Tool {
 			body := plainText(allParts)
 			if body == "" {
 				if raw := htmlPart(allParts); raw != nil {
-					if text, err := convertToMarkdown(ctx, s.g.Client, s.g.MarkItDownURL, "body.html", "text/html", raw); err == nil {
+					if text, err := markitdown.Convert(ctx, s.g.Client, s.g.MarkItDownURL, "body.html", "text/html", raw); err == nil {
 						body = text
 					}
 				}
@@ -371,7 +372,7 @@ func (s *googleSource) gmailReadAttachment() *tools.Tool {
 			if err != nil {
 				return "", fmt.Errorf("decode attachment: %w", err)
 			}
-			return convertToMarkdown(ctx, s.g.Client, s.g.MarkItDownURL, in.Filename, "", raw)
+			return markitdown.Convert(ctx, s.g.Client, s.g.MarkItDownURL, in.Filename, "", raw)
 		},
 	}
 }

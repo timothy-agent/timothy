@@ -42,6 +42,11 @@ type Mission struct {
 	BudgetUSD           *float64 `json:"budget_usd,omitempty"`
 	Route               string   `json:"route"`
 	ReviewRoute         string   `json:"review_route"`
+	// EscalationRoute, when non-empty, is the route worker turns switch
+	// to after a worker failure or review rework — instead of burning
+	// iterations on a model that already proved too weak for the unit.
+	// Empty disables escalation.
+	EscalationRoute string `json:"escalation_route,omitempty"`
 	PendingPermission   string   `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a

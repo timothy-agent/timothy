@@ -33,12 +33,22 @@ func backoffFor(attempt int) time.Duration {
 	return d + time.Duration(rand.Int64N(int64(d)/2+1)) // #nosec G404 -- jitter, not a secret
 }
 
+// retriesFor sizes the in-provider retry budget: the full maxRetries
+// when this is the chain's final attempt, one quick retry otherwise —
+// failover to the next provider beats backing off against a limiter.
+func retriesFor(finalAttempt bool) int {
+	if finalAttempt {
+		return maxRetries
+	}
+	return 1
+}
+
 // doWithRetry issues the request built by build, retrying 429/5xx
-// responses and network errors up to maxRetries with jittered backoff.
-// Each retry is reported through notify (return false to abort); pass
-// nil to retry silently. On success the response body is open and the
-// caller owns closing it.
-func doWithRetry(ctx context.Context, client *http.Client, build func() (*http.Request, error), notify func(stream.RetryInfo) bool) (*http.Response, error) {
+// responses and network errors up to retries times with jittered
+// backoff. Each retry is reported through notify (return false to
+// abort); pass nil to retry silently. On success the response body is
+// open and the caller owns closing it.
+func doWithRetry(ctx context.Context, client *http.Client, retries int, build func() (*http.Request, error), notify func(stream.RetryInfo) bool) (*http.Response, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
@@ -64,7 +74,7 @@ func doWithRetry(ctx context.Context, client *http.Client, build func() (*http.R
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
-			if attempt < maxRetries && ctx.Err() == nil {
+			if attempt < retries && ctx.Err() == nil {
 				continue
 			}
 			return nil, lastErr
@@ -73,7 +83,7 @@ func doWithRetry(ctx context.Context, client *http.Client, build func() (*http.R
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-			if attempt < maxRetries && ctx.Err() == nil {
+			if attempt < retries && ctx.Err() == nil {
 				continue
 			}
 			return nil, lastErr
@@ -140,14 +150,14 @@ type relayFunc func(ctx context.Context, body io.Reader, ch chan<- stream.Stream
 // lifecycle, terminal error emission, and the incomplete+done tail
 // when a stream cuts off mid-flight. Drivers own only request building
 // and delta parsing.
-func runStream(ctx context.Context, client *http.Client, timeout time.Duration, build func(ctx context.Context) (*http.Request, error), relay relayFunc) <-chan stream.StreamEvent {
+func runStream(ctx context.Context, client *http.Client, timeout time.Duration, retries int, build func(ctx context.Context) (*http.Request, error), relay relayFunc) <-chan stream.StreamEvent {
 	ch := make(chan stream.StreamEvent)
 	go func() {
 		defer close(ch)
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		resp, err := doWithRetry(callCtx, client, func() (*http.Request, error) {
+		resp, err := doWithRetry(callCtx, client, retries, func() (*http.Request, error) {
 			return build(callCtx)
 		}, func(ri stream.RetryInfo) bool {
 			return emit(callCtx, ch, stream.StreamEvent{Type: stream.EventRetry, Retry: &ri})

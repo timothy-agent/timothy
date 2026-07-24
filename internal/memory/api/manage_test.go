@@ -22,6 +22,9 @@ type fakeManager struct {
 	inserted   []store.Memory
 	superseded map[string]string
 	nextID     int
+	entities   []store.Entity
+	edges      []store.EntityEdge
+	entityMems map[string][]store.Memory
 }
 
 func newFakeManager() *fakeManager {

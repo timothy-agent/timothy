@@ -141,6 +141,27 @@ export interface RetrievedMemory {
   score: number
 }
 
+// Entity graph (GET /v1/entities/graph): nodes are extracted entities
+// with their active-memory counts; edges are co-occurrences (weight =
+// shared active memories).
+export interface EntityNode {
+  id: string
+  type: string
+  name: string
+  memory_count: number
+}
+
+export interface EntityEdge {
+  src: string
+  dst: string
+  weight: number
+}
+
+export interface EntityGraphData {
+  entities: EntityNode[]
+  edges: EntityEdge[]
+}
+
 // Usage aggregates served by /v1/admin/usage/* — chart-ready, never
 // raw ledger rows.
 export interface UsageSummary {
@@ -151,6 +172,9 @@ export interface UsageSummary {
   cache_write_tokens: number
   requests: number
   errors: number
+  unpriced_requests: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
 }
 
 export interface UsagePoint {
@@ -161,6 +185,20 @@ export interface UsagePoint {
   output_tokens: number
   requests: number
   errors: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
+}
+
+// One mission's total ledger footprint. unpriced_requests counts turns
+// whose cost is unknown (NULL in the ledger) — cost_usd is then a
+// floor, not the whole bill.
+export interface MissionUsage {
+  mission_id: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+  unpriced_requests: number
 }
 
 export interface SessionUsage {
@@ -231,6 +269,26 @@ export interface ChainEntry {
   model: string
 }
 
+// RouteEntryStatus is the router's live view of one chain entry: the
+// usability gate verdict plus the ledger stats and normalized factors
+// behind scored strategies. Numeric fields are absent when the ledger
+// has no data (or the model is unpriced) — never a guessed 0.
+export interface RouteEntryStatus {
+  provider_id: string
+  provider_name?: string
+  model: string
+  usable: boolean
+  skip_reason?: string
+  score?: number
+  norm_price?: number
+  norm_latency?: number
+  norm_tps?: number
+  uptime?: number
+  latency_ms?: number
+  tokens_per_s?: number
+  output_per_mtok?: number
+}
+
 export interface AdminRoute {
   name: string
   chain: ChainEntry[]
@@ -238,6 +296,10 @@ export interface AdminRoute {
   // score entries from recent ledger stats and declared prices.
   strategy: string
   enabled: boolean
+  // Router try order with live stats — present for enabled routes once
+  // a snapshot is loaded. serving is the first usable resolved entry.
+  resolved?: RouteEntryStatus[]
+  serving?: ChainEntry
 }
 
 export interface ProviderHealth {
@@ -332,6 +394,7 @@ export interface Mission {
   budget_usd?: number
   route: string
   review_route: string
+  escalation_route?: string
   pending_permission?: string
   pending_permission_tool?: string
   pending_permission_args?: string

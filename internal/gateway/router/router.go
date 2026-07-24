@@ -193,22 +193,15 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error)
 	seen := map[string]bool{} // "name/model" dedupe across hint + sticky + chain
 
 	add := func(row ProviderRow, model, source string) {
-		p, inRegistry := s.registry.Get(row.Name)
-		switch {
-		case !row.Enabled:
-			skipped = append(skipped, fmt.Sprintf("%s (disabled, %s)", row.Name, source))
-		case !s.healthy[row.Name]:
-			skipped = append(skipped, fmt.Sprintf("%s (unhealthy: credential %s unresolved, %s)", row.Name, row.CredentialRef, source))
-		case !inRegistry:
-			skipped = append(skipped, fmt.Sprintf("%s (not in registry, %s)", row.Name, source))
-		case !attemptCapable(p, row, model, required):
-			skipped = append(skipped, fmt.Sprintf("%s/%s (lacks %s capability, %s)", row.Name, model, required, source))
-		default:
-			key := row.Name + "/" + model
-			if !seen[key] {
-				seen[key] = true
-				attempts = append(attempts, Attempt{Provider: p, ProviderName: row.Name, Model: model})
-			}
+		p, subject, reason := s.entryGate(row, model, required)
+		if reason != "" {
+			skipped = append(skipped, fmt.Sprintf("%s (%s, %s)", subject, reason, source))
+			return
+		}
+		key := row.Name + "/" + model
+		if !seen[key] {
+			seen[key] = true
+			attempts = append(attempts, Attempt{Provider: p, ProviderName: row.Name, Model: model})
 		}
 	}
 
@@ -254,6 +247,25 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error)
 	return attempts, nil
 }
 
+// entryGate applies the usability checks Resolve runs on every
+// candidate. It returns the built driver plus empty subject/reason when
+// usable, or a skip subject ("name", or "name/model" for capability
+// misses) and reason matching the NoRouteError wording.
+func (s *Snapshot) entryGate(row ProviderRow, model string, required provider.Capability) (provider.Provider, string, string) {
+	p, inRegistry := s.registry.Get(row.Name)
+	switch {
+	case !row.Enabled:
+		return nil, row.Name, "disabled"
+	case !s.healthy[row.Name]:
+		return nil, row.Name, fmt.Sprintf("unhealthy: credential %s unresolved", row.CredentialRef)
+	case !inRegistry:
+		return nil, row.Name, "not in registry"
+	case !attemptCapable(p, row, model, required):
+		return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", required)
+	}
+	return p, "", ""
+}
+
 // Strategy weights: relative importance of each additive factor,
 // normalized against the best candidate in the chain (the llmgateway
 // scheme). price dominates "price", latency dominates "latency",
@@ -267,80 +279,131 @@ var strategyWeights = map[string]struct{ price, latency, tps float64 }{
 	"latency": {price: 0.1, latency: 0.6, tps: 0.1},
 }
 
-// orderedChain returns a route's chain in try order: written order for
-// "ordered" (or unknown) strategies, descending score otherwise.
-func (s *Snapshot) orderedChain(route string) []ChainEntry {
+// ResolvedEntry is one chain candidate in router try order, annotated
+// with the usability gate Resolve applies and the factors the scored
+// strategies use. Sentinels: Uptime and the Norm* fields are -1 when
+// the ledger has no data (scoring treats the factor as neutral); raw
+// LatencyMS, TokensPerS, and OutputPerMTok are 0 when unknown — an
+// absent price stays absent, never guessed.
+type ResolvedEntry struct {
+	Entry         ChainEntry
+	ProviderName  string // empty when the provider id is unknown
+	Model         string // entry model, defaulted to the provider's default when empty
+	Usable        bool
+	SkipReason    string  // empty when usable; NoRouteError wording without the source suffix
+	Scored        bool    // false for "ordered" (or unknown) strategies
+	Score         float64 // uptime-multiplied total; 0 when not scored
+	NormPrice     float64 // best-in-chain normalized, 0..1
+	NormLatency   float64
+	NormTPS       float64
+	Uptime        float64 // raw weighted success rate, 0..1
+	LatencyMS     float64 // raw weighted mean latency
+	TokensPerS    float64 // raw weighted output tokens per second
+	OutputPerMTok float64 // declared output price used for scoring
+}
+
+// ResolveDetail returns a route's chain in the exact try order
+// orderedChain produces, annotated for observability. It is the single
+// scoring path: written order for "ordered" (or unknown) strategies,
+// descending score otherwise. Only enabled routes exist in the
+// snapshot; unknown routes return an empty slice.
+func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 	chain := s.routes[route]
 	w, scoredStrategy := strategyWeights[s.strategy[route]]
-	if !scoredStrategy || len(chain) < 2 {
-		return chain
-	}
+	required := requiredCapability(route)
 
 	// Gather each entry's raw factors first: normalization needs the
 	// best value across the candidate set.
-	type cand struct {
-		entry   ChainEntry
-		price   float64 // declared output price; 0 = unknown
-		uptime  float64 // -1 = unknown
-		latency float64 // 0 = unknown
-		tps     float64 // 0 = unknown
-	}
-	cands := make([]cand, 0, len(chain))
+	out := make([]ResolvedEntry, 0, len(chain))
 	minPrice, minLatency, maxTPS := 0.0, 0.0, 0.0
 	for _, e := range chain {
-		c := cand{entry: e, uptime: -1}
-		if row, ok := s.rows[e.ProviderID]; ok {
-			if p := s.Prices(row.Name, e.Model); p != nil && p.OutputPerMTok > 0 {
-				c.price = p.OutputPerMTok
-				if minPrice == 0 || c.price < minPrice {
-					minPrice = c.price
-				}
-			}
-			if st, ok := s.stats[row.Name+"/"+e.Model]; ok {
-				c.uptime = st.Uptime
-				c.latency = st.LatencyMS
-				c.tps = st.TokensPerS
-				if c.latency > 0 && (minLatency == 0 || c.latency < minLatency) {
-					minLatency = c.latency
-				}
-				if c.tps > maxTPS {
-					maxTPS = c.tps
-				}
+		d := ResolvedEntry{
+			Entry: e, Model: e.Model, Scored: scoredStrategy,
+			Uptime: -1, NormPrice: -1, NormLatency: -1, NormTPS: -1,
+		}
+		row, ok := s.rows[e.ProviderID]
+		if !ok {
+			d.SkipReason = "unknown provider id"
+			out = append(out, d)
+			continue
+		}
+		d.ProviderName = row.Name
+		if d.Model == "" {
+			d.Model = row.DefaultModel
+		}
+		// Stats and prices are keyed by the raw entry model — same
+		// lookup Resolve's scoring has always used.
+		if p := s.Prices(row.Name, e.Model); p != nil && p.OutputPerMTok > 0 {
+			d.OutputPerMTok = p.OutputPerMTok
+			if minPrice == 0 || d.OutputPerMTok < minPrice {
+				minPrice = d.OutputPerMTok
 			}
 		}
-		cands = append(cands, c)
+		if st, ok := s.stats[row.Name+"/"+e.Model]; ok {
+			d.Uptime = st.Uptime
+			d.LatencyMS = st.LatencyMS
+			d.TokensPerS = st.TokensPerS
+			if d.LatencyMS > 0 && (minLatency == 0 || d.LatencyMS < minLatency) {
+				minLatency = d.LatencyMS
+			}
+			if d.TokensPerS > maxTPS {
+				maxTPS = d.TokensPerS
+			}
+		}
+		if _, _, reason := s.entryGate(row, d.Model, required); reason != "" {
+			d.SkipReason = reason
+		} else {
+			d.Usable = true
+		}
+		out = append(out, d)
+	}
+
+	if !scoredStrategy {
+		return out
 	}
 
 	const neutral = 0.5
-	score := func(c cand) float64 {
+	for i := range out {
+		d := &out[i]
 		total := 0.0
-		if c.price > 0 && minPrice > 0 {
-			total += w.price * (minPrice / c.price)
+		if d.OutputPerMTok > 0 && minPrice > 0 {
+			d.NormPrice = minPrice / d.OutputPerMTok
+			total += w.price * d.NormPrice
 		} else {
 			total += w.price * neutral
 		}
-		if c.latency > 0 && minLatency > 0 {
-			total += w.latency * (minLatency / c.latency)
+		if d.LatencyMS > 0 && minLatency > 0 {
+			d.NormLatency = minLatency / d.LatencyMS
+			total += w.latency * d.NormLatency
 		} else {
 			total += w.latency * neutral
 		}
-		if c.tps > 0 && maxTPS > 0 {
-			total += w.tps * (c.tps / maxTPS)
+		if d.TokensPerS > 0 && maxTPS > 0 {
+			d.NormTPS = d.TokensPerS / maxTPS
+			total += w.tps * d.NormTPS
 		} else {
 			total += w.tps * neutral
 		}
-		if c.uptime >= 0 {
+		if d.Uptime >= 0 {
 			// Multiplicative, floored so one bad minute can't zero a
 			// candidate out of consideration entirely.
-			total *= max(c.uptime, 0.05)
+			total *= max(d.Uptime, 0.05)
 		}
-		return total
+		d.Score = total
 	}
+	if len(chain) >= 2 {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	}
+	return out
+}
 
-	sort.SliceStable(cands, func(i, j int) bool { return score(cands[i]) > score(cands[j]) })
-	out := make([]ChainEntry, len(cands))
-	for i, c := range cands {
-		out[i] = c.entry
+// orderedChain returns a route's chain in try order: written order for
+// "ordered" (or unknown) strategies, descending score otherwise.
+func (s *Snapshot) orderedChain(route string) []ChainEntry {
+	detail := s.ResolveDetail(route)
+	out := make([]ChainEntry, len(detail))
+	for i, d := range detail {
+		out[i] = d.Entry
 	}
 	return out
 }

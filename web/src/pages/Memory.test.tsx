@@ -10,9 +10,12 @@ vi.mock('../api/client', () => ({
   resolveMemory: vi.fn(),
   memoryChain: vi.fn(),
   searchMemories: vi.fn(),
+  entityGraph: vi.fn(),
+  entityMemories: vi.fn(),
 }))
 
 import {
+  entityGraph,
   listMemories,
   resolveMemory,
   searchMemories,
@@ -100,6 +103,19 @@ describe('Memory queue', () => {
     vi.mocked(listMemories).mockResolvedValue([])
     renderPage()
     expect(await screen.findByText(/Queue is empty/)).toBeInTheDocument()
+  })
+})
+
+describe('Memory graph tab', () => {
+  it('renders the entity graph', async () => {
+    vi.mocked(entityGraph).mockResolvedValue({
+      entities: [{ id: 'e1', type: 'project', name: 'timothy', memory_count: 1 }],
+      edges: [],
+    })
+    renderPage()
+    fireEvent.click(await screen.findByTestId('tab-graph'))
+    expect(await screen.findByTestId('entity-graph')).toBeInTheDocument()
+    expect(screen.getAllByTestId('entity-node')).toHaveLength(1)
   })
 })
 

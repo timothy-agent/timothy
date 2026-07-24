@@ -394,6 +394,191 @@ func TestOrderedStrategyIgnoresStats(t *testing.T) {
 	}
 }
 
+func almostEqual(a, b float64) bool {
+	d := a - b
+	return d < 1e-9 && d > -1e-9
+}
+
+// An ordered route's detail keeps written order, is unscored, and
+// still carries the raw ledger stats for observability.
+func TestResolveDetailOrdered(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys())
+	snap.SetStats(map[string]ModelStats{
+		"anthropic/sonnet": {Uptime: 0.9, LatencyMS: 800, TokensPerS: 40},
+	})
+
+	detail := snap.ResolveDetail("coding")
+	if len(detail) != 2 {
+		t.Fatalf("detail len = %d, want 2", len(detail))
+	}
+	if detail[0].ProviderName != "anthropic" || detail[1].ProviderName != "grok" {
+		t.Fatalf("order = %s,%s, want written order", detail[0].ProviderName, detail[1].ProviderName)
+	}
+	first := detail[0]
+	if first.Scored || first.Score != 0 {
+		t.Fatalf("ordered route scored: %+v", first)
+	}
+	if !first.Usable || first.SkipReason != "" {
+		t.Fatalf("healthy entry not usable: %+v", first)
+	}
+	if first.Uptime != 0.9 || first.LatencyMS != 800 || first.TokensPerS != 40 {
+		t.Fatalf("raw stats not carried: %+v", first)
+	}
+	if second := detail[1]; second.Uptime != -1 || second.LatencyMS != 0 {
+		t.Fatalf("no-data sentinels wrong: %+v", second)
+	}
+}
+
+// A scored route's detail matches Resolve's try order exactly and
+// exposes the normalized factors behind it.
+func TestResolveDetailScoredMatchesResolve(t *testing.T) {
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "pricey", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true,
+			Models: []ModelInfo{{ID: "big", Prices: &ModelPrices{OutputPerMTok: 25}}}},
+		{ID: "p2", Name: "cheap", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true,
+			Models: []ModelInfo{{ID: "small", Prices: &ModelPrices{OutputPerMTok: 1}}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "big"},
+		{ProviderID: "p2", Model: "small"},
+	}}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	detail := snap.ResolveDetail("r")
+	attempts, err := snap.Resolve("r", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for i := range detail {
+		if detail[i].ProviderName != attempts[i].ProviderName {
+			t.Fatalf("detail order diverges from Resolve at %d: %s vs %s",
+				i, detail[i].ProviderName, attempts[i].ProviderName)
+		}
+	}
+
+	cheap, pricey := detail[0], detail[1]
+	if cheap.ProviderName != "cheap" {
+		t.Fatalf("cheapest not first: %+v", detail)
+	}
+	if !cheap.Scored || !almostEqual(cheap.NormPrice, 1) || !almostEqual(pricey.NormPrice, 1.0/25) {
+		t.Fatalf("norm prices wrong: cheap=%+v pricey=%+v", cheap, pricey)
+	}
+	// price weights: 0.9 price + 0.02 latency + 0.02 tps, latency/tps
+	// neutral (0.5) with no ledger data, no uptime multiplier.
+	if !almostEqual(cheap.Score, 0.9+0.02) {
+		t.Fatalf("cheap score = %v", cheap.Score)
+	}
+	if !almostEqual(pricey.Score, 0.9/25+0.02) {
+		t.Fatalf("pricey score = %v", pricey.Score)
+	}
+}
+
+// Missing factors stay sentinel -1 and score neutrally; a near-dead
+// uptime is floored at 0.05 rather than zeroing the candidate.
+func TestResolveDetailNeutralAndFloor(t *testing.T) {
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "quiet", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://a.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true,
+			Models: []ModelInfo{{ID: "m1"}}},
+		{ID: "p2", Name: "flaky", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://b.example/v1", DefaultModel: "m2", CredentialRef: "K", Enabled: true,
+			Models: []ModelInfo{{ID: "m2"}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Strategy: "auto", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "m1"},
+		{ProviderID: "p2", Model: "m2"},
+	}}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	snap.SetStats(map[string]ModelStats{
+		"flaky/m2": {Uptime: 0.01, LatencyMS: 100, TokensPerS: 10},
+	})
+
+	detail := snap.ResolveDetail("r")
+	if detail[0].ProviderName != "quiet" {
+		t.Fatalf("floored candidate outranked neutral one: %+v", detail)
+	}
+	quiet, flaky := detail[0], detail[1]
+	if quiet.NormPrice != -1 || quiet.NormLatency != -1 || quiet.NormTPS != -1 || quiet.Uptime != -1 {
+		t.Fatalf("no-data sentinels wrong: %+v", quiet)
+	}
+	// auto weights: all factors neutral, no uptime multiplier.
+	if !almostEqual(quiet.Score, (0.6+0.1+0.05)*0.5) {
+		t.Fatalf("quiet score = %v", quiet.Score)
+	}
+	// flaky is best (only) latency and tps candidate, price neutral,
+	// then multiplied by the 0.05 uptime floor.
+	if !almostEqual(flaky.Score, (0.6*0.5+0.1+0.05)*0.05) {
+		t.Fatalf("flaky score = %v", flaky.Score)
+	}
+	if !almostEqual(flaky.NormLatency, 1) || !almostEqual(flaky.NormTPS, 1) {
+		t.Fatalf("flaky norms wrong: %+v", flaky)
+	}
+}
+
+// Unusable entries stay in the detail with the gate's reason: the UI
+// shows why an entry is skipped instead of hiding it.
+func TestResolveDetailUsability(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys())
+
+	if d := snap.ResolveDetail("mini"); len(d) != 1 || d[0].Usable || d[0].SkipReason != "disabled" {
+		t.Fatalf("disabled provider detail = %+v", d)
+	}
+	if d := snap.ResolveDetail("ghost"); len(d) != 1 || d[0].Usable || d[0].SkipReason != "unknown provider id" || d[0].ProviderName != "" {
+		t.Fatalf("unknown provider detail = %+v", d)
+	}
+	if d := snap.ResolveDetail("embedding"); len(d) != 2 || d[0].Usable || d[0].SkipReason != "lacks embeddings capability" {
+		t.Fatalf("capability detail = %+v", d)
+	}
+	if d := snap.ResolveDetail("no-such-route"); len(d) != 0 {
+		t.Fatalf("unknown route detail = %+v", d)
+	}
+
+	unhealthy := testSnapshot(t, map[string]string{"X_KEY": "sk-x"}) // A_KEY unresolved
+	d := unhealthy.ResolveDetail("coding")
+	if d[0].Usable || d[0].SkipReason != "unhealthy: credential A_KEY unresolved" {
+		t.Fatalf("unhealthy detail = %+v", d[0])
+	}
+	if !d[1].Usable {
+		t.Fatalf("healthy entry marked unusable: %+v", d[1])
+	}
+}
+
+// A single-entry scored chain keeps written order (nothing to sort)
+// but still reports its score and factors.
+func TestResolveDetailSingleEntryScored(t *testing.T) {
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "solo", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://a.example/v1", DefaultModel: "m", CredentialRef: "K", Enabled: true,
+			Models: []ModelInfo{{ID: "m", Prices: &ModelPrices{OutputPerMTok: 2}}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "m"},
+	}}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	d := snap.ResolveDetail("r")
+	if len(d) != 1 || !d[0].Scored {
+		t.Fatalf("detail = %+v", d)
+	}
+	// Sole candidate is its own best price; latency/tps neutral.
+	if !almostEqual(d[0].Score, 0.9+0.02) || !almostEqual(d[0].NormPrice, 1) {
+		t.Fatalf("solo score = %+v", d[0])
+	}
+}
+
 // Sticky moves a chain member to the front, but never smuggles in a
 // provider+model outside the chain.
 func TestStickyPrefersChainMemberOnly(t *testing.T) {
