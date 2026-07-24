@@ -363,6 +363,14 @@ func TestRoutePatchValidatesProviderRefs(t *testing.T) {
 			if len(r.Chain) != 2 || r.Chain[0].Model != "m2" {
 				t.Fatalf("chain = %+v, want reordered [m2 m1]", r.Chain)
 			}
+			// PatchRoute reloaded the snapshot, so the enabled route
+			// carries the router's resolved view.
+			if len(r.Resolved) != 2 || !r.Resolved[0].Usable {
+				t.Fatalf("resolved = %+v, want 2 usable entries", r.Resolved)
+			}
+			if r.Serving == nil || r.Serving.Model != "m2" {
+				t.Fatalf("serving = %+v, want m2", r.Serving)
+			}
 			return
 		}
 	}
