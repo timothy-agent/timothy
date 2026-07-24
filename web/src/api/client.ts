@@ -10,6 +10,7 @@ import type {
   ChainEntry,
   ChatEvent,
   ChatRequest,
+  EntityGraphData,
   LatencyRow,
   MemoryItem,
   Mission,
@@ -286,6 +287,16 @@ export async function searchMemories(query: string): Promise<RetrievedMemory[]> 
     method: 'POST',
     body: JSON.stringify({ query }),
   })
+  return memories ?? []
+}
+
+export async function entityGraph(): Promise<EntityGraphData> {
+  const data = await request<EntityGraphData>('/v1/entities/graph')
+  return { entities: data.entities ?? [], edges: data.edges ?? [] }
+}
+
+export async function entityMemories(id: string): Promise<MemoryItem[]> {
+  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/entities/${id}/memories`)
   return memories ?? []
 }
 

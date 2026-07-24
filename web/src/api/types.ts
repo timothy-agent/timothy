@@ -141,6 +141,27 @@ export interface RetrievedMemory {
   score: number
 }
 
+// Entity graph (GET /v1/entities/graph): nodes are extracted entities
+// with their active-memory counts; edges are co-occurrences (weight =
+// shared active memories).
+export interface EntityNode {
+  id: string
+  type: string
+  name: string
+  memory_count: number
+}
+
+export interface EntityEdge {
+  src: string
+  dst: string
+  weight: number
+}
+
+export interface EntityGraphData {
+  entities: EntityNode[]
+  edges: EntityEdge[]
+}
+
 // Usage aggregates served by /v1/admin/usage/* — chart-ready, never
 // raw ledger rows.
 export interface UsageSummary {
