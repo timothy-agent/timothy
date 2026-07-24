@@ -52,6 +52,8 @@ func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embe
 	srv.Handle("POST /v1/memories", http.HandlerFunc(a.handleAdd))
 	srv.Handle("POST /v1/memories/{id}", http.HandlerFunc(a.handleResolve))
 	srv.Handle("GET /v1/memories/{id}/chain", http.HandlerFunc(a.handleChain))
+	srv.Handle("GET /v1/entities/graph", http.HandlerFunc(a.handleEntityGraph))
+	srv.Handle("GET /v1/entities/{id}/memories", http.HandlerFunc(a.handleEntityMemories))
 }
 
 // handleExtract runs extraction synchronously and returns the inserted
