@@ -339,6 +339,7 @@ func TestRoutePatchValidatesProviderRefs(t *testing.T) {
 	id, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "route", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "m1",
+		Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
