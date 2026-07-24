@@ -197,7 +197,7 @@ func (a *Anthropic) Stream(ctx context.Context, req CompletionRequest) (<-chan s
 		}
 		return r, nil
 	}
-	return runStream(ctx, a.client, a.cfg.Timeout, build, a.relay), nil
+	return runStream(ctx, a.client, a.cfg.Timeout, retriesFor(req.FinalAttempt), build, a.relay), nil
 }
 
 func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {

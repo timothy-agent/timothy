@@ -41,6 +41,7 @@ export function NewMissionDialog({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [route, setRoute] = useState('')
   const [reviewRoute, setReviewRoute] = useState('')
+  const [escalationRoute, setEscalationRoute] = useState('')
   const [budget, setBudget] = useState('')
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -64,6 +65,7 @@ export function NewMissionDialog({
     setShowAdvanced(false)
     setRoute('')
     setReviewRoute('')
+    setEscalationRoute('')
     setBudget('')
     setAutoApproveSafe(true)
   }
@@ -77,6 +79,7 @@ export function NewMissionDialog({
         agent_id: agentID || undefined,
         route: route || undefined,
         review_route: reviewRoute || undefined,
+        escalation_route: escalationRoute || undefined,
         budget_usd: budget ? Number(budget) : undefined,
         repo_path: kind === 'coding' ? repoPath.trim() : undefined,
         auto_approve_safe: autoApproveSafe,
@@ -186,6 +189,15 @@ export function NewMissionDialog({
                   value={reviewRoute}
                   onChange={(e) => setReviewRoute(e.target.value)}
                   placeholder="default"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-escalation-route">Escalation route</Label>
+                <Input
+                  id="mission-escalation-route"
+                  value={escalationRoute}
+                  onChange={(e) => setEscalationRoute(e.target.value)}
+                  placeholder="Off — set to switch route after a failed or reworked turn"
                 />
               </div>
               <div className="space-y-1.5">

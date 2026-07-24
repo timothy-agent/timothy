@@ -77,6 +77,91 @@ func mem(content string) Memory {
 	}
 }
 
+// TestEntityGraphQueries exercises the graph trio end-to-end: node
+// counts, co-occurrence edges (active-only, dangling refs filtered),
+// and the per-entity memory listing.
+func TestEntityGraphQueries(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	upsert := func(name string) string {
+		id, err := s.UpsertEntity(ctx, "topic", "itest-entity-"+t.Name()+"-"+name)
+		if err != nil {
+			t.Fatalf("UpsertEntity(%s): %v", name, err)
+		}
+		return id
+	}
+	a, b, c := upsert("a"), upsert("b"), upsert("c")
+	const ghost = "99999999-9999-4999-8999-999999999999"
+
+	insert := func(refs []string, active bool) string {
+		m := mem("graph fixture")
+		m.EntityRefs = refs
+		if active {
+			m.Actor = ActorUser // user-explicit memories activate directly
+		}
+		id, err := s.Insert(ctx, m)
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		return id
+	}
+	insert([]string{a, b}, true)
+	insert([]string{a, b}, true)
+	insert([]string{a, c}, true)
+	insert([]string{b, c}, false)     // pending: excluded everywhere
+	insert([]string{a, ghost}, true)  // dangling ref: counted for a, no edge
+
+	entities, err := s.ListEntities(ctx)
+	if err != nil {
+		t.Fatalf("ListEntities: %v", err)
+	}
+	counts := map[string]int{}
+	for _, e := range entities {
+		counts[e.ID] = e.MemoryCount
+	}
+	if counts[a] != 4 || counts[b] != 2 || counts[c] != 1 {
+		t.Fatalf("counts a=%d b=%d c=%d, want 4/2/1", counts[a], counts[b], counts[c])
+	}
+
+	edges, err := s.EntityEdges(ctx)
+	if err != nil {
+		t.Fatalf("EntityEdges: %v", err)
+	}
+	mine := map[string]int{}
+	ours := map[string]bool{a: true, b: true, c: true}
+	for _, e := range edges {
+		if e.Src == ghost || e.Dst == ghost {
+			t.Fatalf("dangling ref produced an edge: %+v", e)
+		}
+		if ours[e.Src] && ours[e.Dst] {
+			mine[e.Src+"|"+e.Dst] = e.Weight
+		}
+	}
+	key := func(x, y string) string {
+		if x < y {
+			return x + "|" + y
+		}
+		return y + "|" + x
+	}
+	if len(mine) != 2 || mine[key(a, b)] != 2 || mine[key(a, c)] != 1 {
+		t.Fatalf("edges = %v, want a-b:2 a-c:1 only", mine)
+	}
+
+	byA, err := s.ListByEntity(ctx, a)
+	if err != nil {
+		t.Fatalf("ListByEntity: %v", err)
+	}
+	if len(byA) != 4 {
+		t.Fatalf("ListByEntity(a) = %d memories, want 4 (active only)", len(byA))
+	}
+	for i := 1; i < len(byA); i++ {
+		if byA[i-1].CreatedAt.Before(byA[i].CreatedAt) {
+			t.Fatalf("ListByEntity not newest-first at %d", i)
+		}
+	}
+}
+
 func TestInsertStagesAgentWrites(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

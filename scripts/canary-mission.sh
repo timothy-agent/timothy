@@ -9,7 +9,24 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_URL="${CANARY_BASE_URL:-http://localhost:${BRAIN_PORT:-8300}}"
 TIMEOUT_SECS="${CANARY_TIMEOUT:-900}"
-GOAL="Summarize what HTTP status code 429 means and when a client should retry, in a markdown file."
+
+# A different goal every run: repeating one fixed goal would let
+# provider prompt caches, model memorization, and leftover artifacts
+# from prior runs flatter the result — a pass must mean the harness
+# worked NOW, on work it hasn't seen before.
+GOALS=(
+  "Summarize what HTTP status code 429 means and when a client should retry, in a markdown file."
+  "Explain how the Retry-After header works with 503 responses, in a markdown file."
+  "Describe HTTP ETag headers and conditional requests, in a markdown file."
+  "Explain CORS preflight requests and when browsers send them, in a markdown file."
+  "Compare HTTP 301 and 308 redirects and when to use each, in a markdown file."
+  "Describe the robots.txt format and how crawlers use it, in a markdown file."
+  "Explain HTTP chunked transfer encoding and when it applies, in a markdown file."
+  "Compare HTTP HEAD and GET requests and typical uses of HEAD, in a markdown file."
+  "Summarize what DNS TTL means and how it affects record changes, in a markdown file."
+  "Explain what an idempotent HTTP method is with examples, in a markdown file."
+)
+GOAL="${GOALS[$((RANDOM % ${#GOALS[@]}))]}"
 
 # The API token stays in the shell environment only — sourced here,
 # never printed.

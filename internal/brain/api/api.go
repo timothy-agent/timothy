@@ -68,6 +68,8 @@ var memoryRoutePatterns = []string{
 	"POST /v1/memories/{id}",
 	"GET /v1/memories/{id}/chain",
 	"POST /v1/memories/search",
+	"GET /v1/entities/graph",
+	"GET /v1/entities/{id}/memories",
 }
 
 // Register mounts the routes, each wrapped in bearer auth. memories

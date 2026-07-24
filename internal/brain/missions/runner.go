@@ -214,6 +214,19 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	return b.String(), sentinelArgs, nil
 }
 
+// workerRoute picks the route a worker turn runs on. With an
+// escalation route configured, any evidence the current model is not
+// cutting it — a worker failure or a review rework already on the
+// books — switches subsequent worker turns to it. Empty escalation
+// route means the ladder is off and the mission's own route always
+// wins.
+func workerRoute(m Mission) string {
+	if m.EscalationRoute != "" && (m.ConsecutiveFailures > 0 || m.StallCount > 0) {
+		return m.EscalationRoute
+	}
+	return m.Route
+}
+
 // RunWorker seeds a fresh session (packet only, no prior transcript)
 // and enforces the sentinel ladder: a present, well-formed
 // mission_status call is trusted directly; a missing or invalid one
@@ -225,7 +238,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	extra := append([]*tools.Tool{MissionStatusTool()}, missionTools(m)...)
 	req := loop.Request{
 		SessionID:  m.SessionID,
-		Route:      m.Route,
+		Route:      workerRoute(m),
 		Agent:      "mission-worker",
 		MissionID:  m.ID,
 		System:     system,

@@ -219,6 +219,85 @@ func TestListCursorStableOnTiedTimestamps(t *testing.T) {
 	}
 }
 
+// TestListExcludesMissionSessions: mission bookkeeping sessions
+// (missions.session_id) exist only so tool audit has a session FK.
+// They are not chat and must never appear in the list — with or
+// without a search query.
+func TestListExcludesMissionSessions(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewStore(pool)
+
+	const marker = "mission-session-list-test"
+	chatID, err := s.Create(ctx, marker)
+	if err != nil {
+		t.Fatalf("Create chat: %v", err)
+	}
+	missionSessionID, err := s.Create(ctx, marker)
+	if err != nil {
+		t.Fatalf("Create mission session: %v", err)
+	}
+	var missionID string
+	if err := db.QueryRow(ctx,
+		"INSERT INTO missions (goal, kind, session_id) VALUES ($1, 'research', $2) RETURNING id",
+		marker, missionSessionID).Scan(&missionID); err != nil {
+		t.Fatalf("insert mission: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM missions WHERE id = $1", missionID)
+		for _, id := range []string{chatID, missionSessionID} {
+			_, _ = conn.Exec(cctx, "DELETE FROM session_events WHERE session_id = $1", id)
+			_, _ = conn.Exec(cctx, "DELETE FROM sessions WHERE id = $1", id)
+		}
+	})
+
+	for _, query := range []string{"", marker} {
+		got, err := s.List(ctx, query, time.Time{}, "")
+		if err != nil {
+			t.Fatalf("List(%q): %v", query, err)
+		}
+		var sawChat, sawMission bool
+		for _, m := range got {
+			switch m.ID {
+			case chatID:
+				sawChat = true
+			case missionSessionID:
+				sawMission = true
+			}
+		}
+		if sawMission {
+			t.Fatalf("List(%q) returned the mission bookkeeping session", query)
+		}
+		if !sawChat && query != "" {
+			t.Fatalf("List(%q) lost the ordinary chat session", query)
+		}
+	}
+}
+
 // TestListQueryMatchesTitleOnlySession pins the NULL guard in the
 // search SQL: a session that has never emitted a user_message (its
 // joined payload is NULL) must still be findable by title.

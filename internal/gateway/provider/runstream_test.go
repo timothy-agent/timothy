@@ -33,7 +33,7 @@ func TestRunStreamTimeoutErrorDeliversOnParentCtx(t *testing.T) {
 	t.Cleanup(func() { close(blocked); srv.Close() })
 
 	relayCalled := false
-	ch := runStream(t.Context(), &http.Client{}, 100*time.Millisecond, buildFor(srv.URL),
+	ch := runStream(t.Context(), &http.Client{}, 100*time.Millisecond, maxRetries, buildFor(srv.URL),
 		func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 			relayCalled = true
 			return true, nil
@@ -67,7 +67,7 @@ func TestRunStreamIncompleteTail(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ch := runStream(t.Context(), &http.Client{}, time.Second, buildFor(srv.URL),
+			ch := runStream(t.Context(), &http.Client{}, time.Second, maxRetries, buildFor(srv.URL),
 				func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 					return false, tt.relayErr
 				})
@@ -89,7 +89,7 @@ func TestRunStreamFinishedRelayGetsNoTail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	t.Cleanup(srv.Close)
 
-	ch := runStream(t.Context(), &http.Client{}, time.Second, buildFor(srv.URL),
+	ch := runStream(t.Context(), &http.Client{}, time.Second, maxRetries, buildFor(srv.URL),
 		func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone})
 			return true, nil
@@ -113,7 +113,7 @@ func TestRunStreamRetryEventsPrecedeSuccess(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	ch := runStream(t.Context(), &http.Client{}, 5*time.Second, buildFor(srv.URL),
+	ch := runStream(t.Context(), &http.Client{}, 5*time.Second, maxRetries, buildFor(srv.URL),
 		func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 			b, _ := io.ReadAll(body)
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventChunk, Text: string(b)})

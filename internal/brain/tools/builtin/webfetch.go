@@ -14,6 +14,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 const (
@@ -26,13 +27,25 @@ type webFetchArgs struct {
 	URL string `json:"url"`
 }
 
+// WebFetchConfig carries optional infrastructure for the tool.
+type WebFetchConfig struct {
+	// MarkitdownURL is the markitdown sidecar's base address (compose-
+	// internal). When set, HTML pages convert to structured markdown
+	// (headings, tables, links survive) and PDF responses become
+	// readable; empty falls back to the built-in DOM text extractor
+	// and PDFs stay unsupported.
+	MarkitdownURL string
+}
+
 // WebFetch fetches a public URL and returns a readable text extract.
 // Every connection — including redirect hops — dials only vetted
 // public IPs: the guard resolves the host itself and refuses private,
 // loopback, link-local (cloud metadata), CGNAT, and unspecified
 // ranges, then dials the vetted address directly so a DNS answer
-// can't change between check and connect.
-func WebFetch() *tools.Tool {
+// can't change between check and connect. The markitdown sidecar is
+// deliberately NOT behind that guard: its address is operator config
+// (compose-internal), never model input.
+func WebFetch(cfg WebFetchConfig) *tools.Tool {
 	client := &http.Client{
 		Timeout: webFetchTimeout,
 		Transport: &http.Transport{
@@ -52,10 +65,11 @@ Arguments:
 - url (string, required): full http:// or https:// URL including
   scheme, e.g. "https://example.com/pricing".
 
-Returns the page title and extracted text for HTML, or the raw body
-for plain-text responses. Long pages are truncated (a note marks the
-cut). Errors state the reason: blocked address, non-text content,
-HTTP status, timeout.
+Returns readable markdown for HTML and PDF responses when the
+converter is available (falling back to a plain-text extract), or the
+raw body for plain-text responses. Long pages are truncated (a note
+marks the cut). Errors state the reason: blocked address, unsupported
+content, HTTP status, timeout.
 
 Example: {"url": "https://go.dev/doc/devel/release"} → "Release
 History — Go 1.26 (released 2026-02-10) ..."`,
@@ -75,12 +89,12 @@ History — Go 1.26 (released 2026-02-10) ..."`,
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
 			}
-			return fetchReadable(ctx, client, args.URL)
+			return fetchReadable(ctx, client, cfg.MarkitdownURL, args.URL)
 		},
 	}
 }
 
-func fetchReadable(ctx context.Context, client *http.Client, rawURL string) (string, error) {
+func fetchReadable(ctx context.Context, client *http.Client, markitdownURL, rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid url: %w", err)
@@ -97,7 +111,11 @@ func fetchReadable(ctx context.Context, client *http.Client, rawURL string) (str
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "timothy/1.0 (+self-hosted assistant)")
-	req.Header.Set("Accept", "text/html, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1")
+	accept := "text/html, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1"
+	if markitdownURL != "" {
+		accept = "text/html, application/pdf;q=0.9, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1"
+	}
+	req.Header.Set("Accept", accept)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -122,7 +140,25 @@ func fetchReadable(ctx context.Context, client *http.Client, rawURL string) (str
 	var text string
 	switch {
 	case strings.Contains(ct, "text/html"):
-		text = extractHTMLText(body)
+		// Markitdown keeps structure (headings, tables, links) the DOM
+		// text walk flattens away; any sidecar failure degrades to the
+		// walk rather than failing the fetch.
+		text = ""
+		if markitdownURL != "" {
+			text, _ = markitdown.Convert(ctx, nil, markitdownURL, "page.html", "text/html", body)
+		}
+		if strings.TrimSpace(text) == "" {
+			text = extractHTMLText(body)
+		}
+	case strings.Contains(ct, "application/pdf"):
+		if markitdownURL == "" {
+			return "", fmt.Errorf("unsupported content type %q: PDF conversion needs the markitdown sidecar, which is not configured", ct)
+		}
+		md, err := markitdown.Convert(ctx, nil, markitdownURL, "page.pdf", "application/pdf", body)
+		if err != nil {
+			return "", fmt.Errorf("pdf conversion failed: %w", err)
+		}
+		text = md
 	case strings.HasPrefix(ct, "text/"),
 		strings.Contains(ct, "json"),
 		strings.Contains(ct, "xml"):

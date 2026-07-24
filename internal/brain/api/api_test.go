@@ -212,13 +212,15 @@ func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
 		{http.MethodPost, "/v1/memories/abc"},
 		{http.MethodGet, "/v1/memories/abc/chain"},
 		{http.MethodPost, "/v1/memories/search"},
+		{http.MethodGet, "/v1/entities/graph"},
+		{http.MethodGet, "/v1/entities/abc/memories"},
 	} {
 		if code := call(c.method, c.path, "Bearer tok"); code != http.StatusOK {
 			t.Fatalf("%s %s = %d, want 200", c.method, c.path, code)
 		}
 	}
-	if proxied != 5 {
-		t.Fatalf("proxied = %d, want 5", proxied)
+	if proxied != 7 {
+		t.Fatalf("proxied = %d, want 7", proxied)
 	}
 
 	// memoryd-internal routes must never be reachable through brain —

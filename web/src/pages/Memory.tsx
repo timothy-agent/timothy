@@ -1,21 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
+import { toast } from 'sonner'
 import {
   addMemory,
   listMemories,
-  memoryChain,
   resolveMemory,
   searchMemories,
 } from '../api/client'
 import type { MemoryItem, RetrievedMemory } from '../api/types'
-import { Badge } from '../components/ui/badge'
+import { ChainDialog } from '../components/memory/ChainDialog'
+import { GraphTab } from '../components/memory/GraphTab'
+import { TypeBadge } from '../components/memory/TypeBadge'
 import { Button } from '../components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
 import { Input } from '../components/ui/input'
 import {
   Select,
@@ -26,20 +22,6 @@ import {
 } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
 import { notifyMemoryChanged } from '../lib/memory'
-
-const typeTone: Record<string, string> = {
-  semantic: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
-  episodic: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-  procedural: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-}
-
-function TypeBadge({ type }: { type: string }) {
-  return (
-    <Badge variant="outline" className={`border-0 ${typeTone[type] ?? ''}`}>
-      {type}
-    </Badge>
-  )
-}
 
 // QueueCard is one pending memory awaiting the user's verdict.
 function QueueCard({
@@ -126,7 +108,10 @@ function Queue() {
   const refresh = useCallback(() => {
     listMemories('pending')
       .then(setPending)
-      .catch(() => setPending([]))
+      .catch(() => {
+        toast.error('Could not load the memory queue')
+        setPending([])
+      })
       .finally(() => setLoaded(true))
   }, [])
   useEffect(refresh, [refresh])
@@ -164,35 +149,6 @@ function Queue() {
   )
 }
 
-// ChainDialog shows a memory's supersede history, oldest first.
-function ChainDialog({ id, onClose }: { id: string; onClose: () => void }) {
-  const [chain, setChain] = useState<MemoryItem[]>([])
-  useEffect(() => {
-    memoryChain(id).then(setChain).catch(() => setChain([]))
-  }, [id])
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Supersede history</DialogTitle>
-        </DialogHeader>
-        <ol className="space-y-2" data-testid="chain-list">
-          {chain.map((m, i) => (
-            <li key={m.id} className="rounded border p-3 text-sm">
-              <div className="mb-1 flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">v{i + 1}</span>
-                <TypeBadge type={m.type} />
-                <span className="text-xs text-muted-foreground">{m.status}</span>
-              </div>
-              {m.content}
-            </li>
-          ))}
-        </ol>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function Browser() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<RetrievedMemory[] | null>(null)
@@ -206,7 +162,10 @@ function Browser() {
   const loadBrowse = useCallback(() => {
     listMemories(status)
       .then(setBrowse)
-      .catch(() => setBrowse([]))
+      .catch(() => {
+        toast.error('Could not load memories')
+        setBrowse([])
+      })
   }, [status])
   useEffect(loadBrowse, [loadBrowse])
 
@@ -219,6 +178,7 @@ function Browser() {
     try {
       setResults(await searchMemories(query.trim()))
     } catch {
+      toast.error('Search failed')
       setResults([])
     } finally {
       setBusy(false)
@@ -233,6 +193,8 @@ function Browser() {
       setNewFact('')
       notifyMemoryChanged()
       if (status === 'active') loadBrowse()
+    } catch {
+      toast.error('Could not save the memory')
     } finally {
       setBusy(false)
     }
@@ -342,28 +304,36 @@ function Browser() {
   )
 }
 
+const tabs = [
+  { id: 'queue', label: 'Queue' },
+  { id: 'browser', label: 'Browser' },
+  { id: 'graph', label: 'Graph' },
+] as const
+
 export function Memory() {
-  const [tab, setTab] = useState<'queue' | 'browser'>('queue')
+  const [tab, setTab] = useState<(typeof tabs)[number]['id']>('queue')
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl p-6 space-y-6">
+      <div
+        className={`mx-auto w-full p-6 space-y-6 ${tab === 'graph' ? 'max-w-5xl' : 'max-w-3xl'}`}
+      >
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">Memory</h1>
           <div className="ml-auto flex gap-1 rounded-lg border p-0.5">
-            {(['queue', 'browser'] as const).map((t) => (
+            {tabs.map((t) => (
               <Button
-                key={t}
+                key={t.id}
                 size="sm"
-                variant={tab === t ? 'secondary' : 'ghost'}
-                onClick={() => setTab(t)}
-                data-testid={`tab-${t}`}
+                variant={tab === t.id ? 'secondary' : 'ghost'}
+                onClick={() => setTab(t.id)}
+                data-testid={`tab-${t.id}`}
               >
-                {t === 'queue' ? 'Queue' : 'Browser'}
+                {t.label}
               </Button>
             ))}
           </div>
         </div>
-        {tab === 'queue' ? <Queue /> : <Browser />}
+        {tab === 'queue' ? <Queue /> : tab === 'browser' ? <Browser /> : <GraphTab />}
       </div>
     </div>
   )

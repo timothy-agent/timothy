@@ -10,10 +10,12 @@ import type {
   ChainEntry,
   ChatEvent,
   ChatRequest,
+  EntityGraphData,
   LatencyRow,
   MemoryItem,
   Mission,
   MissionEvent,
+  MissionUsage,
   Notification,
   ProviderHealth,
   RetrievedMemory,
@@ -285,6 +287,16 @@ export async function searchMemories(query: string): Promise<RetrievedMemory[]> 
     method: 'POST',
     body: JSON.stringify({ query }),
   })
+  return memories ?? []
+}
+
+export async function entityGraph(): Promise<EntityGraphData> {
+  const data = await request<EntityGraphData>('/v1/entities/graph')
+  return { entities: data.entities ?? [], edges: data.edges ?? [] }
+}
+
+export async function entityMemories(id: string): Promise<MemoryItem[]> {
+  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/entities/${id}/memories`)
   return memories ?? []
 }
 
@@ -640,6 +652,7 @@ export interface CreateMissionInput {
   agent_id?: string
   route?: string
   review_route?: string
+  escalation_route?: string
   max_iterations?: number
   budget_usd?: number
   repo_path?: string
@@ -665,6 +678,10 @@ export async function getMission(id: string): Promise<Mission> {
 export async function missionEvents(id: string): Promise<MissionEvent[]> {
   const { events } = await request<{ events: MissionEvent[] }>(`/v1/missions/${id}/events`)
   return events ?? []
+}
+
+export async function missionUsage(id: string): Promise<MissionUsage> {
+  return request<MissionUsage>(`/v1/admin/usage/mission?id=${encodeURIComponent(id)}`)
 }
 
 export async function resumeMission(id: string): Promise<void> {
