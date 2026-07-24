@@ -13,7 +13,22 @@ COMPOSE=(docker compose -f "${REPO_ROOT}/deploy/docker-compose.yml")
 BASE_URL="${CANARY_BASE_URL:-http://localhost:${BRAIN_PORT:-8300}}"
 TIMEOUT_SECS="${CANARY_TIMEOUT:-900}"
 FIXTURE=/workspace/canary-fixture
-GOAL="Add a CHANGELOG.md file at the repository root with a '## 0.1.0' heading and one bullet point describing the initial release."
+
+# A different goal every run: repeating one fixed goal would let
+# prompt caches and prior runs' artifacts flatter the result. Each
+# case pins the exact artifact path so the script can independently
+# assert it exists in the worktree afterward.
+CASES=(
+  "CHANGELOG.md|Add a CHANGELOG.md file at the repository root with a version heading and one bullet point describing the initial release."
+  "CONTRIBUTING.md|Add a CONTRIBUTING.md file at the repository root with a short section on how to propose a change."
+  "docs/USAGE.md|Add a docs/USAGE.md file with a short Usage section explaining what this fixture repo is for."
+  "SECURITY.md|Add a SECURITY.md file at the repository root describing how to report a vulnerability."
+  ".editorconfig|Add an .editorconfig file at the repository root with root=true and basic UTF-8/LF settings."
+  "docs/FAQ.md|Add a docs/FAQ.md file with two short frequently-asked questions and answers about this repo."
+)
+CASE="${CASES[$((RANDOM % ${#CASES[@]}))]}"
+ARTIFACT="${CASE%%|*}"
+GOAL="${CASE#*|}"
 
 # The API token stays in the shell environment only — sourced here,
 # never printed.
@@ -119,9 +134,9 @@ if [[ -z "${worktree}" || -z "${branch}" ]]; then
 fi
 "${COMPOSE[@]}" exec -T brain sh -c "
   git -C ${FIXTURE} rev-parse --verify --quiet '${branch}' >/dev/null &&
-  test -s '${worktree}/CHANGELOG.md'
+  test -s '${worktree}/${ARTIFACT}'
 " || {
-  echo "canary-coding: FAIL — branch ${branch} or ${worktree}/CHANGELOG.md missing in container" >&2
+  echo "canary-coding: FAIL — branch ${branch} or ${worktree}/${ARTIFACT} missing in container" >&2
   exit 1
 }
 
