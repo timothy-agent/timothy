@@ -1,39 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { listProviders, listRoutes, patchRoute, providersHealth } from '../../api/client'
-import type { AdminProvider, AdminRoute, ChainEntry, ProviderHealth } from '../../api/types'
+import { listProviders, listRoutes, patchRoute } from '../../api/client'
+import type { AdminProvider, AdminRoute } from '../../api/types'
 import { Toggle } from './shared'
 import { errText } from './util'
 
 export function RoutesList() {
   const [routes, setRoutes] = useState<AdminRoute[]>([])
   const [providers, setProviders] = useState<AdminProvider[]>([])
-  const [health, setHealth] = useState<Record<string, ProviderHealth>>({})
   const navigate = useNavigate()
 
   const refresh = useCallback(() => {
-    Promise.all([listRoutes(), listProviders(), providersHealth()])
-      .then(([r, p, h]) => {
+    Promise.all([listRoutes(), listProviders()])
+      .then(([r, p]) => {
         setRoutes(r)
         setProviders(p)
-        setHealth(Object.fromEntries(h.map((x) => [x.name, x])))
       })
       .catch((err: unknown) => toast.error('Could not load routes', { description: errText(err) }))
   }, [])
   useEffect(refresh, [refresh])
 
   const nameOf = (id: string) => providers.find((p) => p.id === id)?.name ?? id.slice(0, 8)
-
-  // servingEntry mirrors the router: first chain entry whose provider
-  // is enabled and credential-healthy serves the request.
-  const servingEntry = (r: AdminRoute): ChainEntry | undefined =>
-    r.enabled
-      ? r.chain.find((e) => {
-          const p = providers.find((x) => x.id === e.provider_id)
-          return p?.enabled && health[p.name]?.healthy
-        })
-      : undefined
 
   const toggle = (r: AdminRoute, enabled: boolean) => {
     patchRoute(r.name, { enabled }).then(refresh, (err: unknown) =>
@@ -50,7 +38,8 @@ export function RoutesList() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {routes.map((r) => {
-          const serving = servingEntry(r)
+          // The router's own verdict: first usable entry in try order.
+          const serving = r.serving
           return (
             <button
               key={r.name}
@@ -72,10 +61,12 @@ export function RoutesList() {
                   serving <span className="text-foreground">{nameOf(serving.provider_id)}</span> /{' '}
                   <span className="font-mono text-foreground">{serving.model}</span>
                 </p>
+              ) : !r.enabled ? (
+                <p className="text-xs font-medium text-warning">disabled</p>
+              ) : r.resolved ? (
+                <p className="text-xs font-medium text-warning">no usable provider</p>
               ) : (
-                <p className="text-xs font-medium text-warning">
-                  {r.enabled ? 'no usable provider' : 'disabled'}
-                </p>
+                <p className="text-xs text-muted-foreground">stats loading…</p>
               )}
               <p className="text-xs text-muted-foreground">{r.chain.length} provider(s) in chain</p>
             </button>

@@ -248,6 +248,26 @@ export interface ChainEntry {
   model: string
 }
 
+// RouteEntryStatus is the router's live view of one chain entry: the
+// usability gate verdict plus the ledger stats and normalized factors
+// behind scored strategies. Numeric fields are absent when the ledger
+// has no data (or the model is unpriced) — never a guessed 0.
+export interface RouteEntryStatus {
+  provider_id: string
+  provider_name?: string
+  model: string
+  usable: boolean
+  skip_reason?: string
+  score?: number
+  norm_price?: number
+  norm_latency?: number
+  norm_tps?: number
+  uptime?: number
+  latency_ms?: number
+  tokens_per_s?: number
+  output_per_mtok?: number
+}
+
 export interface AdminRoute {
   name: string
   chain: ChainEntry[]
@@ -255,6 +275,10 @@ export interface AdminRoute {
   // score entries from recent ledger stats and declared prices.
   strategy: string
   enabled: boolean
+  // Router try order with live stats — present for enabled routes once
+  // a snapshot is loaded. serving is the first usable resolved entry.
+  resolved?: RouteEntryStatus[]
+  serving?: ChainEntry
 }
 
 export interface ProviderHealth {
