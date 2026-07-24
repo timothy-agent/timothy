@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -80,7 +81,8 @@ func (f *fakeStore) AppendEvent(ctx context.Context, id, kind string, payload ma
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq[id]++
-	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: kind})
+	raw, _ := json.Marshal(payload)
+	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: kind, Payload: raw})
 	return nil
 }
 
@@ -599,6 +601,17 @@ func TestDriverCodingMissionsAlwaysReview(t *testing.T) {
 		if found {
 			t.Fatal("coding mission skipped review — the gate must not apply to coding kind")
 		}
+	}
+	// An approval must leave a verdict event — otherwise a review that
+	// ran is indistinguishable from one that never happened.
+	approved := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.review_verdict" && strings.Contains(string(ev.Payload), `"decision":"approved"`) {
+			approved = true
+		}
+	}
+	if !approved {
+		t.Fatal("approved review left no mission.review_verdict event")
 	}
 }
 

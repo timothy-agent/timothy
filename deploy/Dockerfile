@@ -21,9 +21,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # explicitly: busybox wget is present by default, but plan/verify_cmd
 # content (model-authored) reaches for curl as the more common default,
 # and a missing binary fails a verify_cmd with a misleading exit code
-# instead of a clear "not found".
+# instead of a clear "not found". git is required by coding missions:
+# the missions engine execs `git worktree add`, `git diff`, rollback,
+# and teardown inside this container.
 FROM alpine:3.22.2 AS runtime-shell
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl git
 COPY --from=build /out/app /app
 COPY skills/ /skills/
 RUN mkdir -p /workspace && chown nobody:nobody /workspace
