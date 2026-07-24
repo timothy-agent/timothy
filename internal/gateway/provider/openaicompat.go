@@ -62,7 +62,7 @@ func (o *OpenAICompat) Embed(ctx context.Context, model string, texts []string) 
 
 	callCtx, cancel := context.WithTimeout(ctx, o.cfg.Timeout)
 	defer cancel()
-	resp, err := doWithRetry(callCtx, o.client, func() (*http.Request, error) {
+	resp, err := doWithRetry(callCtx, o.client, maxRetries, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(callCtx, http.MethodPost, o.cfg.BaseURL+"/embeddings", bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("openaicompat: embed request: %w", err)
@@ -213,7 +213,7 @@ func (o *OpenAICompat) Stream(ctx context.Context, req CompletionRequest) (<-cha
 		}
 		return r, nil
 	}
-	return runStream(ctx, o.client, o.cfg.Timeout, build, o.relay), nil
+	return runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), build, o.relay), nil
 }
 
 func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
