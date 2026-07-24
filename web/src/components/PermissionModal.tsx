@@ -38,10 +38,14 @@ export function PermissionModal({
     <Dialog open onOpenChange={(open) => !open && onDecision(request.id, 'deny')}>
       <DialogContent data-testid="permission-modal">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            Allow <span className="font-mono">{request.tool}</span>?
+          {/* Inline flow, not flex: a long connector tool name
+              (google-calendar_calendar_list_events) must wrap inside
+              the title without orphaning the "?" or colliding with
+              the close button. */}
+          <DialogTitle className="pr-8 leading-snug">
+            Allow <span className="font-mono text-[0.9em] break-all">{request.tool}</span>?
             {request.danger_level === 'destructive' && (
-              <Badge variant="destructive" data-testid="danger-badge">
+              <Badge variant="destructive" data-testid="danger-badge" className="ml-2 align-middle">
                 destructive
               </Badge>
             )}
