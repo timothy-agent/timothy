@@ -8,9 +8,10 @@ import {
   cancelMission,
   getMission,
   missionEvents,
+  missionUsage,
   resumeMission,
 } from '../api/client'
-import type { Mission, MissionEvent } from '../api/types'
+import type { Mission, MissionEvent, MissionUsage } from '../api/types'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ProgressSection } from '../components/missions/ProgressSection'
@@ -28,12 +29,14 @@ export function MissionDetail() {
   const { id } = useParams<{ id: string }>()
   const [mission, setMission] = useState<Mission | null>(null)
   const [events, setEvents] = useState<MissionEvent[]>([])
+  const [usage, setUsage] = useState<MissionUsage | null>(null)
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(() => {
     if (!id) return
     getMission(id).then(setMission, () => undefined)
     missionEvents(id).then(setEvents, () => undefined)
+    missionUsage(id).then(setUsage, () => undefined)
   }, [id])
 
   useEffect(() => {
@@ -146,6 +149,27 @@ export function MissionDetail() {
           </div>
         </div>
       </div>
+
+      {usage && usage.requests > 0 && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Spend</h2>
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+            <span className="text-foreground">${usage.cost_usd.toFixed(4)}</span>
+            <span>{usage.requests} model calls</span>
+            <span>
+              {usage.input_tokens.toLocaleString()} in / {usage.output_tokens.toLocaleString()} out
+            </span>
+            {mission.budget_usd != null && mission.budget_usd > 0 && (
+              <span>{Math.round((usage.cost_usd / mission.budget_usd) * 100)}% of budget</span>
+            )}
+            {usage.unpriced_requests > 0 && (
+              <span title="Some calls have no configured price; their cost is not included.">
+                {usage.unpriced_requests} unpriced call{usage.unpriced_requests === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>

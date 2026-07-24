@@ -151,6 +151,9 @@ export interface UsageSummary {
   cache_write_tokens: number
   requests: number
   errors: number
+  unpriced_requests: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
 }
 
 export interface UsagePoint {
@@ -161,6 +164,20 @@ export interface UsagePoint {
   output_tokens: number
   requests: number
   errors: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
+}
+
+// One mission's total ledger footprint. unpriced_requests counts turns
+// whose cost is unknown (NULL in the ledger) — cost_usd is then a
+// floor, not the whole bill.
+export interface MissionUsage {
+  mission_id: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+  unpriced_requests: number
 }
 
 export interface SessionUsage {

@@ -154,11 +154,17 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 		beforeID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 	}
 
+	// Mission bookkeeping sessions (missions.session_id) are not chat:
+	// they exist so tool audit rows have a session FK (migration 0028)
+	// and would otherwise litter the list as untitled sessions.
+	const notMission = `NOT EXISTS (SELECT 1 FROM missions m WHERE m.session_id = %s.id)`
+
 	var sql string
 	var args []any
 	if query == "" {
 		sql = `SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at
 		       FROM sessions WHERE NOT archived AND (updated_at, id) < ($1, $2::uuid)
+		         AND ` + fmt.Sprintf(notMission, "sessions") + `
 		       ORDER BY updated_at DESC, id DESC LIMIT $3`
 		args = []any{before, beforeID, listLimit}
 	} else {
@@ -168,6 +174,7 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 		       FROM sessions s
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
 		       WHERE (s.updated_at, s.id) < ($2, $3::uuid)
+		         AND ` + fmt.Sprintf(notMission, "s") + `
 		         AND (s.title ILIKE '%' || $4 || '%'
 		          OR (e.payload IS NOT NULL
 		              AND to_tsvector('english', e.payload->>'text') @@ plainto_tsquery('english', $1)))

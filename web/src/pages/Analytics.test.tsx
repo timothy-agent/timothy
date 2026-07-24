@@ -30,6 +30,9 @@ const summary: UsageSummary = {
   cache_write_tokens: 0,
   requests: 10,
   errors: 0,
+  unpriced_requests: 0,
+  unpriced_input_tokens: 0,
+  unpriced_output_tokens: 0,
 }
 
 const calmBudget: BudgetStatus = {
@@ -99,5 +102,34 @@ describe('Analytics token tiles', () => {
     expect(screen.getByText('Output tokens')).toBeTruthy()
     expect(screen.getByText('84.0k')).toBeTruthy()
     expect(screen.getByText('400.0k cached reads')).toBeTruthy()
+  })
+})
+
+describe('Analytics unpriced usage', () => {
+  it('notes unpriced calls with a catalog estimate', async () => {
+    vi.mocked(usageSummary).mockResolvedValue({ ...summary, unpriced_requests: 4 })
+    // gpt-5.6-sol prices in the catalog: $5/mtok in, $30/mtok out.
+    vi.mocked(usageSeries).mockResolvedValue([
+      {
+        bucket: '2026-07-24T00:00:00Z',
+        group: 'gpt-5.6-sol',
+        cost_usd: 0,
+        input_tokens: 1_000_000,
+        output_tokens: 100_000,
+        requests: 4,
+        errors: 0,
+        unpriced_input_tokens: 1_000_000,
+        unpriced_output_tokens: 100_000,
+      },
+    ])
+    renderPage()
+    const note = await screen.findByText(/had no configured price/)
+    expect(note).toHaveTextContent('≈$8.00 at catalog prices')
+  })
+
+  it('stays silent when every call is priced', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/had no configured price/)).toBeNull()
   })
 })

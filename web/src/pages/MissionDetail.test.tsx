@@ -7,6 +7,7 @@ import { MissionDetail } from './MissionDetail'
 vi.mock('../api/client', () => ({
   getMission: vi.fn(),
   missionEvents: vi.fn(),
+  missionUsage: vi.fn(),
   resumeMission: vi.fn(),
   cancelMission: vi.fn(),
   answerMissionPermission: vi.fn(),
@@ -17,6 +18,7 @@ import {
   cancelMission,
   getMission,
   missionEvents,
+  missionUsage,
   resumeMission,
 } from '../api/client'
 
@@ -91,6 +93,41 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(getMission).mockResolvedValue(baseMission)
   vi.mocked(missionEvents).mockResolvedValue(events)
+  vi.mocked(missionUsage).mockResolvedValue({
+    mission_id: 'm1',
+    cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    requests: 0,
+    unpriced_requests: 0,
+  })
+})
+
+describe('MissionDetail spend', () => {
+  it('shows cost, calls, tokens, and budget share once usage exists', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_usd: 2 })
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_usd: 0.5,
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      requests: 7,
+      unpriced_requests: 2,
+    })
+    renderPage()
+    expect(await screen.findByText('Spend')).toBeTruthy()
+    expect(screen.getByText('$0.5000')).toBeTruthy()
+    expect(screen.getByText('7 model calls')).toBeTruthy()
+    expect(screen.getByText('120,000 in / 8,000 out')).toBeTruthy()
+    expect(screen.getByText('25% of budget')).toBeTruthy()
+    expect(screen.getByText('2 unpriced calls')).toBeTruthy()
+  })
+
+  it('hides the section while the mission has no ledger rows', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('Spend')).toBeNull()
+  })
 })
 
 describe('MissionDetail', () => {

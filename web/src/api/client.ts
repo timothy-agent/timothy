@@ -14,6 +14,7 @@ import type {
   MemoryItem,
   Mission,
   MissionEvent,
+  MissionUsage,
   Notification,
   ProviderHealth,
   RetrievedMemory,
@@ -665,6 +666,10 @@ export async function getMission(id: string): Promise<Mission> {
 export async function missionEvents(id: string): Promise<MissionEvent[]> {
   const { events } = await request<{ events: MissionEvent[] }>(`/v1/missions/${id}/events`)
   return events ?? []
+}
+
+export async function missionUsage(id: string): Promise<MissionUsage> {
+  return request<MissionUsage>(`/v1/admin/usage/mission?id=${encodeURIComponent(id)}`)
 }
 
 export async function resumeMission(id: string): Promise<void> {
