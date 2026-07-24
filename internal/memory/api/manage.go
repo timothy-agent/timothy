@@ -10,7 +10,8 @@ import (
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 )
 
-// Manager is the store slice behind the queue and browser endpoints.
+// Manager is the store slice behind the queue, browser, and entity
+// graph endpoints.
 type Manager interface {
 	ListByStatus(ctx context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error)
 	Insert(ctx context.Context, m store.Memory) (string, error)
@@ -18,6 +19,9 @@ type Manager interface {
 	Reject(ctx context.Context, id string) error
 	Supersede(ctx context.Context, oldID, newID string) error
 	Chain(ctx context.Context, id string) ([]store.Memory, error)
+	ListEntities(ctx context.Context) ([]store.Entity, error)
+	EntityEdges(ctx context.Context) ([]store.EntityEdge, error)
+	ListByEntity(ctx context.Context, entityID string) ([]store.Memory, error)
 }
 
 type memoryJSON struct {
