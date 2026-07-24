@@ -77,9 +77,13 @@ type createMissionRequest struct {
 	AgentID       string   `json:"agent_id"`
 	Route         string   `json:"route"`
 	ReviewRoute   string   `json:"review_route"`
-	MaxIterations int      `json:"max_iterations"`
-	BudgetUSD     *float64 `json:"budget_usd"`
-	RepoPath      string   `json:"repo_path"`
+	// EscalationRoute, when set, is where worker turns move after a
+	// failure or rework. Empty keeps escalation off — never defaulted,
+	// so a route change is always an explicit choice.
+	EscalationRoute string   `json:"escalation_route"`
+	MaxIterations   int      `json:"max_iterations"`
+	BudgetUSD       *float64 `json:"budget_usd"`
+	RepoPath        string   `json:"repo_path"`
 	// AutoApproveSafe defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
@@ -146,7 +150,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
-		Route: req.Route, ReviewRoute: req.ReviewRoute,
+		Route: req.Route, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
 		MaxIterations: req.MaxIterations, BudgetUSD: req.BudgetUSD,
 		AutoApproveSafe: autoApproveSafe,
 	}

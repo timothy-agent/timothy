@@ -641,6 +641,7 @@ export interface CreateMissionInput {
   agent_id?: string
   route?: string
   review_route?: string
+  escalation_route?: string
   max_iterations?: number
   budget_usd?: number
   repo_path?: string

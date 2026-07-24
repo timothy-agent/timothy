@@ -215,10 +215,14 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	// Turn telemetry: one event per phase run, so a mission's cost in
 	// wall-clock and outcomes is readable from its event log alone
 	// (token/model cost is in cost_ledger, keyed by mission_id).
-	if evErr := d.store.AppendEvent(ctx, id, "mission.turn", map[string]any{
+	payload := map[string]any{
 		"phase": string(m.Phase), "duration_ms": turnMs,
 		"ok": err == nil, "input": string(in.Input), "reason": in.Reason,
-	}); evErr != nil {
+	}
+	if m.Phase == PhaseExecute && workerRoute(m) != m.Route {
+		payload["escalated_route"] = workerRoute(m)
+	}
+	if evErr := d.store.AppendEvent(ctx, id, "mission.turn", payload); evErr != nil {
 		d.log.Warn("driver: record turn failed", "mission_id", id, "error", evErr)
 	}
 

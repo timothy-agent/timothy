@@ -382,6 +382,41 @@ func TestRunWorkerModelFloorDisabledByDefault(t *testing.T) {
 // root cause of the workspace-split failure family was workers running
 // shell in the shared global root while verification looked in the
 // per-mission directory.
+func TestWorkerRoute(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"no escalation route configured", Mission{Route: "mini", ConsecutiveFailures: 2, StallCount: 1}, "mini"},
+		{"clean run stays on its route", Mission{Route: "mini", EscalationRoute: "coding"}, "mini"},
+		{"worker failure escalates", Mission{Route: "mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, "coding"},
+		{"review rework escalates", Mission{Route: "mini", EscalationRoute: "coding", StallCount: 1}, "coding"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workerRoute(tc.m); got != tc.want {
+				t.Fatalf("workerRoute = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunWorkerUsesEscalatedRoute(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "mini", EscalationRoute: "coding",
+		ConsecutiveFailures: 1, Workspace: "/workspace/missions/m1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if got := agent.requests[0].Route; got != "coding" {
+		t.Fatalf("worker request route = %q, want the escalation route", got)
+	}
+}
+
 func TestRunWorkerGetsMissionScopedShell(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},

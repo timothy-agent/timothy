@@ -349,6 +349,7 @@ export interface Mission {
   budget_usd?: number
   route: string
   review_route: string
+  escalation_route?: string
   pending_permission?: string
   pending_permission_tool?: string
   pending_permission_args?: string

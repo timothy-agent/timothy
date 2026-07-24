@@ -36,6 +36,7 @@ func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, pause_message,
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_usd, route, review_route,
+	escalation_route,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	schedule_id, session_id, created_at, updated_at`
@@ -51,6 +52,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	if err := row.Scan(&m.ID, &m.Goal, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetUSD, &m.Route, &m.ReviewRoute,
+		&m.EscalationRoute,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
@@ -106,9 +108,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, spec, session_id, auto_approve_safe)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid, $10) RETURNING id`,
-		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetUSD, m.Route, m.ReviewRoute, spec, m.SessionID, m.AutoApproveSafe,
+			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, escalation_route, spec, session_id, auto_approve_safe)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid, $11) RETURNING id`,
+		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetUSD, m.Route, m.ReviewRoute, m.EscalationRoute, spec, m.SessionID, m.AutoApproveSafe,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
