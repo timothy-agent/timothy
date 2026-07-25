@@ -188,7 +188,7 @@ func (p *Permissions) sandboxAllows(ctx context.Context, sessionID, subject stri
 	if root == "" {
 		return false
 	}
-	for _, tok := range commandTokens(subject) {
+	for _, tok := range CommandTokens(subject) {
 		if strings.HasPrefix(tok, "/") && !pathWithin(root, tok) {
 			return false
 		}
@@ -306,9 +306,9 @@ var guardPatterns = []struct {
 	{name: "system dirs", pattern: regexp.MustCompile(`(^|[\s'"=])/(etc|root|proc|sys|dev|boot|var/(run|lib))(/|\s|$)`)},
 }
 
-// allowedAbsPrefixes are absolute paths a shell command may name even
+// AllowedAbsPrefixes are absolute paths a shell command may name even
 // though they sit outside the workspace: stream plumbing only.
-var allowedAbsPrefixes = []string{"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
+var AllowedAbsPrefixes = []string{"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
 
 // guardSubject applies the policy guard to shell commands. Other
 // tools have no path-bearing arguments yet; web_fetch has its own
@@ -319,7 +319,7 @@ func guardSubject(root, tool, subject string) string {
 	}
 	// Blank the allowed stream-plumbing paths first so /dev/null
 	// doesn't trip the system-dirs rule.
-	for _, p := range allowedAbsPrefixes {
+	for _, p := range AllowedAbsPrefixes {
 		subject = strings.ReplaceAll(subject, p, " ")
 	}
 	for _, g := range guardPatterns {
@@ -328,7 +328,7 @@ func guardSubject(root, tool, subject string) string {
 		}
 	}
 	if root != "" {
-		for _, tok := range commandTokens(subject) {
+		for _, tok := range CommandTokens(subject) {
 			// A parent-directory reference in any path-like token can
 			// climb out of the workspace once the shell resolves it —
 			// the lexical check below can't see where it lands, so a
@@ -357,11 +357,11 @@ func pathWithin(root, p string) bool {
 	return cleaned == root || strings.HasPrefix(cleaned, root+"/")
 }
 
-// commandTokens splits a command line the cheap way — whitespace,
+// CommandTokens splits a command line the cheap way — whitespace,
 // with quotes and redirect prefixes stripped — enough to spot
 // absolute paths. It intentionally over-matches: a false hit returns
 // corrective feedback, and the model retries with workspace paths.
-func commandTokens(command string) []string {
+func CommandTokens(command string) []string {
 	// '=' splits too, so --output=/abs/path exposes its path part.
 	fields := strings.Fields(strings.ReplaceAll(command, "=", " "))
 	out := make([]string, 0, len(fields))
