@@ -22,11 +22,11 @@ import (
 
 const goldenMarker = "itest-golden:"
 
-// basis returns a 1536-dim unit vector along one dimension — a
+// basis returns a 1024-dim unit vector along one dimension — a
 // deterministic stand-in for real embeddings that gives the vector
 // leg perfect discrimination between fixtures.
 func basis(dim int) store.Vector {
-	v := make(store.Vector, 1536)
+	v := make(store.Vector, 1024)
 	v[dim] = 1
 	return v
 }

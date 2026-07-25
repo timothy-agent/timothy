@@ -201,7 +201,7 @@ func TestInsertStoresEmbedding(t *testing.T) {
 	ctx := t.Context()
 
 	m := mem("embedded fact")
-	m.Embedding = make(Vector, 1536)
+	m.Embedding = make(Vector, 1024)
 	m.Embedding[0] = 0.5
 	id, err := s.Insert(ctx, m)
 	if err != nil {
@@ -218,7 +218,7 @@ func TestInsertStoresEmbedding(t *testing.T) {
 		t.Fatal("embedding not stored")
 	}
 
-	// Wrong dimension must be refused by the vector(1536) column.
+	// Wrong dimension must be refused by the vector(1024) column.
 	bad := mem("bad dimension")
 	bad.Embedding = Vector{0.1, 0.2}
 	if _, err := s.Insert(ctx, bad); err == nil {
@@ -395,7 +395,7 @@ func TestNearestActive(t *testing.T) {
 
 	// No active embedded rows that match closely → still returns the
 	// nearest, so assert with a known-identical vector instead.
-	base := make(Vector, 1536)
+	base := make(Vector, 1024)
 	base[0], base[1] = 0.6, 0.8
 
 	m := mem("nearest target fact")
@@ -464,7 +464,7 @@ func TestNearDupPairs(t *testing.T) {
 	ctx := t.Context()
 
 	near := func(dim int, delta float32) Vector {
-		v := make(Vector, 1536)
+		v := make(Vector, 1024)
 		v[dim] = 1
 		v[dim+1] = delta // small off-axis component
 		return v
