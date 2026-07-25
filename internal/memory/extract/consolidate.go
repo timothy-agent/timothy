@@ -24,7 +24,10 @@ const (
 	decayFactor        = 0.8
 	decayBatch         = 10 // stalest per run; a queue, not a flood
 
-	mergeMaxTokens = 300
+	// Reasoning models spend thinking tokens from the same budget
+	// before emitting content — 300 would starve the one-sentence
+	// reply the same way extraction's old 1000 cap did.
+	mergeMaxTokens = 2000
 )
 
 const mergeSystem = `You merge near-duplicate memory entries into ONE canonical fact. Reply with ONLY the merged fact as a single self-contained sentence (absolute dates, full names). Keep every distinct detail; drop only repetition.`
@@ -181,7 +184,7 @@ func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (strin
 	ctx, cancel := context.WithTimeout(ctx, llmTimeout)
 	defer cancel()
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: "mini",
+		Route: sideRoute,
 		Purpose:      "memory-consolidate",
 		System:       mergeSystem,
 		Messages:     []provider.Message{{Role: "user", Content: strings.Join(lines, "\n")}},

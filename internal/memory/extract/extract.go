@@ -40,6 +40,14 @@ const (
 	maxAttempts = 2
 	maxFacts    = 20
 
+	// sideRoute serves extraction and consolidation side-calls. The
+	// "mini" route these calls used before was never seeded by any
+	// migration, so every one failed with no_route (same bug brain's
+	// classifyRoute already fixed). "summarize" is a real fixed route
+	// and these calls need its model quality: small local models fail
+	// the strict JSON contract more often than they meet it.
+	sideRoute = "summarize"
+
 	// nearDupSimilarity marks a candidate as restating known
 	// knowledge; exactDupSimilarity (or byte-equal content) drops it
 	// outright. Near-dups still insert — the consolidation job merges
@@ -178,11 +186,14 @@ func (e *Extractor) proposeOnce(ctx context.Context, req Request) (string, error
 	defer cancel()
 
 	events, err := e.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: "mini",
+		Route: sideRoute,
 		Purpose:      "memory-extract",
 		System:       system,
 		Messages:     []provider.Message{{Role: "user", Content: req.Text}},
-		MaxTokens:    1000,
+		// Reasoning models spend thinking tokens from the same budget
+		// before emitting content; 1000 starved the JSON reply entirely
+		// (stream ended incomplete with zero content chunks).
+		MaxTokens:    4000,
 		SessionID:    req.SessionID,
 	})
 	if err != nil {

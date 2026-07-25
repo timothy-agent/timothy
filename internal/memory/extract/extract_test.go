@@ -102,9 +102,11 @@ type fakeGateway struct {
 	replies []string
 	calls   int
 	embeds  [][]float32
+	routes  []string
 }
 
 func (g *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	g.routes = append(g.routes, req.Route)
 	ch := make(chan stream.StreamEvent, 2)
 	reply := g.replies[min(g.calls, len(g.replies)-1)]
 	g.calls++
@@ -194,6 +196,11 @@ func TestExtractInsertsAndPromotes(t *testing.T) {
 	}
 	if len(first.Embedding) == 0 {
 		t.Fatal("embedding not attached")
+	}
+	// The side-call must ride a route migrations actually seed —
+	// "mini" never existed and every call on it failed with no_route.
+	if len(gw.routes) != 1 || gw.routes[0] != "summarize" {
+		t.Fatalf("routes = %v, want [summarize]", gw.routes)
 	}
 }
 
