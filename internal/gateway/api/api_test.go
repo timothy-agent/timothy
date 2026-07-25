@@ -14,9 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/metrics"
 )
 
 type fakeSource struct {
@@ -107,7 +110,9 @@ func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
 
 func newAPI(snap *router.Snapshot) (*API, *memRecorder) {
 	rec := &memRecorder{}
-	return &API{store: &fakeSource{snap: snap}, ledger: rec, log: discard()}, rec
+	a := &API{store: &fakeSource{snap: snap}, ledger: rec, log: discard()}
+	a.providerCalls = metrics.New().NewCounterVec("provider_calls_total", "test", "provider", "route", "status")
+	return a, rec
 }
 
 func postJSON(t *testing.T, h http.HandlerFunc, body string) *httptest.ResponseRecorder {
@@ -174,6 +179,9 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	if e.LatencyMS <= 0 {
 		t.Fatalf("latency_ms = %d, want > 0", e.LatencyMS)
 	}
+	if got := testutil.ToFloat64(a.providerCalls.WithLabelValues("one", "coding", "ok")); got != 1 {
+		t.Fatalf("provider_calls_total{one,coding,ok} = %v, want 1", got)
+	}
 }
 
 func TestStreamFailoverToSecondProvider(t *testing.T) {
@@ -205,6 +213,12 @@ func TestStreamFailoverToSecondProvider(t *testing.T) {
 	}
 	if entries[1].Status != "ok" || entries[1].Provider != "two" {
 		t.Fatalf("second entry = %+v", entries[1])
+	}
+	if got := testutil.ToFloat64(a.providerCalls.WithLabelValues("one", "coding", "error")); got != 1 {
+		t.Fatalf("provider_calls_total{one,coding,error} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(a.providerCalls.WithLabelValues("two", "coding", "ok")); got != 1 {
+		t.Fatalf("provider_calls_total{two,coding,ok} = %v, want 1", got)
 	}
 }
 

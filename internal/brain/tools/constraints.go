@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
@@ -42,15 +43,21 @@ type Constrained struct {
 	reg     *Registry
 	schemas map[string]*jsonschema.Schema
 	clamps  map[string]Clamp
+	calls   *prometheus.CounterVec
 }
 
 // NewConstrained compiles every registered tool's input schema up
 // front; a malformed schema is a programming error caught at startup.
-func NewConstrained(reg *Registry) (*Constrained, error) {
+// calls counts tool executions by name and outcome — the caller
+// creates it once and passes it in, since a connector reload rebuilds
+// the registry (and would otherwise re-register the same metric name
+// on the shared Prometheus registry and panic).
+func NewConstrained(reg *Registry, calls *prometheus.CounterVec) (*Constrained, error) {
 	c := &Constrained{
 		reg:     reg,
 		schemas: make(map[string]*jsonschema.Schema),
 		clamps:  make(map[string]Clamp),
+		calls:   calls,
 	}
 	for _, t := range reg.List() {
 		if len(t.InputSchema) == 0 {
@@ -81,7 +88,9 @@ func (c *Constrained) SetClamp(tool string, clamp Clamp) {
 // Execute runs one tool call through the constraint chain. A
 // *Violation error is model feedback; any other error is an
 // infrastructure fault.
-func (c *Constrained) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+func (c *Constrained) Execute(ctx context.Context, name string, args json.RawMessage) (out string, err error) {
+	defer func() { c.calls.WithLabelValues(name, outcomeFor(err)).Inc() }()
+
 	tool, ok := c.reg.Get(name)
 	if !ok {
 		return "", &Violation{Msg: fmt.Sprintf(
@@ -90,23 +99,38 @@ func (c *Constrained) Execute(ctx context.Context, name string, args json.RawMes
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(args))
-	if err != nil {
+	doc, uerr := jsonschema.UnmarshalJSON(bytes.NewReader(args))
+	if uerr != nil {
 		return "", &Violation{Msg: fmt.Sprintf(
-			"arguments for %s are not valid JSON: %v — resend the call with corrected arguments", name, err)}
+			"arguments for %s are not valid JSON: %v — resend the call with corrected arguments", name, uerr)}
 	}
-	if err := c.schemas[name].Validate(doc); err != nil {
+	if verr := c.schemas[name].Validate(doc); verr != nil {
 		return "", &Violation{Msg: fmt.Sprintf(
-			"arguments for %s failed validation: %v — check the tool description for the expected format and resend", name, err)}
+			"arguments for %s failed validation: %v — check the tool description for the expected format and resend", name, verr)}
 	}
 	if clamp, ok := c.clamps[name]; ok {
-		clamped, err := clamp(args)
-		if err != nil {
-			return "", fmt.Errorf("tools: clamp %s: %w", name, err)
+		clamped, cerr := clamp(args)
+		if cerr != nil {
+			return "", fmt.Errorf("tools: clamp %s: %w", name, cerr)
 		}
 		args = clamped
 	}
 	return tool.Execute(ctx, args)
+}
+
+// outcomeFor labels a tool call's result for the tool_calls_total
+// counter: "ok" on success, "violation" for model-correctable feedback
+// (bad arguments, unknown tool), "error" for everything else — an
+// infrastructure fault the model can't fix by retrying differently.
+func outcomeFor(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case IsViolation(err):
+		return "violation"
+	default:
+		return "error"
+	}
 }
 
 // WithinRoot resolves path (which must be absolute) against symlinks

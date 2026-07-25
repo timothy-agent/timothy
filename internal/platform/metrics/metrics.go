@@ -63,6 +63,14 @@ func (m *Metrics) NewGaugeVec(name, help string, labels ...string) *prometheus.G
 	return g
 }
 
+// NewCounterVec registers a service-specific labeled counter on this
+// registry.
+func (m *Metrics) NewCounterVec(name, help string, labels ...string) *prometheus.CounterVec {
+	c := prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "timothy", Name: name, Help: help}, labels)
+	m.registry.MustRegister(c)
+	return c
+}
+
 // Handler serves the registry in Prometheus exposition format.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})

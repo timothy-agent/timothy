@@ -13,11 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
+	"github.com/SumonMSelim/timothy/internal/platform/metrics"
 )
 
 // ConfigSource supplies routing snapshots and reloads; router.Store
@@ -29,18 +32,32 @@ type ConfigSource interface {
 
 // API serves the gateway routes.
 type API struct {
-	store  ConfigSource
-	ledger ledger.Recorder
-	log    *slog.Logger
+	store         ConfigSource
+	ledger        ledger.Recorder
+	log           *slog.Logger
+	providerCalls *prometheus.CounterVec
 }
 
 // Register mounts the gateway API on the shared server.
-func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, log *slog.Logger) {
-	a := &API{store: store, ledger: rec, log: log}
+func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, log *slog.Logger, m *metrics.Metrics) {
+	a := &API{
+		store:  store,
+		ledger: rec,
+		log:    log,
+		providerCalls: m.NewCounterVec("provider_calls_total",
+			"Provider attempts by provider, route, and outcome.", "provider", "route", "status"),
+	}
 	srv.Handle("POST /v1/stream", http.HandlerFunc(a.handleStream))
 	srv.Handle("POST /v1/embed", http.HandlerFunc(a.handleEmbed))
 	srv.Handle("GET /v1/providers", http.HandlerFunc(a.handleProviders))
 	srv.Handle("POST /internal/reload", http.HandlerFunc(a.handleReload))
+}
+
+// recordAttempt writes the ledger row and the matching provider-call
+// counter in one place so the two accountings never drift apart.
+func (a *API) recordAttempt(ctx context.Context, entry ledger.Entry) {
+	a.ledger.Record(ctx, entry)
+	a.providerCalls.WithLabelValues(entry.Provider, entry.Route, entry.Status).Inc()
 }
 
 type streamRequest struct {
@@ -144,12 +161,12 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 
 		if res.failedOver() {
 			failed = append(failed, fmt.Sprintf("%s/%s: %s", att.ProviderName, att.Model, res.reason))
-			a.ledger.Record(r.Context(), res.entry)
+			a.recordAttempt(r.Context(), res.entry)
 			continue
 		}
 
 		res.entry.CostUSD = ledger.Cost(snap.Prices(att.ProviderName, att.Model), res.entry.Usage)
-		a.ledger.Record(r.Context(), res.entry)
+		a.recordAttempt(r.Context(), res.entry)
 		return
 	}
 
@@ -316,14 +333,14 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		entry.Usage = usage
 		if err != nil {
 			entry.Status, entry.ErrorCode = "error", "provider_error"
-			a.ledger.Record(r.Context(), entry)
+			a.recordAttempt(r.Context(), entry)
 			failed = append(failed, fmt.Sprintf("%s/%s: %v", att.ProviderName, att.Model, err))
 			continue
 		}
 
 		entry.Status = "ok"
 		entry.CostUSD = ledger.Cost(snap.Prices(att.ProviderName, att.Model), usage)
-		a.ledger.Record(r.Context(), entry)
+		a.recordAttempt(r.Context(), entry)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{

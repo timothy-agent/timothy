@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +23,14 @@ func discard() *slog.Logger {
 
 func newTestServer(health HealthFunc) *Server {
 	return New(0, discard(), metrics.New(), health)
+}
+
+// newLoggingTestServer is newTestServer with its log output captured
+// instead of discarded, for tests that assert on emitted lines.
+func newLoggingTestServer(health HealthFunc) (*Server, *bytes.Buffer) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	return New(0, log, metrics.New(), health), &buf
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -93,6 +103,38 @@ func TestInboundTraceIDPreserved(t *testing.T) {
 
 	if got != "upstream-1" {
 		t.Fatalf("trace id = %q, want upstream-1", got)
+	}
+}
+
+func TestAccessLogged(t *testing.T) {
+	t.Parallel()
+	s, buf := newLoggingTestServer(func() Health { return Health{Status: "ok"} })
+	s.Handle("GET /echo", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+
+	s.srv.Handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/echo", nil))
+
+	line := buf.String()
+	for _, want := range []string{`"msg":"request"`, `"method":"GET"`, `"route":"GET /echo"`, `"status":418`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log = %s, want containing %q", line, want)
+		}
+	}
+}
+
+// TestHealthAndMetricsNotAccessLogged: both are polled every few
+// seconds by compose healthchecks and the Prometheus scraper — logging
+// them would recreate the exact noise this access log is meant to fix.
+func TestHealthAndMetricsNotAccessLogged(t *testing.T) {
+	t.Parallel()
+	s, buf := newLoggingTestServer(func() Health { return Health{Status: "ok"} })
+
+	s.srv.Handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health", nil))
+	s.srv.Handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if buf.Len() != 0 {
+		t.Fatalf("log = %s, want no access lines for /health or /metrics", buf.String())
 	}
 }
 

@@ -72,9 +72,57 @@ func New(port int, log *slog.Logger, m *metrics.Metrics, health HealthFunc) *Ser
 }
 
 // Handle registers a handler under a method-qualified ServeMux pattern
-// ("GET /health"), instrumented with the pattern as the route label.
+// ("GET /health"), instrumented with the pattern as the route label and
+// logged on completion.
 func (s *Server) Handle(pattern string, h http.Handler) {
-	s.mux.Handle(pattern, s.m.Instrument(pattern, h))
+	s.mux.Handle(pattern, s.m.Instrument(pattern, s.logAccess(pattern, h)))
+}
+
+// noAccessLog are polled every few seconds by compose healthchecks and
+// the Prometheus scraper — logging them would just recreate the
+// wall-of-noise this is meant to fix.
+var noAccessLog = map[string]bool{
+	"GET /health":  true,
+	"GET /metrics": true,
+}
+
+// logAccess emits one structured line per request: method, route,
+// status, and duration, with the trace id withTrace already put on the
+// context. This is the only place any service logs a request — no
+// handler needs to log its own access line.
+func (s *Server) logAccess(pattern string, next http.Handler) http.Handler {
+	if noAccessLog[pattern] {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		start := time.Now()
+		next.ServeHTTP(sw, r)
+		s.log.InfoContext(r.Context(), "request",
+			"method", r.Method,
+			"route", pattern,
+			"status", sw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+	})
+}
+
+// statusWriter records the response status and keeps http.Flusher
+// visible for streaming handlers.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // withTrace gives every request a trace id (accepting an inbound

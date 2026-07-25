@@ -11,11 +11,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
+
+func testToolCalls() *prometheus.CounterVec {
+	return prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_tool_calls_total"}, []string{"tool", "outcome"})
+}
 
 // scriptedGateway plays one canned event script per Stream call and
 // records every request it saw.
@@ -155,7 +161,7 @@ func testAgent(t *testing.T, gw Gateway, extra ...*tools.Tool) (*Agent, *memAudi
 			t.Fatal(err)
 		}
 	}
-	c, err := tools.NewConstrained(reg)
+	c, err := tools.NewConstrained(reg, testToolCalls())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,7 +802,7 @@ func TestSwapToolsChangesSurfaceForNewTurns(t *testing.T) {
 	if err := reg.Register(connector); err != nil {
 		t.Fatal(err)
 	}
-	c, err := tools.NewConstrained(reg)
+	c, err := tools.NewConstrained(reg, testToolCalls())
 	if err != nil {
 		t.Fatal(err)
 	}

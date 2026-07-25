@@ -8,8 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
+
+func testToolCalls() *prometheus.CounterVec {
+	return prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_tool_calls_total"}, []string{"tool", "outcome"})
+}
 
 func constrainedEcho(t *testing.T) *Constrained {
 	t.Helper()
@@ -33,7 +40,7 @@ func constrainedEcho(t *testing.T) *Constrained {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	c, err := NewConstrained(r)
+	c, err := NewConstrained(r, testToolCalls())
 	if err != nil {
 		t.Fatalf("NewConstrained: %v", err)
 	}
@@ -81,8 +88,48 @@ func TestConstrainedRequiresSchemas(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 	_ = r.Register(&Tool{Name: "bare", Description: "no schema"})
-	if _, err := NewConstrained(r); err == nil {
+	if _, err := NewConstrained(r, testToolCalls()); err == nil {
 		t.Fatal("tool without schema accepted")
+	}
+}
+
+func TestConstrainedRecordsToolCallOutcomes(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry()
+	if err := r.Register(&Tool{
+		Name:        "echo",
+		Description: "echoes text",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`),
+		Execute: func(_ context.Context, args json.RawMessage) (string, error) {
+			return string(args), nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	calls := testToolCalls()
+	c, err := NewConstrained(r, calls)
+	if err != nil {
+		t.Fatalf("NewConstrained: %v", err)
+	}
+
+	if _, err := c.Execute(context.Background(), "echo", json.RawMessage(`{"text":"hi"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := c.Execute(context.Background(), "echo", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("want validation violation")
+	}
+	if _, err := c.Execute(context.Background(), "nope", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("want unknown-tool violation")
+	}
+
+	if got := testutil.ToFloat64(calls.WithLabelValues("echo", "ok")); got != 1 {
+		t.Fatalf("echo/ok = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(calls.WithLabelValues("echo", "violation")); got != 1 {
+		t.Fatalf("echo/violation = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(calls.WithLabelValues("nope", "violation")); got != 1 {
+		t.Fatalf("nope/violation = %v, want 1", got)
 	}
 }
 

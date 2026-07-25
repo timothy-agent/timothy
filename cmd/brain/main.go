@@ -29,6 +29,8 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
@@ -132,7 +134,9 @@ func main() {
 	searxngURL := os.Getenv("SEARXNG_URL")
 	markitdownURL := os.Getenv("MARKITDOWN_URL")
 
-	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log)
+	toolCalls := app.Metrics.NewCounterVec("tool_calls_total",
+		"Tool executions by tool name and outcome.", "tool", "outcome")
+	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -146,7 +150,7 @@ func main() {
 			conns.RegisterBuilder("google", goog.Builder())
 		}
 		conns.SetOnReload(func(context.Context) {
-			swapAgentTools(agent, builtinSet, conns, app.Log)
+			swapAgentTools(agent, builtinSet, conns, app.Log, toolCalls)
 		})
 		go runConnectorReload(ctx, conns, app.Log)
 	}
@@ -378,7 +382,7 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
@@ -398,7 +402,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	if len(packs) > 0 {
 		set = append(set, skills.LoadSkillTool(packs, skillAllow))
 	}
-	constrained, defs, err := compileToolset(set, nil, log)
+	constrained, defs, err := compileToolset(set, nil, log, toolCalls)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -427,7 +431,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 // constrained registry. A connector tool whose name collides with an
 // existing tool is skipped with a log — a remote server must never
 // shadow a builtin.
-func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger) (*tools.Constrained, []provider.ToolDef, error) {
+func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger, toolCalls *prometheus.CounterVec) (*tools.Constrained, []provider.ToolDef, error) {
 	reg := tools.NewRegistry()
 	for _, t := range builtins {
 		if err := reg.Register(t); err != nil {
@@ -439,7 +443,7 @@ func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger) (*
 			log.Warn("connector tool skipped", "tool", t.Name, "error", err)
 		}
 	}
-	constrained, err := tools.NewConstrained(reg)
+	constrained, err := tools.NewConstrained(reg, toolCalls)
 	if err != nil {
 		return nil, nil, fmt.Errorf("compile tool schemas: %w", err)
 	}
@@ -455,8 +459,8 @@ func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger) (*
 // swapAgentTools recompiles builtin + connector tools and swaps them
 // into the agent. A compile failure keeps the previous surface — a
 // broken connector schema must not take down the builtins.
-func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors.Manager, log *slog.Logger) {
-	constrained, defs, err := compileToolset(builtins, conns.Tools(), log)
+func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors.Manager, log *slog.Logger, toolCalls *prometheus.CounterVec) {
+	constrained, defs, err := compileToolset(builtins, conns.Tools(), log, toolCalls)
 	if err != nil {
 		log.Warn("connector toolset compile failed; keeping previous tools", "error", err)
 		return

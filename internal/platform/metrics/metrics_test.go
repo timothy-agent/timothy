@@ -42,6 +42,22 @@ func TestInstrumentDefaultsTo200(t *testing.T) {
 	}
 }
 
+func TestNewCounterVec(t *testing.T) {
+	t.Parallel()
+	m := New()
+	c := m.NewCounterVec("widgets_total", "Widgets processed.", "kind")
+	c.WithLabelValues("blue").Inc()
+	c.WithLabelValues("blue").Inc()
+	c.WithLabelValues("red").Inc()
+
+	if got := testutil.ToFloat64(c.WithLabelValues("blue")); got != 2 {
+		t.Fatalf("blue = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues("red")); got != 1 {
+		t.Fatalf("red = %v, want 1", got)
+	}
+}
+
 func TestHandlerServesExposition(t *testing.T) {
 	t.Parallel()
 	m := New()

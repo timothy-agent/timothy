@@ -60,7 +60,7 @@ func main() {
 	led := ledger.New(app.DB, app.Log)
 	agg := ledger.NewAggregator(app.DB)
 	budgets := ledger.NewBudgetStore(app.DB)
-	api.Register(app.Server, store, led, app.Log)
+	api.Register(app.Server, store, led, app.Log, app.Metrics)
 	api.RegisterUsage(app.Server, agg, budgets)
 	api.RegisterAdmin(app.Server, admin.New(app.DB, store, led, budgets, secrets, app.Log))
 
