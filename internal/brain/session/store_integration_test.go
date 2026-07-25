@@ -4,9 +4,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +68,87 @@ func integrationStore(t *testing.T) (*Store, string) {
 		}
 	})
 	return s, id
+}
+
+func TestDeleteRemovesSessionScopedRecords(t *testing.T) {
+	s, id := integrationStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// Populate every session-scoped table Delete must clear.
+	if _, err := s.Append(ctx, id, KindUserMessage, UserMessage{Text: "doomed turn"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO session_grants (session_id, tool, pattern, expires) VALUES ($1, 'shell', '*', now() + interval '1 hour')`,
+		`INSERT INTO tool_audit (session_id, tool, args_digest, status, duration_ms) VALUES ($1, 'shell', 'x', 'ok', 1)`,
+		`INSERT INTO tool_outputs (session_id, tool, content, bytes) VALUES ($1, 'shell', 'out', 3)`,
+	} {
+		if _, err := db.Exec(ctx, stmt, id); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+
+	if err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, q := range []string{
+		`SELECT count(*) FROM sessions WHERE id = $1`,
+		`SELECT count(*) FROM session_events WHERE session_id = $1`,
+		`SELECT count(*) FROM session_grants WHERE session_id = $1`,
+		`SELECT count(*) FROM tool_audit WHERE session_id = $1`,
+		`SELECT count(*) FROM tool_outputs WHERE session_id = $1`,
+	} {
+		var n int
+		if err := db.QueryRow(ctx, q, id).Scan(&n); err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		if n != 0 {
+			t.Fatalf("%q = %d rows after delete, want 0", q, n)
+		}
+	}
+
+	// Second delete: the session is gone.
+	if err := s.Delete(ctx, id); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("re-delete err = %v, want not found", err)
+	}
+}
+
+func TestDeleteRefusesMissionSession(t *testing.T) {
+	s, id := integrationStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	var missionID string
+	if err := db.QueryRow(ctx, `INSERT INTO missions (goal, kind, session_id)
+		VALUES ('itest-delete-guard', 'research', $1) RETURNING id`, id).Scan(&missionID); err != nil {
+		t.Fatalf("seed mission: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		_, _ = conn.Exec(ctx, `DELETE FROM mission_events WHERE mission_id = $1`, missionID)
+		_, _ = conn.Exec(ctx, `DELETE FROM missions WHERE id = $1`, missionID)
+	})
+
+	if err := s.Delete(ctx, id); !errors.Is(err, ErrMissionReferenced) {
+		t.Fatalf("Delete err = %v, want ErrMissionReferenced", err)
+	}
+	var n int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id = $1`, id).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("session rows = %d (%v), want 1 — refusal must not delete", n, err)
+	}
 }
 
 func TestAppendAssignsGaplessOrderedSeqs(t *testing.T) {

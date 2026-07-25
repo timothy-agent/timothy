@@ -245,6 +245,10 @@ export async function updateSession(
   await request<void>(`/v1/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
+export async function deleteSession(id: string): Promise<void> {
+  await request<void>(`/v1/sessions/${id}`, { method: 'DELETE' })
+}
+
 // --- Long-term memory (queue + browser) ---
 
 export async function listMemories(

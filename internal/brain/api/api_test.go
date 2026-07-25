@@ -31,10 +31,11 @@ func staticBudget(n int) func(context.Context) int {
 
 // memDir is an in-memory Directory + chat.SessionLog.
 type memDir struct {
-	mu     sync.Mutex
-	metas  map[string]session.Meta
-	events map[string][]session.Event
-	nextID int
+	mu         sync.Mutex
+	metas      map[string]session.Meta
+	events     map[string][]session.Event
+	missionRef map[string]bool
+	nextID     int
 }
 
 func newMemDir() *memDir {
@@ -109,6 +110,20 @@ func (d *memDir) Update(_ context.Context, id string, title *string, archived *b
 	return nil
 }
 
+func (d *memDir) Delete(_ context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.missionRef[id] {
+		return fmt.Errorf("session: delete %s: %w", id, session.ErrMissionReferenced)
+	}
+	if _, ok := d.metas[id]; !ok {
+		return fmt.Errorf("session: delete %s: not found", id)
+	}
+	delete(d.metas, id)
+	delete(d.events, id)
+	return nil
+}
+
 func (d *memDir) Append(_ context.Context, id, kind string, payload any) (int64, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -173,6 +188,7 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	m.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	m.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
+	m.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
 	m.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
 	m.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
@@ -428,6 +444,37 @@ func TestSessionCRUD(t *testing.T) {
 	// patch missing
 	if w = doMux(a, http.MethodPatch, "/v1/sessions/nope", `{"archived":true}`); w.Code != http.StatusNotFound {
 		t.Fatalf("patch missing: %d", w.Code)
+	}
+}
+
+func TestSessionDelete(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "doomed")
+
+	if w := doMux(a, http.MethodDelete, "/v1/sessions/"+id, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := dir.Get(t.Context(), id); err == nil {
+		t.Fatal("session still present after delete")
+	}
+	// delete again: gone means 404
+	if w := doMux(a, http.MethodDelete, "/v1/sessions/"+id, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("re-delete: %d", w.Code)
+	}
+	// invalid id shape
+	if w := doMux(a, http.MethodDelete, "/v1/sessions/nope", ""); w.Code != http.StatusNotFound {
+		t.Fatalf("delete bad id: %d", w.Code)
+	}
+	// mission-referenced sessions refuse with 409
+	held, _ := dir.Create(t.Context(), "mission transcript")
+	dir.missionRef = map[string]bool{held: true}
+	w := doMux(a, http.MethodDelete, "/v1/sessions/"+held, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "mission_referenced") {
+		t.Fatalf("mission-referenced delete: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := dir.Get(t.Context(), held); err != nil {
+		t.Fatal("mission-referenced session must survive")
 	}
 }
 

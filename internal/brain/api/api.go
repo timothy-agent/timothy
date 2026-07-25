@@ -35,6 +35,7 @@ type Directory interface {
 	Get(ctx context.Context, id string) (session.Meta, error)
 	Events(ctx context.Context, id string) ([]session.Event, error)
 	Update(ctx context.Context, id string, title *string, archived *bool) error
+	Delete(ctx context.Context, id string) error
 }
 
 // PermissionResolver answers parked permission prompts; the loop's
@@ -93,6 +94,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	srv.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
+	srv.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	srv.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
 	srv.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
 	srv.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
@@ -291,6 +293,30 @@ func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonError(w, http.StatusInternalServerError, "update_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDelete permanently removes a session and all its
+// session-scoped records. Irreversible; the web UI gates it behind an
+// explicit confirmation.
+func (a *API) handleDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !validSessionID(id) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
+	if err := a.dir.Delete(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, session.ErrMissionReferenced):
+			jsonError(w, http.StatusConflict, "mission_referenced",
+				"a mission references this session; its transcript must stay")
+		case strings.Contains(err.Error(), "not found"):
+			jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		default:
+			jsonError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
