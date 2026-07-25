@@ -3,12 +3,17 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
+
+// ErrMissionReferenced refuses deletion of a session a mission points
+// at — mission history must keep its transcript.
+var ErrMissionReferenced = errors.New("session referenced by a mission")
 
 // Store persists session rows and their append-only event logs.
 type Store struct {
@@ -233,6 +238,58 @@ func (s *Store) Update(ctx context.Context, id string, title *string, archived *
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("session: update %s: not found", id)
+	}
+	return nil
+}
+
+// Delete permanently removes a session and every session-scoped
+// record: events, permission grants, tool audit rows, and stored tool
+// outputs (D-035). This is user-initiated data control, not an edit of
+// history — the append-only rule forbids mutating events in place, not
+// discarding a whole session. Cost-ledger rows and extracted memories
+// survive on purpose: spend history stays honest and the supersede-only
+// memory store keeps its facts (their source_session link dangles).
+// A session referenced by a mission refuses with ErrMissionReferenced.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("session: delete: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("session: delete begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var referenced bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM missions WHERE session_id = $1)`, id,
+	).Scan(&referenced); err != nil {
+		return fmt.Errorf("session: delete mission check: %w", err)
+	}
+	if referenced {
+		return fmt.Errorf("session: delete %s: %w", id, ErrMissionReferenced)
+	}
+
+	for _, stmt := range []string{
+		`DELETE FROM session_grants WHERE session_id = $1`,
+		`DELETE FROM tool_audit WHERE session_id = $1`,
+		`DELETE FROM tool_outputs WHERE session_id = $1`,
+		`DELETE FROM session_events WHERE session_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, id); err != nil {
+			return fmt.Errorf("session: delete %s: %w", id, err)
+		}
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("session: delete %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session: delete %s: not found", id)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("session: delete commit: %w", err)
 	}
 	return nil
 }

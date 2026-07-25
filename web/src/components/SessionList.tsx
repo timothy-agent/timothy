@@ -2,6 +2,7 @@ import {
   Add01Icon,
   Archive02Icon,
   BubbleChatIcon,
+  Delete02Icon,
   MoreHorizontalIcon,
   PencilEdit01Icon,
   Search01Icon,
@@ -11,10 +12,19 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { updateSession } from '../api/client'
+import { deleteSession, updateSession } from '../api/client'
 import type { SessionMeta } from '../api/types'
 import { groupByDay, useSessions } from '../lib/sessions'
+import { errText } from './settings/util'
 import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,6 +47,7 @@ export function SessionList() {
   const navigate = useNavigate()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState<SessionMeta | null>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   // Infinite scroll: fetch the next page when the sentinel below the
@@ -76,6 +87,22 @@ export function SessionList() {
     refresh()
     // Archiving the open session sends you back to a fresh chat.
     if (!s.archived && pathname === `/chat/${s.id}`) navigate('/chat')
+  }
+
+  const remove = async () => {
+    if (!confirmDelete) return
+    const s = confirmDelete
+    setConfirmDelete(null)
+    try {
+      await deleteSession(s.id)
+      toast.success('Session deleted', {
+        description: `“${s.title || 'New session'}” and its history are gone.`,
+      })
+      refresh()
+      if (pathname === `/chat/${s.id}`) navigate('/chat')
+    } catch (err) {
+      toast.error('Could not delete session', { description: errText(err) })
+    }
   }
 
   // Flat, dated rows (not day-sectioned): each session carries its own
@@ -161,6 +188,13 @@ export function SessionList() {
                       <HugeiconsIcon icon={s.archived ? Unarchive03Icon : Archive02Icon} />
                       {s.archived ? 'Unarchive' : 'Archive'}
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => setConfirmDelete(s)}
+                    >
+                      <HugeiconsIcon icon={Delete02Icon} />
+                      Delete
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </SidebarMenuItem>
@@ -173,6 +207,26 @@ export function SessionList() {
         <p className="px-4 py-1 text-xs text-muted-foreground">No sessions match.</p>
       )}
       {hasMore && <div ref={sentinelRef} className="h-px" data-testid="sessions-sentinel" />}
+
+      <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete “{confirmDelete?.title || 'New session'}”?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This permanently removes the conversation, its tool activity, and its permission
+            grants. It cannot be undone. Confirmed memories and cost history are kept.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void remove()}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
