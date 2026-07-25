@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,35 @@ func TestShellCapsOutput(t *testing.T) {
 	}
 	if !strings.Contains(got, "[output capped]") {
 		t.Fatal("capped output missing marker")
+	}
+}
+
+// TestShellRejectsSymlinkEscape is the sandbox-bypass this tool must
+// close on its own: a symlink already sitting inside the workspace
+// (e.g. brought in by a repo checkout) pointing outside it lets a
+// purely workspace-relative command like "rm -rf vendor/lib/file"
+// destroy something elsewhere. Nothing in the permission chain's
+// lexical containment check catches this — pathWithin only inspects
+// absolute tokens, and a relative token never trips it. The tool
+// itself re-checks with symlinks resolved right before it execs.
+func TestShellRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+	tool, dir := shellTool(t, 0)
+	outside := t.TempDir()
+	targetPath := outside + "/target"
+	if err := os.WriteFile(targetPath, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	if err := os.Symlink(outside, dir+"/escape"); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	_, err := runTool(t, tool, "rm -rf escape/target")
+	if err == nil || !strings.Contains(err.Error(), "outside the workspace") {
+		t.Fatalf("err = %v, want symlink escape rejected", err)
+	}
+	if _, statErr := os.Stat(targetPath); statErr != nil {
+		t.Fatalf("target was deleted through the symlink: %v", statErr)
 	}
 }
 

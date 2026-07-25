@@ -202,6 +202,59 @@ func TestWithinRoot(t *testing.T) {
 	}
 }
 
+func TestCheckCommandPaths(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "target"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink inside the workspace pointing out of it — what
+	// guardSubject's lexical check on its own cannot see through.
+	link := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		command string
+		wantErr string
+	}{
+		{name: "no root configured", command: "rm -rf /etc/passwd"},
+		{name: "relative path ok", command: "rm -rf reports/"},
+		{name: "plain absolute path within root ok", command: "rm -rf " + filepath.Join(root, "sub")},
+		{name: "dev null exempt", command: "echo hi > /dev/null"},
+		{
+			name:    "symlink escape rejected",
+			command: "rm -rf " + filepath.Join(link, "target"),
+			wantErr: "outside the workspace",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := root
+			if tc.name == "no root configured" {
+				r = ""
+			}
+			err := CheckCommandPaths(r, tc.command)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("CheckCommandPaths: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+			}
+			if !IsViolation(err) {
+				t.Fatalf("err %v is not a Violation", err)
+			}
+		})
+	}
+}
+
 func TestCeilingFor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

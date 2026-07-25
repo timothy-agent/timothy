@@ -83,6 +83,26 @@ func TestWriteFile(t *testing.T) {
 	})
 }
 
+// TestWriteFileRejectsSymlinkEscape covers the gap the lexical ".."
+// check above can't see: a workspace-relative path that resolves
+// cleanly on paper but walks through a symlinked ancestor pointing
+// outside the root.
+func TestWriteFileRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	tool := WriteFile(WriteFileConfig{Root: root})
+	args, _ := json.Marshal(map[string]string{"path": "escape/evil.txt", "content": "x"})
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("symlink escape accepted")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "evil.txt")); err == nil {
+		t.Fatal("file was written outside the workspace")
+	}
+}
+
 // TestWriteFileContentWithShellMetacharacters is the reason this tool
 // exists: content full of $(), backticks, and redirects — which would
 // classify a shell heredoc as opaque/destructive and park the turn —

@@ -92,6 +92,12 @@ Example: {"path": "summary.md", "content": "# Title\n\nBody."}`,
 					return "", fmt.Errorf("create parent directories: %w", err)
 				}
 			}
+			// The lexical join above can't see a symlinked ancestor
+			// inside the workspace pointing outside it; WithinRoot
+			// resolves symlinks before the write lands.
+			if err := tools.WithinRoot(cfg.Root, target); err != nil {
+				return "", err
+			}
 			if err := os.WriteFile(target, []byte(args.Content), 0o644); err != nil { //nolint:gosec // artifact files are meant to be readable; path is root-confined above
 				return "", fmt.Errorf("write file: %w", err)
 			}

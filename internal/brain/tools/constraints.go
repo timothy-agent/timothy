@@ -158,6 +158,41 @@ func WithinRoot(root, path string) error {
 	return nil
 }
 
+// CheckCommandPaths re-validates every path-like token a shell command
+// names, with symlinks resolved, right before the command execs. The
+// permission chain's containment check (guardSubject/pathWithin) is
+// lexical only and only inspects absolute tokens — it can't see a
+// symlink inside the workspace pointing outside it, and it never
+// checks relative tokens at all, even though the shell resolves them
+// against the workspace root same as an absolute path underneath it.
+// A destructive command confined "on paper" to the sandbox would still
+// land through either gap.
+func CheckCommandPaths(root, command string) error {
+	if root == "" {
+		return nil
+	}
+	for _, tok := range CommandTokens(command) {
+		abs := tok
+		if !filepath.IsAbs(tok) {
+			abs = filepath.Join(root, tok)
+		}
+		exempt := false
+		for _, p := range AllowedAbsPrefixes {
+			if abs == p || strings.HasPrefix(abs, p+"/") {
+				exempt = true
+				break
+			}
+		}
+		if exempt {
+			continue
+		}
+		if err := WithinRoot(root, abs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // resolveExisting walks up from path to the deepest existing ancestor,
 // resolves that through symlinks, and rejoins the nonexistent tail.
 func resolveExisting(path string) (string, error) {

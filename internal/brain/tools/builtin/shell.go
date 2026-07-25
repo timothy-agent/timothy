@@ -114,6 +114,14 @@ Example: {"command": "wc -l notes.md"} → "42 notes.md"`,
 			if args.TimeoutSeconds > 0 {
 				runTimeout = time.Duration(args.TimeoutSeconds) * time.Second
 			}
+			// The permission chain's sandbox check on absolute path
+			// tokens is lexical only, so a symlink planted inside the
+			// workspace pointing outside it would otherwise reach the
+			// shell unchecked. Re-check with symlinks resolved here,
+			// right before the command actually runs.
+			if err := tools.CheckCommandPaths(cfg.WorkspaceRoot, args.Command); err != nil {
+				return "", err
+			}
 			return runShell(ctx, cfg.WorkspaceRoot, runTimeout, args.Command)
 		},
 	}
