@@ -203,3 +203,51 @@ func TestShellRunnerStillRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal("Runner was called despite a symlink-escape violation")
 	}
 }
+
+// TestShellRunnerRespectsConfiguredMaxTimeout confirms MaxTimeout caps
+// a model-requested timeout_seconds independent of ShellTimeoutClamp —
+// ExtraTools (mission-scoped shells) bypass that middleware entirely,
+// so this in-Execute clamp is the only enforcement they actually get.
+func TestShellRunnerRespectsConfiguredMaxTimeout(t *testing.T) {
+	t.Parallel()
+	var gotTimeout time.Duration
+	tool := Shell(ShellConfig{
+		WorkspaceRoot: t.TempDir(),
+		MaxTimeout:    5 * time.Second,
+		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
+			gotTimeout = timeout
+			return "", nil
+		},
+	})
+	args, _ := json.Marshal(map[string]any{"command": "true", "timeout_seconds": 3600})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotTimeout != 5*time.Second {
+		t.Fatalf("Runner received timeout %s, want the configured MaxTimeout of 5s", gotTimeout)
+	}
+}
+
+// TestShellRunnerAllowsHigherMaxTimeoutThanChatDefault confirms a
+// mission-scoped shell (MaxTimeout above ShellMaxTimeout) is not
+// clamped down to chat's 120s ceiling — the whole point of the
+// sandboxed shell getting a longer ceiling for app-dev workloads.
+func TestShellRunnerAllowsHigherMaxTimeoutThanChatDefault(t *testing.T) {
+	t.Parallel()
+	var gotTimeout time.Duration
+	tool := Shell(ShellConfig{
+		WorkspaceRoot: t.TempDir(),
+		MaxTimeout:    15 * time.Minute,
+		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
+			gotTimeout = timeout
+			return "", nil
+		},
+	})
+	args, _ := json.Marshal(map[string]any{"command": "true", "timeout_seconds": 600})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotTimeout != 600*time.Second {
+		t.Fatalf("Runner received timeout %s, want the requested 600s (under the 15min MaxTimeout)", gotTimeout)
+	}
+}

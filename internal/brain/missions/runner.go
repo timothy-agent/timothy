@@ -160,6 +160,14 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 // set, the shell's Runner routes commands into the mission's own
 // Docker container (see builtin.ShellConfig.Runner) instead of
 // brain's own process.
+// sandboxShellMaxTimeout is the mission shell's timeout ceiling when
+// backed by a sandbox container — 120s (chat's shell ceiling) is far
+// too tight for app-development work: package installs, builds, and
+// test suites routinely run longer. The container's own resource caps
+// (memory/CPU/pids) bound the damage a long-running command can do, so
+// a longer ceiling here is a capability tradeoff, not a safety one.
+const sandboxShellMaxTimeout = 15 * time.Minute
+
 func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 	root := m.WorkRoot()
 	if root == "" {
@@ -167,6 +175,7 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 	}
 	shellCfg := builtin.ShellConfig{WorkspaceRoot: root}
 	if r.sandbox != nil {
+		shellCfg.MaxTimeout = sandboxShellMaxTimeout
 		missionID, workdir := m.ID, root
 		shellCfg.Runner = func(ctx context.Context, command string, timeout time.Duration) (string, error) {
 			var out strings.Builder

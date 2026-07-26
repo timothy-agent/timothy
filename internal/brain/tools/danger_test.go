@@ -57,6 +57,9 @@ func TestClassifyCommand(t *testing.T) {
 		{command: "> out.txt", want: DangerDestructive},
 		{command: "eval \"do something\"", want: DangerDestructive},
 		{command: ". ./setup.sh", want: DangerDestructive},                // dot-source
+		{command: "source ./setup.sh", want: DangerDestructive},
+		{command: "ls; . ./setup.sh", want: DangerDestructive},            // dot-source after separator
+		{command: "ls &&\n. ./setup.sh", want: DangerDestructive},         // dot-source after newline
 		{command: "python3 -c 'print(1)'", want: DangerDestructive},       // interpreter -c
 		{command: "sh -c 'ls'", want: DangerDestructive},
 		// Legitimate reads still safe — no false alarms on plain use.
@@ -72,6 +75,32 @@ func TestClassifyCommand(t *testing.T) {
 		{command: "ls; $X foo", want: DangerDestructive},
 		{command: "ls -la\n$CMD -rf /workspace", want: DangerDestructive}, // newline separator
 		{command: "true &&\n  $X purge", want: DangerDestructive},
+		// A bare "." as an ARGUMENT value (current directory) must not be
+		// mistaken for dot-source — the false positive this classifier
+		// hit on a real mission: python3 -m unittest discover's "-s ."
+		// parked a routine test run on the destructive-command prompt.
+		{command: "python3 -m unittest discover -s . -p '*_test.py'", want: DangerSafe},
+		{command: "grep . file.txt", want: DangerSafe},
+		{command: "cp -r . /tmp/backup", want: DangerSafe},
+		{command: "find . -name '*.go'", want: DangerSafe},
+		{command: "ls -la .", want: DangerSafe},
+		{command: "diff . ../other", want: DangerSafe},
+		// interpreter-c must match -c/-e as a WHOLE flag, not just a
+		// leading "-" — an earlier -e?c? pattern (both letters
+		// independently optional) matched any "python3 -<anything>",
+		// misclassifying routine interpreter invocations as opaque.
+		{command: "python3 -m pytest tests/", want: DangerSafe},
+		{command: "python3 -m pip list", want: DangerSafe},
+		{command: "node -v", want: DangerSafe},
+		{command: "node --version", want: DangerSafe},
+		{command: "ruby -w script.rb", want: DangerSafe},
+		// The real inline-code forms must still be caught.
+		{command: "python3 -c 'print(1)'", want: DangerDestructive},
+		{command: "node -e \"console.log(1)\"", want: DangerDestructive},
+		{command: "perl -e 'print 1'", want: DangerDestructive},
+		{command: "ruby -e 'puts 1'", want: DangerDestructive},
+		{command: "sh -c 'ls'", want: DangerDestructive},
+		{command: "bash -c 'ls'", want: DangerDestructive},
 	}
 	for _, tc := range tests {
 		t.Run(tc.command, func(t *testing.T) {

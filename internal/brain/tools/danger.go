@@ -86,8 +86,27 @@ var opaqueForms = []struct {
 	// separator: sh -c bodies can split commands across lines.
 	{name: "variable-command", pattern: regexp.MustCompile(`(^|[;|&(\n]|&&|\|\|)\s*\$\{?[A-Za-z_]`)},
 	{name: "eval-exec", pattern: regexp.MustCompile(`(^|[\s;|&(])(eval|exec|source)(\s|$)`)},
-	{name: "dot-source", pattern: regexp.MustCompile(`(^|[\s;|&(])\.\s+\S`)},
-	{name: "interpreter-c", pattern: regexp.MustCompile(`(^|[\s;|&(])(/[\w./-]*/)?(ba|z|da)?sh\s+-c|(python[23]?|perl|ruby|node)\s+-e?c?`)},
+	// Bare "." at true command position means POSIX dot-source (". a.sh"
+	// runs a.sh in the current shell — as opaque as eval). Unlike the
+	// other opaque forms, "." is a single character that is ALSO an
+	// extremely common argument VALUE (current directory: "-s .", "cp
+	// . /tmp", "find ."), so the prefix here is intentionally narrower
+	// than the other rules' [\s;|&(] — plain whitespace does NOT count
+	// as a boundary, only a genuine command separator (;|&( or the
+	// start of the string/a newline). "grep . file" or "ls -s ." would
+	// otherwise trip this on the space before the dot; a source call is
+	// always preceded by a separator, never a flag's own argument.
+	{name: "dot-source", pattern: regexp.MustCompile(`(^|[;|&(\n])\s*\.\s+\S`)},
+	// interpreter-c matches an interpreter invoked with its inline-code
+	// flag (-c for shells/python/ruby, -e for perl/ruby/node): the
+	// command running is a STRING, not a file, and as opaque to this
+	// classifier as eval. The flag must match exactly (-c or -e as a
+	// whole token, word-bounded) — an earlier version used -e?c? with
+	// BOTH letters independently optional, which degenerates to
+	// matching a bare "-" and misclassified any other flag starting
+	// with a dash (e.g. "python3 -m unittest ..." tripped this on
+	// "-m"'s leading "-", parking a routine test run for approval).
+	{name: "interpreter-c", pattern: regexp.MustCompile(`(^|[\s;|&(])(/[\w./-]*/)?(ba|z|da)?sh\s+-c(\s|$)|(python[23]?|perl|ruby|node)\s+-[ce](\s|$)`)},
 }
 
 // harmlessRedirects are stream-plumbing forms that look like the
