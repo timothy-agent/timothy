@@ -9,7 +9,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown ollama dev canary canary-coding
+	brain gateway memoryd web markitdown ollama dev canary canary-coding sandbox-image
 
 build:
 	$(GO_RUN) go build ./...
@@ -82,6 +82,16 @@ canary:
 	./scripts/canary-mission.sh
 
 # Same gate for the coding path: worktree provisioning, LLM review,
-# artifact verified inside the worktree. Needs the stack up.
+# artifact verified inside the worktree. Needs the stack up. If
+# MISSION_SANDBOX_IMAGE is set in deploy/.env, run `make sandbox-image`
+# first — otherwise mission shell calls fail opaquely.
 canary-coding:
 	./scripts/canary-coding.sh
+
+# Builds the per-mission sandbox image (python3/node/git/bash — see
+# deploy/sandbox.Dockerfile). Not a compose service: sandboxes are
+# containers brain creates dynamically via the Docker Go SDK, not
+# something `docker compose up` runs on its own. Only needed when
+# MISSION_SANDBOX_IMAGE is set.
+sandbox-image:
+	docker build -f deploy/sandbox.Dockerfile -t timothy-sandbox:latest .

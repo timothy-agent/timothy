@@ -23,6 +23,16 @@ const (
 type ShellConfig struct {
 	WorkspaceRoot string
 	Timeout       time.Duration // 0 = shellDefaultTimeout
+
+	// Runner, when non-nil, executes the command in a sandboxed backend
+	// (a per-mission Docker container) instead of brain's own process —
+	// nil keeps the original in-process exec.CommandContext behavior
+	// (the only path chat's global shell ever uses). The contract mirrors
+	// runShell exactly: return combined output plus nil error for any
+	// exit code, and an error only for a timeout or an infrastructure
+	// failure — callers (missions.missionTools) are responsible for
+	// producing that shape from whatever their backend returns.
+	Runner func(ctx context.Context, command string, timeout time.Duration) (string, error)
 }
 
 type shellArgs struct {
@@ -121,6 +131,9 @@ Example: {"command": "wc -l notes.md"} → "42 notes.md"`,
 			// right before the command actually runs.
 			if err := tools.CheckCommandPaths(cfg.WorkspaceRoot, args.Command); err != nil {
 				return "", err
+			}
+			if cfg.Runner != nil {
+				return cfg.Runner(ctx, args.Command, runTimeout)
 			}
 			return runShell(ctx, cfg.WorkspaceRoot, runTimeout, args.Command)
 		},

@@ -2,10 +2,12 @@ package missions
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunVerifySuccess(t *testing.T) {
@@ -124,5 +126,73 @@ func TestCheckArtifactsSymlinkEscape(t *testing.T) {
 	}
 	if !strings.Contains(problems[0], "escapes the workspace") {
 		t.Fatalf("problem = %q, want it to mention escaping the workspace", problems[0])
+	}
+}
+
+// fakeVerifyBackend writes fixed output to whatever writer it's given
+// and returns exitCode — a stand-in for sandbox.Manager.Exec.
+func fakeVerifyBackend(output string, exitCode int, err error) verifyBackend {
+	return func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+		if err != nil {
+			return 0, err
+		}
+		if _, werr := out.Write([]byte(output)); werr != nil {
+			return 0, werr
+		}
+		return exitCode, nil
+	}
+}
+
+// TestRunVerifyWithBackendMatchesLocalDigest confirms the sandbox-
+// routed path produces byte-identical evidence (digest, excerpt,
+// passed) to RunVerify's local exec path for the same output — the
+// backend must not change what "passed" evidence means, only where
+// the command actually ran.
+func TestRunVerifyWithBackendMatchesLocalDigest(t *testing.T) {
+	const output = "hello"
+	local := newVerifyResult(0, []byte(output))
+
+	got, err := RunVerifyWithBackend(context.Background(), fakeVerifyBackend(output, 0, nil), "/workspace", "printf hello")
+	if err != nil {
+		t.Fatalf("RunVerifyWithBackend: %v", err)
+	}
+	if got != local {
+		t.Fatalf("RunVerifyWithBackend = %+v, want %+v (identical to the local-exec path)", got, local)
+	}
+}
+
+func TestRunVerifyWithBackendNonZeroExit(t *testing.T) {
+	got, err := RunVerifyWithBackend(context.Background(), fakeVerifyBackend("boom", 3, nil), "/workspace", "exit 3")
+	if err != nil {
+		t.Fatalf("RunVerifyWithBackend: %v", err)
+	}
+	if got.Passed || got.ExitCode != 3 {
+		t.Fatalf("RunVerifyWithBackend = %+v, want failed with exit 3", got)
+	}
+}
+
+func TestRunVerifyWithBackendInfraErrorPropagates(t *testing.T) {
+	wantErr := context.DeadlineExceeded
+	_, err := RunVerifyWithBackend(context.Background(), fakeVerifyBackend("", 0, wantErr), "/workspace", "true")
+	if err != wantErr {
+		t.Fatalf("RunVerifyWithBackend error = %v, want %v propagated from the backend", err, wantErr)
+	}
+}
+
+// TestTailBufferBoundsMemoryKeepsEnd confirms the streamed excerpt path
+// is bounded like the local path's slice-from-the-end truncation, and
+// keeps the TAIL, not the head — same contract as
+// TestRunVerifyExcerptTruncatesFromEnd for the local path.
+func TestTailBufferBoundsMemoryKeepsEnd(t *testing.T) {
+	tail := &tailBuffer{max: 5}
+	full := "0123456789" // 10 bytes written in one shot, cap is 5
+	if _, err := tail.Write([]byte(full)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(tail.buf) != 5 {
+		t.Fatalf("tailBuffer retained %d bytes, want exactly 5", len(tail.buf))
+	}
+	if got, want := tail.String(), "56789"; got != want {
+		t.Fatalf("tailBuffer content = %q, want %q (the last 5 bytes)", got, want)
 	}
 }

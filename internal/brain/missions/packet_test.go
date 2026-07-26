@@ -82,3 +82,21 @@ func TestWorkPacketRenderDoesNotNeutralizeOverlay(t *testing.T) {
 		t.Fatalf("Render neutralized operator-authored overlay text, want it verbatim: %q", system)
 	}
 }
+
+func TestWorkPacketRenderIncludesExecEnvironmentNote(t *testing.T) {
+	p := WorkPacket{Goal: "Fix the login bug", ExecEnvironmentNote: " Commands run inside a sandbox."}
+	system, _ := p.Render()
+	if !strings.Contains(system, "Commands run inside a sandbox.") {
+		t.Fatalf("Render did not include ExecEnvironmentNote: %q", system)
+	}
+}
+
+func TestWorkPacketRenderOmitsExecEnvironmentNoteWhenEmpty(t *testing.T) {
+	base := WorkPacket{Goal: "Fix the login bug"}
+	system, _ := base.Render()
+	withNote := WorkPacket{Goal: "Fix the login bug", ExecEnvironmentNote: " extra note"}
+	systemWithNote, _ := withNote.Render()
+	if len(system) >= len(systemWithNote) {
+		t.Fatal("empty ExecEnvironmentNote should not add anything to the system prompt")
+	}
+}

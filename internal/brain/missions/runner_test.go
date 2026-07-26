@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -521,5 +524,108 @@ func TestRunWorkerGetsMissionScopedShell(t *testing.T) {
 	}
 	if !slices.Contains(names, missionStatusToolName) {
 		t.Fatalf("worker ExtraTools = %v, want the mission_status sentinel", names)
+	}
+}
+
+// shellExtraTool pulls the "shell" tool out of a mission's ExtraTools
+// list — helper for tests exercising missionTools' Runner wiring
+// directly, without going through a full RunWorker turn.
+func shellExtraTool(t *testing.T, extras []*tools.Tool) *tools.Tool {
+	t.Helper()
+	for _, tool := range extras {
+		if tool.Name == "shell" {
+			return tool
+		}
+	}
+	t.Fatal("no shell tool in ExtraTools")
+	return nil
+}
+
+// TestMissionToolsNoSandboxUsesLocalExec confirms a runner with no
+// sandbox configured builds a shell with no Runner set — the local
+// exec.CommandContext fallback shell.go already had.
+func TestMissionToolsNoSandboxUsesLocalExec(t *testing.T) {
+	r := newTestRunner(&scriptedAgent{})
+	extraTools := r.missionTools(Mission{ID: "m1", Workspace: t.TempDir()})
+	shell := shellExtraTool(t, extraTools)
+	args, _ := json.Marshal(map[string]string{"command": "echo real-exec"})
+	out, err := shell.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.TrimSpace(out) != "real-exec" {
+		t.Fatalf("output = %q, want local exec to have actually run", out)
+	}
+}
+
+// TestMissionToolsSandboxRoutesShell confirms that with r.sandbox set,
+// missionTools wires a shell whose Runner calls the sandbox backend
+// (never local exec) with the mission id and mission's own work root,
+// and formats a non-zero exit code the same way builtin.Shell's local
+// path does ("(exit status N)" appended, no error).
+func TestMissionToolsSandboxRoutesShell(t *testing.T) {
+	dir := t.TempDir()
+	var gotMissionID, gotWorkdir, gotCommand string
+	r := newTestRunner(&scriptedAgent{})
+	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+		gotMissionID, gotWorkdir, gotCommand = missionID, workdir, command
+		_, _ = out.Write([]byte("sandboxed output"))
+		return 3, nil
+	}
+	extraTools := r.missionTools(Mission{ID: "m1", Workspace: dir})
+	shell := shellExtraTool(t, extraTools)
+	args, _ := json.Marshal(map[string]string{"command": "false"})
+	out, err := shell.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotMissionID != "m1" || gotWorkdir != dir || gotCommand != "false" {
+		t.Fatalf("sandbox called with (%q,%q,%q), want (m1,%s,false)", gotMissionID, gotWorkdir, gotCommand, dir)
+	}
+	if !strings.HasPrefix(out, "sandboxed output") || !strings.Contains(out, "(exit status 3)") {
+		t.Fatalf("output = %q, want sandbox output plus exit-status suffix", out)
+	}
+}
+
+// TestMissionToolsSandboxTimeoutPropagatesAsError confirms a timeout
+// from the sandbox backend surfaces as an error from the shell tool,
+// matching builtin.Shell's local-path contract (a timeout is an error,
+// a non-zero exit is not).
+func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
+	r := newTestRunner(&scriptedAgent{})
+	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+		return 124, errors.New("command timed out after 30s")
+	}
+	extraTools := r.missionTools(Mission{ID: "m1", Workspace: t.TempDir()})
+	shell := shellExtraTool(t, extraTools)
+	args, _ := json.Marshal(map[string]string{"command": "sleep 100"})
+	if _, err := shell.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Execute err = %v, want a timeout error", err)
+	}
+}
+
+// TestMissionToolsSandboxCapsOutput confirms cappedStringWriter bounds
+// the sandbox Runner's output the same way builtin.Shell's local path
+// caps its own — a runaway sandboxed command must not balloon memory
+// or context just because the local exec path isn't the one running.
+func TestMissionToolsSandboxCapsOutput(t *testing.T) {
+	r := newTestRunner(&scriptedAgent{})
+	over := strings.Repeat("x", shellOutputCap+1024)
+	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+		_, _ = out.Write([]byte(over))
+		return 0, nil
+	}
+	extraTools := r.missionTools(Mission{ID: "m1", Workspace: t.TempDir()})
+	shell := shellExtraTool(t, extraTools)
+	args, _ := json.Marshal(map[string]string{"command": "yes"})
+	out, err := shell.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "[output capped]") {
+		t.Fatalf("output not marked as capped: %q", out[:min(200, len(out))])
+	}
+	if len(out) > shellOutputCap+len("\n[output capped]") {
+		t.Fatalf("output length %d exceeds cap plus marker", len(out))
 	}
 }

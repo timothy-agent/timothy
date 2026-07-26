@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -73,6 +74,15 @@ type driverStore interface {
 	AppendProgress(ctx context.Context, id, note string) error
 }
 
+// sandboxRemover is the narrow slice of *sandbox.Manager Driver needs —
+// kept as an interface (not an import of the sandbox package) so
+// missions has no compile-time dependency on Docker; cmd/brain/main.go
+// wires the real *sandbox.Manager. Nil means no sandbox is configured
+// (the in-process-exec fallback everywhere else in this package).
+type sandboxRemover interface {
+	Remove(ctx context.Context, missionID string) error
+}
+
 // Driver walks the state machine for one mission: calls Runner for the
 // phase-appropriate session type, interprets the outcome into a
 // StepInput, calls Step, and persists the Transition via
@@ -87,6 +97,15 @@ type Driver struct {
 	perms     sessionGranter
 	log       *slog.Logger
 	cfg       Config
+
+	// sandboxExec, when set, routes a plan unit's verify_cmd through the
+	// mission's sandbox container instead of brain's own process — the
+	// same backend nativeRunner uses for worker/reviewer shell calls
+	// (see SetSandboxExec). sandboxRemove tears the container down at a
+	// mission's terminal transition; both are nil in the fully
+	// in-process fallback (MISSION_SANDBOX_IMAGE unset).
+	sandboxExec   sandboxExec
+	sandboxRemove sandboxRemover
 
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
@@ -117,6 +136,35 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify no
 		gatekeepers: map[string]*GatekeeperState{},
 		driving:     map[string]bool{},
 	}
+}
+
+// SetSandbox wires a per-mission sandbox exec backend and its
+// container remover — cmd/brain/main.go calls this only when
+// MISSION_SANDBOX_IMAGE is configured, leaving both nil (the
+// in-process fallback) otherwise.
+func (d *Driver) SetSandbox(exec sandboxExec, remove sandboxRemover) {
+	d.sandboxExec, d.sandboxRemove = exec, remove
+}
+
+// removeSandbox best-effort tears down a mission's sandbox container in
+// the background — a slow or unreachable daemon must never block the
+// terminal state transition (or the notify that follows it), only log
+// the failure. The boot-time orphan sweep is the backstop for a removal
+// that fails here.
+func (d *Driver) removeSandbox(id string) {
+	if d.sandboxRemove == nil {
+		return
+	}
+	go func() {
+		// Independent of the transition's own ctx: the mission is already
+		// terminal, so this cleanup must not be tied to a request that
+		// may be winding down.
+		rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := d.sandboxRemove.Remove(rctx, id); err != nil {
+			d.log.Warn("driver: sandbox container removal failed", "mission_id", id, "error", err)
+		}
+	}()
 }
 
 // Create opens the mission's hidden bookkeeping session, inserts the
@@ -241,6 +289,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	}
 	if t.Next.Phase.Terminal() {
 		delete(d.gatekeepers, id)
+		d.removeSandbox(id)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, id, before, t.Next.Status); err != nil {
@@ -315,6 +364,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	}
 	if t.Next.Phase.Terminal() {
 		delete(d.gatekeepers, id)
+		d.removeSandbox(id)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, id, before, t.Next.Status); err != nil {
@@ -622,7 +672,7 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
 		if u.VerifyCmd == "" {
 			return d.markUnitPassed(ctx, m, i)
 		}
-		res, err := RunVerify(ctx, workRoot, u.VerifyCmd)
+		res, err := d.runVerify(ctx, m.ID, workRoot, u.VerifyCmd)
 		if err != nil {
 			return fmt.Errorf("driver: verify unit %d: %w", i, err)
 		}
@@ -661,7 +711,22 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	return WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
+		ExecEnvironmentNote: execEnvironmentNote(d.sandboxExec != nil),
 	}, nil
+}
+
+// runVerify executes verify_cmd via the mission's sandbox container
+// when one is configured, or brain's own process otherwise — the
+// verify-side counterpart of nativeRunner routing shell/write_file
+// through the same backend.
+func (d *Driver) runVerify(ctx context.Context, missionID, workRoot, verifyCmd string) (VerifyResult, error) {
+	if d.sandboxExec == nil {
+		return RunVerify(ctx, workRoot, verifyCmd)
+	}
+	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+		return d.sandboxExec(ctx, missionID, workdir, command, timeout, out)
+	}
+	return RunVerifyWithBackend(ctx, backend, workRoot, verifyCmd)
 }
 
 func (d *Driver) recordProgress(ctx context.Context, id, text string) error {

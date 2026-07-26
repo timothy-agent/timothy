@@ -113,8 +113,23 @@ services:
       # keeps real email content off third-party providers. Empty: those
       # tools' output is processed on whatever route the turn started on.
       SENSITIVE_TOOL_ROUTE: ${SENSITIVE_TOOL_ROUTE:-}
+      # Image tag for per-mission sandbox containers (`make
+      # sandbox-image`) — model-authored shell/verify_cmd execution
+      # moves out of brain's own process into one of these instead of
+      # brain's process, so it never inherits brain's secrets. Empty
+      # (the default) keeps the original in-process exec behavior.
+      MISSION_SANDBOX_IMAGE: ${MISSION_SANDBOX_IMAGE:-}
     volumes:
       - workspace:/workspace
+      # Lets brain create/exec/remove per-mission sandbox containers via
+      # the Docker Go SDK — a no-op mount when MISSION_SANDBOX_IMAGE is
+      # unset. group_add grants the socket's group inside the container;
+      # Docker Desktop's socket is group 0 (root), Linux hosts typically
+      # use a "docker" group with an arbitrary gid — override via
+      # DOCKER_SOCK_GID in deploy/.env if 0 doesn't work on your host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_SOCK_GID:-0}"
     ports:
       - "${BRAIN_PORT:-8300}:8080"
     depends_on:

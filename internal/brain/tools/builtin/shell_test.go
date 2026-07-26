@@ -134,3 +134,72 @@ func TestShellRejectsEmptyCommandAndMissingWorkspace(t *testing.T) {
 		t.Fatalf("err = %v, want workspace error", err)
 	}
 }
+
+// TestShellUsesRunnerWhenConfigured confirms a configured Runner (the
+// sandbox-container backend) is called instead of local exec, and
+// receives exactly the resolved command and timeout — the local
+// exec.CommandContext path must never run when Runner is set.
+func TestShellUsesRunnerWhenConfigured(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	var gotCmd string
+	var gotTimeout time.Duration
+	runnerCalled := false
+	tool := Shell(ShellConfig{
+		WorkspaceRoot: dir,
+		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
+			runnerCalled = true
+			gotCmd, gotTimeout = command, timeout
+			return "from runner", nil
+		},
+	})
+
+	out, err := runTool(t, tool, "echo local-would-say-this")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !runnerCalled {
+		t.Fatal("Runner was not called; local exec ran instead")
+	}
+	if out != "from runner" {
+		t.Fatalf("output = %q, want the Runner's own result, not local exec output", out)
+	}
+	if gotCmd != "echo local-would-say-this" {
+		t.Fatalf("Runner received command %q", gotCmd)
+	}
+	if gotTimeout != shellDefaultTimeout {
+		t.Fatalf("Runner received timeout %s, want default %s", gotTimeout, shellDefaultTimeout)
+	}
+}
+
+// TestShellRunnerStillRejectsSymlinkEscape confirms CheckCommandPaths
+// still gates a Runner-backed shell — the containment check is
+// path-shape analysis, independent of which backend actually executes,
+// and must not be bypassed just because a sandbox backend is present.
+func TestShellRunnerStillRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(outside+"/target", []byte("secret"), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	if err := os.Symlink(outside, dir+"/escape"); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	runnerCalled := false
+	tool := Shell(ShellConfig{
+		WorkspaceRoot: dir,
+		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
+			runnerCalled = true
+			return "", nil
+		},
+	})
+
+	_, err := runTool(t, tool, "rm -rf escape/target")
+	if err == nil || !strings.Contains(err.Error(), "outside the workspace") {
+		t.Fatalf("err = %v, want symlink escape rejected", err)
+	}
+	if runnerCalled {
+		t.Fatal("Runner was called despite a symlink-escape violation")
+	}
+}
