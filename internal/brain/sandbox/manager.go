@@ -19,11 +19,10 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 // sandboxUser matches brain's own "nobody" (alpine runtime-shell stage)
@@ -106,7 +105,10 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	if image == "" {
 		return nil, nil //nolint:nilnil // disabled-by-config sentinel; callers check for a nil *Manager exactly like every other optional brain dependency
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// API-version negotiation is on by default in this client (unlike the
+	// old github.com/docker/docker client, which required
+	// WithAPIVersionNegotiation explicitly) — no negotiation option needed.
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: connect to docker: %w", err)
 	}
@@ -127,11 +129,11 @@ func resolveWorkspaceMount(ctx context.Context, cli *client.Client) (mount.Mount
 	if err != nil {
 		return mount.Mount{}, fmt.Errorf("read own hostname: %w", err)
 	}
-	self, err := cli.ContainerInspect(ctx, hostname)
+	self, err := cli.ContainerInspect(ctx, hostname, client.ContainerInspectOptions{})
 	if err != nil {
 		return mount.Mount{}, fmt.Errorf("inspect own container %s: %w", hostname, err)
 	}
-	for _, m := range self.Mounts {
+	for _, m := range self.Container.Mounts {
 		if m.Destination != workspaceMountPath {
 			continue
 		}
@@ -149,7 +151,7 @@ func (m *Manager) Ping(ctx context.Context) error {
 	if m == nil {
 		return ErrDisabled
 	}
-	_, err := m.cli.Ping(ctx)
+	_, err := m.cli.Ping(ctx, client.PingOptions{})
 	return err
 }
 
@@ -199,16 +201,16 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID string) (string
 	defer lock.Unlock()
 
 	name := containerName(missionID)
-	insp, err := m.cli.ContainerInspect(ctx, name)
+	insp, err := m.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	switch {
 	case err == nil:
-		if insp.State != nil && insp.State.Running {
-			return insp.ID, nil
+		if insp.Container.State != nil && insp.Container.State.Running {
+			return insp.Container.ID, nil
 		}
-		if startErr := m.cli.ContainerStart(ctx, insp.ID, container.StartOptions{}); startErr != nil {
+		if _, startErr := m.cli.ContainerStart(ctx, insp.Container.ID, client.ContainerStartOptions{}); startErr != nil {
 			return "", fmt.Errorf("sandbox: restart container %s: %w", name, startErr)
 		}
-		return insp.ID, nil
+		return insp.Container.ID, nil
 	case errdefs.IsNotFound(err):
 		id, createErr := m.createContainer(ctx, missionID, name)
 		if createErr == nil {
@@ -220,17 +222,17 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID string) (string
 		// Lost a race with a sibling call's create despite the mission
 		// lock (e.g. a stale container from a crashed prior process) —
 		// re-inspect and use whatever is there now rather than failing.
-		insp, err = m.cli.ContainerInspect(ctx, name)
+		insp, err = m.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 		if err != nil {
 			return "", fmt.Errorf("sandbox: inspect after create conflict: %w", err)
 		}
-		if insp.State != nil && insp.State.Running {
-			return insp.ID, nil
+		if insp.Container.State != nil && insp.Container.State.Running {
+			return insp.Container.ID, nil
 		}
-		if startErr := m.cli.ContainerStart(ctx, insp.ID, container.StartOptions{}); startErr != nil {
+		if _, startErr := m.cli.ContainerStart(ctx, insp.Container.ID, client.ContainerStartOptions{}); startErr != nil {
 			return "", fmt.Errorf("sandbox: start after create conflict: %w", startErr)
 		}
-		return insp.ID, nil
+		return insp.Container.ID, nil
 	default:
 		return "", fmt.Errorf("sandbox: inspect container %s: %w", name, err)
 	}
@@ -270,11 +272,15 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name string) (
 		NetworkMode:   "bridge",
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
 	}
-	resp, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)
+	resp, err := m.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     cfg,
+		HostConfig: hostCfg,
+		Name:       name,
+	})
 	if err != nil {
 		return "", fmt.Errorf("sandbox: create container %s: %w", name, err)
 	}
-	if err := m.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := m.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return "", fmt.Errorf("sandbox: start container %s: %w", name, err)
 	}
 	return resp.ID, nil
@@ -308,18 +314,18 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 	cctx, cancel := context.WithTimeout(ctx, timeout+execClientSlack)
 	defer cancel()
 
-	execCfg := container.ExecOptions{
+	execCfg := client.ExecCreateOptions{
 		Cmd:          []string{"timeout", "-k", strconv.Itoa(execGraceKillSeconds), strconv.Itoa(secs), "/bin/sh", "-c", command},
 		WorkingDir:   workdir,
-		Tty:          false,
+		TTY:          false,
 		AttachStdout: true,
 		AttachStderr: true,
 	}
-	created, err := m.cli.ContainerExecCreate(cctx, containerID, execCfg)
+	created, err := m.cli.ExecCreate(cctx, containerID, execCfg)
 	if err != nil {
 		return 0, fmt.Errorf("sandbox: exec create: %w", err)
 	}
-	attach, err := m.cli.ContainerExecAttach(cctx, created.ID, container.ExecAttachOptions{Tty: false})
+	attach, err := m.cli.ExecAttach(cctx, created.ID, client.ExecAttachOptions{TTY: false})
 	if err != nil {
 		return 0, fmt.Errorf("sandbox: exec attach: %w", err)
 	}
@@ -346,7 +352,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 
 	poll := time.NewTicker(execPollInterval)
 	defer poll.Stop()
-	var insp container.ExecInspect
+	var insp client.ExecInspectResult
 	var graceUntil time.Time
 	copyDone, execDone, forcedClose := false, false, false
 	for !copyDone || !execDone {
@@ -367,7 +373,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 			return 0, fmt.Errorf("command timed out after %s", timeout)
 		case now := <-poll.C:
 			if !execDone {
-				cur, ierr := m.cli.ContainerExecInspect(cctx, created.ID)
+				cur, ierr := m.cli.ExecInspect(cctx, created.ID, client.ExecInspectOptions{})
 				if ierr != nil {
 					continue // transient; cctx or stream EOF ends the wait
 				}
@@ -401,7 +407,7 @@ func (m *Manager) Remove(ctx context.Context, missionID string) error {
 		return ErrDisabled
 	}
 	name := containerName(missionID)
-	err := m.cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true})
+	_, err := m.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("sandbox: remove container %s: %w", name, err)
 	}
@@ -422,19 +428,19 @@ func (m *Manager) Sweep(ctx context.Context, isTerminal func(missionID string) b
 	if m == nil {
 		return ErrDisabled
 	}
-	containers, err := m.cli.ContainerList(ctx, container.ListOptions{
+	result, err := m.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", missionLabel)),
+		Filters: make(client.Filters).Add("label", missionLabel),
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox: sweep: list: %w", err)
 	}
-	for _, c := range containers {
+	for _, c := range result.Items {
 		missionID := c.Labels[missionLabel]
 		if missionID == "" || !isTerminal(missionID) {
 			continue
 		}
-		if err := m.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		if _, err := m.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
 			m.log.Warn("sandbox: sweep remove failed", "mission_id", missionID, "container_id", c.ID, "error", err)
 			continue
 		}

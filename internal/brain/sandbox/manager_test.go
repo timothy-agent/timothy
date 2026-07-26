@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 // newTestClient points a real *client.Client at a fake HTTP server
@@ -26,7 +26,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *client.Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	cli, err := client.NewClientWithOpts(client.WithHost(srv.URL), client.WithVersion("1.51"))
+	cli, err := client.New(client.WithHost(srv.URL), client.WithAPIVersion("1.51"))
 	if err != nil {
 		t.Fatalf("new docker client: %v", err)
 	}
@@ -49,7 +49,7 @@ func newTestManager(cli *client.Client) *Manager {
 func TestResolveWorkspaceMountVolume(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, container.InspectResponse{
-			ContainerJSONBase: &container.ContainerJSONBase{ID: "self"},
+			ID: "self",
 			Mounts: []container.MountPoint{
 				{Type: mount.TypeVolume, Name: "timothy_workspace", Destination: "/workspace"},
 				{Type: mount.TypeVolume, Name: "unrelated", Destination: "/other"},
@@ -69,7 +69,7 @@ func TestResolveWorkspaceMountVolume(t *testing.T) {
 func TestResolveWorkspaceMountBind(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, container.InspectResponse{
-			ContainerJSONBase: &container.ContainerJSONBase{ID: "self"},
+			ID: "self",
 			Mounts: []container.MountPoint{
 				{Type: mount.TypeBind, Source: "/host/dev/workspace", Destination: "/workspace"},
 			},
@@ -88,8 +88,8 @@ func TestResolveWorkspaceMountBind(t *testing.T) {
 func TestResolveWorkspaceMountMissing(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, container.InspectResponse{
-			ContainerJSONBase: &container.ContainerJSONBase{ID: "self"},
-			Mounts:            []container.MountPoint{{Type: mount.TypeVolume, Name: "x", Destination: "/data"}},
+			ID:     "self",
+			Mounts: []container.MountPoint{{Type: mount.TypeVolume, Name: "x", Destination: "/data"}},
 		})
 	})
 
@@ -106,7 +106,7 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
 			writeJSON(t, w, http.StatusOK, container.InspectResponse{
-				ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", State: &container.State{Running: true}},
+				ID: "c1", State: &container.State{Running: true},
 			})
 		default:
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
@@ -132,7 +132,7 @@ func TestEnsureContainerExitedRestarts(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
 			writeJSON(t, w, http.StatusOK, container.InspectResponse{
-				ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", State: &container.State{Running: false}},
+				ID: "c1", State: &container.State{Running: false},
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/c1/start":
 			started = true
@@ -222,7 +222,7 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 				return
 			}
 			writeJSON(t, w, http.StatusOK, container.InspectResponse{
-				ContainerJSONBase: &container.ContainerJSONBase{ID: "sibling1", State: &container.State{Running: true}},
+				ID: "sibling1", State: &container.State{Running: true},
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
 			http.Error(w, "already exists", http.StatusConflict)
