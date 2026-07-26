@@ -103,3 +103,26 @@ func TestCheckArtifacts(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckArtifactsSymlinkEscape confirms a symlink that resolves
+// outside workRoot is caught by the WithinRoot check, not blindly
+// os.Stat'd (which would follow it and report the artifact as fine).
+func TestCheckArtifactsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "secret.md")
+	if err := os.WriteFile(target, []byte("outside content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "escape.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	problems := CheckArtifacts(root, []string{"escape.md"})
+	if len(problems) != 1 {
+		t.Fatalf("CheckArtifacts(symlink escape) = %v, want exactly 1 problem", problems)
+	}
+	if !strings.Contains(problems[0], "escapes the workspace") {
+		t.Fatalf("problem = %q, want it to mention escaping the workspace", problems[0])
+	}
+}

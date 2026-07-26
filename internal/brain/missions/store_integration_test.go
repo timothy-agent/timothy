@@ -114,6 +114,40 @@ func TestMissionCRUD(t *testing.T) {
 	}
 }
 
+func TestMissionPromptOverlayRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "overlay", Kind: "research", Route: "default",
+		PromptOverlay: "You are a careful senior engineer.",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PromptOverlay != "You are a careful senior engineer." {
+		t.Fatalf("PromptOverlay = %q, want it to round-trip unchanged", m.PromptOverlay)
+	}
+
+	// Absent means "no agent overlay" (the general agent, e.g.) — must
+	// stay empty, not some driver default.
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-overlay", Kind: "research", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.PromptOverlay != "" {
+		t.Fatalf("PromptOverlay = %q, want empty when not set", m2.PromptOverlay)
+	}
+}
+
 func TestSetAndClearPendingPermission(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

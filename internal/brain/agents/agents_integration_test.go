@@ -80,6 +80,19 @@ func TestAgentCRUDAndResolve(t *testing.T) {
 		t.Fatalf("Resolve = %+v ok=%v", a, ok)
 	}
 
+	// ResolveByID is Resolve's id-keyed counterpart (missions' create
+	// handler uses this — the picker sends a.id, not a.name).
+	byID, ok := s.ResolveByID(ctx, id)
+	if !ok || byID.Name != name || byID.Route != "research" {
+		t.Fatalf("ResolveByID = %+v ok=%v", byID, ok)
+	}
+	if _, ok := s.ResolveByID(ctx, "00000000-0000-0000-0000-000000000000"); ok {
+		t.Fatal("unknown id resolved as known")
+	}
+	if def, ok := s.ResolveByID(ctx, ""); !ok || def.Name != "general" {
+		t.Fatalf("ResolveByID(\"\") = %+v ok=%v, want seeded general", def, ok)
+	}
+
 	// Enabled is the auto-dispatch candidate set: the seeded default
 	// plus this enabled fixture, never a disabled agent, never the
 	// synthetic zero-value fallback (it carries an empty Name).

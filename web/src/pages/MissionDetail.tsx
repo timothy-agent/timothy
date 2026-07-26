@@ -1,6 +1,6 @@
 import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -12,12 +12,16 @@ import {
   resumeMission,
 } from '../api/client'
 import type { Mission, MissionEvent, MissionUsage } from '../api/types'
+import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ProgressSection } from '../components/missions/ProgressSection'
+import { PushBranchDialog } from '../components/missions/PushBranchDialog'
 import { TimelineSection } from '../components/missions/TimelineSection'
+import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { errText } from '../components/settings/util'
+import { playAlertSound } from '../lib/alertSound'
 
 const pollIntervalIdle = 5000
 const pollIntervalPending = 1500
@@ -31,6 +35,7 @@ export function MissionDetail() {
   const [events, setEvents] = useState<MissionEvent[]>([])
   const [usage, setUsage] = useState<MissionUsage | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pushOpen, setPushOpen] = useState(false)
 
   const refresh = useCallback(() => {
     if (!id) return
@@ -39,17 +44,30 @@ export function MissionDetail() {
     missionUsage(id).then(setUsage, () => undefined)
   }, [id])
 
+  const phase = mission?.phase
+  const pendingPermission = mission?.pending_permission
+  const wasPendingRef = useRef(false)
+
   useEffect(() => {
     refresh()
-    const interval = mission?.pending_permission ? pollIntervalPending : pollIntervalIdle
+    if (phase && terminalPhases.has(phase) && !pendingPermission) return
+    const interval = pendingPermission ? pollIntervalPending : pollIntervalIdle
     const timer = setInterval(refresh, interval)
     return () => clearInterval(timer)
-  }, [refresh, mission?.pending_permission])
+  }, [refresh, pendingPermission, phase])
+
+  // Chime only on the transition into a permission block, not on every
+  // poll while it stays pending — the banner itself is the persistent
+  // visual cue.
+  useEffect(() => {
+    if (pendingPermission && !wasPendingRef.current) playAlertSound()
+    wasPendingRef.current = !!pendingPermission
+  }, [pendingPermission])
 
   if (!id) return null
   if (!mission) {
     return (
-      <div className="mx-auto w-full max-w-3xl px-4 py-6">
+      <div className="mx-auto w-full max-w-5xl px-4 py-6">
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     )
@@ -57,6 +75,27 @@ export function MissionDetail() {
 
   const canResume = resumableStatuses.has(mission.status)
   const canCancel = !terminalPhases.has(mission.phase)
+
+  // pause_message never carries real content (the state machine clears
+  // it on every transition — see store.go's ApplyTransition comment);
+  // the actual detail only lives in the mission.paused event itself,
+  // so pull it from the most recent one while still paused.
+  const pauseDetail =
+    mission.status === 'paused'
+      ? (() => {
+          for (let i = events.length - 1; i >= 0; i--) {
+            if (events[i].kind === 'mission.paused') {
+              const payload = events[i].payload
+              if (payload && typeof payload === 'object' && 'detail' in payload) {
+                const detail = (payload as { detail?: unknown }).detail
+                return typeof detail === 'string' ? detail : undefined
+              }
+              return undefined
+            }
+          }
+          return undefined
+        })()
+      : undefined
 
   const resume = async () => {
     setBusy(true)
@@ -94,7 +133,7 @@ export function MissionDetail() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6">
+    <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-6">
       <Link
         to="/missions"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
@@ -131,11 +170,16 @@ export function MissionDetail() {
                 {mission.branch} @ {mission.base_commit?.slice(0, 8)}
               </p>
             )}
-            {mission.pause_message && (
-              <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{mission.pause_message}</p>
+            {pauseDetail && (
+              <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>
             )}
           </div>
           <div className="flex shrink-0 gap-2">
+            {mission.kind === 'coding' && mission.branch && (
+              <Button variant="outline" onClick={() => setPushOpen(true)}>
+                Push branch
+              </Button>
+            )}
             {canResume && (
               <Button variant="outline" disabled={busy} onClick={() => void resume()}>
                 Resume
@@ -168,6 +212,19 @@ export function MissionDetail() {
               </span>
             )}
           </div>
+          {usage.models.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {usage.models.map((m) => (
+                <Badge
+                  key={`${m.provider}:${m.model}`}
+                  variant="secondary"
+                  title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
+                >
+                  {m.model}
+                </Badge>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
@@ -181,10 +238,36 @@ export function MissionDetail() {
         <ProgressSection notes={mission.progress} />
       </section>
 
+      {mission.workspace && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
+          <ArtifactsSection missionId={id} phase={mission.phase} workspace={mission.workspace} />
+        </section>
+      )}
+
       <section>
         <h2 className="mb-2 text-sm font-semibold tracking-tight">Timeline</h2>
         <TimelineSection events={events} />
       </section>
+
+      {terminalPhases.has(mission.phase) && mission.last_evidence && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
+          <div className="rounded-lg border border-border bg-muted/50 p-3">
+            <p className="text-sm whitespace-pre-wrap">{mission.last_evidence}</p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Worker-reported — not independently verified.
+            </p>
+          </div>
+        </section>
+      )}
+
+      <PushBranchDialog
+        missionId={id}
+        open={pushOpen}
+        onOpenChange={setPushOpen}
+        onPushed={refresh}
+      />
     </div>
   )
 }

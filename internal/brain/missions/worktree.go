@@ -34,10 +34,14 @@ const (
 type Workspace struct {
 	root string // $WORKSPACES
 	log  *slog.Logger
+	// identity resolves the operator's configured git author (name,
+	// email) per commit; nil or empty-returning falls back to the fixed
+	// commitName/commitEmail constants.
+	identity func(context.Context) (name, email string)
 }
 
-func NewWorkspace(root string, log *slog.Logger) *Workspace {
-	return &Workspace{root: root, log: log}
+func NewWorkspace(root string, identity func(context.Context) (name, email string), log *slog.Logger) *Workspace {
+	return &Workspace{root: root, identity: identity, log: log}
 }
 
 // Provision creates the mission's directory. Coding missions run `git
@@ -128,16 +132,28 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 	return nil
 }
 
-// CommitUnit commits the worktree's current changes under a fixed
-// machine identity, independent of host git config.
+// CommitUnit commits the worktree's current changes, authored under
+// the operator's configured git identity when set (per-field fallback
+// to commitName/commitEmail otherwise), independent of host git config.
 func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) error {
 	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
 	defer cancel()
 	if out, err := runGit(cctx, worktree, "add", "-A"); err != nil {
 		return fmt.Errorf("worktree: commit add: %w: %s", err, out)
 	}
-	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // commitName/commitEmail are package constants; message is driver-built from mission id/iteration, not user input
-		"-c", "user.name="+commitName, "-c", "user.email="+commitEmail,
+	name, email := commitName, commitEmail
+	if w.identity != nil {
+		if n, e := w.identity(ctx); true {
+			if n != "" {
+				name = n
+			}
+			if e != "" {
+				email = e
+			}
+		}
+	}
+	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // name/email may be operator-supplied but travel as -c key=value args, never shell-interpolated; message is driver-built from mission id/iteration, not user input
+		"-c", "user.name="+name, "-c", "user.email="+email,
 		"commit", "-m", message, "--allow-empty")
 	cmd.Dir = worktree
 	if out, err := cmd.CombinedOutput(); err != nil {

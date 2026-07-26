@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import type { MissionEvent } from '../../api/types'
 import { Button } from '../ui/button'
 import { renderEvent } from './eventRenderers'
+import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
 
 // How close to the bottom (px) counts as "already following the tail"
 // — auto-scroll only kicks in within this margin, so a reader who has
@@ -14,6 +15,7 @@ const followThresholdPx = 48
 export function TimelineSection({ events }: { events: MissionEvent[] }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
+  const { fullscreen, toggle, close } = useFullscreenPanel()
 
   useEffect(() => {
     const el = containerRef.current
@@ -40,8 +42,14 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
     wasAtBottomRef.current = true
   }
 
-  return (
-    <div className="overflow-hidden rounded-lg border border-border">
+  const panel = (
+    <div
+      className={
+        fullscreen
+          ? 'flex h-full flex-col overflow-hidden rounded-lg border border-border'
+          : 'overflow-hidden rounded-lg border border-border'
+      }
+    >
       <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
         <span className="text-xs text-muted-foreground">
           {events.length} event{events.length === 1 ? '' : 's'}
@@ -53,12 +61,17 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
           <Button variant="ghost" size="icon-xs" title="Scroll to bottom" onClick={scrollToBottom}>
             <HugeiconsIcon icon={ArrowDown01Icon} />
           </Button>
+          <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
         </div>
       </div>
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="h-80 overflow-y-auto bg-zinc-950 px-3 py-2 font-mono text-xs dark:bg-black"
+        className={
+          fullscreen
+            ? 'flex-1 overflow-y-auto bg-zinc-950 px-3 py-2 font-mono text-xs dark:bg-black'
+            : 'h-80 overflow-y-auto bg-zinc-950 px-3 py-2 font-mono text-xs dark:bg-black'
+        }
       >
         {events.length === 0 ? (
           <p className="text-zinc-500">No events yet.</p>
@@ -76,5 +89,12 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
         )}
       </div>
     </div>
+  )
+
+  if (!fullscreen) return panel
+  return (
+    <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
+      {panel}
+    </FullscreenDialog>
   )
 }

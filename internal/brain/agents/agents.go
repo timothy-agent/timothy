@@ -163,6 +163,23 @@ func (s *Store) Resolve(ctx context.Context, name string) (Agent, bool) {
 	return a, true
 }
 
+// ResolveByID is Resolve's counterpart for callers that hold an
+// agent's id rather than its name (e.g. the mission-create UI, which
+// picks from a list keyed by id) — same empty-means-default and
+// degrade-to-default-on-miss behavior as Resolve.
+func (s *Store) ResolveByID(ctx context.Context, id string) (Agent, bool) {
+	byName, def := s.load(ctx)
+	if id == "" {
+		return byName[def], true
+	}
+	for _, a := range byName {
+		if a.ID == id {
+			return a, true
+		}
+	}
+	return byName[def], false
+}
+
 // load returns the enabled agents and the default's name from a short
 // cache. A database outage degrades to the zero-value agent (all
 // tools, all skills, default route, memory on) — chat must keep

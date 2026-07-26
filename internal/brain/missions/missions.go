@@ -14,20 +14,24 @@ import (
 
 // Mission is the API/DB shape of one missions row.
 type Mission struct {
-	ID           string         `json:"id"`
-	Goal         string         `json:"goal"`
-	Kind         string         `json:"kind"` // coding | research | scheduled
-	AgentID      string         `json:"agent_id,omitempty"`
-	Phase        Phase          `json:"phase"`
-	Status       Status         `json:"status"`
-	PauseReason  PauseReason    `json:"pause_reason,omitempty"`
-	PauseMessage string         `json:"pause_message,omitempty"`
-	Workspace    string         `json:"workspace,omitempty"`
-	Worktree     string         `json:"worktree,omitempty"`
-	Branch       string         `json:"branch,omitempty"`
-	BaseCommit   string         `json:"base_commit,omitempty"`
-	Spec         Spec           `json:"spec"`
-	Progress     []ProgressNote `json:"progress"`
+	ID      string `json:"id"`
+	Goal    string `json:"goal"`
+	Kind    string `json:"kind"` // coding | research | scheduled
+	AgentID string `json:"agent_id,omitempty"`
+	// PromptOverlay is a snapshot of the creating agent's overlay text
+	// at create time — see 0035_mission_prompt_overlay.sql for why this
+	// isn't a live agent lookup.
+	PromptOverlay string         `json:"prompt_overlay,omitempty"`
+	Phase         Phase          `json:"phase"`
+	Status        Status         `json:"status"`
+	PauseReason   PauseReason    `json:"pause_reason,omitempty"`
+	PauseMessage  string         `json:"pause_message,omitempty"`
+	Workspace     string         `json:"workspace,omitempty"`
+	Worktree      string         `json:"worktree,omitempty"`
+	Branch        string         `json:"branch,omitempty"`
+	BaseCommit    string         `json:"base_commit,omitempty"`
+	Spec          Spec           `json:"spec"`
+	Progress      []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's
 	// evidence text — carried from execute into review so a
 	// research/scheduled mission (whose baseline diff is always empty,
@@ -46,8 +50,8 @@ type Mission struct {
 	// to after a worker failure or review rework — instead of burning
 	// iterations on a model that already proved too weak for the unit.
 	// Empty disables escalation.
-	EscalationRoute string `json:"escalation_route,omitempty"`
-	PendingPermission   string   `json:"pending_permission,omitempty"`
+	EscalationRoute   string `json:"escalation_route,omitempty"`
+	PendingPermission string `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a
 	// worker/reviewer/planner turn parks on stream.EventPermissionRequest,
@@ -76,6 +80,15 @@ type Mission struct {
 	SessionID string    `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WorkRoot is where mission workers/verify/review actually operate:
+// the worktree for coding missions, the plain workspace dir otherwise.
+func (m Mission) WorkRoot() string {
+	if m.Worktree != "" {
+		return m.Worktree
+	}
+	return m.Workspace
 }
 
 // Spec is the mission's plan: an ordered list of units, each verified

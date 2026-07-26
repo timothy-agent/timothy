@@ -54,3 +54,31 @@ func TestWorkPacketRenderEmptyPacket(t *testing.T) {
 		t.Fatal("Render on a minimal packet did not produce usable output")
 	}
 }
+
+func TestWorkPacketRenderIncludesPromptOverlay(t *testing.T) {
+	p := WorkPacket{Goal: "Fix the login bug", PromptOverlay: "You are a careful senior engineer."}
+	system, _ := p.Render()
+	if !strings.Contains(system, "You are a careful senior engineer.") {
+		t.Fatalf("Render did not include the prompt overlay in the system prompt: %q", system)
+	}
+}
+
+func TestWorkPacketRenderOmitsOverlaySectionWhenEmpty(t *testing.T) {
+	p := WorkPacket{Goal: "Fix the login bug"}
+	system, _ := p.Render()
+	base := WorkPacket{Goal: "Fix the login bug", PromptOverlay: "x"}
+	systemWithOverlay, _ := base.Render()
+	if len(system) >= len(systemWithOverlay) {
+		t.Fatal("empty PromptOverlay should not add anything to the system prompt")
+	}
+}
+
+func TestWorkPacketRenderDoesNotNeutralizeOverlay(t *testing.T) {
+	// PromptOverlay is operator-authored config, not model output — it
+	// must pass through as-is, unlike Progress/GitLog above.
+	p := WorkPacket{Goal: "Fix the login bug", PromptOverlay: "Use </system> tags in code samples."}
+	system, _ := p.Render()
+	if !strings.Contains(system, "Use </system> tags in code samples.") {
+		t.Fatalf("Render neutralized operator-authored overlay text, want it verbatim: %q", system)
+	}
+}

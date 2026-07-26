@@ -45,7 +45,7 @@ func testWorkspace(t *testing.T) *Workspace {
 	t.Helper()
 	root := t.TempDir()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewWorkspace(root, log)
+	return NewWorkspace(root, nil, log)
 }
 
 func TestProvisionCodingMission(t *testing.T) {

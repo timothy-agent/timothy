@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Input } from '../ui/input'
 import {
   Select,
@@ -45,6 +45,20 @@ export function useAgentForm(agent?: AdminAgent) {
   const [skillsText, setSkillsText] = useState(agent?.skills.join(', ') ?? '')
   const [tools, setTools] = useState<string[]>(agent?.tools ?? [])
   const [memory, setMemory] = useState(agent?.memory ?? true)
+
+  // Edit loads its agent asynchronously, after this hook has already
+  // mounted with blank defaults — useState's initializer only runs
+  // once, so the fields never pick up the fetched agent without this.
+  useEffect(() => {
+    if (!agent) return
+    setName(agent.name)
+    setDescription(agent.description)
+    setOverlay(agent.prompt_overlay)
+    setRoute(agent.route)
+    setSkillsText(agent.skills.join(', '))
+    setTools(agent.tools)
+    setMemory(agent.memory)
+  }, [agent])
 
   const value: AgentFormValue = {
     name,

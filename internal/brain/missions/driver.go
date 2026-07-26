@@ -226,6 +226,14 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		d.log.Warn("driver: record turn failed", "mission_id", id, "error", evErr)
 	}
 
+	// runPhase may have written spec changes of its own (e.g. review's
+	// verifyCurrentUnit -> markUnitPassed flipping a unit to passed) —
+	// re-fetch so the completion check below sees that write rather
+	// than the pre-round snapshot loaded at the top of this call.
+	m, err = d.store.Get(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("driver advance: reload after phase: %w", err)
+	}
 	state := toStepState(m)
 	t := Step(state, in, d.cfg)
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
@@ -335,13 +343,18 @@ func toStepState(m Mission) StepState {
 	}
 }
 
+// isLastUnit reports whether every unit in the plan has passed — the
+// mission is only done once nothing remains unverified, not merely
+// when the first still-unverified unit happens to sit at the last
+// index (that check alone is one unit short: it's true the moment the
+// second-to-last unit passes, before the actual last unit ever runs).
 func isLastUnit(spec Spec) bool {
-	for i, u := range spec.Units {
+	for _, u := range spec.Units {
 		if !u.Passes {
-			return i == len(spec.Units)-1
+			return false
 		}
 	}
-	return true // no unverified units left
+	return true
 }
 
 // runPhase runs the phase-appropriate session and returns the StepInput
@@ -481,10 +494,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 			return StepInput{}, err
 		}
 	}
-	workRoot := m.Worktree
-	if workRoot == "" {
-		workRoot = m.Workspace
-	}
+	workRoot := m.WorkRoot()
 	packet := ReviewPacket{
 		Goal: m.Goal, Plan: m.Spec, Diff: diff, Evidence: m.LastEvidence,
 		Listing: ListWorkspace(workRoot),
@@ -590,10 +600,7 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
 		if u.Passes {
 			continue
 		}
-		workRoot := m.Worktree
-		if workRoot == "" {
-			workRoot = m.Workspace
-		}
+		workRoot := m.WorkRoot()
 		if problems := CheckArtifacts(workRoot, u.Artifacts); len(problems) > 0 {
 			excerpt := "declared artifacts failed the harness check:\n" + strings.Join(problems, "\n")
 			// Show what DOES exist: the dominant failure here is a
@@ -632,9 +639,16 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
 	return nil
 }
 
+// markUnitPassed persists unit as passed. It copies Units before
+// mutating — m.Spec.Units is a slice header, so writing through it
+// in place would silently mutate the caller's own Mission value too
+// (same backing array), corrupting whatever that caller does with it
+// afterward in the same round (e.g. Advance's toStepState(m) call).
 func (d *Driver) markUnitPassed(ctx context.Context, m Mission, unit int) error {
-	m.Spec.Units[unit].Passes = true
-	return d.store.SetSpec(ctx, m.ID, m.Spec)
+	units := make([]PlanUnit, len(m.Spec.Units))
+	copy(units, m.Spec.Units)
+	units[unit].Passes = true
+	return d.store.SetSpec(ctx, m.ID, Spec{Units: units})
 }
 
 // packet builds the WorkPacket for the current phase/iteration
@@ -646,7 +660,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	}
 	return WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
-		GitLog: gitLog, Iteration: m.Iteration,
+		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 	}, nil
 }
 

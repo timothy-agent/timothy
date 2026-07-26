@@ -1,6 +1,11 @@
 package missions
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestGapFingerprintEmpty(t *testing.T) {
 	if got := GapFingerprint(nil); got != "" {
@@ -60,6 +65,30 @@ func TestParseReviewVerdict(t *testing.T) {
 	}
 	if !approved.Approved {
 		t.Fatal("decision=approve did not parse as Approved=true")
+	}
+}
+
+// TestReadArtifactsSymlinkEscape confirms a symlink resolving outside
+// workRoot is reported as unreadable, never followed to leak the real
+// target's content.
+func TestReadArtifactsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "secret.md")
+	if err := os.WriteFile(target, []byte("outside content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "escape.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	out := ReadArtifacts(root, []string{"escape.md"})
+	got := out["escape.md"]
+	if strings.Contains(got, "outside content") {
+		t.Fatalf("ReadArtifacts leaked the symlink target's real content: %q", got)
+	}
+	if !strings.Contains(got, "not readable") {
+		t.Fatalf("ReadArtifacts(symlink escape) = %q, want a [not readable: ...] marker", got)
 	}
 }
 

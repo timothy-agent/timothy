@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
@@ -318,6 +319,91 @@ func TestRunWorkerReportsPermissionParkAndClear(t *testing.T) {
 	if len(parker.cleared) != 1 || parker.cleared[0] != "m1" {
 		t.Fatalf("parker.cleared = %v, want exactly one clear for m1", parker.cleared)
 	}
+}
+
+// sequencingParker records, at the moment each OnPermissionCleared
+// fires, how many distinct calls had parked vs how many tool results
+// had been delivered so far — the direct signal that distinguishes
+// "cleared after the right call" from "cleared after the first call
+// resolved regardless of which one" (a plain clear-count is identical
+// in both the buggy and fixed behavior for two concurrent parks).
+type sequencingParker struct {
+	fakeParker
+	resultsDeliveredAtClear []int
+	resultsDelivered        atomic.Int32
+}
+
+func (f *sequencingParker) OnPermissionCleared(ctx context.Context, missionID string) {
+	f.fakeParker.OnPermissionCleared(ctx, missionID)
+	f.resultsDeliveredAtClear = append(f.resultsDeliveredAtClear, int(f.resultsDelivered.Load()))
+}
+
+// TestRunWorkerConcurrentParksClearOnlyWhenAllResolve is the
+// regression for a real incident: a turn issuing two concurrent
+// destructive tool calls, both parked. Before this fix, runTurn's
+// single shared "parked" bool cleared the mission's pending-permission
+// state as soon as the FIRST call's result arrived, even while the
+// second call was still genuinely blocked awaiting a decision — the
+// UI/API then showed nothing pending while a destructive command sat
+// unresolved for up to the full 10-minute timeout.
+func TestRunWorkerConcurrentParksClearOnlyWhenAllResolve(t *testing.T) {
+	parker := &sequencingParker{}
+	agent := &countingResultAgent{
+		scriptedAgent: scriptedAgent{batches: [][]stream.StreamEvent{{
+			textEvent("running two risky tool calls"),
+			permissionRequestEvent("perm1", "call1", "shell", "destructive"),
+			permissionRequestEvent("perm2", "call2", "shell", "destructive"),
+			toolResultEvent("call1"), // first call resolves — must NOT clear yet
+			toolResultEvent("call2"), // second (last) call resolves — NOW it clears
+			toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ran both"}`),
+		}}},
+		parker: parker,
+	}
+	r := newTestRunnerWithParker(agent, parker)
+	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if v.Outcome != "done" {
+		t.Fatalf("RunWorker verdict = %+v, want done", v)
+	}
+	if len(parker.parked) != 2 {
+		t.Fatalf("parker.parked = %v, want two parks (both concurrent calls)", parker.parked)
+	}
+	if len(parker.resultsDeliveredAtClear) != 1 || parker.resultsDeliveredAtClear[0] != 2 {
+		// The bug this guards: the buggy single-bool version clears
+		// after resultsDelivered==1 (right after call1, prematurely) —
+		// this asserts the clear only happens once BOTH results (2) have
+		// actually been delivered.
+		t.Fatalf("clear fired after %v results delivered, want exactly one clear after both (2) results", parker.resultsDeliveredAtClear)
+	}
+}
+
+// countingResultAgent wraps scriptedAgent's fixed batch with a live
+// counter the test parker reads at clear-time — the pre-buffered
+// channel scriptedAgent uses can't otherwise expose "how far the
+// consumer has gotten" to a callback fired mid-drain.
+type countingResultAgent struct {
+	scriptedAgent
+	parker *sequencingParker
+}
+
+func (f *countingResultAgent) Start(ctx context.Context, req loop.Request) (<-chan stream.StreamEvent, error) {
+	raw, err := f.scriptedAgent.Start(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan stream.StreamEvent)
+	go func() {
+		defer close(out)
+		for ev := range raw {
+			if ev.Type == stream.EventToolResult {
+				f.parker.resultsDelivered.Add(1)
+			}
+			out <- ev
+		}
+	}()
+	return out, nil
 }
 
 // TestRunWorkerClearsPermissionParkOnStreamError covers the other exit

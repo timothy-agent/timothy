@@ -70,9 +70,7 @@ export const providerPresets: ProviderPreset[] = [
     name: 'GLM (Z.ai)',
     driver: 'openaicompat',
     description: "Zhipu's GLM models",
-    // No logo: Z.ai/Zhipu's mark isn't in the simple-icons registry —
-    // falls back to the neutral glyph rather than guess at an
-    // unverified brand mark.
+    logo: 'zai',
     brandColor: '#4B5563',
     baseURL: 'https://api.z.ai/api/paas/v4',
     requiresKey: true,
@@ -86,10 +84,8 @@ export const providerPresets: ProviderPreset[] = [
     name: 'Grok (xAI)',
     driver: 'openaicompat',
     description: "xAI's Grok models",
-    // No logo: xAI's mark isn't in the simple-icons registry and their
-    // site blocks scraping — falls back to the neutral glyph rather
-    // than guess at an unverified brand mark.
-    brandColor: '#4B5563',
+    logo: 'grok',
+    brandColor: '#000000',
     baseURL: 'https://api.x.ai/v1',
     requiresKey: true,
     defaultRef: 'XAI_API_KEY',

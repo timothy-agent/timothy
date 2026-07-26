@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, MissionEvent } from '../api/types'
 import { MissionDetail } from './MissionDetail'
 
+vi.mock('../lib/alertSound', () => ({ playAlertSound: vi.fn() }))
+
 vi.mock('../api/client', () => ({
   getMission: vi.fn(),
   missionEvents: vi.fn(),
@@ -11,16 +13,26 @@ vi.mock('../api/client', () => ({
   resumeMission: vi.fn(),
   cancelMission: vi.fn(),
   answerMissionPermission: vi.fn(),
+  listMissionFiles: vi.fn(),
+  pushMission: vi.fn(),
+  downloadMissionFile: vi.fn(),
+  downloadMissionArchive: vi.fn(),
+  secretStatus: vi.fn(),
+  listConnectors: vi.fn(),
 }))
 
 import {
   answerMissionPermission,
   cancelMission,
   getMission,
+  listConnectors,
+  listMissionFiles,
   missionEvents,
   missionUsage,
   resumeMission,
+  secretStatus,
 } from '../api/client'
+import { playAlertSound } from '../lib/alertSound'
 
 const baseMission: Mission = {
   id: 'm1',
@@ -30,6 +42,7 @@ const baseMission: Mission = {
   status: 'working',
   branch: 'mission/fix-login',
   base_commit: 'abc123def456',
+  workspace: 'ws-1',
   spec: { units: [{ title: 'Add validation', verify_cmd: 'go test', passes: true }] },
   progress: [{ at: '2026-01-01T00:00:00Z', note: 'found the root cause' }],
   iteration: 2,
@@ -100,7 +113,11 @@ beforeEach(() => {
     output_tokens: 0,
     requests: 0,
     unpriced_requests: 0,
+    models: [],
   })
+  vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
+  vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
+  vi.mocked(listConnectors).mockResolvedValue([])
 })
 
 describe('MissionDetail spend', () => {
@@ -113,6 +130,7 @@ describe('MissionDetail spend', () => {
       output_tokens: 8_000,
       requests: 7,
       unpriced_requests: 2,
+      models: [{ provider: 'GLM (Z.ai)', model: 'glm-5.2', requests: 7, last_used: '2026-01-01T00:00:00Z' }],
     })
     renderPage()
     expect(await screen.findByText('Spend')).toBeTruthy()
@@ -120,6 +138,7 @@ describe('MissionDetail spend', () => {
     expect(screen.getByText('7 model calls')).toBeTruthy()
     expect(screen.getByText('120,000 in / 8,000 out')).toBeTruthy()
     expect(screen.getByText('25% of budget')).toBeTruthy()
+    expect(screen.getByText('glm-5.2')).toBeTruthy()
     expect(screen.getByText('2 unpriced calls')).toBeTruthy()
   })
 
@@ -162,6 +181,30 @@ describe('MissionDetail', () => {
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalledWith('m1', 'once'))
   })
 
+  it('plays an alert sound only on the transition into a permission block, not on later polls', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(getMission).mockResolvedValue(baseMission)
+      renderPage()
+      await vi.waitFor(() => expect(getMission).toHaveBeenCalled())
+      expect(playAlertSound).not.toHaveBeenCalled()
+
+      vi.mocked(getMission).mockResolvedValue({
+        ...baseMission,
+        pending_permission: 'perm-1',
+        pending_permission_tool: 'shell',
+      })
+      await vi.advanceTimersByTimeAsync(5000)
+      await vi.waitFor(() => expect(playAlertSound).toHaveBeenCalledTimes(1))
+
+      // Still pending on the next poll — must not chime again.
+      await vi.advanceTimersByTimeAsync(1500 * 2)
+      expect(playAlertSound).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders known event kinds with their specific text and unknown kinds with the fallback', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
@@ -192,6 +235,49 @@ describe('MissionDetail', () => {
     await waitFor(() => expect(resumeMission).toHaveBeenCalledWith('m1'))
   })
 
+  it('surfaces the most recent mission.paused event detail while paused', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'backoff' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.paused',
+        payload: { reason: 'backoff', detail: 'every provider attempt failed: GLM 429' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('every provider attempt failed: GLM 429')).toBeTruthy()
+  })
+
+  it('omits the pause detail once the mission has been resumed', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'idle', pause_reason: '' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.paused',
+        payload: { reason: 'backoff', detail: 'every provider attempt failed: GLM 429' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 6,
+        kind: 'mission.resumed',
+        payload: {},
+        provenance: 'live',
+        created_at: '2026-01-01T00:05:00Z',
+      },
+    ])
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('every provider attempt failed: GLM 429')).toBeNull()
+  })
+
   it('hides resume and cancel for a done mission', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
@@ -205,5 +291,63 @@ describe('MissionDetail', () => {
     await screen.findByText('Fix the login bug')
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(cancelMission).toHaveBeenCalledWith('m1'))
+  })
+
+  it('shows the push branch button for a coding mission with a branch', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
+  })
+
+  it('hides the push branch button for a non-coding mission', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, kind: 'research' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
+  })
+
+  it('hides the push branch button when the mission has no branch', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, branch: undefined })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
+  })
+
+  it('stops polling once the mission reaches a terminal phase with no pending permission', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
+      renderPage()
+      // One call on initial mount, one more when the effect re-runs after
+      // `mission` resolves (phase dep flips from undefined to 'done') —
+      // then the terminal branch stops scheduling any further interval.
+      await vi.waitFor(() => expect(getMission).toHaveBeenCalledTimes(2))
+      const callsAtTerminal = vi.mocked(getMission).mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(5000 * 3)
+
+      expect(getMission).toHaveBeenCalledTimes(callsAtTerminal)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders a Result section for a terminal mission with worker-reported evidence', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'done',
+      status: 'done',
+      last_evidence: 'some evidence text',
+    })
+    renderPage()
+    expect(await screen.findByText('Result')).toBeTruthy()
+    expect(screen.getByText('some evidence text')).toBeTruthy()
+  })
+
+  it('omits the Result section for a terminal mission with no evidence', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('Result')).toBeNull()
   })
 })

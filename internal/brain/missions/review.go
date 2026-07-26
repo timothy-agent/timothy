@@ -72,7 +72,16 @@ func ReadArtifacts(workRoot string, artifacts []string) map[string]string {
 			out[rel] = "[not readable: path escapes the workspace]"
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(workRoot, cleaned)) //nolint:gosec // path is workspace-relative, cleaned, and .. / absolute forms are rejected above
+		abs := filepath.Join(workRoot, cleaned)
+		if err := tools.WithinRoot(workRoot, abs); err != nil {
+			if tools.IsViolation(err) {
+				out[rel] = "[not readable: path escapes the workspace]"
+			} else {
+				out[rel] = "[not readable: cannot verify workspace root: " + err.Error() + "]"
+			}
+			continue
+		}
+		b, err := os.ReadFile(abs) //nolint:gosec // path is workspace-relative, cleaned, .. / absolute forms rejected above, and containment re-verified by tools.WithinRoot
 		if err != nil {
 			out[rel] = "[not readable: " + err.Error() + "]"
 			continue

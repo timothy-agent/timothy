@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -137,12 +139,24 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 // MissionUsage totals one mission's ledger footprint — every turn the
 // missions engine ran for it, across all its sessions.
 type MissionUsage struct {
-	MissionID        string  `json:"mission_id"`
-	CostUSD          float64 `json:"cost_usd"`
-	InputTokens      int64   `json:"input_tokens"`
-	OutputTokens     int64   `json:"output_tokens"`
-	Requests         int64   `json:"requests"`
-	UnpricedRequests int64   `json:"unpriced_requests"`
+	MissionID        string      `json:"mission_id"`
+	CostUSD          float64     `json:"cost_usd"`
+	InputTokens      int64       `json:"input_tokens"`
+	OutputTokens     int64       `json:"output_tokens"`
+	Requests         int64       `json:"requests"`
+	UnpricedRequests int64       `json:"unpriced_requests"`
+	Models           []ModelUsed `json:"models"`
+}
+
+// ModelUsed is one provider/model pair actually invoked for a mission
+// — a route is a named fallback chain, not a single model, so this is
+// the only honest answer to "which model ran this," and it can be
+// more than one entry if the chain fell back mid-mission.
+type ModelUsed struct {
+	Provider string    `json:"provider"`
+	Model    string    `json:"model"`
+	Requests int64     `json:"requests"`
+	LastUsed time.Time `json:"last_used"`
 }
 
 func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsage, error) {
@@ -161,7 +175,33 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	if err != nil {
 		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
 	}
+	models, err := a.missionModels(ctx, db, missionID)
+	if err != nil {
+		return MissionUsage{}, err
+	}
+	m.Models = models
 	return m, nil
+}
+
+func (a *Aggregator) missionModels(ctx context.Context, db *pgxpool.Pool, missionID string) ([]ModelUsed, error) {
+	rows, err := db.Query(ctx, `SELECT provider, model, COUNT(*), MAX(ts)
+		FROM cost_ledger
+		WHERE mission_id = $1 AND `+notTest+`
+		GROUP BY provider, model ORDER BY MAX(ts) DESC`, missionID)
+	if err != nil {
+		return nil, fmt.Errorf("usage mission: models: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ModelUsed{}
+	for rows.Next() {
+		var mu ModelUsed
+		if err := rows.Scan(&mu.Provider, &mu.Model, &mu.Requests, &mu.LastUsed); err != nil {
+			return nil, fmt.Errorf("usage mission: models: %w", err)
+		}
+		out = append(out, mu)
+	}
+	return out, rows.Err()
 }
 
 // SessionUsage ranks sessions by spend for the top-N table.

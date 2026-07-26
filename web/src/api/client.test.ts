@@ -3,9 +3,12 @@ import {
   ChatError,
   chatStream,
   createSSEParser,
+  downloadMissionFile,
+  listMissionFiles,
   listProviders,
   listSessions,
   patchBudget,
+  pushMission,
   usageBudget,
 } from './client'
 import type { ChatEvent } from './types'
@@ -192,5 +195,95 @@ describe('listProviders', () => {
 
     expect(p.models).toEqual([])
     expect(p.headers).toEqual({})
+  })
+})
+
+describe('mission artifacts and push', () => {
+  it('lists mission files', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const body = {
+      files: [{ path: 'a.txt', size: 10, mtime: '2026-01-01T00:00:00Z', declared: true }],
+      truncated: false,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await listMissionFiles('m1')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions/m1/files')
+    expect(r).toEqual(body)
+  })
+
+  it('defaults missing files to an empty array', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 })),
+    )
+
+    const r = await listMissionFiles('m1')
+
+    expect(r).toEqual({ files: [], truncated: false })
+  })
+
+  it('pushes a mission branch with the credential ref in the body', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const body = { branch: 'mission/x', remote_host: 'github.com' }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await pushMission('m1', 'ref-x')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/v1/missions/m1/push')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ credential_ref: 'ref-x' })
+    expect(r).toEqual(body)
+  })
+
+  it('downloads a mission file, encoding each path segment and saving via a blob link', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const blob = new Blob(['file contents'])
+    const fetchMock = vi.fn().mockResolvedValue(new Response(blob, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const createObjectURL = vi.fn(() => 'blob:mock-url')
+    const revokeObjectURL = vi.fn()
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(createObjectURL)
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(revokeObjectURL)
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    await downloadMissionFile('m1', 'src/a b.txt')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions/m1/files/src/a%20b.txt')
+    expect(createObjectURL).toHaveBeenCalledWith(blob)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+
+    clickSpy.mockRestore()
+    vi.mocked(URL.createObjectURL).mockRestore?.()
+    vi.mocked(URL.revokeObjectURL).mockRestore?.()
+  })
+
+  it('throws a structured ChatError when the file download fails', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: 'no_workspace', message: 'no workspace' }), {
+          status: 404,
+        }),
+      ),
+    )
+
+    const err = (await downloadMissionFile('m1', 'a.txt').catch((e: unknown) => e)) as ChatError
+    expect(err).toBeInstanceOf(ChatError)
+    expect(err.status).toBe(404)
+    expect(err.code).toBe('no_workspace')
+    expect(err.message).toBe('no workspace')
   })
 })

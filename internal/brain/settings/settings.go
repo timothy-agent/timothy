@@ -39,10 +39,16 @@ const (
 	// ValueSkillsAllowlist restricts the agent to these skill packs
 	// (comma-separated names); empty allows all loaded packs.
 	ValueSkillsAllowlist = "skills_allowlist"
+	// ValueGitAuthorName/ValueGitAuthorEmail set the git identity mission
+	// commits are authored under; empty falls back to the built-in
+	// timothy/timothy@localhost identity.
+	ValueGitAuthorName  = "git_author_name"
+	ValueGitAuthorEmail = "git_author_email"
 )
 
 var knownValueKeys = map[string]bool{
 	ValueTokenBudget: true, ValueSkillsAllowlist: true,
+	ValueGitAuthorName: true, ValueGitAuthorEmail: true,
 }
 
 const cacheTTL = 10 * time.Second

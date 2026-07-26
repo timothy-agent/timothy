@@ -192,6 +192,13 @@ export interface UsagePoint {
 // One mission's total ledger footprint. unpriced_requests counts turns
 // whose cost is unknown (NULL in the ledger) — cost_usd is then a
 // floor, not the whole bill.
+export interface ModelUsed {
+  provider: string
+  model: string
+  requests: number
+  last_used: string
+}
+
 export interface MissionUsage {
   mission_id: string
   cost_usd: number
@@ -199,6 +206,7 @@ export interface MissionUsage {
   output_tokens: number
   requests: number
   unpriced_requests: number
+  models: ModelUsed[]
 }
 
 export interface SessionUsage {
@@ -400,6 +408,7 @@ export interface Mission {
   pending_permission_args?: string
   pending_permission_danger?: string
   pending_permission_rationale?: string
+  last_evidence?: string
   auto_approve_safe: boolean
   schedule_id?: string
   created_at: string
@@ -414,6 +423,16 @@ export interface MissionEvent {
   provenance: string
   fingerprint?: string
   created_at: string
+}
+
+// MissionFile is one entry of a mission workspace's file listing
+// (GET /v1/missions/:id/files). Declared marks files named in the
+// mission's plan artifacts, not the full tree.
+export interface MissionFile {
+  path: string
+  size: number
+  mtime: string
+  declared: boolean
 }
 
 export interface Notification {

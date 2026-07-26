@@ -149,7 +149,8 @@ func TestAggregateMissionUsage(t *testing.T) {
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
 			LatencyMS: 100, Status: "ok", CostUSD: usd(0.20)},
-		// Unpriced turn: cost NULL by design, must count as unpriced.
+		// A fallback to a second model — the whole point of Models: a
+		// route is a chain, not one model, so both must show up.
 		{Provider: aggMarker + "a", Model: "m-local", Route: "coding", MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 40, OutputTokens: 20},
 			LatencyMS: 100, Status: "ok"},
@@ -169,10 +170,23 @@ func TestAggregateMissionUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mission: %v", err)
 	}
-	want := MissionUsage{MissionID: mission, CostUSD: 0.30,
-		InputTokens: 340, OutputTokens: 170, Requests: 3, UnpricedRequests: 1}
-	if got != want {
-		t.Fatalf("Mission = %+v, want %+v", got, want)
+	if got.MissionID != mission || got.CostUSD != 0.30 || got.InputTokens != 340 ||
+		got.OutputTokens != 170 || got.Requests != 3 || got.UnpricedRequests != 1 {
+		t.Fatalf("Mission = %+v, want mission_id=%s cost=0.30 in=340 out=170 requests=3 unpriced=1",
+			got, mission)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("Models = %+v, want 2 distinct provider/model pairs", got.Models)
+	}
+	byModel := map[string]ModelUsed{}
+	for _, mu := range got.Models {
+		byModel[mu.Model] = mu
+	}
+	if mu := byModel["m1"]; mu.Provider != aggMarker+"a" || mu.Requests != 2 {
+		t.Fatalf("Models[m1] = %+v, want provider=%s requests=2", mu, aggMarker+"a")
+	}
+	if mu := byModel["m-local"]; mu.Provider != aggMarker+"a" || mu.Requests != 1 {
+		t.Fatalf("Models[m-local] = %+v, want provider=%s requests=1", mu, aggMarker+"a")
 	}
 
 	// A mission with no ledger rows is all zeros, not an error.
@@ -180,8 +194,8 @@ func TestAggregateMissionUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mission(empty): %v", err)
 	}
-	if empty.Requests != 0 || empty.CostUSD != 0 {
-		t.Fatalf("empty mission = %+v, want zeros", empty)
+	if empty.Requests != 0 || empty.CostUSD != 0 || len(empty.Models) != 0 {
+		t.Fatalf("empty mission = %+v, want zeros and no models", empty)
 	}
 }
 

@@ -138,10 +138,7 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 // per-mission directory — and write_file, so artifact writes never go
 // through destructive-classified shell redirects.
 func missionTools(m Mission) []*tools.Tool {
-	root := m.Worktree
-	if root == "" {
-		root = m.Workspace
-	}
+	root := m.WorkRoot()
 	if root == "" {
 		return nil
 	}
@@ -172,7 +169,11 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 		return "", nil, err
 	}
 	var b strings.Builder
-	parked := false
+	// parked tracks in-flight parks by CallID, not a single flag — a
+	// turn can issue concurrent tool calls (executeAll runs up to
+	// maxParallelTools at once), so a sibling call finishing first must
+	// not be mistaken for the still-blocked destructive one resolving.
+	parked := map[string]bool{}
 	servedModel := ""
 	for ev := range events {
 		switch ev.Type {
@@ -184,25 +185,26 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			}
 		case stream.EventPermissionRequest:
 			if r.parker != nil && ev.Permission != nil {
-				parked = true
+				parked[ev.Permission.CallID] = true
 				r.parker.OnPermissionParked(ctx, req.MissionID, ev.Permission.ID, ev.Permission.Tool,
 					ev.Permission.Args, ev.Permission.Danger, ev.Permission.Rationale)
 			}
 		case stream.EventToolResult:
-			// Any tool result clears a park — resolving the very call
-			// that parked ends it; a parallel call finishing first would
-			// clear early, but Phase 1's worker/reviewer/planner turns
-			// never issue overlapping tool calls, so this stays exact.
-			if parked && r.parker != nil {
-				parked = false
-				r.parker.OnPermissionCleared(ctx, req.MissionID)
+			// Only the specific call that parked clears it — and only
+			// once every parked call in this turn has resolved does the
+			// mission stop reporting a pending permission.
+			if ev.ToolResult != nil && parked[ev.ToolResult.ID] {
+				delete(parked, ev.ToolResult.ID)
+				if len(parked) == 0 && r.parker != nil {
+					r.parker.OnPermissionCleared(ctx, req.MissionID)
+				}
 			}
 		case stream.EventDone:
 			if ev.Meta != nil {
 				servedModel = ev.Meta.Model
 			}
 		case stream.EventError:
-			if parked && r.parker != nil {
+			if len(parked) > 0 && r.parker != nil {
 				r.parker.OnPermissionCleared(ctx, req.MissionID)
 			}
 			return b.String(), sentinelArgs, fmt.Errorf("mission runner: %s", ev.Err.Message)

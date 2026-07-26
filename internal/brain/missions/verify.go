@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 // verifyTimeout bounds one plan unit's verify_cmd.
@@ -85,7 +87,16 @@ func CheckArtifacts(workRoot string, artifacts []string) []string {
 			problems = append(problems, fmt.Sprintf("%s: artifact path escapes the workspace", rel))
 			continue
 		}
-		info, err := os.Stat(filepath.Join(workRoot, cleaned))
+		abs := filepath.Join(workRoot, cleaned)
+		if err := tools.WithinRoot(workRoot, abs); err != nil {
+			if tools.IsViolation(err) {
+				problems = append(problems, fmt.Sprintf("%s: artifact path escapes the workspace", rel))
+			} else {
+				problems = append(problems, fmt.Sprintf("%s: cannot verify workspace root: %v", rel, err))
+			}
+			continue
+		}
+		info, err := os.Stat(abs)
 		switch {
 		case err != nil:
 			problems = append(problems, fmt.Sprintf("%s: not found in the workspace", rel))

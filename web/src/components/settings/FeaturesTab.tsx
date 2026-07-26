@@ -91,6 +91,8 @@ function AgentCard({
 }) {
   const [budget, setBudget] = useState(values.session_token_budget ?? '')
   const [allowlist, setAllowlist] = useState(values.skills_allowlist ?? '')
+  const [gitName, setGitName] = useState(values.git_author_name ?? '')
+  const [gitEmail, setGitEmail] = useState(values.git_author_email ?? '')
   const [saved, setSaved] = useState(false)
 
   const save = () => {
@@ -98,6 +100,8 @@ function AgentCard({
     patchSettingValues({
       session_token_budget: budget.trim(),
       skills_allowlist: allowlist.trim(),
+      git_author_name: gitName.trim(),
+      git_author_email: gitEmail.trim(),
     })
       .then(() => {
         setSaved(true)
@@ -134,6 +138,26 @@ function AgentCard({
             aria-label="Skills allowlist"
           />
         </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Git author name
+          <Input
+            value={gitName}
+            onChange={(e) => setGitName(e.target.value)}
+            placeholder="Your Name"
+            className="w-48"
+            aria-label="Git author name"
+          />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Git author email
+          <Input
+            value={gitEmail}
+            onChange={(e) => setGitEmail(e.target.value)}
+            placeholder="you@example.com"
+            className="w-56"
+            aria-label="Git author email"
+          />
+        </label>
         <Button onClick={save}>Save</Button>
         {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
       </div>
@@ -141,6 +165,10 @@ function AgentCard({
         Budget caps the projected context when the serving model&apos;s window is unknown (a
         known window still wins at 60%). Allowlist restricts which skill packs the agent may
         load; empty allows all.
+      </p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Git author name/email are used for mission commits; set them to your GitHub identity so
+        pushed commits link to your account.
       </p>
     </div>
   )

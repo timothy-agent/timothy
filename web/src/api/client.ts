@@ -15,6 +15,7 @@ import type {
   MemoryItem,
   Mission,
   MissionEvent,
+  MissionFile,
   MissionUsage,
   Notification,
   ProviderHealth,
@@ -713,4 +714,103 @@ export async function listNotifications(): Promise<Notification[]> {
 
 export async function markNotificationRead(id: string): Promise<void> {
   await request<void>(`/v1/notifications/${id}/read`, { method: 'POST' })
+}
+
+// --- mission artifacts + push ---
+
+export async function listMissionFiles(
+  id: string,
+): Promise<{ files: MissionFile[]; truncated: boolean }> {
+  const r = await request<{ files: MissionFile[]; truncated: boolean }>(
+    `/v1/missions/${id}/files`,
+  )
+  return { files: r.files ?? [], truncated: r.truncated ?? false }
+}
+
+// fetchBlobDownload fetches an authenticated binary response and saves
+// it via a programmatic anchor click — plain hrefs can't carry the
+// bearer token from localStorage.
+async function fetchBlobDownload(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let code: string | undefined
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { error?: string; message?: string }
+      code = parsed.error
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `request failed (${res.status})`, code)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fallbackName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
+// downloadMissionFile encodes each path segment individually so
+// filenames containing '/' cannot be mistaken for it (the server
+// mirrors this per-segment scheme on GET /v1/missions/:id/files/*).
+export async function downloadMissionFile(id: string, path: string): Promise<void> {
+  const fallbackName = path.split('/').pop() || path
+  return fetchBlobDownload(`/v1/missions/${id}/files/${encodeFilePath(path)}`, fallbackName)
+}
+
+// missionFilePreviewCap bounds in-app preview: the server always
+// serves the full file (download is uncapped), but rendering a huge
+// file inline would hang the tab, so previews over this size fall
+// back to "download instead" in the UI.
+export const missionFilePreviewCap = 1_000_000
+
+export class MissionFileTooLargeError extends Error {}
+
+// fetchMissionFileBlob reads a mission file's bytes for in-app
+// preview (image/text/markdown) rather than triggering a save — the
+// server forces Content-Type: application/octet-stream on this route
+// deliberately (a worker-authored file could be arbitrary HTML), so
+// callers must render the bytes themselves, never navigate to the URL.
+export async function fetchMissionFileBlob(id: string, path: string): Promise<Blob> {
+  const res = await fetch(`/v1/missions/${id}/files/${encodeFilePath(path)}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) {
+    throw new ChatError(res.status, `request failed (${res.status})`)
+  }
+  const len = res.headers.get('Content-Length')
+  if (len && Number(len) > missionFilePreviewCap) {
+    throw new MissionFileTooLargeError('file too large to preview')
+  }
+  const blob = await res.blob()
+  if (blob.size > missionFilePreviewCap) {
+    throw new MissionFileTooLargeError('file too large to preview')
+  }
+  return blob
+}
+
+export async function downloadMissionArchive(id: string): Promise<void> {
+  return fetchBlobDownload(`/v1/missions/${id}/archive`, `mission-${id.slice(0, 8)}.zip`)
+}
+
+export async function pushMission(
+  id: string,
+  credentialRef: string,
+): Promise<{ branch: string; remote_host: string }> {
+  return request<{ branch: string; remote_host: string }>(`/v1/missions/${id}/push`, {
+    method: 'POST',
+    body: JSON.stringify({ credential_ref: credentialRef }),
+  })
 }

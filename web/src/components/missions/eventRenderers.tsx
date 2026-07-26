@@ -59,8 +59,9 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return `Permission ${String(decision ?? '?')}: ${String(tool ?? 'a tool call')}`
   },
   'mission.paused': (p) => {
-    const { reason } = asRecord(p)
-    return `Paused (${String(reason ?? 'unknown reason')})`
+    const { reason, detail } = asRecord(p)
+    const base = `Paused (${String(reason ?? 'unknown reason')})`
+    return detail ? `${base}: ${String(detail)}` : base
   },
   'mission.resumed': () => 'Resumed',
   'mission.recovery': () => 'Recovered after a restart',
@@ -73,6 +74,14 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.reconciled': (p) => {
     const { canonical_phase } = asRecord(p)
     return `Conflicting outcome reconciled (canonical: ${String(canonical_phase ?? '?')})`
+  },
+  'mission.pushed': (p) => {
+    const { branch, remote_host } = asRecord(p)
+    return `Pushed ${String(branch ?? '?')} to ${String(remote_host ?? '?')}`
+  },
+  'mission.push_failed': (p) => {
+    const { reason } = asRecord(p)
+    return `Push failed: ${String(reason ?? 'unknown reason')}`
   },
 }
 

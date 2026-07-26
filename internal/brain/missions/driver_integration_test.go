@@ -24,7 +24,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	repo := scratchRepo(t)
 	wsRoot := t.TempDir()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	workspace := NewWorkspace(wsRoot, log)
+	workspace := NewWorkspace(wsRoot, nil, log)
 
 	id, err := store.Create(ctx, Mission{Goal: marker + "e2e coding", Kind: "coding", Route: "default", ReviewRoute: "default"})
 	if err != nil {

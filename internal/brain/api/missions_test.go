@@ -9,7 +9,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -19,6 +19,10 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 		{"POST", "/v1/missions/abc/resume"},
 		{"POST", "/v1/missions/abc/cancel"},
 		{"POST", "/v1/missions/abc/permission"},
+		{"GET", "/v1/missions/abc/files"},
+		{"GET", "/v1/missions/abc/files/foo.txt"},
+		{"GET", "/v1/missions/abc/archive"},
+		{"POST", "/v1/missions/abc/push"},
 		{"GET", "/v1/notifications"},
 		{"POST", "/v1/notifications/abc/read"},
 	} {
