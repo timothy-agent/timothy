@@ -498,12 +498,18 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, researchNotes
 		user += "\n\nResearch findings:\n" + NeutralizeSlot(researchNotes)
 	}
 	req := loop.Request{
-		SessionID:  m.SessionID,
-		Route:      m.Route,
-		Agent:      "mission-planner",
-		MissionID:  m.ID,
-		System:     system,
-		Messages:   []provider.Message{{Role: "user", Content: user}},
+		SessionID: m.SessionID,
+		Route:     m.Route,
+		Agent:     "mission-planner",
+		MissionID: m.ID,
+		System:    system,
+		Messages:  []provider.Message{{Role: "user", Content: user}},
+		// The planner plans; it must not act. No base tool matches this
+		// allowlist (submit_plan arrives via ExtraTools, which bypass
+		// it), so the turn's only tool is submit_plan — a planner that
+		// reaches for shell parked a live canary on the permission gate
+		// for ten minutes trying to do the worker's job in plan phase.
+		ToolAllow:  []string{planToolName},
 		ExtraTools: []*tools.Tool{PlanTool()},
 	}
 	text, args, err := r.runTurn(ctx, req, planToolName)

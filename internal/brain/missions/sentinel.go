@@ -81,7 +81,7 @@ func PlanTool() *tools.Tool {
 							"artifacts": {
 								"type": "array",
 								"items": {"type": "string"},
-								"description": "Workspace-relative file path(s) this unit must produce."
+								"description": "Workspace-relative file path(s) this unit must produce. Files only — the harness rejects directories."
 							},
 							"verify_cmd": {
 								"type": "string",

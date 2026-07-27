@@ -82,6 +82,7 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// protocol parked every mission's first turn for nothing.
 			"mission_status": true,
 			"review_verdict": true,
+			"submit_plan":    true,
 			// write_file is root-confined by construction (relative
 			// paths only, .. rejected, root fixed at registration) —
 			// there is nothing for a prompt to guard that the tool

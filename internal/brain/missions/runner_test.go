@@ -275,6 +275,11 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 	if agent.call != 1 {
 		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
 	}
+	// The planner must not act: its only tool is submit_plan, so the
+	// base surface (shell, write_file, ...) is filtered out entirely.
+	if allow := agent.requests[0].ToolAllow; len(allow) != 1 || allow[0] != planToolName {
+		t.Fatalf("planner ToolAllow = %v, want [%s]", allow, planToolName)
+	}
 }
 
 func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
