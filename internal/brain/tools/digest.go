@@ -25,7 +25,7 @@ var errorLineRe = regexp.MustCompile(`(?i)\b(error|fail|failed|failure|panic|fat
 func Digest(content, tool, ref string) string {
 	lines := strings.Split(content, "\n")
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%s output offloaded: %d bytes, %d lines. Full content: retrieve_output {\"ref\": %q}]\n",
+	fmt.Fprintf(&b, "[%s output offloaded: %d bytes, %d lines. To see the full content, call the retrieve_output TOOL (not a shell command) with argument ref=%q.]\n",
 		tool, len(content), len(lines), ref)
 
 	head := lines

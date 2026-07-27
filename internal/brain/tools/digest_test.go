@@ -19,7 +19,8 @@ func TestDigest(t *testing.T) {
 
 	for _, want := range []string{
 		"500 lines",
-		`retrieve_output {"ref": "9be4c1d2-04a7-47a1-a1a9-3f6d2c9f1e10"}`,
+		"retrieve_output TOOL",
+		`ref="9be4c1d2-04a7-47a1-a1a9-3f6d2c9f1e10"`,
 		"line 1 ok",   // head
 		"line 500 ok", // tail
 		"460 lines omitted",
