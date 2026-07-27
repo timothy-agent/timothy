@@ -3,6 +3,7 @@ package extract
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,8 @@ type consolidateStore struct {
 	archived int64
 	decayed  []string
 
-	superseded map[string]string
+	applyMergeErr error
+	superseded    map[string]string
 }
 
 func (s *consolidateStore) NearDupPairs(context.Context, float64) ([][2]string, error) {
@@ -65,12 +67,23 @@ func (s *consolidateStore) Get(_ context.Context, id string) (store.Memory, erro
 	return m, nil
 }
 
-func (s *consolidateStore) Supersede(_ context.Context, oldID, newID string) error {
+// ApplyMerge records the merged fact as inserted and every member as
+// superseded, in one call, mirroring the store's transactional apply.
+func (s *consolidateStore) ApplyMerge(ctx context.Context, m store.Memory, memberIDs []string) (string, error) {
+	if s.applyMergeErr != nil {
+		return "", s.applyMergeErr
+	}
+	id, err := s.Insert(ctx, m)
+	if err != nil {
+		return "", err
+	}
 	if s.superseded == nil {
 		s.superseded = map[string]string{}
 	}
-	s.superseded[oldID] = newID
-	return nil
+	for _, memberID := range memberIDs {
+		s.superseded[memberID] = id
+	}
+	return id, nil
 }
 
 func (s *consolidateStore) ArchiveStaleEpisodic(context.Context, time.Time) (int64, error) {
@@ -99,8 +112,12 @@ func TestConsolidateMergesGroup(t *testing.T) {
 		},
 	}
 	c := NewConsolidator(gw, st, testLog(), Metrics{})
-	if err := c.Run(t.Context()); err != nil {
+	summary, err := c.Run(t.Context())
+	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if summary.Merged != 1 || summary.Rejected != 0 {
+		t.Fatalf("summary = %+v, want Merged:1 Rejected:0", summary)
 	}
 
 	if len(st.inserted) != 1 {
@@ -119,11 +136,10 @@ func TestConsolidateMergesGroup(t *testing.T) {
 	if len(merged.Embedding) == 0 {
 		t.Fatal("merged fact has no embedding")
 	}
-	// The merged fact activates; both members point at it.
-	if len(st.promoted) != 1 {
-		t.Fatalf("promoted = %v, want the merged id", st.promoted)
-	}
-	if len(st.superseded) != 2 || st.superseded["m1"] != st.promoted[0] || st.superseded["m2"] != st.promoted[0] {
+	// The merged fact activates; both members point at it via a single
+	// ApplyMerge call.
+	mergedID := "mem-1"
+	if len(st.superseded) != 2 || st.superseded["m1"] != mergedID || st.superseded["m2"] != mergedID {
 		t.Fatalf("superseded = %v", st.superseded)
 	}
 }
@@ -139,8 +155,12 @@ func TestConsolidateSkipsDissolvedGroups(t *testing.T) {
 		},
 	}
 	c := NewConsolidator(gw, st, testLog(), Metrics{})
-	if err := c.Run(t.Context()); err != nil {
+	summary, err := c.Run(t.Context())
+	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if summary.Merged != 0 || summary.Rejected != 0 {
+		t.Fatalf("dissolved group counted: summary = %+v, want all zero", summary)
 	}
 	if len(st.inserted) != 0 || len(st.superseded) != 0 {
 		t.Fatalf("dissolved group still merged: inserted=%d superseded=%v",
@@ -159,10 +179,119 @@ func TestConsolidateMergeFailureKeepsGroup(t *testing.T) {
 		},
 	}
 	c := NewConsolidator(gw, st, testLog(), Metrics{})
-	if err := c.Run(t.Context()); err != nil {
+	summary, err := c.Run(t.Context())
+	if err != nil {
 		t.Fatalf("Run: %v (stage failures log, they don't fail the pass)", err)
+	}
+	if summary.Merged != 0 || summary.Rejected != 1 {
+		t.Fatalf("summary = %+v, want Merged:0 Rejected:1", summary)
 	}
 	if len(st.inserted) != 0 || len(st.superseded) != 0 {
 		t.Fatal("failed merge still mutated the store")
+	}
+}
+
+func TestMergeGuard(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		members []string
+		merged  string
+		want    string
+	}{
+		{
+			name:    "plausible merge passes",
+			members: []string{"User lives in Porto.", "The user is based in Porto, Portugal."},
+			merged:  "The user lives in Porto, Portugal.",
+			want:    "",
+		},
+		{
+			name:    "drops a significant detail",
+			members: []string{"User was born in 1990 in Lisbon.", "The user grew up in Lisbon."},
+			merged:  "The user is from somewhere.",
+			want:    "token_loss",
+		},
+		{
+			name:    "shrinks below the longest member despite retaining half the tokens",
+			members: []string{"The user deployed version 2.3.4 to production on 2026-07-11 after three days of testing."},
+			merged:  "User 2026 days 2.4.3.11",
+			want:    "shrink",
+		},
+		{
+			name: "bloats with preamble",
+			members: []string{
+				"User lives in Porto.",
+			},
+			merged: "Sure, here is a merged fact reflecting the information you provided about where the user currently resides, " +
+				"which appears to be the beautiful coastal city of Porto in Portugal, a place known for its port wine and river views, " +
+				"and this sentence keeps going just to pad out the length far past any reasonable multiple of the original short fact.",
+			want: "bloat",
+		},
+		{
+			name:    "empty signature set skips token check",
+			members: []string{"a b c"}, // no token >= 4 runes and no digit
+			merged:  "a b c",
+			want:    "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := mergeGuard(tc.members, tc.merged); got != tc.want {
+				t.Fatalf("mergeGuard = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConsolidateGuardRejectKeepsGroup(t *testing.T) {
+	t.Parallel()
+	// The merged reply drops the members' significant detail — the
+	// guard must reject it before ApplyMerge is ever called.
+	gw := &fakeGateway{replies: []string{"The user is from somewhere."}}
+	st := &consolidateStore{
+		pairs: [][2]string{{"m1", "m2"}},
+		memories: map[string]store.Memory{
+			"m1": activeMem("m1", "User was born in 1990 in Lisbon.", 0.9),
+			"m2": activeMem("m2", "The user grew up in Lisbon.", 0.8),
+		},
+	}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.Merged != 0 || summary.Rejected != 1 {
+		t.Fatalf("summary = %+v, want Merged:0 Rejected:1", summary)
+	}
+	if len(st.inserted) != 0 || len(st.superseded) != 0 {
+		t.Fatal("guard-rejected merge still mutated the store")
+	}
+}
+
+func TestConsolidateApplyConflictKeepsGroup(t *testing.T) {
+	t.Parallel()
+	// A plausible merge, but ApplyMerge reports a member changed
+	// underneath the read (wraps ErrNotFound) — classified "conflict",
+	// group kept as-is, no partial mutation.
+	gw := &fakeGateway{replies: []string{"The user lives in Porto, Portugal."}}
+	st := &consolidateStore{
+		pairs: [][2]string{{"m1", "m2"}},
+		memories: map[string]store.Memory{
+			"m1": activeMem("m1", "User lives in Porto.", 0.9),
+			"m2": activeMem("m2", "The user is based in Porto, Portugal.", 0.7),
+		},
+		applyMergeErr: fmt.Errorf("apply merge supersede m1: %w", store.ErrNotFound),
+	}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v (stage failures log, they don't fail the pass)", err)
+	}
+	if summary.Merged != 0 || summary.Rejected != 1 {
+		t.Fatalf("summary = %+v, want Merged:0 Rejected:1", summary)
+	}
+	if len(st.inserted) != 0 || len(st.superseded) != 0 {
+		t.Fatal("conflicting merge still mutated the store")
 	}
 }

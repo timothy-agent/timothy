@@ -206,10 +206,14 @@ func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string,
 	return id, similarity, true, nil
 }
 
-// NearDupPairs returns every pair of active embedded memories whose
-// cosine similarity meets the threshold. The consolidation job builds
-// merge groups from these edges. O(n²) join — fine for a single-user
-// corpus; revisit if the active set grows past tens of thousands.
+// NearDupPairs returns every pair of active embedded memories of the
+// same type whose cosine similarity meets the threshold. The
+// consolidation job builds merge groups from these edges — a
+// semantic+episodic pair never merges, even at similarity 1.0: they
+// answer different questions (a durable fact vs. something that
+// happened) and collapsing them silently loses that distinction.
+// O(n²) join — fine for a single-user corpus; revisit if the active
+// set grows past tens of thousands.
 func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]string, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -219,6 +223,7 @@ func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]strin
 		FROM memories a
 		JOIN memories b ON a.id < b.id
 		WHERE a.status = $1 AND b.status = $1
+		  AND a.type = b.type
 		  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
 		  AND 1 - (a.embedding <=> b.embedding) >= $2`,
 		StatusActive, threshold)
@@ -235,6 +240,78 @@ func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]strin
 		pairs = append(pairs, p)
 	}
 	return pairs, rows.Err()
+}
+
+// ApplyMerge inserts the consolidator's merged fact and supersedes
+// every member in a single transaction: a crash mid-sequence can no
+// longer leave the merged row active alongside still-active members
+// (D-011 double-count). The merged row activates directly — it
+// replaces confirmed knowledge — with last_confirmed_at defaulting to
+// now(). Any member whose Supersede predicate no longer matches (already
+// superseded, or no longer active/pending) aborts the whole tx: the
+// merged content was computed from a stale read, and the deferred
+// Rollback undoes the insert along with every supersede already
+// applied this call.
+func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("apply merge: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("apply merge begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var id string
+	err = tx.QueryRow(ctx, `INSERT INTO memories
+		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence)
+		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9)
+		RETURNING id`,
+		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
+		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("apply merge insert: %w", err)
+	}
+
+	for _, memberID := range memberIDs {
+		tag, err := tx.Exec(ctx, `UPDATE memories
+			SET superseded_by = $2, status = $3
+			WHERE id = $1 AND status IN ($4, $5) AND superseded_by IS NULL`,
+			memberID, id, StatusArchived, StatusActive, StatusPending)
+		if err != nil {
+			return "", fmt.Errorf("apply merge supersede %s: %w", memberID, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return "", fmt.Errorf("apply merge supersede %s: %w", memberID, ErrNotFound)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("apply merge commit: %w", err)
+	}
+	return id, nil
+}
+
+// Confirm bumps an active memory's last_confirmed_at without touching
+// its content — lifecycle metadata, not a fact UPDATE (D-011).
+// Extraction calls it when a proposed fact turns out to be an exact
+// duplicate of an active memory: dropping the duplicate would
+// otherwise discard the confirmation signal entirely.
+func (s *Store) Confirm(ctx context.Context, id string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("confirm memory: %w", err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at = now()
+		WHERE id = $1 AND status = $2`, id, StatusActive)
+	if err != nil {
+		return fmt.Errorf("confirm memory: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("confirm %s: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // ArchiveStaleEpisodic retires active episodic memories neither

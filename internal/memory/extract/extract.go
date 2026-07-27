@@ -31,6 +31,7 @@ type Gateway interface {
 type Storer interface {
 	Insert(ctx context.Context, m store.Memory) (string, error)
 	Promote(ctx context.Context, id string) error
+	Confirm(ctx context.Context, id string) error
 	UpsertEntity(ctx context.Context, typ, name string) (string, error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, ok bool, err error)
 }
@@ -121,6 +122,12 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 				return ids, fmt.Errorf("extract: dedup: %w", err)
 			}
 			if found && sim >= exactDupSimilarity {
+				// Dropping the fact would otherwise lose the
+				// confirmation signal entirely; best-effort, never
+				// fails extraction.
+				if err := e.store.Confirm(ctx, dupID); err != nil {
+					e.log.Warn("confirm on exact duplicate failed; fact still dropped", "of", dupID, "error", err)
+				}
 				e.log.Info("memory dropped as exact duplicate",
 					"of", dupID, "similarity", sim, "session_id", req.SessionID)
 				continue

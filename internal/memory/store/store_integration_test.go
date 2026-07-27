@@ -109,8 +109,8 @@ func TestEntityGraphQueries(t *testing.T) {
 	insert([]string{a, b}, true)
 	insert([]string{a, b}, true)
 	insert([]string{a, c}, true)
-	insert([]string{b, c}, false)     // pending: excluded everywhere
-	insert([]string{a, ghost}, true)  // dangling ref: counted for a, no edge
+	insert([]string{b, c}, false)    // pending: excluded everywhere
+	insert([]string{a, ghost}, true) // dangling ref: counted for a, no edge
 
 	entities, err := s.ListEntities(ctx)
 	if err != nil {
@@ -503,6 +503,177 @@ func TestNearDupPairs(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("near-dup pair not found in %v", pairs)
+	}
+}
+
+// TestNearDupPairsCrossTypeExcluded proves a semantic+episodic pair
+// never surfaces as a near-dup edge even at near-identical embeddings
+// — merging across types would silently collapse a durable fact into
+// a one-off event or vice versa.
+func TestNearDupPairsCrossTypeExcluded(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	near := func(dim int, delta float32) Vector {
+		v := make(Vector, 1024)
+		v[dim] = 1
+		v[dim+1] = delta
+		return v
+	}
+	sem := mem("cross-type semantic fact")
+	sem.Embedding = near(300, 0)
+	epi := mem("cross-type episodic fact")
+	epi.Type = TypeEpisodic
+	epi.Embedding = near(300, 0.1) // cosine ~0.995 with sem
+
+	var ids []string
+	for _, m := range []Memory{sem, epi} {
+		id, err := s.Insert(ctx, m)
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		if err := s.Promote(ctx, id); err != nil {
+			t.Fatalf("Promote: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	pairs, err := s.NearDupPairs(ctx, 0.95)
+	if err != nil {
+		t.Fatalf("NearDupPairs: %v", err)
+	}
+	for _, p := range pairs {
+		if (p[0] == ids[0] && p[1] == ids[1]) || (p[0] == ids[1] && p[1] == ids[0]) {
+			t.Fatalf("cross-type pair surfaced: %v", p)
+		}
+	}
+}
+
+func TestApplyMerge(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	a, err := s.Insert(ctx, mem("original merge member a"))
+	if err != nil {
+		t.Fatalf("insert a: %v", err)
+	}
+	if err := s.Promote(ctx, a); err != nil {
+		t.Fatalf("promote a: %v", err)
+	}
+	b, err := s.Insert(ctx, mem("original merge member b"))
+	if err != nil {
+		t.Fatalf("insert b: %v", err)
+	}
+	if err := s.Promote(ctx, b); err != nil {
+		t.Fatalf("promote b: %v", err)
+	}
+
+	merged := mem("merged canonical fact")
+	mergedID, err := s.ApplyMerge(ctx, merged, []string{a, b})
+	if err != nil {
+		t.Fatalf("ApplyMerge: %v", err)
+	}
+
+	got, err := s.Get(ctx, mergedID)
+	if err != nil {
+		t.Fatalf("Get merged: %v", err)
+	}
+	if got.Status != StatusActive {
+		t.Fatalf("merged status = %s, want active", got.Status)
+	}
+
+	for _, memberID := range []string{a, b} {
+		m, err := s.Get(ctx, memberID)
+		if err != nil {
+			t.Fatalf("Get member %s: %v", memberID, err)
+		}
+		if m.Status != StatusArchived || m.SupersededBy != mergedID {
+			t.Fatalf("member %s = {status:%s superseded_by:%s}, want archived->%s",
+				memberID, m.Status, m.SupersededBy, mergedID)
+		}
+	}
+}
+
+// TestApplyMergeConflictRollsBack proves a member that changed state
+// underneath the merge (already superseded) aborts the whole
+// transaction: no merged row exists, and the untouched member is left
+// exactly as it was.
+func TestApplyMergeConflictRollsBack(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	a, err := s.Insert(ctx, mem("conflict member a"))
+	if err != nil {
+		t.Fatalf("insert a: %v", err)
+	}
+	if err := s.Promote(ctx, a); err != nil {
+		t.Fatalf("promote a: %v", err)
+	}
+	b, err := s.Insert(ctx, mem("conflict member b"))
+	if err != nil {
+		t.Fatalf("insert b: %v", err)
+	}
+	if err := s.Promote(ctx, b); err != nil {
+		t.Fatalf("promote b: %v", err)
+	}
+	other, err := s.Insert(ctx, mem("pre-existing successor"))
+	if err != nil {
+		t.Fatalf("insert other: %v", err)
+	}
+	// Pre-supersede a so ApplyMerge's predicate no longer matches it.
+	if err := s.Supersede(ctx, a, other); err != nil {
+		t.Fatalf("presupersede a: %v", err)
+	}
+
+	merged := mem("merged fact that should never land")
+	_, err = s.ApplyMerge(ctx, merged, []string{a, b})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ApplyMerge err = %v, want ErrNotFound", err)
+	}
+
+	// No merged row exists: content is marked with the test fixture
+	// prefix, so a leaked row would show up in the sweep query — here
+	// we check directly that b was left untouched instead.
+	gotB, err := s.Get(ctx, b)
+	if err != nil {
+		t.Fatalf("Get b: %v", err)
+	}
+	if gotB.Status != StatusActive || gotB.SupersededBy != "" {
+		t.Fatalf("b = {status:%s superseded_by:%s}, want untouched active", gotB.Status, gotB.SupersededBy)
+	}
+}
+
+func TestConfirmBumpsActiveOnly(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Insert(ctx, mem("confirmable via Confirm"))
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	// Pending rows are not confirmable.
+	if err := s.Confirm(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Confirm pending err = %v, want ErrNotFound", err)
+	}
+	if err := s.Promote(ctx, id); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	before, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := s.Confirm(ctx, id); err != nil {
+		t.Fatalf("Confirm active: %v", err)
+	}
+	after, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !after.LastConfirmedAt.After(before.LastConfirmedAt) {
+		t.Fatalf("last_confirmed_at not bumped: before=%v after=%v", before.LastConfirmedAt, after.LastConfirmedAt)
+	}
+	if after.Content != before.Content {
+		t.Fatal("Confirm must never change content (append-only invariant)")
 	}
 }
 

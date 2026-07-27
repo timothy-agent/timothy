@@ -54,13 +54,15 @@ func main() {
 	st := store.New(app.DB, app.Log)
 	extractor := extract.New(gwc, st, app.Log)
 	searcher := retrieval.NewSearcher(app.DB, app.Log)
-	api.Register(app.Server, extractor, searcher, gwc, st, app.Log)
 
 	consolidator := extract.NewConsolidator(gwc, st, app.Log, extract.Metrics{
-		Merges:   app.Metrics.NewCounter("memory_merges_total", "Near-duplicate memory groups merged."),
+		Merges: app.Metrics.NewCounter("memory_merges_total", "Near-duplicate memory groups merged."),
+		Rejects: app.Metrics.NewCounterVec("memory_merge_rejects_total",
+			"Near-duplicate merges rejected by reason.", "reason"),
 		Archived: app.Metrics.NewCounter("memory_archived_total", "Stale episodic memories archived."),
 		Decayed:  app.Metrics.NewCounter("memory_decayed_total", "Stale semantic facts decayed and queued for reconfirmation."),
 	})
+	api.Register(app.Server, extractor, searcher, gwc, st, consolidator, app.Log)
 	go consolidator.RunLoop(ctx, consolidateEvery)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {

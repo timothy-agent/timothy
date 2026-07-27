@@ -129,10 +129,11 @@ func (g *fakeGateway) Embed(_ context.Context, texts []string, _ string) ([][]fl
 
 // fakeStore records pipeline actions.
 type fakeStore struct {
-	inserted []store.Memory
-	promoted []string
-	entities map[string]string
-	nearest  struct {
+	inserted  []store.Memory
+	promoted  []string
+	confirmed []string
+	entities  map[string]string
+	nearest   struct {
 		id  string
 		sim float64
 		ok  bool
@@ -149,6 +150,11 @@ func (s *fakeStore) Insert(_ context.Context, m store.Memory) (string, error) {
 
 func (s *fakeStore) Promote(_ context.Context, id string) error {
 	s.promoted = append(s.promoted, id)
+	return nil
+}
+
+func (s *fakeStore) Confirm(_ context.Context, id string) error {
+	s.confirmed = append(s.confirmed, id)
 	return nil
 }
 
@@ -215,6 +221,10 @@ func TestExtractDropsExactDuplicate(t *testing.T) {
 	}
 	if len(ids) != 0 || len(st.inserted) != 0 {
 		t.Fatalf("exact dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	// Dropping the duplicate must not drop the confirmation signal.
+	if len(st.confirmed) != 1 || st.confirmed[0] != "existing" {
+		t.Fatalf("confirmed = %v, want [existing]", st.confirmed)
 	}
 }
 

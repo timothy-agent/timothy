@@ -2,9 +2,11 @@ package extract
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -28,6 +30,16 @@ const (
 	// before emitting content — 300 would starve the one-sentence
 	// reply the same way extraction's old 1000 cap did.
 	mergeMaxTokens = 2000
+
+	// mergeGuard thresholds. A guard false positive only keeps a
+	// near-dup group as-is (extraction already tolerates that state)
+	// and retries next pass with a fresh LLM sample; a false negative
+	// permanently loses a detail. So each signal is loose and they
+	// reject on OR, the opposite of an AND-gated guard that only
+	// blocks a rewrite outright.
+	guardMinTokenRetention = 0.5
+	guardMinLengthRatio    = 0.4
+	guardMaxLengthRatio    = 4.0
 )
 
 const mergeSystem = `You merge near-duplicate memory entries into ONE canonical fact. Reply with ONLY the merged fact as a single self-contained sentence (absolute dates, full names). Keep every distinct detail; drop only repetition.`
@@ -37,9 +49,7 @@ const mergeSystem = `You merge near-duplicate memory entries into ONE canonical 
 type ConsolidateStore interface {
 	NearDupPairs(ctx context.Context, threshold float64) ([][2]string, error)
 	Get(ctx context.Context, id string) (store.Memory, error)
-	Insert(ctx context.Context, m store.Memory) (string, error)
-	Promote(ctx context.Context, id string) error
-	Supersede(ctx context.Context, oldID, newID string) error
+	ApplyMerge(ctx context.Context, m store.Memory, memberIDs []string) (string, error)
 	ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error)
 	DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error)
 }
@@ -48,8 +58,18 @@ type ConsolidateStore interface {
 // (tests).
 type Metrics struct {
 	Merges   prometheus.Counter
+	Rejects  *prometheus.CounterVec // reason: token_loss|shrink|bloat|conflict|error
 	Archived prometheus.Counter
 	Decayed  prometheus.Counter
+}
+
+// Summary counts one Run pass. RunLoop discards it; the manual
+// trigger endpoint returns it.
+type Summary struct {
+	Merged   int `json:"merged"`
+	Rejected int `json:"rejected"`
+	Archived int `json:"archived"`
+	Decayed  int `json:"decayed"`
 }
 
 // Consolidator is the daily lifecycle job (D-011): merge near-dup
@@ -82,7 +102,7 @@ func (c *Consolidator) RunLoop(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+			if _, err := c.Run(ctx); err != nil && ctx.Err() == nil {
 				c.log.Warn("consolidation pass failed", "error", err)
 			}
 		}
@@ -90,51 +110,96 @@ func (c *Consolidator) RunLoop(ctx context.Context, interval time.Duration) {
 }
 
 // Run executes one full pass. Each stage is independent: a failure in
-// one logs and the others still run.
-func (c *Consolidator) Run(ctx context.Context) error {
+// one logs and the others still run; the returned Summary counts
+// whatever did complete even when err is non-nil.
+func (c *Consolidator) Run(ctx context.Context) (Summary, error) {
+	var summary Summary
 	var errs []string
-	if err := c.mergeNearDups(ctx); err != nil {
+
+	merged, rejected, err := c.mergeNearDups(ctx)
+	summary.Merged, summary.Rejected = merged, rejected
+	if err != nil {
 		errs = append(errs, err.Error())
 	}
-	if err := c.archiveStale(ctx); err != nil {
+
+	archived, err := c.archiveStale(ctx)
+	summary.Archived = archived
+	if err != nil {
 		errs = append(errs, err.Error())
 	}
-	if err := c.decayStale(ctx); err != nil {
+
+	decayed, err := c.decayStale(ctx)
+	summary.Decayed = decayed
+	if err != nil {
 		errs = append(errs, err.Error())
 	}
+
 	if len(errs) > 0 {
-		return fmt.Errorf("consolidate: %s", strings.Join(errs, "; "))
+		return summary, fmt.Errorf("consolidate: %s", strings.Join(errs, "; "))
 	}
-	return nil
+	return summary, nil
 }
 
 // mergeNearDups groups pairwise near-duplicates (union-find over the
 // similarity edges), asks the mini category for one canonical fact
-// per group, and supersedes the members with it.
-func (c *Consolidator) mergeNearDups(ctx context.Context) error {
+// per group, and applies the merges that survive the guard.
+func (c *Consolidator) mergeNearDups(ctx context.Context) (merged, rejected int, err error) {
 	pairs, err := c.store.NearDupPairs(ctx, nearDupSimilarity)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	for _, group := range groupPairs(pairs) {
-		if err := c.mergeGroup(ctx, group); err != nil {
-			c.log.Warn("near-dup group merge failed; group kept as-is", "error", err, "size", len(group))
-			continue
-		}
-		if c.metrics.Merges != nil {
-			c.metrics.Merges.Inc()
+		reject, err := c.mergeGroup(ctx, group)
+		switch {
+		case err != nil:
+			reason := "error"
+			if errors.Is(err, store.ErrNotFound) {
+				reason = "conflict"
+			}
+			c.log.Warn("near-dup group merge failed; group kept as-is, retried next pass",
+				"error", err, "size", len(group), "reason", reason)
+			rejected++
+			if c.metrics.Rejects != nil {
+				c.metrics.Rejects.WithLabelValues(reason).Inc()
+			}
+		case reject == dissolvedGroup:
+			// Fewer than 2 members were still active by the time we
+			// read them — nothing to merge, nothing to count.
+		case reject != "":
+			rejected++
+			if c.metrics.Rejects != nil {
+				c.metrics.Rejects.WithLabelValues(reject).Inc()
+			}
+		default:
+			merged++
+			if c.metrics.Merges != nil {
+				c.metrics.Merges.Inc()
+			}
 		}
 	}
-	return nil
+	return merged, rejected, nil
 }
 
-func (c *Consolidator) mergeGroup(ctx context.Context, ids []string) error {
+// dissolvedGroup is mergeGroup's internal reject sentinel for a group
+// that no longer has 2+ active members by the time it's read — never
+// surfaced as a Rejects metric label, just silently skipped.
+const dissolvedGroup = "dissolved"
+
+// mergeGroup asks the LLM for one canonical fact covering the group,
+// guards the result, and applies the merge transactionally. An empty
+// reject string with a nil error means the merge applied; a non-empty
+// reject means the group was dissolved or the guard rejected the
+// rewrite — either way the group is kept as-is and nothing is
+// counted as an error. A dissolved group (fewer than 2 active
+// members) returns (dissolvedGroup, nil) and counts nothing, same as
+// today.
+func (c *Consolidator) mergeGroup(ctx context.Context, ids []string) (reject string, err error) {
 	members := make([]store.Memory, 0, len(ids))
 	var lines []string
 	for _, id := range ids {
 		m, err := c.store.Get(ctx, id)
 		if err != nil {
-			return err
+			return "", err
 		}
 		// The pair scan and this read race with other supersedes;
 		// only still-active rows join the merge.
@@ -145,39 +210,120 @@ func (c *Consolidator) mergeGroup(ctx context.Context, ids []string) error {
 		lines = append(lines, "- "+m.Content)
 	}
 	if len(members) < 2 {
-		return nil // group dissolved before we got here
+		return dissolvedGroup, nil // group dissolved before we got here
 	}
 
 	merged, err := c.mergedContent(ctx, lines)
 	if err != nil {
-		return err
+		return "", err
 	}
+
+	memberContents := make([]string, len(members))
+	for i, m := range members {
+		memberContents[i] = m.Content
+	}
+	if reason := mergeGuard(memberContents, merged); reason != "" {
+		c.log.Warn("merge rejected by guard; group kept, retried next pass",
+			"reason", reason, "size", len(members))
+		return reason, nil
+	}
+
 	vecs, err := c.gw.Embed(ctx, []string{merged}, "memory-consolidate")
 	if err != nil {
-		return fmt.Errorf("embed merged fact: %w", err)
+		return "", fmt.Errorf("embed merged fact: %w", err)
 	}
 
 	// The merged fact inherits the group's strongest provenance: it
 	// replaces confirmed knowledge, so it activates directly.
 	canonical := members[0]
-	newID, err := c.store.Insert(ctx, store.Memory{
+	memberIDs := make([]string, len(members))
+	for i, m := range members {
+		memberIDs[i] = m.ID
+	}
+	newID, err := c.store.ApplyMerge(ctx, store.Memory{
 		Type: canonical.Type, Content: merged, Embedding: store.Vector(vecs[0]),
 		EntityRefs: unionRefs(members), SourceSession: canonical.SourceSession,
 		SourceSeq: canonical.SourceSeq, Confidence: maxConfidence(members),
-	})
+	}, memberIDs)
 	if err != nil {
-		return err
-	}
-	if err := c.store.Promote(ctx, newID); err != nil {
-		return err
-	}
-	for _, m := range members {
-		if err := c.store.Supersede(ctx, m.ID, newID); err != nil {
-			c.log.Warn("supersede after merge failed", "member", m.ID, "merged", newID, "error", err)
-		}
+		return "", err
 	}
 	c.log.Info("near-dup group merged", "members", len(members), "merged", newID)
-	return nil
+	return "", nil
+}
+
+// sigTokens lowercases s and splits it on runs of non-letter,
+// non-digit characters, keeping tokens that contain a digit (dates,
+// versions, quantities — least paraphrasable) or are at least 4 runes
+// long (a cheap stopword filter).
+func sigTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	var b strings.Builder
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		tok := b.String()
+		b.Reset()
+		hasDigit := strings.ContainsFunc(tok, unicode.IsDigit)
+		if hasDigit || len([]rune(tok)) >= 4 {
+			out[tok] = true
+		}
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
+}
+
+// mergeGuard returns "" when merged plausibly retains the members'
+// information, else a reject reason: "token_loss", "shrink", or
+// "bloat". Accepted limitation: near-dup members already share most
+// tokens, so dropping ONE member's unique detail can still pass token
+// retention — this is a residual LLM-judge-free risk, not something
+// the guard can catch; the reject counters make persistent cases
+// visible instead.
+func mergeGuard(members []string, merged string) string {
+	sig := map[string]bool{}
+	longest := 0
+	for _, m := range members {
+		for t := range sigTokens(m) {
+			sig[t] = true
+		}
+		if n := len([]rune(m)); n > longest {
+			longest = n
+		}
+	}
+
+	if len(sig) > 0 {
+		mergedTokens := sigTokens(merged)
+		retained := 0
+		for t := range sig {
+			if mergedTokens[t] {
+				retained++
+			}
+		}
+		if float64(retained)/float64(len(sig)) < guardMinTokenRetention {
+			return "token_loss"
+		}
+	}
+
+	mergedLen := len([]rune(merged))
+	if longest > 0 {
+		ratio := float64(mergedLen) / float64(longest)
+		if ratio < guardMinLengthRatio {
+			return "shrink"
+		}
+		if ratio > guardMaxLengthRatio {
+			return "bloat"
+		}
+	}
+	return ""
 }
 
 func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (string, error) {
@@ -209,10 +355,10 @@ func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (strin
 	return merged, nil
 }
 
-func (c *Consolidator) archiveStale(ctx context.Context) error {
+func (c *Consolidator) archiveStale(ctx context.Context) (int, error) {
 	n, err := c.store.ArchiveStaleEpisodic(ctx, time.Now().Add(-episodicArchiveAfter))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if n > 0 {
 		c.log.Info("stale episodic memories archived", "count", n)
@@ -220,13 +366,13 @@ func (c *Consolidator) archiveStale(ctx context.Context) error {
 			c.metrics.Archived.Add(float64(n))
 		}
 	}
-	return nil
+	return int(n), nil
 }
 
-func (c *Consolidator) decayStale(ctx context.Context) error {
+func (c *Consolidator) decayStale(ctx context.Context) (int, error) {
 	ids, err := c.store.DecayStaleSemantic(ctx, time.Now().Add(-semanticDecayAfter), decayFactor, decayBatch)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(ids) > 0 {
 		c.log.Info("stale semantic facts decayed; queued for reconfirmation", "count", len(ids))
@@ -234,7 +380,7 @@ func (c *Consolidator) decayStale(ctx context.Context) error {
 			c.metrics.Decayed.Add(float64(len(ids)))
 		}
 	}
-	return nil
+	return len(ids), nil
 }
 
 // groupPairs unions similarity edges into merge groups (size >= 2),

@@ -36,16 +36,17 @@ type Embedder interface {
 
 // API serves memoryd's routes.
 type API struct {
-	ext    Extractor
-	search Searcher
-	embed  Embedder
-	store  Manager
-	log    *slog.Logger
+	ext         Extractor
+	search      Searcher
+	embed       Embedder
+	store       Manager
+	consolidate ConsolidateRunner
+	log         *slog.Logger
 }
 
 // Register mounts the routes.
-func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embedder, st Manager, log *slog.Logger) {
-	a := &API{ext: ext, search: search, embed: embed, store: st, log: log}
+func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embedder, st Manager, consolidate ConsolidateRunner, log *slog.Logger) {
+	a := &API{ext: ext, search: search, embed: embed, store: st, consolidate: consolidate, log: log}
 	srv.Handle("POST /v1/extract", http.HandlerFunc(a.handleExtract))
 	srv.Handle("POST /v1/retrieve", http.HandlerFunc(a.handleRetrieve))
 	srv.Handle("GET /v1/memories", http.HandlerFunc(a.handleList))
@@ -54,6 +55,7 @@ func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embe
 	srv.Handle("GET /v1/memories/{id}/chain", http.HandlerFunc(a.handleChain))
 	srv.Handle("GET /v1/entities/graph", http.HandlerFunc(a.handleEntityGraph))
 	srv.Handle("GET /v1/entities/{id}/memories", http.HandlerFunc(a.handleEntityMemories))
+	srv.Handle("POST /v1/consolidate", http.HandlerFunc(a.handleConsolidate))
 }
 
 // handleExtract runs extraction synchronously and returns the inserted
