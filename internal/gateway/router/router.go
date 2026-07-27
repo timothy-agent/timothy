@@ -41,6 +41,11 @@ type ProviderRow struct {
 	CredentialRef string
 	Headers       map[string]string
 	Enabled       bool
+	// ExcludeFromBootstrap opts this provider out of BootstrapChain's
+	// auto-fallback fill — for a local/dev provider (e.g. Ollama) that
+	// should never be silently appended as a fallback on the shared
+	// default/summarize/embedding routes production mission traffic runs on.
+	ExcludeFromBootstrap bool
 }
 
 // ChainEntry is one step of a route chain.

@@ -25,6 +25,9 @@ var bootstrapRoutes = map[string]string{
 // as the LAST entry — existing priority order is never reordered or
 // removed, so hand-tuned chains only ever gain a fallback.
 func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry) map[string][]ChainEntry {
+	if p.ExcludeFromBootstrap {
+		return nil
+	}
 	out := map[string][]ChainEntry{}
 	for route, needed := range bootstrapRoutes {
 		model, ok := cheapestCapable(p.Models, needed)

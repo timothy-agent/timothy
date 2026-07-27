@@ -653,6 +653,70 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	}
 }
 
+// TestCreateExcludeFromBootstrapSkipsFixedRoutes covers the fix for a
+// real incident: a local Ollama provider auto-bootstrapped onto the
+// shared "default" route, and a cloud-outage failover silently served
+// a mission turn with a below-floor local model. A provider created
+// with exclude_from_bootstrap=true must never touch default/summarize/
+// embedding's chains, however cheap or capable its models are.
+func TestCreateExcludeFromBootstrapSkipsFixedRoutes(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+
+	type saved struct {
+		chain   []byte
+		enabled bool
+	}
+	origs := map[string]saved{}
+	for _, name := range []string{"default", "summarize", "embedding"} {
+		var s saved
+		if err := db.QueryRow(ctx, `SELECT chain, enabled FROM routes WHERE name = $1`, name).Scan(&s.chain, &s.enabled); err != nil {
+			t.Fatalf("read %s route: %v", name, err)
+		}
+		origs[name] = s
+	}
+	defer func() {
+		for name, s := range origs {
+			if _, err := db.Exec(ctx, `UPDATE routes SET chain = $2, enabled = $3 WHERE name = $1`, name, s.chain, s.enabled); err != nil {
+				t.Errorf("restore %s route: %v", name, err)
+			}
+		}
+	}()
+
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "excluded", Kind: "api", Driver: "openaicompat",
+		BaseURL: "http://ollama.invalid:11434", DefaultModel: "qwen2.5:7b",
+		ExcludeFromBootstrap: true,
+		Models: []router.ModelInfo{
+			{ID: "qwen2.5:7b", Capabilities: []string{"chat"}, Prices: &router.ModelPrices{InputPerMTok: 0}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	routes, err := adm.Routes(ctx)
+	if err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	for _, r := range routes {
+		for _, entry := range r.Chain {
+			if entry.ProviderID == id {
+				t.Fatalf("route %s chain = %+v, want excluded provider %s absent from every fixed route", r.Name, r.Chain, id)
+			}
+		}
+	}
+
+	got, err := adm.get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.ExcludeFromBootstrap {
+		t.Fatal("ExcludeFromBootstrap round-tripped as false, want true")
+	}
+}
+
 func TestSecretExternalBackendConfig(t *testing.T) {
 	adm, _, _ := testAdmin(t)
 	ctx := t.Context()

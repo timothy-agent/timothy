@@ -123,6 +123,18 @@ func TestBootstrapChainNeverMutatesExistingSlice(t *testing.T) {
 	}
 }
 
+func TestBootstrapChainExcludedProviderYieldsNoUpdates(t *testing.T) {
+	p := ProviderRow{ID: "ollama", ExcludeFromBootstrap: true, Models: []ModelInfo{
+		priced("qwen2.5:7b", 0, "chat"),
+	}}
+
+	got := BootstrapChain(p, map[string][]ChainEntry{})
+
+	if got != nil {
+		t.Fatalf("BootstrapChain(excluded) = %+v, want nil (no route touched)", got)
+	}
+}
+
 func TestBootstrapChainIgnoresResearchRoute(t *testing.T) {
 	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("m", 1, "chat")}}
 
