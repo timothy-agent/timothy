@@ -25,7 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
-	"github.com/SumonMSelim/timothy/internal/brain/sandbox"
+	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -166,17 +166,18 @@ func main() {
 		go runConnectorReload(ctx, conns, app.Log)
 	}
 
-	// Fail closed: an operator who set MISSION_SANDBOX_IMAGE opted into
-	// sandboxed execution, so a manager that cannot initialize (daemon
-	// unreachable, workspace mount unresolvable) must stop the service
-	// loudly — silently falling back to executing model-authored
-	// commands inside brain's own process would defeat the whole point.
-	// A missing image is deliberately NOT fatal: the health check below
-	// reports it, and building it needs no brain restart.
-	missionSandbox, sberr := sandbox.NewManager(ctx, os.Getenv("MISSION_SANDBOX_IMAGE"), app.Log)
-	if sberr != nil {
-		fmt.Fprintln(os.Stderr, sberr)
-		os.Exit(1)
+	// SANDBOXD_URL empty (MISSION_SANDBOX_IMAGE unset in compose) keeps a
+	// nil client and the original in-process exec fallback — same
+	// nil-able-dependency convention as every other optional brain
+	// dependency. Unlike the old direct-socket path, brain itself can no
+	// longer fail closed on a Docker problem: that fail-closed behavior
+	// moved to sandboxd's own boot (it holds the socket now), and a
+	// sandboxd that's unreachable or degraded surfaces here as a
+	// degraded health check, with missions failing as infra at exec
+	// time instead of brain refusing to start.
+	var missionSandbox *sandboxclient.Client
+	if sandboxdURL := os.Getenv("SANDBOXD_URL"); sandboxdURL != "" {
+		missionSandbox = sandboxclient.New(sandboxdURL)
 	}
 
 	missionStore, missionDriver, missionNotifier, missionWorkspace := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, app.Log)
@@ -191,11 +192,8 @@ func main() {
 	}
 	if missionSandbox != nil {
 		app.AddCheck("sandbox", func() httpserver.Check {
-			if err := missionSandbox.Ping(ctx); err != nil {
-				return httpserver.Check{Status: "degraded", Detail: "docker daemon unreachable: " + err.Error()}
-			}
-			if err := missionSandbox.CheckImage(ctx); err != nil {
-				return httpserver.Check{Status: "degraded", Detail: "sandbox image not found: " + err.Error()}
+			if err := missionSandbox.Health(ctx); err != nil {
+				return httpserver.Check{Status: "degraded", Detail: err.Error()}
 			}
 			return httpserver.Check{Status: "ok"}
 		})
@@ -311,7 +309,7 @@ const missionWorkSlotMax = 4
 // missions stay entirely inert — no goroutines started, nothing
 // scheduled, the API surface unmounted (registerMissions 404s on a nil
 // store).
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandbox.Manager, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -334,9 +332,10 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		}
 	}
 	// sandboxMgr non-nil routes model-authored command execution (the
-	// worker/reviewer shell, verify_cmd) OUT of brain's own process into
-	// a per-mission Docker container; nil (MISSION_SANDBOX_IMAGE unset)
-	// keeps the original in-process exec.CommandContext behavior.
+	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
+	// through sandboxd, into a per-mission Docker container; nil
+	// (SANDBOXD_URL unset) keeps the original in-process
+	// exec.CommandContext behavior.
 	var sandboxExec func(context.Context, string, string, string, time.Duration, io.Writer) (int, error)
 	if sandboxMgr != nil {
 		sandboxExec = sandboxMgr.Exec

@@ -1,11 +1,12 @@
-// Package sandbox drives per-mission Docker containers that execute
+// Package sandboxd drives per-mission Docker containers that execute
 // model-authored shell commands (mission worker/reviewer shell calls,
 // verify_cmd) OUTSIDE brain's own process — so a command never inherits
 // brain's environment (DATABASE_URL, TIMOTHY_MASTER_KEY, API tokens)
 // or reaches brain's filesystem/binaries. Harness-authored git
 // operations stay in brain; only model/plan-authored commands route
-// here.
-package sandbox
+// here. The Docker socket lives only in this service — brain reaches
+// it exclusively through sandboxclient's narrow HTTP API.
+package sandboxd
 
 import (
 	"context"
@@ -73,6 +74,12 @@ const (
 // ErrDisabled is returned by every Manager method when no image was
 // configured — callers check this to fall back to in-process exec.
 var ErrDisabled = errors.New("sandbox: not configured")
+
+// ErrTimeout wraps Exec's two timeout-return paths so the HTTP handler
+// can classify a timeout (SSE event: error, code "timeout") separately
+// from every other infrastructure failure via errors.Is, without
+// string-matching the error text.
+var ErrTimeout = errors.New("sandbox: command timed out")
 
 // Manager creates, reuses, and tears down one Docker container per
 // mission on the same Docker daemon brain itself runs under (driven via
@@ -370,7 +377,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 			if ctx.Err() != nil {
 				return 0, ctx.Err()
 			}
-			return 0, fmt.Errorf("command timed out after %s", timeout)
+			return 0, fmt.Errorf("command timed out after %s: %w", timeout, ErrTimeout)
 		case now := <-poll.C:
 			if !execDone {
 				cur, ierr := m.cli.ExecInspect(cctx, created.ID, client.ExecInspectOptions{})
@@ -394,7 +401,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 		}
 	}
 	if insp.ExitCode == timeoutExitCode {
-		return timeoutExitCode, fmt.Errorf("command timed out after %s", timeout)
+		return timeoutExitCode, fmt.Errorf("command timed out after %s: %w", timeout, ErrTimeout)
 	}
 	return insp.ExitCode, nil
 }
@@ -417,36 +424,28 @@ func (m *Manager) Remove(ctx context.Context, missionID string) error {
 	return nil
 }
 
-// Sweep force-removes every sandbox container whose mission is
-// terminal (or no longer known) according to isTerminal, given the
-// mission id encoded in the timothy.mission label. Meant to run once
-// at boot and on the existing periodic sweep tick — the day-to-day path
-// is Remove at each mission's own terminal transition; this is the
-// backstop for missions that terminated (or were deleted) while brain
-// was down.
-func (m *Manager) Sweep(ctx context.Context, isTerminal func(missionID string) bool) error {
+// List returns the mission id (the timothy.mission label's value) of
+// every sandbox container that exists, running or not. The caller
+// (brain's sandboxclient.Sweep) filters this against its own
+// terminal-mission knowledge and deletes what it decides is safe to
+// remove — this package holds no Postgres state to make that call
+// itself.
+func (m *Manager) List(ctx context.Context) ([]string, error) {
 	if m == nil {
-		return ErrDisabled
+		return nil, ErrDisabled
 	}
 	result, err := m.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: make(client.Filters).Add("label", missionLabel),
 	})
 	if err != nil {
-		return fmt.Errorf("sandbox: sweep: list: %w", err)
+		return nil, fmt.Errorf("sandbox: list: %w", err)
 	}
+	ids := make([]string, 0, len(result.Items))
 	for _, c := range result.Items {
-		missionID := c.Labels[missionLabel]
-		if missionID == "" || !isTerminal(missionID) {
-			continue
+		if missionID := c.Labels[missionLabel]; missionID != "" {
+			ids = append(ids, missionID)
 		}
-		if _, err := m.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
-			m.log.Warn("sandbox: sweep remove failed", "mission_id", missionID, "container_id", c.ID, "error", err)
-			continue
-		}
-		m.mu.Lock()
-		delete(m.locks, missionID)
-		m.mu.Unlock()
 	}
-	return nil
+	return ids, nil
 }

@@ -21,32 +21,34 @@ const (
 	recoverWorkingRetryDelay = 2 * time.Second
 )
 
-// sandboxSweeper is the narrow slice of *sandbox.Manager the boot-time
-// orphan pass needs — kept as an interface (not an import of the
-// sandbox package) for the same reason as Driver's sandboxRemover: no
-// compile-time dependency on Docker from this package.
+// sandboxSweeper is the narrow slice of the sandbox backend the
+// periodic orphan pass needs — kept as an interface (not an import of
+// sandboxd or sandboxclient) for the same reason as Driver's
+// sandboxRemover: no compile-time dependency on Docker from this
+// package.
 type sandboxSweeper interface {
 	Sweep(ctx context.Context, isTerminal func(missionID string) bool) error
 }
 
 // RecoverAndSweep runs the boot-time recovery pass once (re-Drives any
-// mission left status='working' from a prior process's crash), sweeps
-// any sandbox container whose mission is terminal or unknown (the
-// day-to-day path is Driver removing its own mission's container at
-// its terminal transition; this is the backstop for missions that
-// terminated, or were deleted, while brain was down), then runs the
-// periodic work-slot sweep until ctx is done. This is the one entry
-// point cmd/brain/main.go needs — it owns the Driver, which carries
-// its own Store reference. sandbox may be nil (MISSION_SANDBOX_IMAGE
-// unset), in which case the container sweep is skipped entirely.
+// mission left status='working' from a prior process's crash), then
+// runs the periodic work-slot sweep until ctx is done — which now also
+// sweeps orphaned sandbox containers on the same tick (see
+// runWorkSlotSweep). This is the one entry point cmd/brain/main.go
+// needs — it owns the Driver, which carries its own Store reference.
+// sandbox may be nil (SANDBOXD_URL unset), in which case the container
+// sweep is skipped entirely.
 func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, log *slog.Logger) {
 	recoverWorking(ctx, d, store, log)
-	sweepOrphanSandboxes(ctx, store, sandbox, log)
-	runWorkSlotSweep(ctx, d, store, maxConcurrent, log)
+	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, log)
 }
 
-// sweepOrphanSandboxes runs once at boot. A mission is terminal (safe
-// to remove its container) if it doesn't exist at all (deleted) or its
+// sweepOrphanSandboxes runs on every runWorkSlotSweep tick (previously
+// boot-only — fixes a pre-existing race where a straggler exec racing
+// a mission's own terminal-transition Remove could recreate a
+// container that then lived until the next brain restart; a 30s-later
+// retry now cleans it up instead). A mission is terminal (safe to
+// remove its container) if it doesn't exist at all (deleted) or its
 // Phase reports Terminal(); everything else — including phases this
 // process doesn't recognize — is left alone, since removing a live
 // mission's container out from under it is far worse than leaving an
@@ -104,9 +106,10 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 
 // runWorkSlotSweep retries missions parked idle over the work-slot cap
 // every workSlotSweepInterval via ClaimWorkSlot, kicking off a Drive
-// for whichever gets claimed. Runs until ctx is done — this call
-// blocks, so RecoverAndSweep's caller runs it in its own goroutine.
-func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, log *slog.Logger) {
+// for whichever gets claimed, and sweeps orphaned sandbox containers on
+// the same tick. Runs until ctx is done — this call blocks, so
+// RecoverAndSweep's caller runs it in its own goroutine.
+func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, log *slog.Logger) {
 	ticker := time.NewTicker(workSlotSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -114,6 +117,7 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			sweepOrphanSandboxes(ctx, store, sandbox, log)
 			id, ok, err := store.ClaimWorkSlot(ctx, maxConcurrent)
 			if err != nil {
 				log.Error("work slot sweep: claim failed", "error", err)

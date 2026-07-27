@@ -1,6 +1,6 @@
 //go:build integration
 
-package sandbox
+package sandboxd
 
 import (
 	"bytes"

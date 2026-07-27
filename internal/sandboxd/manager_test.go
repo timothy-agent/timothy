@@ -1,4 +1,4 @@
-package sandbox
+package sandboxd
 
 import (
 	"bytes"
@@ -256,8 +256,8 @@ func TestManagerDisabledReturnsErrDisabled(t *testing.T) {
 	if err := mgr.Remove(ctx, "m1"); err != ErrDisabled {
 		t.Errorf("Remove on nil manager = %v, want ErrDisabled", err)
 	}
-	if err := mgr.Sweep(ctx, func(string) bool { return true }); err != ErrDisabled {
-		t.Errorf("Sweep on nil manager = %v, want ErrDisabled", err)
+	if _, err := mgr.List(ctx); err != ErrDisabled {
+		t.Errorf("List on nil manager = %v, want ErrDisabled", err)
 	}
 }
 
