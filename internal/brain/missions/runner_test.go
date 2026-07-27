@@ -259,7 +259,7 @@ func TestRunReviewRecoversWhenVerdictMissingThenPresent(t *testing.T) {
 
 func TestPlanSessionParsesSpec(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{textEvent(`{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -272,11 +272,15 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 	if spec.Units[0].Passes {
 		t.Fatal("PlanSession must never trust a planner-claimed passes=true — only RunVerify may set it")
 	}
+	if agent.call != 1 {
+		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
+	}
 }
 
 func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{textEvent(`{"units":[]}`)},
+		{toolEndEvent(planToolName, `{"units":[]}`)},
+		{toolEndEvent(planToolName, `{"units":[]}`)},
 	}}
 	r := newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, ""); err == nil {
@@ -287,10 +291,42 @@ func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 func TestPlanSessionRejectsMalformedJSON(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("I think the plan should have a few steps but I won't format it as JSON")},
+		{textEvent("still no tool call")},
 	}}
 	r := newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, ""); err == nil {
 		t.Fatal("PlanSession accepted non-JSON output")
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+}
+
+// TestPlanSessionRecoversWithFeedback confirms a missing/invalid
+// submit_plan call on the first turn gets ONE recovery re-run whose
+// injected message names what was wrong — not a byte-identical retry
+// of the original prompt, which previously produced the same failure
+// every time against a nondeterministic model.
+func TestPlanSessionRecoversWithFeedback(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("here's my plan in prose, no tool call")},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Fix it","verify_cmd":"true"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 1 || spec.Units[0].Title != "Fix it" {
+		t.Fatalf("PlanSession spec = %+v", spec)
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+	recoverReq := agent.requests[1]
+	last := recoverReq.Messages[len(recoverReq.Messages)-1]
+	if !strings.Contains(last.Content, "did not call submit_plan") {
+		t.Fatalf("recovery message = %q, want it to name the failure", last.Content)
 	}
 }
 

@@ -485,26 +485,67 @@ func renderReviewContent(p ReviewPacket) string {
 }
 
 // PlanSession runs the planning turn that produces a Spec from the
-// mission's goal and research-phase findings.
+// mission's goal and research-phase findings. The plan is forced
+// through the submit_plan tool call (mirroring RunWorker/RunReview's
+// sentinel ladder) rather than asked for as bare JSON prose — a model
+// free to preface its reply with prose was the root cause of a real
+// stuck mission (5 straight "invalid plan JSON" failures, identical
+// each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error) {
-	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. Reply with ONLY a JSON object: {\"units\":[{\"title\":\"...\",\"artifacts\":[\"relative/path.md\"],\"verify_cmd\":\"...\"}]}. artifacts lists the workspace-relative file(s) the unit must produce — the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace." + r.execEnvironmentNote()
+	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. artifacts lists the workspace-relative file(s) the unit must produce — the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote()
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if researchNotes != "" {
 		user += "\n\nResearch findings:\n" + NeutralizeSlot(researchNotes)
 	}
 	req := loop.Request{
-		SessionID: m.SessionID,
-		Route:     m.Route,
-		Agent:     "mission-planner",
-		MissionID: m.ID,
-		System:    system,
-		Messages:  []provider.Message{{Role: "user", Content: user}},
+		SessionID:  m.SessionID,
+		Route:      m.Route,
+		Agent:      "mission-planner",
+		MissionID:  m.ID,
+		System:     system,
+		Messages:   []provider.Message{{Role: "user", Content: user}},
+		ExtraTools: []*tools.Tool{PlanTool()},
 	}
-	text, _, err := r.runTurn(ctx, req, "")
+	text, args, err := r.runTurn(ctx, req, planToolName)
 	if err != nil {
 		return Spec{}, err
 	}
-	return parseSpec(text)
+	if len(args) > 0 {
+		if spec, specErr := parseSpec(string(args)); specErr == nil {
+			return spec, nil
+		}
+	}
+
+	// Recovery re-run: either the tool call was missing entirely, or its
+	// arguments didn't decode as a valid Spec — either way, tell the
+	// model exactly what was wrong instead of silently repeating the
+	// identical prompt (which previously produced the identical failure
+	// on every retry).
+	var recoverReason string
+	if len(args) == 0 {
+		recoverReason = "you did not call submit_plan"
+	} else if _, specErr := parseSpec(string(args)); specErr != nil {
+		recoverReason = specErr.Error()
+	}
+	recoverReq := req
+	recoverReq.Messages = append(append([]provider.Message{}, req.Messages...),
+		provider.Message{Role: "assistant", Content: text},
+		provider.Message{Role: "user", Content: "[system] Your last turn did not produce a usable plan: " + recoverReason + ". You must end this turn with exactly one submit_plan tool call."},
+	)
+	recoverText, recoverArgs, err := r.runTurn(ctx, recoverReq, planToolName)
+	if err != nil {
+		return Spec{}, err
+	}
+	if len(recoverArgs) == 0 {
+		r.log.Warn("mission planner ended without a submit_plan call", "mission_id", m.ID, "text", text, "recover_text", recoverText)
+		return Spec{}, fmt.Errorf("mission runner: planner ended without a submit_plan call")
+	}
+	spec, err := parseSpec(string(recoverArgs))
+	if err != nil {
+		r.log.Warn("mission planner submitted an invalid plan twice", "mission_id", m.ID, "text", text, "recover_text", recoverText, "error", err)
+		return Spec{}, err
+	}
+	return spec, nil
 }
 
 // execEnvironmentNote tells the planner what execution environment

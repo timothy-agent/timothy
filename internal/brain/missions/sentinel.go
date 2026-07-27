@@ -54,6 +54,52 @@ func MissionStatusTool() *tools.Tool {
 	}
 }
 
+// planToolName is the planner's end-of-turn sentinel call — forcing
+// the plan through a tool call (like mission_status and review_verdict
+// already do) instead of asking the model to reply with bare JSON
+// prose eliminates the fence-stripping fragility that caused plans to
+// fail on stray prose or wrapping the model's provider doesn't emit
+// consistently.
+const planToolName = "submit_plan"
+
+// PlanTool defines the planner's one tool call — registered per-turn
+// via loop.Request.ExtraTools, never in the shared agent tool surface.
+func PlanTool() *tools.Tool {
+	return &tools.Tool{
+		Name:        planToolName,
+		Description: "Submit the mission plan. Call this exactly once, as your final action.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"units": {
+					"type": "array",
+					"description": "The smallest ordered list of verifiable units that achieves the goal.",
+					"items": {
+						"type": "object",
+						"properties": {
+							"title": {"type": "string", "description": "One-line summary of the unit."},
+							"artifacts": {
+								"type": "array",
+								"items": {"type": "string"},
+								"description": "Workspace-relative file path(s) this unit must produce."
+							},
+							"verify_cmd": {
+								"type": "string",
+								"description": "A real POSIX shell command, run as /bin/sh -c \"<verify_cmd>\" in the mission's workspace, that checks the CONTENT of the artifacts."
+							}
+						},
+						"required": ["title", "verify_cmd"]
+					}
+				}
+			},
+			"required": ["units"]
+		}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "plan recorded", nil
+		},
+	}
+}
+
 // WorkerVerdict is the parsed mission_status call.
 type WorkerVerdict struct {
 	Outcome  string // done | retry | blocked
