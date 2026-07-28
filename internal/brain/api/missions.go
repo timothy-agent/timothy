@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -78,8 +79,29 @@ func failMission(w http.ResponseWriter, err error) {
 	}
 }
 
+// list serves GET /v1/missions, optionally narrowed by ?schedule_id=
+// (a recurring schedule's fire history: every mission it spawned)
+// and/or ?limit= (a positive result cap). Both are ignored when
+// empty/absent — the original "every mission" behavior — and a
+// malformed value is a 400 rather than a silently-empty filter.
 func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.List(r.Context())
+	var filter missions.ListFilter
+	if v := r.URL.Query().Get("schedule_id"); v != "" {
+		if !validSessionID(v) {
+			jsonError(w, http.StatusBadRequest, "bad_request", "schedule_id must be a UUID")
+			return
+		}
+		filter.ScheduleID = v
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			jsonError(w, http.StatusBadRequest, "bad_request", "limit must be a positive integer")
+			return
+		}
+		filter.Limit = n
+	}
+	rows, err := h.store.List(r.Context(), filter)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "missions_failed", err.Error())
 		return

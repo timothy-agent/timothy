@@ -69,6 +69,7 @@ type driverStore interface {
 	ApplyTransition(ctx context.Context, id string, t Transition) error
 	AppendEvent(ctx context.Context, id, kind string, payload map[string]any) error
 	SetSpec(ctx context.Context, id string, spec Spec) error
+	SetSession(ctx context.Context, id, sessionID string) error
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	AppendProgress(ctx context.Context, id, note string) error
@@ -106,6 +107,12 @@ type Driver struct {
 	// in-process fallback (MISSION_SANDBOX_IMAGE unset).
 	sandboxExec   sandboxExec
 	sandboxRemove sandboxRemover
+
+	// resolveAgent resolves a mission's agent_id to its
+	// ApprovalAllowlist at provisioning time (see SetAgentResolver) —
+	// nil-safe: unset means no allowlist grants, same as before this
+	// existed.
+	resolveAgent AgentResolver
 
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
@@ -146,6 +153,15 @@ func (d *Driver) SetSandbox(exec sandboxExec, remove sandboxRemover) {
 	d.sandboxExec, d.sandboxRemove = exec, remove
 }
 
+// SetAgentResolver wires the resolver ensureProvisioned uses to grant
+// each of a mission's agent's ApprovalAllowlist tools at provisioning
+// time — a setter (not a NewDriver parameter) because cmd/brain/main.go
+// builds the Driver before it builds the agents.Store the resolver
+// closes over.
+func (d *Driver) SetAgentResolver(resolve AgentResolver) {
+	d.resolveAgent = resolve
+}
+
 // removeSandbox best-effort tears down a mission's sandbox container in
 // the background — a slow or unreachable daemon must never block the
 // terminal state transition (or the notify that follows it), only log
@@ -167,54 +183,21 @@ func (d *Driver) removeSandbox(id string) {
 	}()
 }
 
-// Create opens the mission's hidden bookkeeping session, inserts the
-// mission row, provisions its workspace (a git worktree for coding
-// missions, a plain directory otherwise), and kicks off the first
-// Drive in a background goroutine — callers (the API's create handler)
-// get the new id back immediately without waiting on the mission to
-// actually run.
+// Create inserts the mission row bare (no session, no workspace yet),
+// then calls ensureProvisioned to give it both — the exact same
+// provisioning step Advance calls lazily for a mission that reached
+// the store some other way (scheduler.go's createFromTemplate). Kicks
+// off the first Drive in a background goroutine — callers (the API's
+// create handler) get the new id back immediately without waiting on
+// the mission to actually run.
 func (d *Driver) Create(ctx context.Context, m Mission, repoPath string) (string, error) {
-	if d.sessions != nil {
-		sessionID, err := d.sessions.Create(ctx, "")
-		if err != nil {
-			return "", fmt.Errorf("driver: create: session: %w", err)
-		}
-		m.SessionID = sessionID
-		if m.AutoApproveSafe && d.perms != nil {
-			// Best-effort: a failed grant just means the mission asks on
-			// its first safe shell call instead of running unattended —
-			// degraded autonomy, not a broken mission.
-			if err := d.perms.Grant(ctx, sessionID, "shell", "*", missionGrantTTL); err != nil {
-				d.log.Warn("driver: create: auto-approve grant failed", "mission_id", m.ID, "error", err)
-			}
-		}
-	}
 	id, err := d.store.Create(ctx, m)
 	if err != nil {
 		return "", fmt.Errorf("driver: create: %w", err)
 	}
-	if d.workspace != nil {
-		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, id, m.Goal, m.Kind, repoPath)
-		if err != nil {
-			return "", fmt.Errorf("driver: create: provision: %w", err)
-		}
-		if err := d.store.SetProvisioned(ctx, id, workspace, worktree, branch, baseCommit); err != nil {
-			return "", fmt.Errorf("driver: create: %w", err)
-		}
-		if m.AutoApproveSafe && d.perms != nil && m.SessionID != "" {
-			// Register the mission's own directory as the session's
-			// sandbox: destructive-classified commands provably confined
-			// to it (writing the mission's own artifacts, cleaning its
-			// own files) stop parking on a human prompt. Best-effort,
-			// same as the shell grant above.
-			root := worktree
-			if root == "" {
-				root = workspace
-			}
-			if err := d.perms.Grant(ctx, m.SessionID, tools.SandboxGrantTool, root, missionGrantTTL); err != nil {
-				d.log.Warn("driver: create: sandbox grant failed", "mission_id", id, "error", err)
-			}
-		}
+	m.ID = id
+	if _, err := d.ensureProvisioned(ctx, m, repoPath); err != nil {
+		return "", fmt.Errorf("driver: create: %w", err)
 	}
 	go func() { //nolint:gosec // G118: deliberate — the mission must outlive the HTTP request that created it, driveTimeBound is Drive's own cap
 		if err := d.Drive(context.Background(), id); err != nil {
@@ -222,6 +205,102 @@ func (d *Driver) Create(ctx context.Context, m Mission, repoPath string) (string
 		}
 	}()
 	return id, nil
+}
+
+// ensureProvisioned gives a mission everything Create used to set up
+// inline — a hidden session, its standing grants, and a workspace —
+// but callable a second time for a mission that reached the store some
+// OTHER way (scheduler.go's createFromTemplate inserts a bare row
+// directly, bypassing Create entirely: no session, no workspace, no
+// grants). Advance calls this at the top of every turn so a
+// scheduler-born mission gets provisioned the first time anything
+// actually drives it, not at fire time. Idempotent: a mission that
+// already has both a session and a workspace/worktree is a no-op,
+// and SetSession's own WHERE session_id IS NULL guard makes a second
+// concurrent attempt safe even without that check.
+//
+// Grants happen in BOTH the session-creation and the workspace-
+// provisioning halves below — same shape as Create always had, plus
+// the new ApprovalAllowlist grants (via resolveAgent) once a session
+// exists, whichever half of ensureProvisioned actually created it.
+func (d *Driver) ensureProvisioned(ctx context.Context, m Mission, repoPath string) (Mission, error) {
+	if m.SessionID == "" && d.sessions != nil {
+		sessionID, err := d.sessions.Create(ctx, "")
+		if err != nil {
+			return m, fmt.Errorf("session: %w", err)
+		}
+		if err := d.store.SetSession(ctx, m.ID, sessionID); err != nil {
+			return m, fmt.Errorf("set session: %w", err)
+		}
+		m.SessionID = sessionID
+		d.grantSessionDefaults(ctx, m)
+	}
+	if d.workspace != nil && m.Workspace == "" && m.Worktree == "" {
+		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, repoPath)
+		if err != nil {
+			return m, fmt.Errorf("provision: %w", err)
+		}
+		if err := d.store.SetProvisioned(ctx, m.ID, workspace, worktree, branch, baseCommit); err != nil {
+			return m, err
+		}
+		m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
+		if m.AutoApproveSafe && d.perms != nil && m.SessionID != "" {
+			// Register the mission's own directory as the session's
+			// sandbox: destructive-classified commands provably confined
+			// to it (writing the mission's own artifacts, cleaning its
+			// own files) stop parking on a human prompt. Best-effort, same
+			// as the grants in grantSessionDefaults.
+			root := worktree
+			if root == "" {
+				root = workspace
+			}
+			if err := d.perms.Grant(ctx, m.SessionID, tools.SandboxGrantTool, root, missionGrantTTL); err != nil {
+				d.log.Warn("driver: sandbox grant failed", "mission_id", m.ID, "error", err)
+			}
+		}
+	}
+	return m, nil
+}
+
+// grantSessionDefaults pre-authorizes a freshly created hidden session:
+// standing "safe shell" approval when the mission opted in, plus every
+// tool in the mission's agent's ApprovalAllowlist (resolved at
+// provisioning time via resolveAgent, same fire-time-not-create-time
+// principle as scheduler.go's createFromTemplate — an agent's allowlist
+// edited after the mission started still applies to a not-yet-
+// provisioned mission). All best-effort: a failed grant just means the
+// mission asks on its first call instead of running unattended —
+// degraded autonomy, never a broken mission.
+//
+// AutoApproveSafe is deliberately shell-scoped only ("shell" + sandbox
+// root) — it does not widen to connector tools, which default
+// danger=safe unclassified; doing so would silently unlock every
+// connector write (send an email, delete a calendar event) for an
+// unattended mission with no per-tool review. Autonomy over connector
+// tools comes only from the agent's ApprovalAllowlist grants below,
+// matched against the connector-namespaced tool name via matchGrant's
+// suffix rule (D-036).
+func (d *Driver) grantSessionDefaults(ctx context.Context, m Mission) {
+	if d.perms == nil {
+		return
+	}
+	if m.AutoApproveSafe {
+		if err := d.perms.Grant(ctx, m.SessionID, "shell", "*", missionGrantTTL); err != nil {
+			d.log.Warn("driver: auto-approve grant failed", "mission_id", m.ID, "error", err)
+		}
+	}
+	if d.resolveAgent == nil {
+		return
+	}
+	defaults, ok := d.resolveAgent(ctx, m.AgentID)
+	if !ok {
+		return
+	}
+	for _, tool := range defaults.ApprovalAllowlist {
+		if err := d.perms.Grant(ctx, m.SessionID, tool, "*", missionGrantTTL); err != nil {
+			d.log.Warn("driver: approval allowlist grant failed", "mission_id", m.ID, "tool", tool, "error", err)
+		}
+	}
 }
 
 // Advance performs exactly one worker turn, review round, or planning
@@ -236,6 +315,18 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	}
 	if m.Phase.Terminal() || m.Status == StatusPaused || m.Status == StatusWaitingForInput {
 		return false, nil
+	}
+	// A mission that reached the store without going through Create
+	// (scheduler.go's createFromTemplate inserts a bare row directly) has
+	// no session and no workspace yet — provision it now, on the first
+	// turn that actually drives it, rather than leaving the worker with
+	// no shell/write_file tools (runner.go's missionTools returns nil for
+	// an empty WorkRoot).
+	if m.SessionID == "" || (m.Workspace == "" && m.Worktree == "") {
+		m, err = d.ensureProvisioned(ctx, m, "")
+		if err != nil {
+			return false, fmt.Errorf("driver advance: ensure provisioned: %w", err)
+		}
 	}
 
 	before := m.Status

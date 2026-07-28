@@ -138,13 +138,36 @@ func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 	return m, nil
 }
 
-// List returns every mission, newest first.
-func (s *Store) List(ctx context.Context) ([]Mission, error) {
+// ListFilter narrows List's result set — the zero value (no filter,
+// no limit) is the original "every mission" behavior. Added for a
+// recurring schedule's fire history view (?schedule_id=) and any
+// future paginated list (?limit=), both optional.
+type ListFilter struct {
+	ScheduleID string
+	// Limit caps the result count; 0 means unlimited.
+	Limit int
+}
+
+// List returns missions matching filter, newest first. The zero
+// ListFilter{} returns every mission, matching the pre-filter
+// behavior exactly.
+func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("missions list: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT `+missionColumns+` FROM missions ORDER BY created_at DESC`)
+	query := `SELECT ` + missionColumns + ` FROM missions`
+	var args []any
+	if filter.ScheduleID != "" {
+		args = append(args, filter.ScheduleID)
+		query += fmt.Sprintf(" WHERE schedule_id = $%d", len(args))
+	}
+	query += " ORDER BY created_at DESC"
+	if filter.Limit > 0 {
+		args = append(args, filter.Limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("missions list: %w", err)
 	}
@@ -458,6 +481,29 @@ func (s *Store) ReconcileTerminal(ctx context.Context, id string, proposed Phase
 		return fmt.Errorf("missions reconcile event: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// SetSession attaches the mission's hidden bookkeeping session id —
+// used by lazy provisioning (driver.go's ensureProvisioned) for a
+// mission that reached the store without going through Driver.Create
+// (a scheduler-fired row, see scheduler.go's createFromTemplate).
+// Race-idempotent by construction: the WHERE clause only ever matches
+// a mission that doesn't already have one, so two concurrent
+// ensureProvisioned calls for the same never-provisioned mission (a
+// Drive loop racing the work-slot sweep's own re-Drive) can't each
+// create their own session and stomp the other's — the loser's write
+// silently affects zero rows instead of overwriting a session id a
+// worker turn may already be running under.
+func (s *Store) SetSession(ctx context.Context, id, sessionID string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set session: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET session_id = $2, updated_at = now()
+		WHERE id = $1 AND session_id IS NULL`, id, sessionID); err != nil {
+		return fmt.Errorf("missions set session: %w", err)
+	}
+	return nil
 }
 
 // SetProvisioned checks-and-writes workspace/worktree/branch/base_commit
