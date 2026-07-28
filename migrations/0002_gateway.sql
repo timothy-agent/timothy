@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS providers (
     headers        jsonb NOT NULL DEFAULT '{}',
     options        jsonb NOT NULL DEFAULT '{}',
     enabled        boolean NOT NULL DEFAULT false,
+    -- D-033 follow-up: opts a provider out of BootstrapChain's
+    -- auto-fallback fill, so a local/dev provider (e.g. Ollama) doesn't
+    -- get silently appended as a fallback on shared routes.
+    exclude_from_bootstrap boolean NOT NULL DEFAULT false,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
