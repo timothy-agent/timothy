@@ -147,6 +147,131 @@ func TestConverseTools(t *testing.T) {
 	}
 }
 
+// TestSanitizeNovaSchema covers the AWS-documented Nova constraint
+// (D-037): only "type"/"properties"/"required" survive at the schema's
+// top level, while nested keys inside a property's own subschema
+// (including additionalProperties there) are left untouched.
+func TestSanitizeNovaSchema(t *testing.T) {
+	t.Parallel()
+	in := json.RawMessage(`{
+		"$schema": "http://json-schema.org/draft-07/schema#",
+		"title": "calc input",
+		"description": "arguments for calc",
+		"additionalProperties": false,
+		"type": "object",
+		"required": ["a"],
+		"properties": {
+			"a": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {"b": {"type": "string"}}
+			}
+		}
+	}`)
+
+	out := sanitizeNovaSchema(in)
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output not valid JSON: %v", err)
+	}
+	for _, forbidden := range []string{"$schema", "title", "description", "additionalProperties"} {
+		if _, ok := got[forbidden]; ok {
+			t.Fatalf("top-level key %q must be stripped, got %#v", forbidden, got)
+		}
+	}
+	if got["type"] != "object" {
+		t.Fatalf("type = %#v, want object", got["type"])
+	}
+	required, ok := got["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "a" {
+		t.Fatalf("required = %#v", got["required"])
+	}
+	props, ok := got["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v", got["properties"])
+	}
+	a, ok := props["a"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties.a = %#v", props["a"])
+	}
+	// Nested additionalProperties (inside a property subschema) must survive.
+	if v, ok := a["additionalProperties"]; !ok || v != false {
+		t.Fatalf("nested additionalProperties stripped or wrong: %#v", a["additionalProperties"])
+	}
+}
+
+// TestSanitizeNovaSchemaEmptyOrInvalid proves the sanitize step never
+// panics and leaves empty/unparseable input alone so documentFromJSON's
+// existing nil-on-empty, nil-on-invalid behavior is unaffected.
+func TestSanitizeNovaSchemaEmptyOrInvalid(t *testing.T) {
+	t.Parallel()
+	if out := sanitizeNovaSchema(nil); out != nil {
+		t.Fatalf("nil input must stay nil, got %#v", out)
+	}
+	if out := sanitizeNovaSchema(json.RawMessage{}); len(out) != 0 {
+		t.Fatalf("empty input must stay empty, got %#v", out)
+	}
+	broken := json.RawMessage(`{broken`)
+	if out := sanitizeNovaSchema(broken); string(out) != string(broken) {
+		t.Fatalf("invalid JSON must pass through unchanged, got %#v", out)
+	}
+	if documentFromJSON(sanitizeNovaSchema(nil)) != nil {
+		t.Fatal("nil schema through the full pipeline must still yield a nil document")
+	}
+}
+
+// TestBuildConverseStreamInput covers the D-037 Nova greedy-decoding
+// workaround: only requests that are both Nova and tool-bearing get
+// temperature 0 + topK 1, and MaxTokens mapping is unaffected.
+func TestBuildConverseStreamInput(t *testing.T) {
+	t.Parallel()
+
+	novaTools := CompletionRequest{
+		Model:     "us.amazon.nova-pro-v1:0",
+		Tools:     []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		MaxTokens: 512,
+	}
+	input := buildConverseStreamInput(novaTools)
+	if input.InferenceConfig == nil || input.InferenceConfig.Temperature == nil || *input.InferenceConfig.Temperature != 0 {
+		t.Fatalf("nova+tools: InferenceConfig = %#v, want Temperature 0", input.InferenceConfig)
+	}
+	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 512 {
+		t.Fatalf("nova+tools: MaxTokens = %#v, want 512", input.InferenceConfig.MaxTokens)
+	}
+	if input.AdditionalModelRequestFields == nil {
+		t.Fatal("nova+tools: AdditionalModelRequestFields must be set")
+	}
+
+	novaNoTools := CompletionRequest{Model: "us.amazon.nova-pro-v1:0", MaxTokens: 512}
+	input = buildConverseStreamInput(novaNoTools)
+	if input.InferenceConfig == nil || input.InferenceConfig.Temperature != nil {
+		t.Fatalf("nova without tools: Temperature must stay unset, got %#v", input.InferenceConfig)
+	}
+	if input.AdditionalModelRequestFields != nil {
+		t.Fatal("nova without tools: AdditionalModelRequestFields must stay nil")
+	}
+	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 512 {
+		t.Fatalf("nova without tools: MaxTokens = %#v, want 512", input.InferenceConfig.MaxTokens)
+	}
+
+	titanTools := CompletionRequest{
+		Model:     "amazon.titan-text-premier-v1:0",
+		Tools:     []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		MaxTokens: 256,
+	}
+	input = buildConverseStreamInput(titanTools)
+	if input.InferenceConfig == nil || input.InferenceConfig.Temperature != nil {
+		t.Fatalf("titan+tools: Temperature must stay unset, got %#v", input.InferenceConfig)
+	}
+	if input.AdditionalModelRequestFields != nil {
+		t.Fatal("titan+tools: AdditionalModelRequestFields must stay nil")
+	}
+	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 256 {
+		t.Fatalf("titan+tools: MaxTokens = %#v, want 256", input.InferenceConfig.MaxTokens)
+	}
+}
+
 func TestDocumentFromJSON(t *testing.T) {
 	t.Parallel()
 	if documentFromJSON(nil) != nil {

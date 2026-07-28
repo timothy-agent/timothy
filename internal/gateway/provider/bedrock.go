@@ -101,20 +101,7 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 		return nil, err
 	}
 
-	// Nova models are served through inference profiles, so ModelId is
-	// e.g. "us.amazon.nova-pro-v1:0" — the bare model ID rejects
-	// on-demand invocation.
-	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:    aws.String(req.Model),
-		Messages:   converseMessages(req.Messages),
-		ToolConfig: converseTools(req.Tools),
-		System:     converseSystem(req.System, req.Model),
-	}
-	if req.MaxTokens > 0 {
-		input.InferenceConfig = &types.InferenceConfiguration{
-			MaxTokens: aws.Int32(int32(req.MaxTokens)), //nolint:gosec // token caps are far below int32 max
-		}
-	}
+	input := buildConverseStreamInput(req)
 
 	outCh := make(chan stream.StreamEvent, 64)
 
@@ -247,6 +234,43 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 	return outCh, nil
 }
 
+// buildConverseStreamInput assembles the ConverseStream request.
+// Nova models are served through inference profiles, so ModelId is
+// e.g. "us.amazon.nova-pro-v1:0" — the bare model ID rejects
+// on-demand invocation.
+//
+// D-037: Nova tool-calling streams intermittently abort mid-stream
+// with "ModelStreamErrorException: Model produced invalid sequence as
+// part of ToolUse". AWS's Nova tool-troubleshooting guide prescribes
+// greedy decoding (temperature 0, topK 1) for any request that offers
+// tools — sampling variance is what produces the malformed ToolUse
+// sequence. topK has no field on InferenceConfiguration; Nova reads it
+// from AdditionalModelRequestFields instead. Titan has no such
+// failure mode and no topK field, so the workaround is gated to Nova.
+func buildConverseStreamInput(req CompletionRequest) *bedrockruntime.ConverseStreamInput {
+	input := &bedrockruntime.ConverseStreamInput{
+		ModelId:    aws.String(req.Model),
+		Messages:   converseMessages(req.Messages),
+		ToolConfig: converseTools(req.Tools),
+		System:     converseSystem(req.System, req.Model),
+	}
+	if req.MaxTokens > 0 {
+		input.InferenceConfig = &types.InferenceConfiguration{
+			MaxTokens: aws.Int32(int32(req.MaxTokens)), //nolint:gosec // token caps are far below int32 max
+		}
+	}
+	if len(req.Tools) > 0 && strings.Contains(req.Model, "amazon.nova") {
+		if input.InferenceConfig == nil {
+			input.InferenceConfig = &types.InferenceConfiguration{}
+		}
+		input.InferenceConfig.Temperature = aws.Float32(0)
+		input.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
+			"inferenceConfig": map[string]any{"topK": 1},
+		})
+	}
+	return input
+}
+
 // converseMessages maps normalized messages onto Bedrock Converse
 // messages. Tool results ride as user-role toolResult blocks;
 // assistant messages that carry neither text nor tool calls are
@@ -365,12 +389,49 @@ func converseTools(defs []ToolDef) *types.ToolConfiguration {
 				Name:        aws.String(t.Name),
 				Description: aws.String(t.Description),
 				InputSchema: &types.ToolInputSchemaMemberJson{
-					Value: documentFromJSON(t.InputSchema),
+					Value: documentFromJSON(sanitizeNovaSchema(t.InputSchema)),
 				},
 			},
 		})
 	}
 	return &types.ToolConfiguration{Tools: tools}
+}
+
+// sanitizeNovaSchema strips top-level schema keys AWS's Nova
+// tool-troubleshooting guide identifies as contributors to invalid
+// ToolUse sequences: the top-level tool input schema object supports
+// only "type", "properties", and "required" — fields like $schema,
+// additionalProperties, and title are rejected mid-stream instead of
+// at request time. This adapter serves only Amazon first-party models
+// (Bedrock, D-037), so the sanitize runs unconditionally rather than
+// gating on model family. Nested schema keys (e.g. additionalProperties
+// inside a property's own subschema) are untouched — only the
+// top-level object is filtered. Unparseable or empty input is returned
+// as-is; documentFromJSON already handles that case.
+func sanitizeNovaSchema(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+	const (
+		keyType       = "type"
+		keyProperties = "properties"
+		keyRequired   = "required"
+	)
+	clean := make(map[string]any, 3)
+	for _, k := range []string{keyType, keyProperties, keyRequired} {
+		if v, ok := m[k]; ok {
+			clean[k] = v
+		}
+	}
+	out, err := json.Marshal(clean)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // documentFromJSON converts a raw JSON schema into the
