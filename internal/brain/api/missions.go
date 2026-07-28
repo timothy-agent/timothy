@@ -32,10 +32,11 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, perms: a.perms, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
+	handle("DELETE /v1/missions/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("GET /v1/missions/{id}/events", a.auth(http.HandlerFunc(h.events)))
 	handle("POST /v1/missions/{id}/resume", a.auth(http.HandlerFunc(h.resume)))
 	handle("POST /v1/missions/{id}/cancel", a.auth(http.HandlerFunc(h.cancel)))
@@ -53,8 +54,8 @@ type missionAPI struct {
 	driver   *missions.Driver
 	notifier *missions.Notifier
 	agentReg *agents.Store
-	// workspace performs mission-directory git operations (currently
-	// just Push) outside the normal Drive loop.
+	// workspace performs mission-directory git operations (Push,
+	// Teardown for delete) outside the normal Drive loop.
 	workspace *missions.Workspace
 	// resolveSecret resolves a credential_ref to its plaintext value for
 	// push; nil means no secret store is configured.
@@ -63,7 +64,11 @@ type missionAPI struct {
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
 	perms PermissionResolver
-	log   *slog.Logger
+	// dir deletes a mission's hidden session on mission delete — the
+	// same Directory the top-level session routes use (a.dir), not a
+	// mission-specific store.
+	dir Directory
+	log *slog.Logger
 }
 
 func failMission(w http.ResponseWriter, err error) {
@@ -74,6 +79,8 @@ func failMission(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "branch_conflict", err.Error())
 	case errors.Is(err, missions.ErrTerminal):
 		jsonError(w, http.StatusConflict, "already_finished", err.Error())
+	case errors.Is(err, missions.ErrNotTerminal):
+		jsonError(w, http.StatusConflict, "not_terminal", err.Error())
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}
@@ -211,6 +218,33 @@ func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+// delete permanently removes a terminal mission: its row (Store.Delete
+// cascades mission_events/notifications), its hidden session, and its
+// on-disk workspace. Only a terminal mission (done/error, which
+// includes cancelled) may be deleted — 409 not_terminal otherwise — so
+// a live mission's row can never vanish out from under a running
+// Driver.Advance. Session and workspace cleanup are best-effort past
+// that point: the mission row is already gone, so a failure here is
+// logged, never turned into an error response.
+func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
+	m, err := h.store.Delete(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	if m.SessionID != "" && h.dir != nil {
+		if err := h.dir.Delete(r.Context(), m.SessionID); err != nil {
+			h.log.Warn("mission delete: hidden session cleanup failed", "mission_id", m.ID, "session_id", m.SessionID, "error", err)
+		}
+	}
+	if m.Workspace != "" && h.workspace != nil {
+		if err := h.workspace.Teardown(r.Context(), m.Workspace, m.Worktree, m.Kind); err != nil {
+			h.log.Warn("mission delete: workspace cleanup failed", "mission_id", m.ID, "workspace", m.Workspace, "error", err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *missionAPI) events(w http.ResponseWriter, r *http.Request) {

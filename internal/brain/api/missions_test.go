@@ -19,6 +19,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 		{"GET", "/v1/missions"},
 		{"POST", "/v1/missions"},
 		{"GET", "/v1/missions/abc"},
+		{"DELETE", "/v1/missions/abc"},
 		{"GET", "/v1/missions/abc/events"},
 		{"POST", "/v1/missions/abc/resume"},
 		{"POST", "/v1/missions/abc/cancel"},
@@ -79,5 +80,32 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	}
 	if code := call("/v1/missions?limit=10"); code != 500 {
 		t.Fatalf("valid limit against a degraded store = %d, want 500 (passed validation)", code)
+	}
+}
+
+// TestMissionsDeleteReachesStore confirms DELETE /v1/missions/{id} is
+// wired to Store.Delete: against a never-connecting pool the request
+// still passes routing/auth and reaches the store call, which fails
+// closed as failMission's default 400 (the same generic-error mapping
+// every other mission handler falls back to for an unrecognized
+// error) — never a 404/409, which would mean the id path or the
+// not-terminal check short-circuited before the store was even called.
+// The actual not_found/not_terminal/success semantics need a real
+// Postgres connection and are covered by the Store.Delete integration
+// tests in internal/brain/missions.
+func TestMissionsDeleteReachesStore(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Fatalf("DELETE against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
 	}
 }

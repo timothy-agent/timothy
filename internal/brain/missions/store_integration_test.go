@@ -5,6 +5,7 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -116,6 +117,56 @@ func TestMissionCRUD(t *testing.T) {
 
 	if _, err := s.Get(ctx, "00000000-0000-0000-0000-000000000000"); err == nil {
 		t.Fatal("Get of a nonexistent id succeeded")
+	}
+}
+
+// TestMissionDelete covers Store.Delete's three outcomes: unknown id
+// (ErrNotFound), a live (non-terminal) mission (ErrNotTerminal), and a
+// terminal mission — which must actually remove the row, and its
+// mission_events via the ON DELETE CASCADE migrations 0025/0027 rely
+// on.
+func TestMissionDelete(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if _, err := s.Delete(ctx, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete of a nonexistent id = %v, want ErrNotFound", err)
+	}
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "delete-live", Kind: "research"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Delete(ctx, id); !errors.Is(err, ErrNotTerminal) {
+		t.Fatalf("Delete of a live (research/idle) mission = %v, want ErrNotTerminal", err)
+	}
+
+	if err := s.AppendEvent(ctx, id, "mission.progress", map[string]any{"note": "hi"}); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next: StepState{Phase: PhaseDone, Status: StatusDone},
+	}); err != nil {
+		t.Fatalf("ApplyTransition to terminal: %v", err)
+	}
+
+	deleted, err := s.Delete(ctx, id)
+	if err != nil {
+		t.Fatalf("Delete of a terminal mission: %v", err)
+	}
+	if deleted.ID != id {
+		t.Fatalf("Delete returned mission %q, want %q", deleted.ID, id)
+	}
+
+	if _, err := s.Get(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after Delete = %v, want ErrNotFound (row gone)", err)
+	}
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events after Delete: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("Events after Delete = %+v, want none (mission_events cascades on mission delete)", events)
 	}
 }
 
