@@ -911,6 +911,92 @@ func TestForceRouteIgnoresNonMatchingTools(t *testing.T) {
 	}
 }
 
+// TestForceRouteDropsModelHint closes the gateway-hint privacy hole: a
+// ModelHint outranks Route in the gateway's Resolve order, so a hint
+// surviving the flip would let a turn escape the forced route entirely
+// after a sensitive tool ran. The hint must be dropped the moment the
+// route is forced, not just the route switched.
+func TestForceRouteDropsModelHint(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"personal_gmail_read", `{}`}),
+		finalStep("done"),
+	}}
+	sensitive := &tools.Tool{
+		Name:        "personal_gmail_read",
+		Description: "reads a fake email",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "email body", nil
+		},
+	}
+	a, _, _, _ := testAgent(t, gw, sensitive)
+	a.SetForceRoute("gmail_read", "local")
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default", ModelHint: "glm-4.7-flash",
+		Messages: []provider.Message{{Role: "user", Content: "check my email"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(gw.requests))
+	}
+	if gw.requests[0].ModelHint != "glm-4.7-flash" {
+		t.Fatalf("step 1 hint = %q, want glm-4.7-flash (before the sensitive tool ran)", gw.requests[0].ModelHint)
+	}
+	if gw.requests[1].Route != "local" {
+		t.Fatalf("step 2 route = %q, want local (forced after gmail_read ran)", gw.requests[1].Route)
+	}
+	if gw.requests[1].ModelHint != "" {
+		t.Fatalf("step 2 hint = %q, want empty — a surviving hint bypasses the forced route at the gateway", gw.requests[1].ModelHint)
+	}
+}
+
+// TestForceRoutePinSurvivesStepRetry confirms the forced route and
+// dropped hint hold even when a step's stream dies and is retried
+// (D-038): the retry re-sends the same sreq built after the flip, so
+// it must never revert to the turn's original route or hint.
+func TestForceRoutePinSurvivesStepRetry(t *testing.T) {
+	withShortRetryBackoff(t)
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"personal_gmail_read", `{}`}),
+		retryableErrorStep(),
+		finalStep("done"),
+	}}
+	sensitive := &tools.Tool{
+		Name:        "personal_gmail_read",
+		Description: "reads a fake email",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "email body", nil
+		},
+	}
+	a, _, _, _ := testAgent(t, gw, sensitive)
+	a.SetForceRoute("gmail_read", "local")
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default", ModelHint: "glm-4.7-flash",
+		Messages: []provider.Message{{Role: "user", Content: "check my email"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	// step 1 (unforced), step 2 attempt 1 (retryable error), step 2
+	// attempt 2 (the retry) — three gw.Stream calls.
+	if len(gw.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(gw.requests))
+	}
+	retried := gw.requests[2]
+	if retried.Route != "local" {
+		t.Fatalf("retried request route = %q, want local (pin must survive the step retry)", retried.Route)
+	}
+	if retried.ModelHint != "" {
+		t.Fatalf("retried request hint = %q, want empty (dropped hint must survive the step retry)", retried.ModelHint)
+	}
+}
+
 // TestRequestExtraToolsCallableAndExecutable reproduces the missions
 // bug: a sentinel-style tool defined outside the shared agent registry
 // must still be (a) offered to the model as callable and (b)

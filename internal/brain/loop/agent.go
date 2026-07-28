@@ -156,7 +156,8 @@ func (a *Agent) SetOffloadThreshold(tool string, bytes int) {
 // only takes effect after. suffix, not the exact registered name:
 // connector tools are namespaced "<connector-name>_<tool-name>" with a
 // user-chosen connector name, so "gmail_read" matches regardless of
-// which connector name serves it.
+// which connector name serves it. Forcing also clears the turn's model
+// hint from then on, since a hint outranks the route at the gateway.
 func (a *Agent) SetForceRoute(suffix, route string) {
 	a.forceRouteBySuffix[suffix] = route
 }
@@ -251,7 +252,12 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	stuck := false
 	// route is req.Route until a tool with a forced route runs; from
 	// then on it's sticky for the rest of the turn (see SetForceRoute).
+	// hint follows the same lifecycle: it's dropped alongside the flip
+	// because gateway hint resolution is not chain-constrained — a
+	// surviving hint would let the model pick a provider outside the
+	// forced route's chain and bypass it entirely.
 	route := req.Route
+	hint := req.ModelHint
 
 	for step := 1; ; step++ {
 		directive := tools.CeilingFor(step, a.maxSteps)
@@ -265,7 +271,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			Route:     route,
 			Agent:     req.Agent,
 			Purpose:   "chat",
-			ModelHint: req.ModelHint,
+			ModelHint: hint,
 			System:    req.System,
 			Messages:  msgs,
 			Tools:     defs,
@@ -404,6 +410,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			for suffix, forced := range a.forceRouteBySuffix {
 				if strings.HasSuffix(c.Name, suffix) {
 					route = forced
+					hint = ""
 				}
 			}
 		}
