@@ -26,7 +26,7 @@ const featureCopy: Record<string, { label: string; description: string }> = {
   },
   scheduler_enabled: {
     label: 'Scheduler',
-    description: 'Stored now; gains a consumer when the agent harness lands.',
+    description: 'Off: recurring schedules stop firing missions.',
   },
 }
 

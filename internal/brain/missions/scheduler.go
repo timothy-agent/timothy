@@ -27,16 +27,22 @@ const schedulerLockKey = 0x4D495353
 // anyway — at most one backfilled run after downtime, never a burst.
 const misfireGrace = 1 * time.Hour
 
+// defaultMissionRoute mirrors api.defaultMissionRoute: an agent's empty
+// route means "the default chain," but the gateway's /v1/stream
+// requires a real, non-empty route name.
+const defaultMissionRoute = "default"
+
 // Schedule is one schedules row.
 type Schedule struct {
-	ID              string
-	Name            string
-	Cron            string
-	MissionTemplate MissionTemplate
-	Enabled         bool
-	ExpiresAt       *time.Time
-	LastRun         *time.Time
-	CreatedAt       time.Time
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Cron            string          `json:"cron"`
+	MissionTemplate MissionTemplate `json:"mission_template"`
+	Enabled         bool            `json:"enabled"`
+	ExpiresAt       *time.Time      `json:"expires_at,omitempty"`
+	LastRun         *time.Time      `json:"last_run,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 // MissionTemplate is applied verbatim as a new mission's initial
@@ -49,7 +55,31 @@ type MissionTemplate struct {
 	ReviewRoute   string   `json:"review_route"`
 	MaxIterations int      `json:"max_iterations"`
 	BudgetUSD     *float64 `json:"budget_usd,omitempty"`
+	// AutoApproveSafe defaults true for a scheduled mission, same as
+	// api/missions.go's create handler — a mission fired unattended
+	// needs the same standing shell approval a UI-created one gets by
+	// default, or its very first shell call parks with nobody watching.
+	AutoApproveSafe bool `json:"auto_approve_safe"`
 }
+
+// AgentDefaults is the slice of an agents row a fired mission borrows
+// when its template leaves the corresponding field empty — mirrors
+// api/missions.go's create-handler resolution so a scheduler-fired
+// mission gets the same defaults a UI-created one would.
+type AgentDefaults struct {
+	Route             string
+	ReviewRoute       string
+	PromptOverlay     string
+	BudgetUSD         *float64
+	ApprovalAllowlist []string
+}
+
+// AgentResolver resolves an agent id to its defaults at FIRE time, not
+// schedule-create time — an agent edited after the schedule was made
+// (a new prompt overlay, a changed allowlist) must apply the moment it
+// next fires, not freeze at whatever it was when the schedule was
+// created. ok reports whether the id resolved to a real agent.
+type AgentResolver func(ctx context.Context, agentID string) (AgentDefaults, bool)
 
 // Scheduler ticks every schedulerTick, evaluating schedules rows
 // against their cron expression (5-field, parsed via robfig/cron/v3's
@@ -60,11 +90,21 @@ type MissionTemplate struct {
 type Scheduler struct {
 	db       *pgpool.Pool
 	missions *Store
+	resolve  AgentResolver
+	enabled  func(ctx context.Context) bool
 	log      *slog.Logger
 }
 
-func NewScheduler(db *pgpool.Pool, missions *Store, log *slog.Logger) *Scheduler {
-	return &Scheduler{db: db, missions: missions, log: log}
+// NewScheduler wires the scheduler with the agent resolver
+// createFromTemplate uses to fill in missing route/review_route/
+// budget/prompt_overlay at fire time, and the scheduler_enabled
+// feature switch (D-032) that tick checks first — nil-safe on both:
+// a nil resolve leaves an unresolved AgentID's fields at whatever the
+// template already specified, and a nil enabled defaults every tick to
+// enabled (degrade open, since a config-read hiccup pausing every
+// schedule silently would be worse than one that keeps firing).
+func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, log *slog.Logger) *Scheduler {
+	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, log: log}
 }
 
 // Run ticks forever until ctx is done. Double-fire protection across
@@ -116,8 +156,15 @@ func dueDecision(cronExpr string, anchor, now time.Time, grace time.Duration) (d
 	return decisionFire, nil
 }
 
-// tick evaluates every enabled, unexpired schedule once.
+// tick evaluates every enabled, unexpired schedule once — but only
+// when the scheduler_enabled feature switch is on: this is the toggle
+// wire-up that was previously a no-op UI switch (see settings.KeyScheduler),
+// checked before anything else in the tick so a disabled scheduler
+// does no work at all, not even the advisory-lock attempt.
 func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
+	if s.enabled != nil && !s.enabled(ctx) {
+		return nil
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("scheduler: %w", err)
@@ -136,7 +183,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 		return tx.Commit(ctx) // another instance already owns this tick
 	}
 
-	rows, err := tx.Query(ctx, `SELECT id, name, cron, mission_template, enabled, expires_at, last_run, created_at
+	rows, err := tx.Query(ctx, `SELECT id, name, cron, mission_template, enabled, expires_at, last_run, created_at, updated_at
 		FROM schedules WHERE enabled AND (expires_at IS NULL OR expires_at > now())`)
 	if err != nil {
 		return fmt.Errorf("scheduler: query schedules: %w", err)
@@ -145,7 +192,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 	for rows.Next() {
 		var sc Schedule
 		var templateJSON []byte
-		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &templateJSON, &sc.Enabled, &sc.ExpiresAt, &sc.LastRun, &sc.CreatedAt); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &templateJSON, &sc.Enabled, &sc.ExpiresAt, &sc.LastRun, &sc.CreatedAt, &sc.UpdatedAt); err != nil {
 			rows.Close()
 			return fmt.Errorf("scheduler: scan schedule: %w", err)
 		}
@@ -211,13 +258,56 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 }
 
 // createFromTemplate inserts a new mission from the schedule's
-// template, tagged with the schedule that spawned it.
+// template, tagged with the schedule that spawned it. It resolves the
+// template's agent_id AT FIRE TIME (mirroring api/missions.go's create
+// handler): an empty route/review_route/budget/prompt_overlay is
+// filled from the agent's current defaults, and an agent's own empty
+// route (its "use the default chain" shorthand) still falls back to
+// defaultMissionRoute since the gateway requires a real route name.
+// This inserted row bypasses Driver.Create entirely — it has no
+// session, no workspace, no grants yet — so it is provisioned lazily
+// the first time Advance/Drive touches it (see driver.go's
+// ensureProvisioned).
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	t := sc.MissionTemplate
+	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve)
 	spec, _ := json.Marshal(Spec{})
 	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, spec, schedule_id)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9)`,
-		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetUSD, t.Route, t.ReviewRoute, spec, sc.ID)
+			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetUSD, t.Route, t.ReviewRoute,
+		promptOverlay, t.AutoApproveSafe, spec, sc.ID)
 	return err
+}
+
+// resolveTemplateDefaults is the pure fire-time resolution step
+// createFromTemplate performs, split out so it's unit-testable without
+// a real pgx.Tx: an empty route/review_route/budget is filled from the
+// resolved agent's current defaults (nil-safe — a nil resolve, or one
+// that reports ok=false, leaves the template exactly as given except
+// for the final defaultMissionRoute fallback), and the resolved
+// agent's prompt overlay is returned separately since MissionTemplate
+// itself carries no such field.
+func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver) (MissionTemplate, string) {
+	promptOverlay := ""
+	if resolve != nil {
+		if defaults, ok := resolve(ctx, t.AgentID); ok {
+			if t.Route == "" {
+				t.Route = defaults.Route
+			}
+			if t.ReviewRoute == "" {
+				t.ReviewRoute = defaults.ReviewRoute
+			}
+			if t.BudgetUSD == nil {
+				t.BudgetUSD = defaults.BudgetUSD
+			}
+			promptOverlay = defaults.PromptOverlay
+		}
+	}
+	if t.Route == "" {
+		t.Route = defaultMissionRoute
+	}
+	if t.ReviewRoute == "" {
+		t.ReviewRoute = defaultMissionRoute
+	}
+	return t, promptOverlay
 }

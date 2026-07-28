@@ -180,7 +180,13 @@ func main() {
 		missionSandbox = sandboxclient.New(sandboxdURL)
 	}
 
-	missionStore, missionDriver, missionNotifier, missionWorkspace := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, app.Log)
+	// Built here, above buildMissions, so both the scheduler (fire-time
+	// route/review_route/budget/prompt_overlay resolution) and the
+	// driver (ApprovalAllowlist grants at provisioning time) can close
+	// over the same registry.
+	agentReg := agents.NewStore(app.DB, app.Log)
+
+	missionStore, missionDriver, missionNotifier, missionWorkspace := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, app.Log)
 	if missionDriver != nil {
 		var sandboxSweeper interface {
 			Sweep(ctx context.Context, isTerminal func(missionID string) bool) error
@@ -199,7 +205,6 @@ func main() {
 		})
 	}
 
-	agentReg := agents.NewStore(app.DB, app.Log)
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
 		agentReg.Resolve, app.Log)
@@ -304,12 +309,33 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 // setting.
 const missionWorkSlotMax = 4
 
+// missionAgentResolver adapts agentReg.ResolveByID to scheduler.go's
+// AgentResolver / driver.go's SetAgentResolver shape — both need the
+// SAME resolution (route/review_route/budget/prompt_overlay/
+// approval_allowlist from an agents row), just at different moments
+// (schedule fire time vs mission provisioning time), so one adapter
+// serves both call sites.
+func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
+	return func(ctx context.Context, agentID string) (missions.AgentDefaults, bool) {
+		a, ok := agentReg.ResolveByID(ctx, agentID)
+		if !ok {
+			return missions.AgentDefaults{}, false
+		}
+		return missions.AgentDefaults{
+			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
+			BudgetUSD: a.BudgetUSD, ApprovalAllowlist: a.ApprovalAllowlist,
+		}, true
+	}
+}
+
 // buildMissions wires the mission engine (Store, Driver, Notifier,
 // Scheduler). Gated on WORKSPACES: no workspace root configured means
 // missions stay entirely inert — no goroutines started, nothing
 // scheduled, the API surface unmounted (registerMissions 404s on a nil
-// store).
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace) {
+// store). agentReg is D-034's agent registry, resolved at scheduler
+// fire time and mission provisioning time (never schedule-create
+// time) so an agent edited after the fact still applies.
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -352,8 +378,11 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	if sandboxMgr != nil {
 		driver.SetSandbox(sandboxExec, sandboxMgr)
 	}
+	resolveAgent := missionAgentResolver(agentReg)
+	driver.SetAgentResolver(resolveAgent)
 
-	scheduler := missions.NewScheduler(db, store, log)
+	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
+	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, log)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace
 }

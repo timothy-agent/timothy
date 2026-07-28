@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 // TestDriverEndToEndCodingMission is M2's exit criterion: one mission
@@ -107,5 +110,69 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 
 	if err := workspace.Teardown(ctx, ws, wt, "coding"); err != nil {
 		t.Fatalf("Teardown: %v", err)
+	}
+}
+
+// TestDriverLazilyProvisionsBareSchedulerStyleMission reproduces the
+// plan's defect #1 against a real Postgres store: a mission inserted
+// directly (bypassing Driver.Create — exactly what scheduler.go's
+// createFromTemplate does) has no session, no workspace, no grants.
+// One Advance call must provision all three before running the phase,
+// or the worker gets no shell/write_file tools at all.
+func TestDriverLazilyProvisionsBareSchedulerStyleMission(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	id, err := store.Create(ctx, Mission{
+		Goal: marker + "lazy provisioning", Kind: "research", Route: "default", ReviewRoute: "default",
+		AutoApproveSafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Bare row, exactly as createFromTemplate leaves it: no session_id,
+	// no workspace/worktree — confirmed before Advance runs.
+	m, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.SessionID != "" || m.Workspace != "" {
+		t.Fatalf("mission before Advance = %+v, want no session and no workspace", m)
+	}
+
+	wsRoot := t.TempDir()
+	workspace := NewWorkspace(wsRoot, nil, log)
+	sessions := session.NewStore(store.db)
+	perms := tools.NewPermissions(store.db, wsRoot)
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, perms, log)
+
+	if _, err := d.Advance(ctx, id); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, err = store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after Advance: %v", err)
+	}
+	if m.SessionID == "" {
+		t.Fatal("Advance did not provision a hidden session")
+	}
+	if m.Workspace == "" {
+		t.Fatal("Advance did not provision a workspace")
+	}
+
+	db, err := store.db.Get()
+	if err != nil {
+		t.Fatalf("Get pool: %v", err)
+	}
+	var grantCount int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM session_grants WHERE session_id = $1 AND tool = 'shell'`,
+		m.SessionID).Scan(&grantCount); err != nil {
+		t.Fatalf("count session_grants: %v", err)
+	}
+	if grantCount == 0 {
+		t.Fatal("Advance's lazy provisioning did not grant the auto-approve-safe shell allowance")
 	}
 }

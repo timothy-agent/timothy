@@ -35,6 +35,11 @@ export function MissionCard({ mission }: { mission: Mission }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="capitalize">{mission.kind}</span>
         <span>{mission.phase}</span>
+        {mission.schedule_id && (
+          <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
+            recurring
+          </span>
+        )}
         <span>
           iteration {mission.iteration}/{mission.max_iterations}
         </span>

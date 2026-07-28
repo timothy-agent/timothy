@@ -382,7 +382,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// (D-011 poisoning defense); the skill body is instructions the
 	// user explicitly selected, deterministically loaded rather than
 	// left to the model's load_skill judgment.
-	system := assembleSystem(skills.Index(s.allowedPacks(ctx, profile)))
+	system := assembleSystem(skills.Index(s.allowedPacks(ctx, profile)), time.Now())
 	// The agent overlay is stable for a given agent, so it sits ahead
 	// of the per-turn tail and stays inside the cacheable prefix.
 	if profile.PromptOverlay != "" {

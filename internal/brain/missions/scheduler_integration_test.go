@@ -45,8 +45,8 @@ func TestSchedulerNoDoubleFireAcrossInstances(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched1 := NewScheduler(store.db, store, store.log)
-	sched2 := NewScheduler(store.db, store, store.log)
+	sched1 := NewScheduler(store.db, store, nil, nil, store.log)
+	sched2 := NewScheduler(store.db, store, nil, nil, store.log)
 
 	now := time.Now()
 	var wg sync.WaitGroup
@@ -93,7 +93,7 @@ func TestSchedulerLiveQueueDedup(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, store.log)
 	now := time.Now()
 	if err := sched.tick(ctx, now); err != nil {
 		t.Fatalf("tick: %v", err)

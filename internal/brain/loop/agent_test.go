@@ -414,9 +414,11 @@ func TestAgentCeilingTerminatesEvenIfModelKeepsCalling(t *testing.T) {
 
 func TestAgentFlushesUsageOnGatewayError(t *testing.T) {
 	t.Parallel()
+	withShortRetryBackoff(t)
 	// First step succeeds with a tool call and usage; the second
-	// Stream call errors synchronously (exhausted script). Accumulated
-	// usage must still reach the client before the error.
+	// Stream call errors synchronously (exhausted script) on every
+	// attempt, exhausting the step retry budget. Accumulated usage
+	// must still reach the client before the error.
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
 		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
 	}}

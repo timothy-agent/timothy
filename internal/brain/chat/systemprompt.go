@@ -1,7 +1,9 @@
 package chat
 
+import "time"
+
 // systemPromptVersion increments with any change to the prompt text.
-const systemPromptVersion = 3
+const systemPromptVersion = 4
 
 // systemPrompt is Timothy's identity. Additions APPEND after the
 // existing text and the terseness steer stays the LAST line: the
@@ -21,10 +23,18 @@ Before a tool call, write at most one short line saying what you are checking �
 const systemPromptClose = `Be concise; do not restate context or repeat the question.`
 
 // assembleSystem builds the full system prompt: identity, then the
-// optional per-deploy skills index, then the closing steer.
-func assembleSystem(skillsIndex string) string {
+// optional per-deploy skills index, then a current-date line, then the
+// closing steer. now must be evaluated at request time (never cached
+// at construction) so the date line is fresh every turn — a model
+// with no other way to know "today" otherwise anchors on training
+// data and mangles date-bounded tool calls (e.g. Gmail after:/before:
+// operators). Date only, no clock time: a timestamp would bust the
+// provider prompt cache's tail every single request, where a date
+// busts it once per day (D-018) — acceptable.
+func assembleSystem(skillsIndex string, now time.Time) string {
+	dateLine := "Today is " + now.UTC().Format("Monday, 2006-01-02") + " (UTC)."
 	if skillsIndex == "" {
-		return systemPrompt + "\n\n" + systemPromptClose
+		return systemPrompt + "\n\n" + dateLine + "\n\n" + systemPromptClose
 	}
-	return systemPrompt + "\n\n" + skillsIndex + "\n" + systemPromptClose
+	return systemPrompt + "\n\n" + skillsIndex + "\n\n" + dateLine + "\n\n" + systemPromptClose
 }
