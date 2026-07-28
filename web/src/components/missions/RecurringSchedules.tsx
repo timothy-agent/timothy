@@ -1,11 +1,11 @@
 import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { deleteSchedule, patchSchedule, listSchedules } from '../../api/client'
 import type { Schedule } from '../../api/types'
 import { describeCron } from '../../lib/schedules'
-import { ScheduleDialog } from '../schedules/ScheduleDialog'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -22,14 +22,13 @@ function formatDate(v?: string): string {
   return new Date(v).toLocaleString()
 }
 
-// RecurringSchedules lists the recurring missions created via
-// NewMissionDialog's "Repeat on schedule" toggle — rendered on the
+// RecurringSchedules lists the recurring missions created from the new
+// mission page's "Repeat on schedule" option — rendered on the
 // Missions page between the notifications strip and the mission grid,
 // only when at least one schedule exists.
 export function RecurringSchedules() {
+  const navigate = useNavigate()
   const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editing, setEditing] = useState<Schedule | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState<Schedule | null>(null)
 
   const refresh = useCallback(() => {
@@ -45,11 +44,6 @@ export function RecurringSchedules() {
       toast.error('Could not update schedule', { description: errText(err) })
       refresh()
     })
-  }
-
-  const openEdit = (sc: Schedule) => {
-    setEditing(sc)
-    setDialogOpen(true)
   }
 
   const remove = async () => {
@@ -90,7 +84,11 @@ export function RecurringSchedules() {
               </div>
             </div>
             <Toggle on={sc.enabled} onChange={(v) => toggle(sc, v)} label={`${sc.name} enabled`} />
-            <Button size="sm" variant="outline" onClick={() => openEdit(sc)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(`/missions/schedules/${sc.id}/edit`)}
+            >
               Edit
             </Button>
             <button
@@ -104,13 +102,6 @@ export function RecurringSchedules() {
           </div>
         ))}
       </div>
-
-      <ScheduleDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        schedule={editing}
-        onSaved={refresh}
-      />
 
       <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
         <DialogContent>

@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Schedule } from '../../api/types'
 import { RecurringSchedules } from './RecurringSchedules'
@@ -26,11 +26,15 @@ const schedule: Schedule = {
 }
 
 function renderList() {
-  return render(
-    <MemoryRouter>
-      <RecurringSchedules />
-    </MemoryRouter>,
+  const router = createMemoryRouter(
+    [
+      { path: '/missions', element: <RecurringSchedules /> },
+      { path: '/missions/schedules/:id/edit', element: <div>edit schedule page</div> },
+    ],
+    { initialEntries: ['/missions'] },
   )
+  const result = render(<RouterProvider router={router} />)
+  return { router, ...result }
 }
 
 afterEach(cleanup)
@@ -75,5 +79,16 @@ describe('RecurringSchedules', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
 
     await waitFor(() => expect(deleteSchedule).toHaveBeenCalledWith('s1'))
+  })
+
+  it('navigates to the edit schedule page', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    const { router } = renderList()
+    await screen.findByText('weekly-digest')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/missions/schedules/s1/edit'))
+    expect(await screen.findByText('edit schedule page')).toBeTruthy()
   })
 })

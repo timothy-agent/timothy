@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router'
 import { listMissions, listNotifications, markNotificationRead } from '../api/client'
 import type { Mission, Notification } from '../api/types'
 import { MissionCard } from '../components/missions/MissionCard'
-import { NewMissionDialog } from '../components/missions/NewMissionDialog'
 import { RecurringSchedules } from '../components/missions/RecurringSchedules'
 import { Button } from '../components/ui/button'
 
@@ -15,10 +14,6 @@ export function Missions() {
   const navigate = useNavigate()
   const [missions, setMissions] = useState<Mission[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
-  const [dialogOpen, setDialogOpen] = useState(false)
-  // Bumped to force RecurringSchedules to refetch after a new schedule
-  // is created from the dialog — it manages its own list internally.
-  const [schedulesVersion, setSchedulesVersion] = useState(0)
 
   const refresh = useCallback(() => {
     listMissions().then(setMissions, () => undefined)
@@ -46,7 +41,7 @@ export function Missions() {
             Long-running tasks that plan, execute, and review their own work.
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>New mission</Button>
+        <Button onClick={() => navigate('/missions/new')}>New mission</Button>
       </div>
 
       {unread.length > 0 && (
@@ -77,7 +72,7 @@ export function Missions() {
         </div>
       )}
 
-      <RecurringSchedules key={schedulesVersion} />
+      <RecurringSchedules />
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {missions.map((m) => (
@@ -89,13 +84,6 @@ export function Missions() {
           </div>
         )}
       </div>
-
-      <NewMissionDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onCreated={(id) => navigate(`/missions/${id}`)}
-        onScheduled={() => setSchedulesVersion((v) => v + 1)}
-      />
     </div>
   )
 }

@@ -47,10 +47,12 @@ import { usePendingMemories } from './lib/memory'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
 import { Analytics } from './pages/Analytics'
+import { EditSchedule } from './pages/EditSchedule'
 import { Home } from './pages/Home'
 import { Memory } from './pages/Memory'
 import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
+import { NewMission } from './pages/NewMission'
 import { Research } from './pages/Research'
 import { Settings } from './pages/Settings'
 
@@ -319,6 +321,8 @@ function App() {
                 {/* Old bookmarks: the page lived at /dashboard before the rename. */}
                 <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
                 <Route path="/missions" element={<Missions />} />
+                <Route path="/missions/new" element={<NewMission />} />
+                <Route path="/missions/schedules/:id/edit" element={<EditSchedule />} />
                 <Route path="/missions/:id" element={<MissionDetail />} />
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/settings/*" element={<Settings />} />
