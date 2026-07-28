@@ -1,6 +1,7 @@
 package missions
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -83,4 +84,110 @@ func TestDueDecision(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveTemplateDefaults(t *testing.T) {
+	t.Parallel()
+	budget := 5.0
+
+	cases := []struct {
+		name        string
+		template    MissionTemplate
+		resolve     AgentResolver
+		wantRoute   string
+		wantReview  string
+		wantBudget  *float64
+		wantOverlay string
+	}{
+		{
+			name:       "nil resolver falls back to defaultMissionRoute",
+			template:   MissionTemplate{Goal: "g", AgentID: "a1"},
+			resolve:    nil,
+			wantRoute:  defaultMissionRoute,
+			wantReview: defaultMissionRoute,
+		},
+		{
+			name:     "unresolved agent id falls back to defaultMissionRoute",
+			template: MissionTemplate{Goal: "g", AgentID: "missing"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{}, false
+			},
+			wantRoute:  defaultMissionRoute,
+			wantReview: defaultMissionRoute,
+		},
+		{
+			name:     "empty template fields fill from resolved agent",
+			template: MissionTemplate{Goal: "g", AgentID: "briefing"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{Route: "fast", ReviewRoute: "careful", BudgetUSD: &budget, PromptOverlay: "overlay text"}, true
+			},
+			wantRoute:   "fast",
+			wantReview:  "careful",
+			wantBudget:  &budget,
+			wantOverlay: "overlay text",
+		},
+		{
+			name:     "template's own non-empty fields are never overwritten",
+			template: MissionTemplate{Goal: "g", AgentID: "briefing", Route: "explicit", ReviewRoute: "explicit-review"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{Route: "fast", ReviewRoute: "careful", PromptOverlay: "overlay text"}, true
+			},
+			wantRoute:   "explicit",
+			wantReview:  "explicit-review",
+			wantOverlay: "overlay text",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve)
+			if got.Route != tc.wantRoute {
+				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
+			}
+			if got.ReviewRoute != tc.wantReview {
+				t.Errorf("ReviewRoute = %q, want %q", got.ReviewRoute, tc.wantReview)
+			}
+			if (got.BudgetUSD == nil) != (tc.wantBudget == nil) {
+				t.Errorf("BudgetUSD = %v, want %v", got.BudgetUSD, tc.wantBudget)
+			} else if got.BudgetUSD != nil && *got.BudgetUSD != *tc.wantBudget {
+				t.Errorf("BudgetUSD = %v, want %v", *got.BudgetUSD, *tc.wantBudget)
+			}
+			if overlay != tc.wantOverlay {
+				t.Errorf("overlay = %q, want %q", overlay, tc.wantOverlay)
+			}
+		})
+	}
+}
+
+func TestTickSkipsAllWorkWhenDisabled(t *testing.T) {
+	t.Parallel()
+	called := false
+	s := &Scheduler{enabled: func(ctx context.Context) bool {
+		called = true
+		return false
+	}}
+	// db is nil: if tick proceeded past the enabled check it would
+	// panic dereferencing s.db.Get, not merely fail — the disabled
+	// short-circuit must return before any of that.
+	if err := s.tick(context.Background(), time.Now()); err != nil {
+		t.Fatalf("tick with scheduler disabled: %v", err)
+	}
+	if !called {
+		t.Fatal("tick never consulted the enabled func")
+	}
+}
+
+func TestTickNilEnabledDegradesOpen(t *testing.T) {
+	t.Parallel()
+	// A nil enabled func must NOT short-circuit tick (degrade open) —
+	// this only checks the guard itself doesn't panic or skip; db is
+	// nil, so a real proceed would panic on s.db.Get, proving the nil
+	// check alone can't be mistaken for "disabled".
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("tick with nil enabled and nil db: want it to proceed past the guard and panic on the nil db, proving degrade-open")
+		}
+	}()
+	s := &Scheduler{enabled: nil}
+	_ = s.tick(context.Background(), time.Now())
 }

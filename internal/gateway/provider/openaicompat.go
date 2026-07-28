@@ -154,8 +154,10 @@ type oaiRequest struct {
 	} `json:"stream_options"`
 	Tools     []oaiTool `json:"tools,omitempty"`
 	MaxTokens int       `json:"max_tokens,omitempty"`
-	// ReasoningEffort is the D-020 dial; providers that don't know
-	// the field ignore it.
+	// ReasoningEffort is the D-020 dial. Not every OpenAI-compatible
+	// backend tolerates the field: Ollama returns HTTP 400 for models
+	// that don't recognize it. Stream retries once without it on that
+	// exact failure (see stripReasoningEffortAndRetry).
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
@@ -196,12 +198,29 @@ func (o *OpenAICompat) Stream(ctx context.Context, req CompletionRequest) (<-cha
 	if req.Model == "" {
 		return nil, fmt.Errorf("openaicompat: model is required")
 	}
-	body, err := json.Marshal(o.buildRequest(req))
+	wire := o.buildRequest(req)
+	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, fmt.Errorf("openaicompat: marshal request: %w", err)
 	}
 
-	build := func(ctx context.Context) (*http.Request, error) {
+	ch := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
+	if wire.ReasoningEffort == "" {
+		return ch, nil
+	}
+
+	// Some OpenAI-compatible backends (Ollama, for qwen2.5 family
+	// models) reject an unrecognized reasoning_effort field with HTTP
+	// 400 instead of ignoring it. That surfaces as a single permanent
+	// error event with no prior stream activity — retry once with the
+	// field stripped rather than failing the whole turn over a hint.
+	return stripReasoningEffortAndRetry(ctx, o, req, wire, ch), nil
+}
+
+// buildFor returns the request builder for a fixed, already-marshaled
+// body.
+func (o *OpenAICompat) buildFor(body []byte) func(ctx context.Context) (*http.Request, error) {
+	return func(ctx context.Context) (*http.Request, error) {
 		r, err := http.NewRequestWithContext(ctx, http.MethodPost, o.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -213,7 +232,62 @@ func (o *OpenAICompat) Stream(ctx context.Context, req CompletionRequest) (<-cha
 		}
 		return r, nil
 	}
-	return runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), build, o.relay), nil
+}
+
+// stripReasoningEffortAndRetry peeks the first event off first. Per
+// the runStream contract, a request-level failure (doWithRetry
+// returning a permanent error) emits exactly one error event and
+// closes the channel — nothing can follow it. So a bare http_400 as
+// that first event is unambiguously "rejected before any stream
+// activity"; retry once with reasoning_effort cleared. Any other first
+// event means relay already ran, so pass everything through
+// unchanged, event by event, keeping the success path streaming live
+// rather than buffering.
+func stripReasoningEffortAndRetry(ctx context.Context, o *OpenAICompat, req CompletionRequest, wire oaiRequest, first <-chan stream.StreamEvent) <-chan stream.StreamEvent {
+	out := make(chan stream.StreamEvent)
+	go func() {
+		defer close(out)
+		ev, ok := <-first
+		if !ok {
+			return
+		}
+		if isHTTP400(ev) {
+			retryReasoningEffortStripped(ctx, o, req, wire, out)
+			return
+		}
+		if !emit(ctx, out, ev) {
+			return
+		}
+		for ev := range first {
+			if !emit(ctx, out, ev) {
+				return
+			}
+		}
+	}()
+	return out
+}
+
+// retryReasoningEffortStripped rebuilds the request without
+// ReasoningEffort and relays the retried stream to out.
+func retryReasoningEffortStripped(ctx context.Context, o *OpenAICompat, req CompletionRequest, wire oaiRequest, out chan<- stream.StreamEvent) {
+	wire.ReasoningEffort = ""
+	body, err := json.Marshal(wire)
+	if err != nil {
+		emit(ctx, out, errEvent(fmt.Errorf("openaicompat: marshal retry request: %w", err)))
+		return
+	}
+	retry := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
+	for ev := range retry {
+		if !emit(ctx, out, ev) {
+			return
+		}
+	}
+}
+
+// isHTTP400 reports whether ev is the terminal error event for an
+// HTTP 400 response.
+func isHTTP400(ev stream.StreamEvent) bool {
+	return ev.Type == stream.EventError && ev.Err != nil && ev.Err.Code == "http_400"
 }
 
 func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {

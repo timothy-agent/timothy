@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { createMission } from '../../api/client'
+import { createMission, createSchedule } from '../../api/client'
 import type { AdminAgent } from '../../api/types'
 import { useAgents } from '../AgentPicker'
+import { slugify } from '../settings/AgentForm'
+import { cronPresets, type CronPresetValue } from '../../lib/schedules'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -21,17 +23,21 @@ import { errText } from '../settings/util'
 const kinds = [
   { value: 'research', label: 'Research' },
   { value: 'coding', label: 'Coding' },
-  { value: 'scheduled', label: 'Scheduled' },
 ] as const
 
 export function NewMissionDialog({
   open,
   onOpenChange,
   onCreated,
+  onScheduled,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated: (id: string) => void
+  // Fires after a recurring schedule is created instead of a one-off
+  // mission — the caller refreshes its schedule list; unlike onCreated
+  // this never navigates, there is no mission yet to open.
+  onScheduled?: () => void
 }) {
   const agents = useAgents()
   const [goal, setGoal] = useState('')
@@ -46,6 +52,15 @@ export function NewMissionDialog({
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
   const [busy, setBusy] = useState(false)
 
+  // Repeat-on-schedule fields — only read/submitted while repeat is on.
+  const [repeat, setRepeat] = useState(false)
+  const [scheduleName, setScheduleName] = useState('')
+  const [preset, setPreset] = useState<CronPresetValue>('daily-7am')
+  const [cron, setCron] = useState<string>(cronPresets[0].cron ?? '0 7 * * *')
+  const [cronError, setCronError] = useState<string | null>(null)
+  const [maxIterations, setMaxIterations] = useState('')
+  const [expiresAt, setExpiresAt] = useState('')
+
   const pickAgent = (id: string) => {
     setAgentID(id)
     const agent = agents.find((a) => a.id === id)
@@ -55,7 +70,26 @@ export function NewMissionDialog({
     }
   }
 
-  const canSubmit = goal.trim() !== '' && (kind !== 'coding' || repoPath.trim() !== '')
+  const pickPreset = (v: CronPresetValue) => {
+    setPreset(v)
+    const found = cronPresets.find((p) => p.value === v)
+    if (found?.cron) setCron(found.cron)
+  }
+
+  // A client-side 5-field shape check only — the server is the
+  // authoritative cron validator (robfig/cron), this just catches
+  // obvious typos before a round trip.
+  const validCronShape = (v: string) => v.trim().split(/\s+/).length === 5
+
+  const onCronChange = (v: string) => {
+    setCron(v)
+    setCronError(null)
+  }
+
+  const canSubmit =
+    goal.trim() !== '' &&
+    (kind !== 'coding' || repoPath.trim() !== '') &&
+    (!repeat || validCronShape(cron))
 
   const reset = () => {
     setGoal('')
@@ -68,28 +102,69 @@ export function NewMissionDialog({
     setEscalationRoute('')
     setBudget('')
     setAutoApproveSafe(true)
+    setRepeat(false)
+    setScheduleName('')
+    setPreset('daily-7am')
+    setCron(cronPresets[0].cron ?? '0 7 * * *')
+    setCronError(null)
+    setMaxIterations('')
+    setExpiresAt('')
   }
 
-  const submit = async () => {
-    setBusy(true)
-    try {
-      const { id } = await createMission({
+  const submitMission = async () => {
+    const { id } = await createMission({
+      goal: goal.trim(),
+      kind,
+      agent_id: agentID || undefined,
+      route: route || undefined,
+      review_route: reviewRoute || undefined,
+      escalation_route: escalationRoute || undefined,
+      budget_usd: budget ? Number(budget) : undefined,
+      repo_path: kind === 'coding' ? repoPath.trim() : undefined,
+      auto_approve_safe: autoApproveSafe,
+    })
+    toast.success('Mission created')
+    onCreated(id)
+  }
+
+  const submitSchedule = async () => {
+    await createSchedule({
+      name: slugify(scheduleName || goal),
+      cron,
+      mission_template: {
         goal: goal.trim(),
         kind,
         agent_id: agentID || undefined,
         route: route || undefined,
         review_route: reviewRoute || undefined,
-        escalation_route: escalationRoute || undefined,
+        max_iterations: maxIterations ? Number(maxIterations) : undefined,
         budget_usd: budget ? Number(budget) : undefined,
-        repo_path: kind === 'coding' ? repoPath.trim() : undefined,
         auto_approve_safe: autoApproveSafe,
-      })
-      toast.success('Mission created')
+      },
+      expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+    })
+    toast.success('Schedule created')
+    onScheduled?.()
+  }
+
+  const submit = async () => {
+    if (repeat && !validCronShape(cron)) {
+      setCronError('Cron must have 5 space-separated fields (minute hour day month weekday).')
+      return
+    }
+    setBusy(true)
+    try {
+      if (repeat) {
+        await submitSchedule()
+      } else {
+        await submitMission()
+      }
       reset()
       onOpenChange(false)
-      onCreated(id)
     } catch (err) {
-      toast.error('Could not create mission', { description: errText(err) })
+      toast.error(repeat ? 'Could not create schedule' : 'Could not create mission', {
+        description: errText(err),
+      })
     } finally {
       setBusy(false)
     }
@@ -125,15 +200,21 @@ export function NewMissionDialog({
               </SelectTrigger>
               <SelectContent>
                 {kinds.map((k) => (
-                  <SelectItem key={k.value} value={k.value}>
+                  <SelectItem key={k.value} value={k.value} disabled={repeat && k.value === 'coding'}>
                     {k.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {repeat && (
+              <p className="text-xs text-muted-foreground">
+                Coding missions aren't supported on a recurring schedule yet — each fire has no
+                repository to work in.
+              </p>
+            )}
           </div>
 
-          {kind === 'coding' && (
+          {kind === 'coding' && !repeat && (
             <div className="space-y-1.5">
               <Label htmlFor="mission-repo">Repository path</Label>
               <Input
@@ -160,6 +241,90 @@ export function NewMissionDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          <label htmlFor="mission-repeat" className="flex items-start gap-2 text-sm">
+            <input
+              id="mission-repeat"
+              type="checkbox"
+              checked={repeat}
+              onChange={(e) => {
+                setRepeat(e.target.checked)
+                if (e.target.checked && kind === 'coding') setKind('research')
+              }}
+              className="mt-0.5"
+            />
+            <span>
+              Repeat on schedule
+              <span className="block text-xs text-muted-foreground">
+                Fires this mission on a cron schedule instead of running it once.
+              </span>
+            </span>
+          </label>
+
+          {repeat && (
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-schedule-name">Schedule name</Label>
+                <Input
+                  id="mission-schedule-name"
+                  value={scheduleName}
+                  onChange={(e) => setScheduleName(e.target.value)}
+                  placeholder={slugify(goal) || 'schedule name'}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Runs</Label>
+                <Select value={preset} onValueChange={(v) => pickPreset(v as CronPresetValue)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cronPresets.map((p) => (
+                      <SelectItem key={p.value} value={p.value}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {preset === 'custom' && (
+                  <Input
+                    aria-label="Cron expression"
+                    value={cron}
+                    onChange={(e) => onCronChange(e.target.value)}
+                    placeholder="0 7 * * *"
+                    className="font-mono"
+                  />
+                )}
+                {cronError && <p className="text-xs text-destructive">{cronError}</p>}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-max-iterations">Max iterations</Label>
+                <Input
+                  id="mission-max-iterations"
+                  type="number"
+                  value={maxIterations}
+                  onChange={(e) => setMaxIterations(e.target.value)}
+                  placeholder="Default"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-expires">Expires</Label>
+                <Input
+                  id="mission-expires"
+                  type="datetime-local"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Server time — the schedule stops firing after this moment. Empty means it never
+                  expires.
+                </p>
+              </div>
             </div>
           )}
 
@@ -191,15 +356,17 @@ export function NewMissionDialog({
                   placeholder="default"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="mission-escalation-route">Escalation route</Label>
-                <Input
-                  id="mission-escalation-route"
-                  value={escalationRoute}
-                  onChange={(e) => setEscalationRoute(e.target.value)}
-                  placeholder="Off — set to switch route after a failed or reworked turn"
-                />
-              </div>
+              {!repeat && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-escalation-route">Escalation route</Label>
+                  <Input
+                    id="mission-escalation-route"
+                    value={escalationRoute}
+                    onChange={(e) => setEscalationRoute(e.target.value)}
+                    placeholder="Off — set to switch route after a failed or reworked turn"
+                  />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="mission-budget">Budget (USD)</Label>
                 <Input
@@ -235,7 +402,7 @@ export function NewMissionDialog({
             Cancel
           </Button>
           <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
-            Create mission
+            {repeat ? 'Create schedule' : 'Create mission'}
           </Button>
         </DialogFooter>
       </DialogContent>

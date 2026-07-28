@@ -17,9 +17,11 @@ import type {
   MissionEvent,
   MissionFile,
   MissionUsage,
+  MissionTemplate,
   Notification,
   ProviderHealth,
   RetrievedMemory,
+  Schedule,
   SessionMeta,
   SessionUsage,
   TestResult,
@@ -653,7 +655,7 @@ export async function patchSettingValues(changes: Record<string, string>): Promi
 
 export interface CreateMissionInput {
   goal: string
-  kind: 'coding' | 'research' | 'scheduled'
+  kind: 'coding' | 'research'
   agent_id?: string
   route?: string
   review_route?: string
@@ -664,8 +666,18 @@ export interface CreateMissionInput {
   auto_approve_safe?: boolean
 }
 
-export async function listMissions(): Promise<Mission[]> {
-  const { missions } = await request<{ missions: Mission[] }>('/v1/missions')
+// listMissions returns every mission by default; opts narrows to one
+// schedule's fire history (scheduleId) and/or caps the result count
+// (limit) — both map directly to the server's optional query params.
+export async function listMissions(opts?: {
+  scheduleId?: string
+  limit?: number
+}): Promise<Mission[]> {
+  const params = new URLSearchParams()
+  if (opts?.scheduleId) params.set('schedule_id', opts.scheduleId)
+  if (opts?.limit) params.set('limit', String(opts.limit))
+  const qs = params.size > 0 ? `?${params.toString()}` : ''
+  const { missions } = await request<{ missions: Mission[] }>(`/v1/missions${qs}`)
   return missions ?? []
 }
 
@@ -813,4 +825,46 @@ export async function pushMission(
     method: 'POST',
     body: JSON.stringify({ credential_ref: credentialRef }),
   })
+}
+
+// --- schedules (recurring cron triggers that fire mission templates) ---
+
+export interface CreateScheduleInput {
+  name: string
+  cron: string
+  mission_template: MissionTemplate
+  enabled?: boolean
+  expires_at?: string
+}
+
+export async function listSchedules(): Promise<Schedule[]> {
+  const { schedules } = await request<{ schedules: Schedule[] }>('/v1/schedules')
+  return schedules ?? []
+}
+
+export async function createSchedule(input: CreateScheduleInput): Promise<{ id: string }> {
+  return request<{ id: string }>('/v1/schedules', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function patchSchedule(
+  id: string,
+  patch: {
+    name?: string
+    cron?: string
+    mission_template?: MissionTemplate
+    enabled?: boolean
+    expires_at?: string | null
+  },
+): Promise<Schedule> {
+  return request<Schedule>(`/v1/schedules/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  await request<void>(`/v1/schedules/${id}`, { method: 'DELETE' })
 }

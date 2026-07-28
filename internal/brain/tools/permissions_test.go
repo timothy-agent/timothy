@@ -112,6 +112,32 @@ func TestGlobMatch(t *testing.T) {
 	}
 }
 
+func TestToolMatches(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		tool, rowTool string
+		want          bool
+	}{
+		{name: "exact match", tool: "gmail_search", rowTool: "gmail_search", want: true},
+		{name: "connector suffix match", tool: "google-calendar_calendar_list_events", rowTool: "calendar_list_events", want: true},
+		{name: "connector suffix match gmail", tool: "gmail_gmail_search", rowTool: "gmail_search", want: true},
+		{name: "sandbox sentinel never suffix-matches", tool: "foo___sandbox__", rowTool: SandboxGrantTool, want: false},
+		{name: "sandbox sentinel exact still matches", tool: SandboxGrantTool, rowTool: SandboxGrantTool, want: true},
+		{name: "no underscore boundary rejected", tool: "notcalendar_list_events", rowTool: "calendar_list_events", want: false},
+		{name: "trailing extra text rejected", tool: "calendar_list_events_extra", rowTool: "calendar_list_events", want: false},
+		{name: "unrelated tool", tool: "shell", rowTool: "calendar_list_events", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := toolMatches(tc.tool, tc.rowTool); got != tc.want {
+				t.Errorf("toolMatches(%q, %q) = %v, want %v", tc.tool, tc.rowTool, got, tc.want)
+			}
+		})
+	}
+}
+
 // The chain short-circuits before any DB access for policy-guard
 // denials, exempt tools, and danger-classified commands — so these
 // paths are testable without Postgres (nil pool).

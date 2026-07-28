@@ -9,10 +9,19 @@ vi.mock('../api/client', () => ({
   listNotifications: vi.fn(),
   markNotificationRead: vi.fn(),
   createMission: vi.fn(),
+  createSchedule: vi.fn(),
+  listSchedules: vi.fn(),
   listAgents: vi.fn(),
 }))
 
-import { createMission, listAgents, listMissions, listNotifications } from '../api/client'
+import {
+  createMission,
+  createSchedule,
+  listAgents,
+  listMissions,
+  listNotifications,
+  listSchedules,
+} from '../api/client'
 
 const mission: Mission = {
   id: 'm1',
@@ -47,6 +56,7 @@ beforeEach(() => {
   vi.mocked(listMissions).mockResolvedValue([mission])
   vi.mocked(listNotifications).mockResolvedValue([])
   vi.mocked(listAgents).mockResolvedValue([])
+  vi.mocked(listSchedules).mockResolvedValue([])
 })
 
 describe('Missions board', () => {
@@ -155,5 +165,84 @@ describe('Missions board', () => {
 
     fireEvent.change(screen.getByLabelText('Repository path'), { target: { value: '/workspace/repo' } })
     expect(createButton.disabled).toBe(false)
+  })
+})
+
+describe('Missions board — repeat on schedule', () => {
+  it('submits a schedule with the slugified default name, preset cron, and research kind', async () => {
+    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    fireEvent.click(screen.getByRole('button', { name: 'New mission' }))
+    fireEvent.change(await screen.findByLabelText('Goal'), {
+      target: { value: 'Check the news every morning' },
+    })
+    fireEvent.click(screen.getByLabelText(/Repeat on schedule/))
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+
+    await waitFor(() =>
+      expect(createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'check-the-news-every-morning',
+          cron: '0 7 * * *',
+          mission_template: expect.objectContaining({
+            goal: 'Check the news every morning',
+            kind: 'research',
+            auto_approve_safe: true,
+          }),
+        }),
+      ),
+    )
+    expect(createMission).not.toHaveBeenCalled()
+  })
+
+  it('disables the Coding kind while repeating', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    fireEvent.click(screen.getByRole('button', { name: 'New mission' }))
+    await screen.findByLabelText('Goal')
+    fireEvent.click(screen.getByLabelText(/Repeat on schedule/))
+    fireEvent.click(screen.getAllByRole('combobox')[0])
+
+    expect((await screen.findByText('Coding')).closest('[role="option"]')).toHaveAttribute(
+      'data-disabled',
+    )
+  })
+
+  it('cascades the picked agent onto review route the same as a one-off mission', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.mocked(listAgents).mockResolvedValue([
+      {
+        id: 'a1',
+        name: 'briefing',
+        description: '',
+        prompt_overlay: '',
+        route: '',
+        skills: [],
+        tools: [],
+        memory: false,
+        is_default: false,
+        enabled: true,
+        review_route: 'careful',
+      },
+    ])
+    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    fireEvent.click(screen.getByRole('button', { name: 'New mission' }))
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByLabelText(/Repeat on schedule/))
+
+    // Combobox order: Kind, Agent, Runs (cron preset) — the agent
+    // picker is the second one once repeat is on.
+    fireEvent.click(screen.getAllByRole('combobox')[1])
+    fireEvent.click(await screen.findByText('briefing'))
+    fireEvent.click(screen.getByText('Show advanced options'))
+
+    expect((screen.getByLabelText('Review route') as HTMLInputElement).value).toBe('careful')
   })
 })

@@ -233,31 +233,61 @@ func (p *Permissions) Grant(ctx context.Context, sessionID, tool, pattern string
 
 // matchGrant checks the project allowlist, then unexpired session
 // grants, glob-matching each pattern against the subject.
+//
+// D-036: a grant row's tool also matches when the call's tool name
+// ENDS WITH "_"+rowTool — connector tools are namespaced
+// "<connector-name>_<tool-name>" (connectors.Manager.Tools), so an
+// allowlist entry like "calendar_list_events" (agent-authored, before
+// any connector name is known) still hits
+// "google-calendar_calendar_list_events" at call time. Same suffix
+// semantics as loop.Agent.SetForceRoute, for the same reason. The
+// SandboxGrantTool sentinel ("__sandbox__") is excluded — it is never
+// a real tool call, only a stored sandbox root, and its leading "__"
+// can never be a legitimate "_"-boundary suffix match target anyway
+// since no call tool ends with "__sandbox__".
 func (p *Permissions) matchGrant(ctx context.Context, sessionID, tool, subject string) (bool, string, error) {
 	db, err := p.db.Get()
 	if err != nil {
 		return false, "", fmt.Errorf("tools: match grant: %w", err)
 	}
 	rows, err := db.Query(ctx, `
-		SELECT pattern, 'project allowlist' FROM project_allowlist WHERE tool = $2
+		SELECT tool, pattern, 'project allowlist' FROM project_allowlist
 		UNION ALL
-		SELECT pattern, 'session grant' FROM session_grants
-		WHERE session_id = $1 AND tool = $2 AND expires > now()`,
-		sessionID, tool)
+		SELECT tool, pattern, 'session grant' FROM session_grants
+		WHERE session_id = $1 AND expires > now()`,
+		sessionID)
 	if err != nil {
 		return false, "", fmt.Errorf("tools: match grant: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var pattern, source string
-		if err := rows.Scan(&pattern, &source); err != nil {
+		var rowTool, pattern, source string
+		if err := rows.Scan(&rowTool, &pattern, &source); err != nil {
 			return false, "", fmt.Errorf("tools: match grant: %w", err)
+		}
+		if !toolMatches(tool, rowTool) {
+			continue
 		}
 		if globMatch(pattern, subject) {
 			return true, source + " " + pattern, nil
 		}
 	}
 	return false, "", rows.Err()
+}
+
+// toolMatches reports whether a grant/allowlist row named rowTool
+// covers a call to tool: exact match, or tool ends with "_"+rowTool
+// (connector namespacing — see matchGrant's D-036 note). rowTool ==
+// SandboxGrantTool never suffix-matches; it is a stored sandbox root,
+// not a grantable tool name.
+func toolMatches(tool, rowTool string) bool {
+	if tool == rowTool {
+		return true
+	}
+	if rowTool == SandboxGrantTool {
+		return false
+	}
+	return strings.HasSuffix(tool, "_"+rowTool)
 }
 
 // globMatch matches shell-style patterns. A trailing "*" also matches

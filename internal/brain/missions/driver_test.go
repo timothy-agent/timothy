@@ -52,6 +52,20 @@ func (f *fakeStore) SetProvisioned(ctx context.Context, id, workspace, worktree,
 	return nil
 }
 
+// SetSession mirrors the real Store's WHERE session_id IS NULL guard —
+// a second call for a mission that already has one is a no-op, not an
+// overwrite.
+func (f *fakeStore) SetSession(ctx context.Context, id, sessionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	if m.SessionID == "" {
+		m.SessionID = sessionID
+		f.missions[id] = m
+	}
+	return nil
+}
+
 func (f *fakeStore) Get(ctx context.Context, id string) (Mission, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -504,6 +518,137 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	}
 	if len(granter.calls) != 0 {
 		t.Fatalf("Grant calls = %d, want 0 when AutoApproveSafe is false", len(granter.calls))
+	}
+}
+
+// TestDriverCreateGrantsApprovalAllowlist confirms Create grants every
+// tool in the resolved agent's ApprovalAllowlist — the fix that makes
+// api/missions.go:28's stale "ApprovalAllowlist is resolved" comment
+// actually true.
+func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
+	store := newFakeStore()
+	granter := &fakeGranter{}
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+		if agentID != "briefing-agent" {
+			return AgentDefaults{}, false
+		}
+		return AgentDefaults{ApprovalAllowlist: []string{"gmail_search", "gmail_send"}}, true
+	})
+
+	id, err := d.Create(context.Background(), Mission{
+		Goal: "test", Kind: "research", AgentID: "briefing-agent",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false,
+	}, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, _ := store.Get(context.Background(), id)
+
+	gotTools := map[string]bool{}
+	for _, call := range granter.calls {
+		if call.sessionID != m.SessionID {
+			t.Fatalf("Grant call sessionID = %q, want the mission's own hidden session %q", call.sessionID, m.SessionID)
+		}
+		gotTools[call.tool] = true
+	}
+	for _, want := range []string{"gmail_search", "gmail_send"} {
+		if !gotTools[want] {
+			t.Fatalf("Grant calls = %+v, want a grant for %q", granter.calls, want)
+		}
+	}
+}
+
+// TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved: an
+// AgentID that doesn't resolve (deleted agent, or none set) grants
+// nothing beyond whatever AutoApproveSafe itself produces — no
+// allowlist to apply.
+func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
+	store := newFakeStore()
+	granter := &fakeGranter{}
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+		return AgentDefaults{}, false
+	})
+
+	if _, err := d.Create(context.Background(), Mission{
+		Goal: "test", Kind: "research", AutoApproveSafe: false,
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	}, ""); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(granter.calls) != 0 {
+		t.Fatalf("Grant calls = %d, want 0 for an unresolved agent", len(granter.calls))
+	}
+}
+
+// TestDriverAdvanceLazilyProvisionsBareMission reproduces the fix for
+// the plan's defect #1: a mission inserted directly (bypassing
+// Create — exactly what scheduler.go's createFromTemplate does) has no
+// session and no workspace. The first Advance call must provision both
+// before running the phase, or the worker gets no shell/write_file
+// tools (runner.go's missionTools returns nil for an empty WorkRoot).
+func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
+	store := newFakeStore()
+	// A bare row, exactly as createFromTemplate leaves it: no
+	// SessionID, no Workspace/Worktree.
+	store.put("m1", Mission{
+		ID: "m1", Goal: "scheduled run", Kind: "research",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true,
+	})
+	granter := &fakeGranter{}
+	sessions := &fakeSessionCreator{}
+	wsRoot := t.TempDir()
+	workspace := NewWorkspace(wsRoot, nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, granter, slog.Default())
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.SessionID == "" {
+		t.Fatal("Advance did not provision a hidden session for a bare mission")
+	}
+	if m.Workspace == "" {
+		t.Fatal("Advance did not provision a workspace for a bare mission")
+	}
+	found := false
+	for _, call := range granter.calls {
+		if call.tool == "shell" && call.pattern == "*" && call.sessionID == m.SessionID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Advance's lazy provisioning did not grant the auto-approve-safe shell allowance")
+	}
+}
+
+// TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned confirms
+// ensureProvisioned is a no-op (no new session, no re-grant) once a
+// mission already has both — the ordinary case for every mission
+// created via Create, which must not re-provision on every single
+// Advance call.
+func TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, SessionID: "already-provisioned-session", Workspace: "/already/provisioned",
+	})
+	granter := &fakeGranter{}
+	sessions := &fakeSessionCreator{}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, nil, nil, sessions, granter, slog.Default())
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(granter.calls) != 0 {
+		t.Fatalf("Grant calls = %d, want 0 for an already-provisioned mission", len(granter.calls))
+	}
+	if sessions.n != 0 {
+		t.Fatalf("sessions.Create was called %d times, want 0 for an already-provisioned mission", sessions.n)
 	}
 }
 

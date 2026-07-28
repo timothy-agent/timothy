@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -70,12 +71,16 @@ type execer interface {
 // goal verbatim, not the marker prefix — delete them via the schedule
 // join FIRST, before deleting schedules (whose FK would otherwise
 // orphan them under ON DELETE CASCADE at an unpredictable order
-// relative to a concurrently running test).
+// relative to a concurrently running test). Schedule NAMES can't carry
+// marker verbatim (it has a trailing space; schedule names must be a
+// slug — see schedules_integration_test.go's slugMarker), so schedule
+// rows are also swept by the slug form.
 func sweep(ctx context.Context, db execer) {
+	slug := strings.TrimSpace(marker)
 	_, _ = db.Exec(ctx, `DELETE FROM missions WHERE schedule_id IN (
-		SELECT id FROM schedules WHERE name LIKE $1 || '%'
-	)`, marker)
-	_, _ = db.Exec(ctx, "DELETE FROM schedules WHERE name LIKE $1 || '%'", marker)
+		SELECT id FROM schedules WHERE name LIKE $1 || '%' OR name LIKE $2 || '%'
+	)`, marker, slug)
+	_, _ = db.Exec(ctx, "DELETE FROM schedules WHERE name LIKE $1 || '%' OR name LIKE $2 || '%'", marker, slug)
 	_, _ = db.Exec(ctx, "DELETE FROM missions WHERE goal LIKE $1 || '%'", marker)
 }
 
@@ -95,7 +100,7 @@ func TestMissionCRUD(t *testing.T) {
 		t.Fatalf("Get = %+v, want default research/idle/8", m)
 	}
 
-	list, err := s.List(ctx)
+	list, err := s.List(ctx, ListFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
