@@ -1177,6 +1177,67 @@ func TestAgentUnknownToolRejectedBeforePermissionChain(t *testing.T) {
 	}
 }
 
+// TestAgentToolAllowExcludedToolRejected pins the wiring between
+// filterDefs and toolNames (run, agent.go ~line 214/241): toolNames
+// must be built from the POST-ToolAllow-filter defs, not the raw
+// agent tool surface. If a regression built toolNames from the
+// unfiltered defs instead, a tool excluded by Request.ToolAllow would
+// still resolve as "known" here and fall through to the permission
+// chain — silently reopening the allowlist bypass that filterDefs
+// exists to close, since resolveAndRun's unknown-tool precheck would
+// no longer catch it.
+func TestAgentToolAllowExcludedToolRejected(t *testing.T) {
+	t.Parallel()
+	var blockedRan bool
+	allowed := &tools.Tool{
+		Name:        "echo_allowed",
+		Description: "allowed echo",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			return "allowed ran", nil
+		},
+	}
+	blocked := &tools.Tool{
+		Name:        "echo_blocked",
+		Description: "blocked echo",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			blockedRan = true
+			return "blocked ran", nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo_blocked", `{}`}),
+		finalStep("adapted"),
+	}}
+	a, _, _, _ := testAgent(t, gw, allowed, blocked)
+	perms := &countingAskPerms{}
+	a.perms = perms
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", ToolAllow: []string{"echo_allowed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	results := ofType(evs, stream.EventToolResult)
+	if len(results) != 1 || results[0].ToolResult.Status != "error" {
+		t.Fatalf("tool result = %+v, want one error result", results)
+	}
+	if !strings.Contains(results[0].ToolResult.Digest, `unknown tool "echo_blocked"`) {
+		t.Fatalf("digest = %q, want the unknown-tool feedback", results[0].ToolResult.Digest)
+	}
+	if blockedRan {
+		t.Fatal("echo_blocked executed despite being excluded by ToolAllow")
+	}
+	if len(ofType(evs, stream.EventPermissionRequest)) != 0 {
+		t.Fatal("tool excluded by ToolAllow must never trigger a permission request")
+	}
+	if perms.resolveCalls != 0 {
+		t.Fatalf("perms.Resolve called %d times, want 0 — ToolAllow-excluded tool must short-circuit before it", perms.resolveCalls)
+	}
+}
+
 // TestAgentUnattendedAskDeniesImmediately is D-039's second failure
 // mode: an unattended (schedule-fired) turn hitting DecisionAsk must
 // deny immediately with feedback naming the rationale, never call
