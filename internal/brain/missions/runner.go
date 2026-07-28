@@ -92,6 +92,18 @@ func (p *StorePermissionParker) OnPermissionCleared(ctx context.Context, mission
 	}
 }
 
+// OnPermissionDenied records that a tool call was denied (D-039: most
+// often the automatic unattended-turn denial, but any denied result
+// qualifies) — best-effort, same stance as OnPermissionParked/Cleared:
+// a failed append logs and never aborts the turn it's reporting on.
+func (p *StorePermissionParker) OnPermissionDenied(ctx context.Context, missionID, tool, digest string) {
+	if err := p.Store.AppendEvent(ctx, missionID, "mission.permission_denied", map[string]any{
+		"tool": tool, "digest": digest,
+	}); err != nil {
+		p.Log.Error("mission: record permission denied failed", "mission_id", missionID, "error", err)
+	}
+}
+
 // parkNotifier reports a mission turn parking on (and later clearing)
 // a tool-call permission prompt — without this, the same interactive
 // broker chat sessions use silently strands a mission worker turn for
@@ -101,6 +113,10 @@ func (p *StorePermissionParker) OnPermissionCleared(ctx context.Context, mission
 type parkNotifier interface {
 	OnPermissionParked(ctx context.Context, missionID, permissionID, tool, args, danger, rationale string)
 	OnPermissionCleared(ctx context.Context, missionID string)
+	// OnPermissionDenied reports a tool result that came back denied —
+	// most often the unattended-turn automatic denial (D-039), but any
+	// denial qualifies. Best-effort like the two methods above.
+	OnPermissionDenied(ctx context.Context, missionID, tool, digest string)
 }
 
 // sandboxExec is the narrow slice of *sandbox.Manager nativeRunner
@@ -284,6 +300,13 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 					r.parker.OnPermissionCleared(ctx, req.MissionID)
 				}
 			}
+			// A denied result — most often the unattended-turn automatic
+			// denial (D-039), which never emits EventPermissionRequest at
+			// all — is otherwise invisible to anything watching the
+			// mission; record it as an event.
+			if ev.ToolResult != nil && ev.ToolResult.Status == "denied" && r.parker != nil {
+				r.parker.OnPermissionDenied(ctx, req.MissionID, ev.ToolResult.Name, ev.ToolResult.Digest)
+			}
 		case stream.EventDone:
 			if ev.Meta != nil {
 				servedModel = ev.Meta.Model
@@ -331,6 +354,10 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		System:     system,
 		Messages:   []provider.Message{{Role: "user", Content: user}},
 		ExtraTools: extra,
+		// Schedule-fired missions have nobody watching: asks fail fast
+		// with feedback instead of parking (D-039). UI-created missions
+		// (ScheduleID empty) keep the park-and-answer flow.
+		Unattended: m.ScheduleID != "",
 	}
 
 	text, args, err := r.runTurn(ctx, req, missionStatusToolName)
@@ -402,6 +429,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		System:     system,
 		Messages:   messages,
 		ExtraTools: extra,
+		Unattended: m.ScheduleID != "",
 	}
 	text, args, err := r.runTurn(ctx, req, reviewVerdictToolName)
 	if err != nil {
@@ -511,6 +539,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, researchNotes
 		// for ten minutes trying to do the worker's job in plan phase.
 		ToolAllow:  []string{planToolName},
 		ExtraTools: []*tools.Tool{PlanTool()},
+		Unattended: m.ScheduleID != "",
 	}
 	text, args, err := r.runTurn(ctx, req, planToolName)
 	if err != nil {

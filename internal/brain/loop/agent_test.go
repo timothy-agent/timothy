@@ -1041,3 +1041,134 @@ func TestRequestExtraToolsOverrideBaseTool(t *testing.T) {
 		t.Fatal("base echo executed instead of the turn-scoped override")
 	}
 }
+
+// countingAskPerms behaves like askPerms (always DecisionAsk) but
+// counts Resolve calls — tests use it to assert the permission chain
+// was never reached at all (the unknown-tool precheck short-circuits
+// before it).
+type countingAskPerms struct {
+	resolveCalls int
+}
+
+func (p *countingAskPerms) Resolve(_ context.Context, _, tool string, _ json.RawMessage) (tools.Resolution, error) {
+	p.resolveCalls++
+	return tools.Resolution{Decision: tools.DecisionAsk, Subject: tool, Rationale: "no standing grant"}, nil
+}
+func (p *countingAskPerms) Grant(context.Context, string, string, string, time.Duration) error { return nil }
+
+// TestAgentUnknownToolRejectedBeforePermissionChain is D-039's first
+// failure mode: a hallucinated tool name must never reach the
+// permission chain (and so never park on askUser) — it's rejected with
+// the same feedback tools.Constrained.Execute gives, just earlier.
+func TestAgentUnknownToolRejectedBeforePermissionChain(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"does_not_exist", `{}`}),
+		finalStep("adapted"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	perms := &countingAskPerms{}
+	a.perms = perms
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	results := ofType(evs, stream.EventToolResult)
+	if len(results) != 1 || results[0].ToolResult.Status != "error" {
+		t.Fatalf("tool result = %+v, want one error result", results)
+	}
+	if !strings.Contains(results[0].ToolResult.Digest, `unknown tool "does_not_exist"`) {
+		t.Fatalf("digest = %q, want the unknown-tool feedback", results[0].ToolResult.Digest)
+	}
+	if len(ofType(evs, stream.EventPermissionRequest)) != 0 {
+		t.Fatal("unknown tool must never trigger a permission request")
+	}
+	if perms.resolveCalls != 0 {
+		t.Fatalf("perms.Resolve called %d times, want 0 — unknown tool must short-circuit before it", perms.resolveCalls)
+	}
+}
+
+// TestAgentUnattendedAskDeniesImmediately is D-039's second failure
+// mode: an unattended (schedule-fired) turn hitting DecisionAsk must
+// deny immediately with feedback naming the rationale, never call
+// askUser (so no EventPermissionRequest, no 10-minute wait). The test
+// itself finishing well under that timeout is part of the assertion.
+func TestAgentUnattendedAskDeniesImmediately(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("adapted"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = askPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Unattended: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	results := ofType(evs, stream.EventToolResult)
+	if len(results) != 1 || results[0].ToolResult.Status != "denied" {
+		t.Fatalf("tool result = %+v, want denied", results)
+	}
+	if len(ofType(evs, stream.EventPermissionRequest)) != 0 {
+		t.Fatal("unattended turn must never emit a permission request")
+	}
+	var content string
+	for _, m := range gw.requests[1].Messages {
+		if m.ToolResult != nil {
+			content = m.ToolResult.Content
+		}
+	}
+	if !strings.Contains(content, "no standing grant") {
+		t.Fatalf("feedback = %q, want it to contain the resolution's rationale", content)
+	}
+	if !strings.Contains(content, "unattended mission") {
+		t.Fatalf("feedback = %q, want it to explain no human is available", content)
+	}
+}
+
+// TestAgentAttendedAskStillParks is the control for the above: with
+// Unattended left false (the default), DecisionAsk must still emit
+// EventPermissionRequest and be answerable through the broker exactly
+// as before D-039.
+func TestAgentAttendedAskStillParks(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("after decision"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = askPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evs []stream.StreamEvent
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				results := ofType(evs, stream.EventToolResult)
+				if len(results) != 1 || results[0].ToolResult.Status != "ok" {
+					t.Fatalf("results = %+v, want ok after DecideOnce", results)
+				}
+				return
+			}
+			evs = append(evs, ev)
+			if ev.Type == stream.EventPermissionRequest {
+				if !a.broker.Resolve(ev.Permission.ID, DecideOnce) {
+					t.Fatal("broker did not know the prompt id")
+				}
+			}
+		case <-deadline:
+			t.Fatal("loop never finished")
+		}
+	}
+}

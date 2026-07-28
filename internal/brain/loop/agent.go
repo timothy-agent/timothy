@@ -178,6 +178,11 @@ type Request struct {
 	// must never see. Executed via extraExecutor, never merged into the
 	// shared registry other callers read.
 	ExtraTools []*tools.Tool
+
+	// Unattended marks a turn nobody is watching (schedule-fired
+	// missions): a permission ask resolves as immediate denial instead
+	// of parking on a human prompt for the full timeout (D-039).
+	Unattended bool
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -225,6 +230,16 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			}
 		}
 		defs = append(kept, extraDefs...)
+	}
+	// toolNames is the turn's actual offered surface (post ToolAllow
+	// filter, post ExtraTools override) — built once per turn so a
+	// hallucinated tool name can be rejected before it ever reaches the
+	// permission chain (D-039). tools.Constrained.Execute already checks
+	// this, but only after askUser has parked; an unattended mission
+	// can't afford the wait to find out.
+	toolNames := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		toolNames[d.Name] = true
 	}
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
@@ -392,7 +407,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 				}
 			}
 		}
-		results := a.executeAll(ctx, exec, req.SessionID, calls, emit)
+		results := a.executeAll(ctx, exec, req.SessionID, calls, toolNames, req.Unattended, emit)
 
 		msgs = append(msgs, provider.Message{
 			Role: "assistant", Content: text.String(), ToolCalls: calls,
@@ -439,14 +454,16 @@ func EffortFor(results []provider.ToolResult) string {
 }
 
 // executeAll runs a step's tool calls concurrently (bounded) and
-// returns results in call order.
-func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, emit func(stream.StreamEvent)) []provider.ToolResult {
+// returns results in call order. toolNames is the turn's offered
+// surface (see run's toolNames comment); unattended is req.Unattended,
+// threaded down to resolveAndRun's DecisionAsk handling (D-039).
+func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) []provider.ToolResult {
 	results := make([]provider.ToolResult, len(calls))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxParallelTools)
 	for i, call := range calls {
 		g.Go(func() error {
-			results[i] = a.executeOne(gctx, exec, sessionID, call, emit)
+			results[i] = a.executeOne(gctx, exec, sessionID, call, toolNames, unattended, emit)
 			return nil
 		})
 	}
@@ -454,9 +471,9 @@ func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string,
 	return results
 }
 
-func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) provider.ToolResult {
+func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
-	content, status := a.resolveAndRun(ctx, exec, sessionID, call, emit)
+	content, status := a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, emit)
 	isError := status != "ok"
 
 	if status == "ok" {
@@ -519,7 +536,18 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 // on allow. It returns the content the model sees plus a status of
 // ok, denied, or error — denials and failures come back as feedback
 // text, never as a broken turn (D-009).
-func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, emit func(stream.StreamEvent)) (content, status string) {
+//
+// A call whose name is absent from toolNames (a hallucinated tool)
+// never reaches a.perms.Resolve at all — it is rejected here, before
+// the permission chain and before any askUser park, with the same
+// feedback tools.Constrained.Execute would eventually give (D-039):
+// an unattended mission can't afford to wait out a 10-minute prompt
+// timeout just to learn the name never existed.
+func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) (content, status string) {
+	if !toolNames[call.Name] {
+		return fmt.Sprintf("unknown tool %q — use one of the tools you were given", call.Name), "error"
+	}
+
 	res, err := a.perms.Resolve(ctx, sessionID, call.Name, call.Input)
 	if err != nil {
 		return "permission check failed: " + err.Error(), "error"
@@ -529,6 +557,13 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 	case tools.DecisionDeny:
 		return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied"
 	case tools.DecisionAsk:
+		if unattended {
+			// No human is watching a schedule-fired mission's turn — parking
+			// on askUser would strand it for the full permissionTimeout with
+			// nobody to answer (D-039). Fail fast with feedback that steers
+			// the model toward calls the allowlist actually grants.
+			return fmt.Sprintf("permission denied automatically (unattended mission): %s. No human is available to approve. Rewrite the call to avoid the flagged pattern — create files with write_file instead of shell redirects, avoid command substitution — or use only tools the agent's allowlist grants.", res.Rationale), "denied"
+		}
 		decision := a.askUser(ctx, call, res, emit)
 		switch decision {
 		case DecideSession:

@@ -65,6 +65,7 @@ func newTestRunnerWithParker(agent agentStream, parker parkNotifier) *nativeRunn
 type fakeParker struct {
 	parked  []string // "missionID:tool:danger"
 	cleared []string // missionID
+	denied  []string // "missionID:tool:digest"
 }
 
 func (f *fakeParker) OnPermissionParked(_ context.Context, missionID, _, tool, _, danger, _ string) {
@@ -75,6 +76,10 @@ func (f *fakeParker) OnPermissionCleared(_ context.Context, missionID string) {
 	f.cleared = append(f.cleared, missionID)
 }
 
+func (f *fakeParker) OnPermissionDenied(_ context.Context, missionID, tool, digest string) {
+	f.denied = append(f.denied, missionID+":"+tool+":"+digest)
+}
+
 func permissionRequestEvent(id, callID, tool, danger string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{
 		ID: id, CallID: callID, Tool: tool, Danger: danger,
@@ -83,6 +88,12 @@ func permissionRequestEvent(id, callID, tool, danger string) stream.StreamEvent 
 
 func toolResultEvent(id string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: id}}
+}
+
+func deniedToolResultEvent(id, name, digest string) stream.StreamEvent {
+	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
+		ID: id, Name: name, Status: "denied", Digest: digest,
+	}}
 }
 
 func TestRunWorkerSentinelPresent(t *testing.T) {
@@ -668,5 +679,60 @@ func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	}
 	if len(out) > shellOutputCap+len("\n[output capped]") {
 		t.Fatalf("output length %d exceeds cap plus marker", len(out))
+	}
+}
+
+// TestRunWorkerUnattendedFollowsScheduleID is the D-039 wiring check:
+// a schedule-fired mission (ScheduleID set) has nobody watching its
+// turns, so the loop.Request it hands to the agent must say so.
+func TestRunWorkerUnattendedFollowsScheduleID(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", ScheduleID: "sched-1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if !agent.requests[0].Unattended {
+		t.Fatal("worker request Unattended = false, want true for a schedule-fired mission")
+	}
+}
+
+// TestRunWorkerAttendedWithoutScheduleID is the other half: a
+// UI-created mission (no ScheduleID) keeps the park-and-answer flow.
+func TestRunWorkerAttendedWithoutScheduleID(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if agent.requests[0].Unattended {
+		t.Fatal("worker request Unattended = true, want false without a ScheduleID")
+	}
+}
+
+// TestRunWorkerReportsPermissionDenied confirms a denied tool result
+// (the D-039 automatic unattended denial, or any other denial) reaches
+// the mission via parkNotifier as a mission.permission_denied event —
+// without this, an unattended turn's fast-fail denials would be
+// invisible to anything watching the mission (no park event is ever
+// emitted for them, unlike the ask-and-timeout path).
+func TestRunWorkerReportsPermissionDenied(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		textEvent("tried a risky call"),
+		deniedToolResultEvent("call1", "shell", "permission denied automatically (unattended mission): ..."),
+		toolEndEvent(missionStatusToolName, `{"outcome":"retry","analysis":"denied"}`),
+	}}}
+	parker := &fakeParker{}
+	r := newTestRunnerWithParker(agent, parker)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if len(parker.denied) != 1 || !strings.HasPrefix(parker.denied[0], "m1:shell:") {
+		t.Fatalf("parker.denied = %v, want exactly one m1:shell:... entry", parker.denied)
 	}
 }
