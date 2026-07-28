@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -22,10 +24,18 @@ type Notifier struct {
 	webhookURL string // NOTIFY_WEBHOOK_URL; empty disables fan-out, inbox row still always written
 	log        *slog.Logger
 	http       *http.Client
+	hub        *Hub
 }
 
 func NewNotifier(db *pgpool.Pool, webhookURL string, log *slog.Logger) *Notifier {
 	return &Notifier{db: db, webhookURL: webhookURL, log: log, http: &http.Client{Timeout: webhookTimeout}}
+}
+
+// SetHub wires the push-notification hub; nil (the default) makes
+// OnTransition's publish a no-op, same nil-safe convention as
+// Store.SetHub.
+func (n *Notifier) SetHub(hub *Hub) {
+	n.hub = hub
 }
 
 // isActionableTransition is the pure classification Driver's
@@ -66,19 +76,29 @@ func (n *Notifier) OnTransition(ctx context.Context, missionID string, before, a
 // sendOncePerMission dedupes by "already has an unread notification of
 // this kind" — checked inside the same insert (via a NOT EXISTS
 // subquery), not a separate pre-check, to avoid a TOCTOU race between
-// two concurrent Advance calls for the same mission.
+// two concurrent Advance calls for the same mission. RETURNING id
+// yields pgx.ErrNoRows exactly when the NOT EXISTS guard suppressed
+// the insert (already an unread row of this kind) — not a failure,
+// just "nothing to publish."
 func (n *Notifier) sendOncePerMission(ctx context.Context, missionID, kind, message string) error {
 	db, err := n.db.Get()
 	if err != nil {
 		return fmt.Errorf("get pool: %w", err)
 	}
-	_, err = db.Exec(ctx, `INSERT INTO notifications (mission_id, kind, message)
+	var id string
+	err = db.QueryRow(ctx, `INSERT INTO notifications (mission_id, kind, message)
 		SELECT $1, $2, $3
 		WHERE NOT EXISTS (
 			SELECT 1 FROM notifications WHERE mission_id = $1 AND kind = $2 AND NOT read
-		)`, missionID, kind, message)
+		) RETURNING id`, missionID, kind, message).Scan(&id)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil
+		}
 		return fmt.Errorf("insert: %w", err)
+	}
+	if n.hub != nil {
+		n.hub.Publish(Signal{Kind: "notification", ID: id})
 	}
 	return nil
 }

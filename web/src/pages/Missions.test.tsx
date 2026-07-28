@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, Notification } from '../api/types'
+import type { Signal } from '../lib/events'
 import { Missions } from './Missions'
 
 vi.mock('../api/client', () => ({
@@ -12,7 +13,23 @@ vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
 }))
 
+vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
+
 import { listAgents, listMissions, listNotifications, listSchedules } from '../api/client'
+import { subscribeEvents } from '../lib/events'
+
+// captureSubscribe grabs the onSignal/onReady callbacks subscribeEvents
+// was last called with, so a test can fire them directly instead of
+// waiting on a real SSE stream.
+function captureSubscribe() {
+  const unsubscribe = vi.fn()
+  vi.mocked(subscribeEvents).mockReturnValue(unsubscribe)
+  return {
+    fireSignal: (sig: Signal) => vi.mocked(subscribeEvents).mock.calls.at(-1)?.[0](sig),
+    fireReady: () => vi.mocked(subscribeEvents).mock.calls.at(-1)?.[1]?.(),
+    unsubscribe,
+  }
+}
 
 const mission: Mission = {
   id: 'm1',
@@ -48,6 +65,7 @@ function renderPage() {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(subscribeEvents).mockReturnValue(vi.fn())
   vi.mocked(listMissions).mockResolvedValue([mission])
   vi.mocked(listNotifications).mockResolvedValue([])
   vi.mocked(listAgents).mockResolvedValue([])
@@ -98,5 +116,44 @@ describe('Missions board', () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/missions/new'))
     expect(await screen.findByText('new mission page')).toBeTruthy()
+  })
+
+  it('refetches missions and notifications on any signal', async () => {
+    const sub = captureSubscribe()
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    vi.mocked(listMissions).mockClear()
+    vi.mocked(listNotifications).mockClear()
+
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+
+    await waitFor(() => expect(listMissions).toHaveBeenCalledTimes(1))
+    expect(listNotifications).toHaveBeenCalledTimes(1)
+  })
+
+  it('refetches on the ready event (initial connect and reconnects)', async () => {
+    const sub = captureSubscribe()
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    vi.mocked(listMissions).mockClear()
+
+    sub.fireReady()
+
+    await waitFor(() => expect(listMissions).toHaveBeenCalledTimes(1))
+  })
+
+  it('unsubscribes on unmount', async () => {
+    const sub = captureSubscribe()
+    const { unmount } = render(
+      <RouterProvider
+        router={createMemoryRouter(
+          [{ path: '/missions', element: <Missions /> }],
+          { initialEntries: ['/missions'] },
+        )}
+      />,
+    )
+    await screen.findByText('Fix the login bug')
+    unmount()
+    expect(sub.unsubscribe).toHaveBeenCalled()
   })
 })
