@@ -1279,6 +1279,150 @@ func TestAgentUnattendedAskDeniesImmediately(t *testing.T) {
 	}
 }
 
+// sessionGrantPerms mimics the real Permissions chain's behavior for
+// the single-flight ask gate tests: Resolve returns Ask for a tool
+// until a Grant has been recorded for it, after which it returns
+// Allow — matching how a real session grant, once written, makes a
+// later Resolve on the same (session, tool, subject) succeed without
+// asking again.
+type sessionGrantPerms struct {
+	mu      sync.Mutex
+	granted map[string]bool
+}
+
+func (p *sessionGrantPerms) Resolve(_ context.Context, sessionID, tool string, _ json.RawMessage) (tools.Resolution, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.granted[sessionID+"\x00"+tool] {
+		return tools.Resolution{Decision: tools.DecisionAllow, Subject: tool}, nil
+	}
+	return tools.Resolution{Decision: tools.DecisionAsk, Subject: tool, Rationale: "no standing grant"}, nil
+}
+
+func (p *sessionGrantPerms) Grant(_ context.Context, sessionID, tool, _ string, _ time.Duration) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.granted == nil {
+		p.granted = map[string]bool{}
+	}
+	p.granted[sessionID+"\x00"+tool] = true
+	return nil
+}
+
+// TestParallelSameToolAsksOnce reproduces the race this change fixes:
+// a step firing 3 parallel calls to the same tool with the same
+// arguments (same subject) must produce exactly one permission
+// prompt. Answering that prompt with "session" records a grant that
+// the other two calls — parked behind the gate — pick up on
+// re-resolve, so they never prompt at all.
+func TestParallelSameToolAsksOnce(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep(
+			[2]string{"echo", `{"text":"hi"}`},
+			[2]string{"echo", `{"text":"hi"}`},
+			[2]string{"echo", `{"text":"hi"}`},
+		),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = &sessionGrantPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var evs []stream.StreamEvent
+	var prompts int
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				results := ofType(evs, stream.EventToolResult)
+				if len(results) != 3 {
+					t.Fatalf("tool results = %d, want 3", len(results))
+				}
+				for _, r := range results {
+					if r.ToolResult.Status != "ok" {
+						t.Fatalf("result = %+v, want ok", r.ToolResult)
+					}
+				}
+				if prompts != 1 {
+					t.Fatalf("permission prompts = %d, want exactly 1", prompts)
+				}
+				return
+			}
+			evs = append(evs, ev)
+			if ev.Type == stream.EventPermissionRequest {
+				prompts++
+				if !a.broker.Resolve(ev.Permission.ID, DecideSession) {
+					t.Fatal("broker did not know the prompt id")
+				}
+			}
+		case <-deadline:
+			t.Fatal("loop never finished")
+		}
+	}
+}
+
+// TestParallelSameToolOnceAnswerReAsks confirms "once" (not "session")
+// answers do NOT suppress a sibling call's prompt: with only 2
+// parallel same-tool calls, answering the first prompt with
+// DecideOnce records no grant, so the second call — released from the
+// gate after the first's execution — must still hit its own prompt.
+func TestParallelSameToolOnceAnswerReAsks(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep(
+			[2]string{"echo", `{"text":"hi"}`},
+			[2]string{"echo", `{"text":"hi"}`},
+		),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = &sessionGrantPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var evs []stream.StreamEvent
+	var prompts int
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				results := ofType(evs, stream.EventToolResult)
+				if len(results) != 2 {
+					t.Fatalf("tool results = %d, want 2", len(results))
+				}
+				for _, r := range results {
+					if r.ToolResult.Status != "ok" {
+						t.Fatalf("result = %+v, want ok", r.ToolResult)
+					}
+				}
+				if prompts != 2 {
+					t.Fatalf("permission prompts = %d, want exactly 2 (once must not suppress the sibling's ask)", prompts)
+				}
+				return
+			}
+			evs = append(evs, ev)
+			if ev.Type == stream.EventPermissionRequest {
+				prompts++
+				if !a.broker.Resolve(ev.Permission.ID, DecideOnce) {
+					t.Fatal("broker did not know the prompt id")
+				}
+			}
+		case <-deadline:
+			t.Fatal("loop never finished")
+		}
+	}
+}
+
 // TestAgentAttendedAskStillParks is the control for the above: with
 // Unattended left false (the default), DecisionAsk must still emit
 // EventPermissionRequest and be answerable through the broker exactly

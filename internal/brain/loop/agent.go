@@ -83,6 +83,7 @@ type Agent struct {
 	audit          AuditSink
 	events         EventAppender
 	broker         *PermBroker
+	askGate        *askGate
 	maxSteps       int
 	offloadAt      int
 	offloadPerTool map[string]int
@@ -108,7 +109,7 @@ type Agent struct {
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
 	return &Agent{
 		gw: gw, exec: exec, perms: perms, outputs: outputs, audit: audit,
-		events: events, broker: broker, defs: defs,
+		events: events, broker: broker, askGate: newAskGate(), defs: defs,
 		maxSteps:           tools.DefaultMaxSteps,
 		offloadAt:          tools.DefaultOffloadThreshold,
 		offloadPerTool:     map[string]int{},
@@ -571,17 +572,51 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 			// the model toward calls the allowlist actually grants.
 			return fmt.Sprintf("permission denied automatically (unattended mission): %s. No human is available to approve. Rewrite the call to avoid the flagged pattern — create files with write_file instead of shell redirects, avoid command substitution — or use only tools the agent's allowlist grants.", res.Rationale), "denied"
 		}
-		decision := a.askUser(ctx, call, res, emit)
-		switch decision {
-		case DecideSession:
-			if err := a.perms.Grant(ctx, sessionID, call.Name, res.Subject, sessionGrantTTL); err != nil {
-				a.logger.Warn("record session grant", "session_id", sessionID, "error", err)
-			}
-		case DecideOnce:
-			// proceed
-		default: // deny or timeout
+
+		// A step's parallel same-tool calls (executeAll) all land here
+		// before any of them has been answered — without the gate, each
+		// would independently park on askUser and the user would see N
+		// identical prompts for what is really one decision. The gate
+		// serializes them per (session, tool, subject): only the first
+		// caller through asks; the rest wait, then re-resolve below to
+		// pick up whatever grant the first one just recorded.
+		key := sessionID + "\x00" + call.Name + "\x00" + res.Subject
+		release, ok := a.askGate.lock(ctx, key)
+		if !ok {
 			return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied"
 		}
+
+		// Re-resolve under the gate: a parallel sibling's session grant
+		// may have landed while we waited — Allow means zero prompt.
+		res, err = a.perms.Resolve(ctx, sessionID, call.Name, call.Input)
+		if err != nil {
+			release()
+			return "permission check failed: " + err.Error(), "error"
+		}
+		switch res.Decision {
+		case tools.DecisionAllow:
+			// fall through to execution below.
+		case tools.DecisionDeny:
+			release()
+			return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied"
+		default: // still DecisionAsk
+			decision := a.askUser(ctx, call, res, emit)
+			switch decision {
+			case DecideSession:
+				if err := a.perms.Grant(ctx, sessionID, call.Name, res.Subject, sessionGrantTTL); err != nil {
+					a.logger.Warn("record session grant", "session_id", sessionID, "error", err)
+				}
+			case DecideOnce:
+				// proceed
+			default: // deny or timeout
+				release()
+				return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied"
+			}
+		}
+		// Execution runs outside the gate: only the ask/re-resolve/grant
+		// needs serializing, not the tool call itself — parallel same-tool
+		// calls must still execute concurrently once permission is settled.
+		release()
 	}
 
 	out, err := exec.Execute(ctx, call.Name, call.Input)
