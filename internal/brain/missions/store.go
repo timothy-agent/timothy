@@ -27,10 +27,19 @@ const workSlotLockKey = 0x54494D53 // "TIMS"
 type Store struct {
 	db  *pgpool.Pool
 	log *slog.Logger
+	hub *Hub
 }
 
 func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
+}
+
+// SetHub wires the push-notification hub: a nil hub (the default,
+// before this is called) makes every publish below a no-op, so a
+// mission API test or a build without SSE wired up behaves exactly as
+// it did before this feature existed.
+func (s *Store) SetHub(hub *Hub) {
+	s.hub = hub
 }
 
 const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, pause_message,
@@ -378,6 +387,9 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("missions apply transition commit: %w", err)
 	}
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
+	}
 	return nil
 }
 
@@ -398,7 +410,13 @@ func (s *Store) AppendEvent(ctx context.Context, id, kind string, payload map[st
 	if err := appendEventTx(ctx, tx, id, kind, payload, "live"); err != nil {
 		return fmt.Errorf("missions append event: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
+	}
+	return nil
 }
 
 // appendEventTx does the actual locked-seq insert within an

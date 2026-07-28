@@ -24,14 +24,12 @@ import { Button } from '../components/ui/button'
 import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
+import { subscribeEvents } from '../lib/events'
 
 function formatDate(v?: string): string {
   if (!v) return '—'
   return new Date(v).toLocaleString()
 }
-
-const pollIntervalIdle = 5000
-const pollIntervalPending = 1500
 
 const resumableStatuses = new Set(['paused', 'waiting_for_input'])
 const terminalPhases = new Set(['done', 'failed'])
@@ -52,17 +50,22 @@ export function MissionDetail() {
     missionUsage(id).then(setUsage, () => undefined)
   }, [id])
 
-  const phase = mission?.phase
   const pendingPermission = mission?.pending_permission
   const wasPendingRef = useRef(false)
 
   useEffect(() => {
     refresh()
-    if (phase && terminalPhases.has(phase) && !pendingPermission) return
-    const interval = pendingPermission ? pollIntervalPending : pollIntervalIdle
-    const timer = setInterval(refresh, interval)
-    return () => clearInterval(timer)
-  }, [refresh, pendingPermission, phase])
+    // Only refetch for a signal naming THIS mission — other missions'
+    // signals don't concern this page. onReady covers the initial
+    // connect and every reconnect, catching anything missed while
+    // disconnected.
+    return subscribeEvents(
+      (sig) => {
+        if (sig.kind === 'mission' && sig.id === id) refresh()
+      },
+      () => refresh(),
+    )
+  }, [refresh, id])
 
   // No GET-by-id for schedules; the list is small, so find the one
   // this mission fired from rather than adding a single-row endpoint.

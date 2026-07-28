@@ -43,7 +43,9 @@ export function setToken(token: string) {
 // createSSEParser incrementally parses an SSE byte stream that may be
 // chunked at arbitrary boundaries. Each complete "data:" block is
 // JSON-decoded and passed to onEvent; malformed blocks are skipped.
-export function createSSEParser(onEvent: (ev: ChatEvent) => void) {
+// Generic so events.ts's /v1/events stream (frames shaped differently
+// than ChatEvent) can reuse the same parsing without a cast.
+export function createSSEParser<T = ChatEvent>(onEvent: (ev: T) => void) {
   let buf = ''
 
   const emit = (block: string) => {
@@ -54,7 +56,7 @@ export function createSSEParser(onEvent: (ev: ChatEvent) => void) {
       .join('\n')
     if (!data) return
     try {
-      onEvent(JSON.parse(data) as ChatEvent)
+      onEvent(JSON.parse(data) as T)
     } catch {
       // Malformed frame: skip rather than kill the stream.
     }

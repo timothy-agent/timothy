@@ -186,7 +186,7 @@ func main() {
 	// over the same registry.
 	agentReg := agents.NewStore(app.DB, app.Log)
 
-	missionStore, missionDriver, missionNotifier, missionWorkspace := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, app.Log)
 	if missionDriver != nil {
 		var sandboxSweeper interface {
 			Sweep(ctx context.Context, isTerminal func(missionID string) bool) error
@@ -248,7 +248,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, token, app.Log)
+		missionWorkspace, resolveSecret, missionHub, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -329,19 +329,23 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 }
 
 // buildMissions wires the mission engine (Store, Driver, Notifier,
-// Scheduler). Gated on WORKSPACES: no workspace root configured means
-// missions stay entirely inert — no goroutines started, nothing
+// Scheduler, Hub). Gated on WORKSPACES: no workspace root configured
+// means missions stay entirely inert — no goroutines started, nothing
 // scheduled, the API surface unmounted (registerMissions 404s on a nil
 // store). agentReg is D-034's agent registry, resolved at scheduler
 // fire time and mission provisioning time (never schedule-create
-// time) so an agent edited after the fact still applies.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace) {
+// time) so an agent edited after the fact still applies. The hub
+// lives inside the same gate as everything else here — no missions,
+// no push events either.
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
+	hub := missions.NewHub()
 	store := missions.NewStore(db, log)
+	store.SetHub(hub)
 	identity := func(ctx context.Context) (string, string) {
 		return flags.Value(ctx, settings.ValueGitAuthorName), flags.Value(ctx, settings.ValueGitAuthorEmail)
 	}
@@ -369,6 +373,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	runner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxExec, log)
 	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
 	notifier := missions.NewNotifier(db, webhookURL, log)
+	notifier.SetHub(hub)
 	// A second tools.Permissions instance, not the one buildAgent built —
 	// it's stateless besides the shared db/root (Grant/Resolve hit
 	// Postgres directly), so a fresh instance behaves identically. Used
@@ -384,7 +389,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
 	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, log)
 	go scheduler.Run(ctx)
-	return store, driver, notifier, workspace
+	return store, driver, notifier, workspace, hub
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd

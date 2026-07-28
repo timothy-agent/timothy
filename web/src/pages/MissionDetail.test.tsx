@@ -2,9 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, MissionEvent } from '../api/types'
+import type { Signal } from '../lib/events'
 import { MissionDetail } from './MissionDetail'
 
 vi.mock('../lib/alertSound', () => ({ playAlertSound: vi.fn() }))
+vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
 
 vi.mock('../api/client', () => ({
   getMission: vi.fn(),
@@ -35,6 +37,20 @@ import {
   secretStatus,
 } from '../api/client'
 import { playAlertSound } from '../lib/alertSound'
+import { subscribeEvents } from '../lib/events'
+
+// captureSubscribe grabs the onSignal/onReady callbacks subscribeEvents
+// was last called with, so a test can fire them directly instead of
+// waiting on a real SSE stream.
+function captureSubscribe() {
+  const unsubscribe = vi.fn()
+  vi.mocked(subscribeEvents).mockReturnValue(unsubscribe)
+  return {
+    fireSignal: (sig: Signal) => vi.mocked(subscribeEvents).mock.calls.at(-1)?.[0](sig),
+    fireReady: () => vi.mocked(subscribeEvents).mock.calls.at(-1)?.[1]?.(),
+    unsubscribe,
+  }
+}
 
 const baseMission: Mission = {
   id: 'm1',
@@ -106,6 +122,7 @@ function renderPage(id = 'm1') {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(subscribeEvents).mockReturnValue(vi.fn())
   vi.mocked(getMission).mockResolvedValue(baseMission)
   vi.mocked(missionEvents).mockResolvedValue(events)
   vi.mocked(missionUsage).mockResolvedValue({
@@ -184,28 +201,25 @@ describe('MissionDetail', () => {
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalledWith('m1', 'once'))
   })
 
-  it('plays an alert sound only on the transition into a permission block, not on later polls', async () => {
-    vi.useFakeTimers()
-    try {
-      vi.mocked(getMission).mockResolvedValue(baseMission)
-      renderPage()
-      await vi.waitFor(() => expect(getMission).toHaveBeenCalled())
-      expect(playAlertSound).not.toHaveBeenCalled()
+  it('plays an alert sound only on the transition into a permission block, not on later refetches', async () => {
+    const sub = captureSubscribe()
+    vi.mocked(getMission).mockResolvedValue(baseMission)
+    renderPage()
+    await vi.waitFor(() => expect(getMission).toHaveBeenCalled())
+    expect(playAlertSound).not.toHaveBeenCalled()
 
-      vi.mocked(getMission).mockResolvedValue({
-        ...baseMission,
-        pending_permission: 'perm-1',
-        pending_permission_tool: 'shell',
-      })
-      await vi.advanceTimersByTimeAsync(5000)
-      await vi.waitFor(() => expect(playAlertSound).toHaveBeenCalledTimes(1))
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_permission: 'perm-1',
+      pending_permission_tool: 'shell',
+    })
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+    await vi.waitFor(() => expect(playAlertSound).toHaveBeenCalledTimes(1))
 
-      // Still pending on the next poll — must not chime again.
-      await vi.advanceTimersByTimeAsync(1500 * 2)
-      expect(playAlertSound).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.useRealTimers()
-    }
+    // Still pending on the next refetch — must not chime again.
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+    await vi.waitFor(() => expect(getMission).toHaveBeenCalledTimes(3))
+    expect(playAlertSound).toHaveBeenCalledTimes(1)
   })
 
   it('renders known event kinds with their specific text and unknown kinds with the fallback', async () => {
@@ -316,23 +330,39 @@ describe('MissionDetail', () => {
     expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
   })
 
-  it('stops polling once the mission reaches a terminal phase with no pending permission', async () => {
-    vi.useFakeTimers()
-    try {
-      vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
-      renderPage()
-      // One call on initial mount, one more when the effect re-runs after
-      // `mission` resolves (phase dep flips from undefined to 'done') —
-      // then the terminal branch stops scheduling any further interval.
-      await vi.waitFor(() => expect(getMission).toHaveBeenCalledTimes(2))
-      const callsAtTerminal = vi.mocked(getMission).mock.calls.length
+  it('ignores a signal for a different mission id', async () => {
+    const sub = captureSubscribe()
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    vi.mocked(getMission).mockClear()
 
-      await vi.advanceTimersByTimeAsync(5000 * 3)
+    sub.fireSignal({ kind: 'mission', id: 'some-other-mission' })
 
-      expect(getMission).toHaveBeenCalledTimes(callsAtTerminal)
-    } finally {
-      vi.useRealTimers()
-    }
+    // Nothing to await on directly (a no-op produces no event), so
+    // give any errant refetch a turn to happen, then assert it didn't.
+    await Promise.resolve()
+    expect(getMission).not.toHaveBeenCalled()
+  })
+
+  it('refetches on a signal naming this mission, and on ready', async () => {
+    const sub = captureSubscribe()
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    vi.mocked(getMission).mockClear()
+
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+    await vi.waitFor(() => expect(getMission).toHaveBeenCalledTimes(1))
+
+    sub.fireReady()
+    await vi.waitFor(() => expect(getMission).toHaveBeenCalledTimes(2))
+  })
+
+  it('unsubscribes on unmount', async () => {
+    const sub = captureSubscribe()
+    const { unmount } = renderPage()
+    await screen.findByText('Fix the login bug')
+    unmount()
+    expect(sub.unsubscribe).toHaveBeenCalled()
   })
 
   it('renders a Result section for a terminal mission with worker-reported evidence', async () => {

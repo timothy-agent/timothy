@@ -7,8 +7,7 @@ import type { Mission, Notification } from '../api/types'
 import { MissionCard } from '../components/missions/MissionCard'
 import { RecurringSchedules } from '../components/missions/RecurringSchedules'
 import { Button } from '../components/ui/button'
-
-const pollInterval = 5000
+import { subscribeEvents } from '../lib/events'
 
 export function Missions() {
   const navigate = useNavigate()
@@ -22,8 +21,14 @@ export function Missions() {
 
   useEffect(() => {
     refresh()
-    const id = setInterval(refresh, pollInterval)
-    return () => clearInterval(id)
+    // Any mission or notification signal means this board is stale —
+    // refetch both lists rather than trying to patch just the one
+    // that changed. onReady covers the initial connect and every
+    // reconnect, catching anything missed while disconnected.
+    return subscribeEvents(
+      () => refresh(),
+      () => refresh(),
+    )
   }, [refresh])
 
   const unread = notifications.filter((n) => !n.read)
