@@ -57,6 +57,17 @@ const (
 	retrieveInlineCap = 32 << 10
 )
 
+// maxStepRetries bounds automatic retry of one step's stream (D-038):
+// a 3rd consecutive failure surfaces as today rather than retrying
+// forever.
+const maxStepRetries = 2
+
+// stepRetryBackoff scales the wait before each step retry (attempt *
+// this duration); a package-level var so tests can shrink it instead
+// of plumbing a config knob through Request/NewAgent for one knob
+// only tests need.
+var stepRetryBackoff = time.Second
+
 const finalizeWarning = "[system] You have one tool step left before the limit. Finish gathering and produce your final answer on the next step."
 
 const coercionMessage = "[system] This task category requires consulting your tools before answering. Make the relevant tool call(s), then answer."
@@ -256,50 +267,83 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			sreq.Tools = nil
 		}
 
-		upstream, err := a.gw.Stream(ctx, sreq)
-		if err != nil {
-			// Flush usage accumulated by earlier steps before the
-			// terminal error, matching the in-stream error path — a
-			// mid-loop gateway failure must not undercount the turn.
-			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
-			emit(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
-				Code: "gateway_unavailable", Message: err.Error(), Retryable: true,
-			}})
-			return
-		}
-
+		// Inner attempt loop: a stream that dies before anything
+		// user-visible went out for THIS step can be re-tried transparently
+		// — the web "retry" handler appends a notice but never resets
+		// partial text, so re-streaming after any emission would duplicate
+		// content in the saved turn. Retrying never advances step/directive:
+		// same sreq, same msgs.
 		var text strings.Builder
 		var calls []provider.ToolCall
 		terminal := stream.StreamEvent{}
-		for ev := range upstream {
-			switch ev.Type {
-			case stream.EventChunk:
-				text.WriteString(ev.Text)
-				emit(ev)
-			case stream.EventReasoningChunk, stream.EventRetry, stream.EventToolStart:
-				emit(ev)
-			case stream.EventToolEnd:
-				if ev.ToolCall != nil {
-					calls = append(calls, provider.ToolCall{
-						ID: ev.ToolCall.ID, Name: ev.ToolCall.Name, Input: ev.ToolCall.Input,
-					})
+		emittedThisAttempt := false
+
+		for attempt := 0; ; attempt++ {
+			upstream, err := a.gw.Stream(ctx, sreq)
+			if err != nil {
+				if attempt < maxStepRetries && retryStep(ctx, emit, attempt+1, err.Error()) {
+					continue
 				}
-				emit(ev)
-			case stream.EventUsage:
-				if ev.Usage != nil {
-					total.InputTokens += ev.Usage.InputTokens
-					total.OutputTokens += ev.Usage.OutputTokens
-					total.CacheReadTokens += ev.Usage.CacheReadTokens
-					total.CacheWriteTokens += ev.Usage.CacheWriteTokens
-				}
-			case stream.EventDone:
-				terminal = ev
-				if ev.Meta != nil {
-					lastMeta = ev.Meta
-				}
-			case stream.EventIncomplete, stream.EventError:
-				terminal = ev
+				// Flush usage accumulated by earlier steps before the
+				// terminal error, matching the in-stream error path — a
+				// mid-loop gateway failure must not undercount the turn.
+				emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+				emit(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
+					Code: "gateway_unavailable", Message: err.Error(), Retryable: true,
+				}})
+				return
 			}
+
+			text.Reset()
+			calls = nil
+			terminal = stream.StreamEvent{}
+			emittedThisAttempt = false
+			for ev := range upstream {
+				switch ev.Type {
+				case stream.EventChunk:
+					text.WriteString(ev.Text)
+					emittedThisAttempt = true
+					emit(ev)
+				case stream.EventReasoningChunk, stream.EventRetry, stream.EventToolStart:
+					if ev.Type != stream.EventRetry {
+						emittedThisAttempt = true
+					}
+					emit(ev)
+				case stream.EventToolEnd:
+					if ev.ToolCall != nil {
+						calls = append(calls, provider.ToolCall{
+							ID: ev.ToolCall.ID, Name: ev.ToolCall.Name, Input: ev.ToolCall.Input,
+						})
+					}
+					emittedThisAttempt = true
+					emit(ev)
+				case stream.EventUsage:
+					if ev.Usage != nil {
+						total.InputTokens += ev.Usage.InputTokens
+						total.OutputTokens += ev.Usage.OutputTokens
+						total.CacheReadTokens += ev.Usage.CacheReadTokens
+						total.CacheWriteTokens += ev.Usage.CacheWriteTokens
+					}
+				case stream.EventDone:
+					terminal = ev
+					if ev.Meta != nil {
+						lastMeta = ev.Meta
+					}
+				case stream.EventIncomplete, stream.EventError:
+					terminal = ev
+				}
+			}
+
+			// EventIncomplete is a cut-off stream, not a retryable failure
+			// signal on its own — only a terminal EventError with
+			// Retryable set qualifies, and only before anything emitted.
+			if terminal.Type == stream.EventError && terminal.Err != nil && terminal.Err.Retryable &&
+				!emittedThisAttempt && attempt < maxStepRetries {
+				if retryStep(ctx, emit, attempt+1, terminal.Err.Message) {
+					continue
+				}
+			}
+			break
 		}
 
 		// Abnormal step end: surface it and stop — the relay persists
@@ -357,6 +401,25 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			msgs = append(msgs, provider.Message{Role: "tool", ToolResult: &results[i]})
 		}
 		effort = EffortFor(results)
+	}
+}
+
+// retryStep emits a stream.EventRetry for the upcoming attempt and
+// waits the scaled backoff, aborting early if ctx is done. It reports
+// whether the caller should retry; false means ctx ended mid-wait, in
+// which case the caller falls through to its normal failure path.
+func retryStep(ctx context.Context, emit func(stream.StreamEvent), attempt int, reason string) bool {
+	backoff := time.Duration(attempt) * stepRetryBackoff
+	emit(stream.StreamEvent{Type: stream.EventRetry, Retry: &stream.RetryInfo{
+		Attempt: attempt, BackoffMs: backoff.Milliseconds(), Reason: reason,
+	}})
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
