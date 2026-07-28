@@ -1071,7 +1071,7 @@ func TestMemoryExtractUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
 		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
 	}}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
 
 	got := make(chan string, 1)
 	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
@@ -1107,7 +1107,7 @@ func TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T)
 		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
 	}}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
 
 	got := make(chan string, 1)
 	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {

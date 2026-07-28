@@ -1,6 +1,9 @@
 package session
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // SensitiveTools names the tools whose execution marks a turn/session
 // sensitive, and the route side-calls must fall back to when they are.
@@ -12,9 +15,12 @@ import "strings"
 // (e.g. email text) to a cloud model. Suffix, not exact name: connector
 // tools are namespaced "<connector-name>_<tool-name>" with a user-chosen
 // connector name (same rule as Agent.SetForceRoute/matchGrant, D-036).
+// Route is a func, not a static string, so a settings change applies to
+// the next side-call without a restart; an empty result means the
+// feature is currently off (callers keep their own default route).
 type SensitiveTools struct {
 	Suffixes []string
-	Route    string
+	Route    func(context.Context) string
 }
 
 // Matches reports whether toolName ends a sensitive suffix: exact

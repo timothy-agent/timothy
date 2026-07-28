@@ -145,7 +145,15 @@ func main() {
 
 	toolCalls := app.Metrics.NewCounterVec("tool_calls_total",
 		"Tool executions by tool name and outcome.", "tool", "outcome")
-	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls)
+	// sensitiveRoute resolves the route sensitive-tool turns and their
+	// side-calls (extraction, compaction summarize) pin to: the runtime
+	// setting, else "" (feature off). A func, not a value snapshotted at
+	// startup, so a settings change from the web UI applies to the next
+	// turn without a restart.
+	sensitiveRoute := func(ctx context.Context) string {
+		return flags.Value(ctx, settings.ValueSensitiveToolRoute)
+	}
+	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -214,14 +222,13 @@ func main() {
 
 	// Single source of truth for "this turn/session executed a sensitive
 	// tool": the loop's in-turn SetForceRoute pin above and this
-	// SensitiveTools value share sensitiveToolSuffixes, so side-calls
-	// (extraction, compaction summarize) honor the same route floor the
-	// tool loop already pinned the turn to. Nil when SENSITIVE_TOOL_ROUTE
-	// is unset — every side-call keeps today's behavior.
-	var sensitiveTools *session.SensitiveTools
-	if sensitiveRoute := os.Getenv("SENSITIVE_TOOL_ROUTE"); sensitiveRoute != "" {
-		sensitiveTools = &session.SensitiveTools{Suffixes: sensitiveToolSuffixes, Route: sensitiveRoute}
-	}
+	// SensitiveTools value share sensitiveToolSuffixes and the same
+	// sensitiveRoute resolver, so side-calls (extraction, compaction
+	// summarize) honor the same route floor the tool loop already
+	// pinned the turn to. Wired unconditionally — sensitiveRoute
+	// resolving to "" at call time means the feature is currently off,
+	// same as before, but now editable at runtime from the settings UI.
+	sensitiveTools := &session.SensitiveTools{Suffixes: sensitiveToolSuffixes, Route: sensitiveRoute}
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
@@ -502,7 +509,7 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
@@ -537,13 +544,12 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	// fires, pin the rest of the turn to a trusted route (e.g. one
 	// chained only to a local Ollama provider) instead of whatever
 	// route the turn started on — optional, since not everyone runs a
-	// local model.
-	if sensitiveRoute := os.Getenv("SENSITIVE_TOOL_ROUTE"); sensitiveRoute != "" {
-		for _, suffix := range sensitiveToolSuffixes {
-			agent.SetForceRoute(suffix, sensitiveRoute)
-		}
-	} else {
-		log.Warn("SENSITIVE_TOOL_ROUTE not set; gmail_read/gmail_read_attachment output is processed on the turn's normal route, same as everything else")
+	// local model. sensitiveRoute resolving to "" at flip time means
+	// the feature is currently off; wired unconditionally since the
+	// route is now runtime-configurable from the settings UI, not just
+	// boot-time env.
+	for _, suffix := range sensitiveToolSuffixes {
+		agent.SetForceRoute(suffix, sensitiveRoute)
 	}
 	return agent, broker, outputs, set, nil
 }

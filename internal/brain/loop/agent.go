@@ -102,14 +102,18 @@ type Agent struct {
 	exec   Executor
 	defs   []provider.ToolDef
 
-	// forceRouteBySuffix maps a tool name SUFFIX to a route its output
-	// must be processed under — e.g. a route chained only to a
-	// local/trusted provider, for tools whose results carry sensitive
-	// data (raw email content) that should never reach a third-party
-	// model. Suffix, not exact name: connector tools are namespaced
-	// "<connector-name>_<tool-name>" and the connector name is user-
-	// chosen, so "gmail_read" must match regardless of prefix.
-	forceRouteBySuffix map[string]string
+	// forceRouteBySuffix maps a tool name SUFFIX to a resolver for the
+	// route its output must be processed under — e.g. a route chained
+	// only to a local/trusted provider, for tools whose results carry
+	// sensitive data (raw email content) that should never reach a
+	// third-party model. Suffix, not exact name: connector tools are
+	// namespaced "<connector-name>_<tool-name>" and the connector name
+	// is user-chosen, so "gmail_read" must match regardless of prefix.
+	// A func, not a static string: the route is resolved at flip time
+	// (settings-backed), so a runtime settings change applies to the
+	// next turn without a restart; an empty result means the feature is
+	// currently off and no flip happens.
+	forceRouteBySuffix map[string]func(context.Context) string
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
@@ -119,7 +123,7 @@ func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink,
 		maxSteps:           tools.DefaultMaxSteps,
 		offloadAt:          tools.DefaultOffloadThreshold,
 		offloadPerTool:     map[string]int{},
-		forceRouteBySuffix: map[string]string{},
+		forceRouteBySuffix: map[string]func(context.Context) string{},
 		logger:             logger,
 	}
 }
@@ -154,18 +158,22 @@ func (a *Agent) SetOffloadThreshold(tool string, bytes int) {
 	a.offloadPerTool[tool] = bytes
 }
 
-// SetForceRoute pins a tool's output to route for the rest of the
+// SetForceRoute pins a tool's output to route(ctx) for the rest of the
 // turn: once a tool whose name ENDS WITH suffix is called, every
-// subsequent LLM step in the SAME turn uses route instead of the
-// turn's normal route — sticky, never un-forced mid-turn, since the
-// sensitive content is already in context by then. The turn's FIRST
-// step (before any tool has run) still uses the turn's own route; this
-// only takes effect after. suffix, not the exact registered name:
-// connector tools are namespaced "<connector-name>_<tool-name>" with a
-// user-chosen connector name, so "gmail_read" matches regardless of
-// which connector name serves it. Forcing also clears the turn's model
-// hint from then on, since a hint outranks the route at the gateway.
-func (a *Agent) SetForceRoute(suffix, route string) {
+// subsequent LLM step in the SAME turn uses the resolved route instead
+// of the turn's normal route — sticky, never un-forced mid-turn, since
+// the sensitive content is already in context by then. The turn's
+// FIRST step (before any tool has run) still uses the turn's own
+// route; this only takes effect after. suffix, not the exact
+// registered name: connector tools are namespaced
+// "<connector-name>_<tool-name>" with a user-chosen connector name, so
+// "gmail_read" matches regardless of which connector name serves it.
+// Forcing also clears the turn's model hint from then on, since a hint
+// outranks the route at the gateway. route is resolved at flip time
+// (not when SetForceRoute is called), so a settings change takes
+// effect on the next turn without a restart; an empty result means the
+// feature is currently off and the turn's route is left alone.
+func (a *Agent) SetForceRoute(suffix string, route func(context.Context) string) {
 	a.forceRouteBySuffix[suffix] = route
 }
 
@@ -414,10 +422,12 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		toolCallCount += len(calls)
 		stuck = repeats.Record(calls)
 		for _, c := range calls {
-			for suffix, forced := range a.forceRouteBySuffix {
+			for suffix, fn := range a.forceRouteBySuffix {
 				if strings.HasSuffix(c.Name, suffix) {
-					route = forced
-					hint = ""
+					if forced := fn(ctx); forced != "" {
+						route = forced
+						hint = ""
+					}
 				}
 			}
 		}

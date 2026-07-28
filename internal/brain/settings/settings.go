@@ -44,11 +44,17 @@ const (
 	// timothy/timothy@localhost identity.
 	ValueGitAuthorName  = "git_author_name"
 	ValueGitAuthorEmail = "git_author_email"
+	// ValueSensitiveToolRoute names the route that sensitive-tool turns
+	// (e.g. gmail_read) and their side-calls (memory extraction,
+	// compaction) pin to; empty means the feature is off. Set from the
+	// web settings panel.
+	ValueSensitiveToolRoute = "sensitive_tool_route"
 )
 
 var knownValueKeys = map[string]bool{
 	ValueTokenBudget: true, ValueSkillsAllowlist: true,
 	ValueGitAuthorName: true, ValueGitAuthorEmail: true,
+	ValueSensitiveToolRoute: true,
 }
 
 const cacheTTL = 10 * time.Second

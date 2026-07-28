@@ -612,8 +612,8 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		// email), so it must never fall back to memoryd's own default
 		// side-call route.
 		extractRoute := ""
-		if turnSensitive && s.sensitive != nil {
-			extractRoute = s.sensitive.Route
+		if turnSensitive && s.sensitive != nil && s.sensitive.Route != nil {
+			extractRoute = s.sensitive.Route(context.Background())
 		}
 		go s.memory(context.Background(), sessionID, turnSeq, mtext, extractRoute)
 	}

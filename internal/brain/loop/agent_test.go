@@ -862,7 +862,7 @@ func TestForceRouteSwitchesRouteAfterMatchingToolAndStaysSticky(t *testing.T) {
 		},
 	}
 	a, _, _, _ := testAgent(t, gw, sensitive)
-	a.SetForceRoute("gmail_read", "local")
+	a.SetForceRoute("gmail_read", func(context.Context) string { return "local" })
 
 	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
 		Messages: []provider.Message{{Role: "user", Content: "check my email"}}})
@@ -895,7 +895,7 @@ func TestForceRouteIgnoresNonMatchingTools(t *testing.T) {
 		finalStep("done"),
 	}}
 	a, _, _, _ := testAgent(t, gw)
-	a.SetForceRoute("gmail_read", "local")
+	a.SetForceRoute("gmail_read", func(context.Context) string { return "local" })
 
 	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
 		Messages: []provider.Message{{Role: "user", Content: "go"}}})
@@ -931,7 +931,7 @@ func TestForceRouteDropsModelHint(t *testing.T) {
 		},
 	}
 	a, _, _, _ := testAgent(t, gw, sensitive)
-	a.SetForceRoute("gmail_read", "local")
+	a.SetForceRoute("gmail_read", func(context.Context) string { return "local" })
 
 	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default", ModelHint: "glm-4.7-flash",
 		Messages: []provider.Message{{Role: "user", Content: "check my email"}}})
@@ -974,7 +974,7 @@ func TestForceRoutePinSurvivesStepRetry(t *testing.T) {
 		},
 	}
 	a, _, _, _ := testAgent(t, gw, sensitive)
-	a.SetForceRoute("gmail_read", "local")
+	a.SetForceRoute("gmail_read", func(context.Context) string { return "local" })
 
 	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default", ModelHint: "glm-4.7-flash",
 		Messages: []provider.Message{{Role: "user", Content: "check my email"}}})

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   getSettings,
+  listRoutes,
   patchBudget,
   patchSettings,
   patchSettingValues,
   usageBudget,
 } from '../../api/client'
+import type { AdminRoute } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { ErrorBanner, Toggle } from './shared'
 import { errText } from './util'
 
@@ -71,6 +74,7 @@ export function FeaturesTab() {
         </div>
       ))}
       {values && <AgentCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
       <BudgetsCard />
     </div>
   )
@@ -169,6 +173,87 @@ function AgentCard({
       <p className="mt-2 text-xs text-muted-foreground">
         Git author name/email are used for mission commits; set them to your GitHub identity so
         pushed commits link to your account.
+      </p>
+    </div>
+  )
+}
+
+const SENSITIVE_ROUTE_OFF = '__off__'
+
+// SensitiveRouteCard picks the route sensitive-tool turns (e.g. reading
+// email content) and their memory extraction/compaction side-calls pin
+// to. Fetches the route list on mount like AgentAdd/AgentEdit; if that
+// fetch fails (or the admin proxy is nil-gated), falls back to a plain
+// text input so the setting stays editable without the picker.
+function SensitiveRouteCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [route, setRoute] = useState(values.sensitive_tool_route ?? '')
+  const [routes, setRoutes] = useState<AdminRoute[] | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    listRoutes().then(setRoutes, () => setRoutes(null))
+  }, [])
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ sensitive_tool_route: route.trim() })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Sensitive tool route</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        {routes ? (
+          <div className="grid gap-1 text-xs text-muted-foreground">
+            <span>Route</span>
+            <Select
+              value={route || SENSITIVE_ROUTE_OFF}
+              onValueChange={(v) => setRoute(v === SENSITIVE_ROUTE_OFF ? '' : v)}
+            >
+              <SelectTrigger className="h-10 w-56" aria-label="Sensitive tool route">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SENSITIVE_ROUTE_OFF}>Off (default)</SelectItem>
+                {routes.map((r) => (
+                  <SelectItem key={r.name} value={r.name}>
+                    {r.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : (
+          <label className="grid gap-1 text-xs text-muted-foreground">
+            Route
+            <Input
+              value={route}
+              onChange={(e) => setRoute(e.target.value)}
+              placeholder="empty = off"
+              className="w-56"
+              aria-label="Sensitive tool route"
+            />
+          </label>
+        )}
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Turns that read email content switch to this route, and their memory extraction and
+        compaction follow. Chain it to a local provider for a privacy floor.
       </p>
     </div>
   )

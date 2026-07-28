@@ -1,13 +1,16 @@
 package session
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestSensitiveToolsMatches pins the suffix semantics: exact name, or
 // name ending "_"+suffix (connector namespacing), same rule as
 // loop.Agent.SetForceRoute/matchGrant (D-036).
 func TestSensitiveToolsMatches(t *testing.T) {
 	t.Parallel()
-	s := &SensitiveTools{Suffixes: []string{"gmail_read", "gmail_read_attachment"}, Route: "local"}
+	s := &SensitiveTools{Suffixes: []string{"gmail_read", "gmail_read_attachment"}, Route: func(context.Context) string { return "local" }}
 	tests := []struct {
 		name string
 		tool string

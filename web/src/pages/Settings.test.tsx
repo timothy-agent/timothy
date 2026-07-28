@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatError } from '../api/client'
@@ -138,7 +138,8 @@ describe('Features tab agent settings', () => {
     fireEvent.change(screen.getByLabelText('Skills allowlist'), {
       target: { value: 'coding-task, research' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const card = budget.closest('div.rounded-xl') as HTMLElement
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
       expect(patchSettingValues).toHaveBeenCalledWith({
@@ -147,6 +148,55 @@ describe('Features tab agent settings', () => {
         git_author_name: '',
         git_author_email: '',
       }),
+    )
+  })
+})
+
+describe('Features tab sensitive tool route', () => {
+  beforeEach(() => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: { tools_enabled: true },
+      values: { sensitive_tool_route: '' },
+    })
+    vi.mocked(usageBudget).mockResolvedValue({
+      day: { limit_usd: null, spend_usd: 0, over: false },
+      month: { limit_usd: null, spend_usd: 0, over: false },
+    })
+    vi.mocked(patchSettingValues).mockResolvedValue()
+  })
+
+  it('offers every route plus Off, and patches the chosen one', async () => {
+    vi.mocked(listRoutes).mockResolvedValue([
+      { name: 'default', chain: [], strategy: 'ordered', enabled: true },
+      { name: 'local', chain: [], strategy: 'ordered', enabled: true },
+    ])
+
+    renderPage('/settings/features')
+    const trigger = await screen.findByRole('combobox', { name: 'Sensitive tool route' })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByText('local'))
+
+    const card = trigger.closest('div.rounded-xl') as HTMLElement
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local' }),
+    )
+  })
+
+  it('falls back to a text input when the route list fails to load', async () => {
+    vi.mocked(listRoutes).mockRejectedValue(new Error('admin proxy unavailable'))
+
+    renderPage('/settings/features')
+    const input = await screen.findByLabelText('Sensitive tool route')
+    expect((input as HTMLInputElement).tagName).toBe('INPUT')
+
+    fireEvent.change(input, { target: { value: 'local' } })
+    const card = input.closest('div.rounded-xl') as HTMLElement
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local' }),
     )
   })
 })

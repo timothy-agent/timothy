@@ -195,8 +195,8 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 			b.WriteString(m.Role + ": " + m.Content + "\n\n")
 		}
 		extractRoute := ""
-		if sensitive && c.sensitive != nil {
-			extractRoute = c.sensitive.Route
+		if sensitive && c.sensitive != nil && c.sensitive.Route != nil {
+			extractRoute = c.sensitive.Route(ctx)
 		}
 		if ids := c.extract(ctx, sessionID, boundary, b.String(), extractRoute); ids != nil {
 			facts = ids
@@ -313,8 +313,10 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 	defer cancel()
 
 	route := "summarize"
-	if sensitive && c.sensitive != nil && c.sensitive.Route != "" {
-		route = c.sensitive.Route
+	if sensitive && c.sensitive != nil && c.sensitive.Route != nil {
+		if forced := c.sensitive.Route(ctx); forced != "" {
+			route = forced
+		}
 	}
 	var b strings.Builder
 	for _, m := range msgs {

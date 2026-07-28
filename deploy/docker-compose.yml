@@ -107,12 +107,6 @@ services:
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to
       # markdown/text; compose-internal only.
       MARKITDOWN_URL: http://markitdown:8000
-      # Optional: a route name (configured in Settings → Routing,
-      # normally chained only to a local Ollama provider) that gmail_read
-      # and gmail_read_attachment force the rest of their turn onto —
-      # keeps real email content off third-party providers. Empty: those
-      # tools' output is processed on whatever route the turn started on.
-      SENSITIVE_TOOL_ROUTE: ${SENSITIVE_TOOL_ROUTE:-}
       # sandboxd's internal address — set only when MISSION_SANDBOX_IMAGE
       # is configured (sandboxd itself always runs; without an image it
       # just idles degraded). Empty keeps the original in-process exec
