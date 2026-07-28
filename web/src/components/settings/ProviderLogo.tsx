@@ -1,8 +1,8 @@
 import type { ProviderPreset } from './presets'
 
 // Official provider marks (lobehub icon set, monochrome variants),
-// rendered white on the preset's brand color. LogoSprite mounts once;
-// ProviderLogo references symbols from it.
+// rendered white on the preset's brand color. LogoSprite mounts once
+// in App; ProviderLogo references symbols from it.
 export function LogoSprite() {
   return (
     <svg width="0" height="0" className="absolute" aria-hidden="true">

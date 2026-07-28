@@ -5,7 +5,7 @@ import { listProviders, patchProvider, providersHealth, testProvider } from '../
 import type { AdminProvider, ProviderHealth, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { matchPreset, providerPresets } from './presets'
-import { LogoSprite, ProviderLogo } from './ProviderLogo'
+import { ProviderLogo } from './ProviderLogo'
 import { Toggle } from './shared'
 import { errText } from './util'
 
@@ -26,8 +26,6 @@ export function ProvidersList() {
 
   return (
     <div className="mt-6 space-y-8">
-      <LogoSprite />
-
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'}

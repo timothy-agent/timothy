@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { listConnectors, patchConnector, testConnector } from '../../api/client'
 import type { AdminConnector } from '../../api/types'
 import { Button } from '../ui/button'
-import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
+import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Toggle } from './shared'
 import { errText } from './util'
@@ -28,8 +28,6 @@ export function ConnectorsList() {
 
   return (
     <div className="mt-6 space-y-8">
-      <ConnectorLogoSprite />
-
       {oauthConnected && (
         <div className="flex items-center gap-3 rounded-xl border border-good/30 bg-good-soft p-3 text-sm text-good">
           <span>Google account connected to “{oauthConnected}”. Enable it below to serve tools.</span>

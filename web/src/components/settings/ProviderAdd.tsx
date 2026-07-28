@@ -10,7 +10,7 @@ import { Input } from '../ui/input'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
 import { modelCatalog } from './modelCatalog'
 import { providerPresets, type ProviderPreset } from './presets'
-import { LogoSprite, ProviderLogo } from './ProviderLogo'
+import { ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText, secretField, stripPaste } from './util'
@@ -181,7 +181,6 @@ export function ProviderAdd() {
 
   return (
     <div className="mt-6 w-full space-y-6">
-      <LogoSprite />
       <Link
         to="/settings/providers"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"

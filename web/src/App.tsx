@@ -18,6 +18,8 @@ import { getToken } from './api/client'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
+import { ConnectorLogoSprite } from './components/settings/ConnectorLogo'
+import { LogoSprite } from './components/settings/ProviderLogo'
 import {
   CommandDialog,
   CommandEmpty,
@@ -283,6 +285,8 @@ function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <SessionsProvider>
+        <LogoSprite />
+        <ConnectorLogoSprite />
         <Toaster richColors closeButton theme={theme} />
         <SidebarProvider className="min-h-dvh">
           <AppSidebar

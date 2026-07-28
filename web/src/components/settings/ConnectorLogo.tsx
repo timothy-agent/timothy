@@ -2,6 +2,8 @@ import type { ConnectorPreset } from './connectorPresets'
 
 // Official connector marks (simple-icons, monochrome), rendered white
 // on the preset's brand color — same treatment as provider logos.
+// ConnectorLogoSprite mounts once in App; ConnectorLogo references
+// symbols from it.
 export function ConnectorLogoSprite() {
   return (
     <svg width="0" height="0" className="absolute" aria-hidden="true">
