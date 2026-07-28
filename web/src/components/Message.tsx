@@ -85,13 +85,37 @@ export function CopyButton({
   )
 }
 
-export function UserMessage({ text }: { text: string }) {
+export function UserMessage({
+  text,
+  onRetry,
+}: {
+  text: string
+  // Present only for a trailing dangling user message (the turn died
+  // before any assistant event landed) — Chat.tsx decides that, this
+  // component just renders whatever it's handed.
+  onRetry?: () => void
+}) {
   return (
-    <div className="group/message flex items-end justify-end gap-1">
-      <CopyButton text={text} label="Copy message" />
-      <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 whitespace-pre-wrap text-white">
-        {text}
+    <div className="flex flex-col items-end gap-1">
+      <div className="group/message flex items-end justify-end gap-1">
+        <CopyButton text={text} label="Copy message" />
+        <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 whitespace-pre-wrap text-white">
+          {text}
+        </div>
       </div>
+      {onRetry && (
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <span className="text-xs">No reply — the turn failed.</span>
+          <button
+            type="button"
+            data-testid="retry-button"
+            onClick={onRetry}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            retry
+          </button>
+        </div>
+      )}
     </div>
   )
 }

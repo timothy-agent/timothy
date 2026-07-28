@@ -200,14 +200,24 @@ export function Chat({
 
   // retryLast re-runs the last (failed) turn: the session already
   // carries the dangling user message server-side (chat.Service.Retry),
-  // so this resets the existing assistant item in place rather than
-  // appending a new user+assistant pair like sendMessage does.
+  // so this never sends a new user message like sendMessage does. Two
+  // shapes reach here: an in-session failure, where the trailing item
+  // is still the assistant one from the failed attempt and gets reset
+  // in place; and a reload after a failure, where the transcript ends
+  // at the dangling user message (no assistant item survived), so one
+  // is appended for the stream to render into.
   const retryLast = async () => {
     const sessionId = sessionRef.current
     if (!sessionId || streaming) return
     setStreaming(true)
     pinnedRef.current = true
-    updateLast(() => emptyAssistant())
+    setItems((prev) => {
+      const next = [...prev]
+      const last = next[next.length - 1]
+      if (last?.role === 'assistant') next[next.length - 1] = { ...emptyAssistant(), id: last.id, role: 'assistant' }
+      else next.push({ id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() })
+      return next
+    })
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -296,7 +306,16 @@ export function Chat({
         {items.map((item, i) => {
           switch (item.role) {
             case 'user':
-              return <UserMessage key={item.id} text={item.text} />
+              return (
+                <UserMessage
+                  key={item.id}
+                  text={item.text}
+                  // A trailing user message means the turn died before any
+                  // assistant event reached the transcript — retry re-runs
+                  // it server-side, same trailing-only condition as above.
+                  onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                />
+              )
             case 'compaction':
               return <CompactionDivider key={item.id} text={item.text} />
             case 'interrupted':

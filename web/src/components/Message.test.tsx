@@ -155,6 +155,18 @@ describe('copy buttons', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders no retry button on a user message without onRetry', () => {
+    render(<UserMessage text="my question" />)
+    expect(screen.queryByTestId('retry-button')).not.toBeInTheDocument()
+  })
+
+  it('shows a retry button on a user message when onRetry is given, and calls it on click', () => {
+    const onRetry = vi.fn()
+    render(<UserMessage text="my question" onRetry={onRetry} />)
+    fireEvent.click(screen.getByTestId('retry-button'))
+    expect(onRetry).toHaveBeenCalledOnce()
+  })
+
   it('hides the copy button while streaming', () => {
     const msg = play([{ type: 'chunk', text: 'partial' }])
     render(<AssistantMessage msg={msg} />)
