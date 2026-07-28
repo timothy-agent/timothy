@@ -2,15 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
 import { answerPermission, ChatError, chatStream, getTranscript, retryStream } from '../api/client'
 import type { ChatEvent } from '../api/types'
+import { ActivityPanel } from '../components/Activity'
 import { Composer } from '../components/Composer'
-import {
-  AssistantMessage,
-  CompactionDivider,
-  InterruptedMessage,
-  ToolBlock,
-  UserMessage,
-} from '../components/Message'
+import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from '../components/Message'
 import { PermissionModal } from '../components/PermissionModal'
+import { Sheet } from '../components/ui/sheet'
 import {
   answerPermission as clearPermission,
   applyEvent,
@@ -63,6 +59,10 @@ export function Chat({
   const [skillHint, setSkillHint] = useState<string | undefined>(lockedSkillHint)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
+  // Id of the assistant item whose Activity panel is open, if any. The
+  // panel content is derived from `items` below rather than captured
+  // once, so it keeps updating live while that turn is still streaming.
+  const [activityId, setActivityId] = useState<string | null>(null)
   const sessionRef = useRef<string | undefined>(routeSession)
   // Session ids this page itself adopted mid-stream (via navigate):
   // the resume effect must not clobber the live stream with a replay.
@@ -268,9 +268,17 @@ export function Chat({
     })
   }
 
+  // Re-derived from `items` every render (not captured on open) so the
+  // panel keeps showing live tool/reasoning state while its turn streams.
+  const activityItem = items.find((i) => i.id === activityId)
+  const activityMsg = activityItem?.role === 'assistant' ? activityItem : undefined
+
   return (
     <div className="flex h-full flex-col">
       {pendingPermission && <PermissionModal request={pendingPermission} onDecision={decide} />}
+      <Sheet open={activityMsg !== undefined} onOpenChange={(open) => !open && setActivityId(null)}>
+        {activityMsg && <ActivityPanel msg={activityMsg} />}
+      </Sheet>
       <div ref={listRef} onScroll={trackPin} className="flex-1 space-y-6 overflow-y-auto py-6">
         {items.length === 0 && !loadError && (
           <div className="mt-24 text-center">
@@ -289,8 +297,6 @@ export function Chat({
           switch (item.role) {
             case 'user':
               return <UserMessage key={item.id} text={item.text} />
-            case 'tool':
-              return <ToolBlock key={item.id} tool={item.tool} />
             case 'compaction':
               return <CompactionDivider key={item.id} text={item.text} />
             case 'interrupted':
@@ -304,6 +310,7 @@ export function Chat({
                   // (the session's last event server-side) — never a
                   // mid-transcript message.
                   onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                  onShowActivity={() => setActivityId(item.id)}
                 />
               )
           }

@@ -2,13 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, emptyAssistant, type AssistantState } from '../lib/chat'
-import {
-  AssistantMessage,
-  CompactionDivider,
-  InterruptedMessage,
-  ToolBlock,
-  UserMessage,
-} from './Message'
+import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from './Message'
 
 afterEach(cleanup)
 
@@ -29,18 +23,29 @@ describe('AssistantMessage', () => {
     expect(screen.getByText('world').tagName).toBe('STRONG')
   })
 
-  it('collapses reasoning behind a toggle', () => {
+  it('shows a reasoning-only activity line that opens the detail panel', () => {
+    const msg = play([
+      { type: 'reasoning_chunk', text: 'thinking…' },
+      { type: 'chunk', text: 'answer' },
+      { type: 'meta', session_id: 's' },
+    ])
+    const onShowActivity = vi.fn()
+    render(<AssistantMessage msg={msg} onShowActivity={onShowActivity} />)
+
+    const line = screen.getByTestId('activity-line')
+    expect(line).toHaveTextContent('Reasoning')
+    fireEvent.click(line)
+    expect(onShowActivity).toHaveBeenCalledOnce()
+  })
+
+  it('omits the activity line entirely when there is no onShowActivity handler', () => {
     const msg = play([
       { type: 'reasoning_chunk', text: 'thinking…' },
       { type: 'chunk', text: 'answer' },
       { type: 'meta', session_id: 's' },
     ])
     render(<AssistantMessage msg={msg} />)
-
-    const details = screen.getByText('Reasoning').closest('details')
-    expect(details).not.toBeNull()
-    expect(details).not.toHaveAttribute('open')
-    expect(screen.getByText('thinking…')).toBeInTheDocument()
+    expect(screen.queryByTestId('activity-line')).not.toBeInTheDocument()
   })
 
   it('renders retry and incomplete honestly', () => {
@@ -166,23 +171,6 @@ describe('copy buttons', () => {
     vi.unstubAllGlobals()
   })
 
-  it('copies a tool response digest', () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
-
-    render(
-      <ToolBlock tool={{ id: 'c9', name: 'calculate', status: 'ok', digest: 'the answer is 42' }} />,
-    )
-    fireEvent.click(screen.getByTestId('copy-button'))
-    expect(writeText).toHaveBeenCalledWith('the answer is 42')
-    vi.unstubAllGlobals()
-  })
-
-  it('omits the copy button when a tool has no digest yet', () => {
-    render(<ToolBlock tool={{ id: 'c9', name: 'shell', status: 'running' }} />)
-    expect(screen.queryByTestId('copy-button')).toBeNull()
-  })
-
   it('confirms the copy then reverts after two seconds', async () => {
     vi.useFakeTimers()
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -243,27 +231,15 @@ describe('tool calls', () => {
     expect(msg.tools).toHaveLength(1)
     expect(msg.tools[0]).toMatchObject({ id: 'c1', status: 'ok', digest: 'notes.md' })
 
-    render(<AssistantMessage msg={msg} />)
-    expect(screen.getByTestId('tool-block')).toHaveTextContent('shell')
-    expect(screen.getByTestId('tool-status')).toHaveTextContent('ok')
-    expect(screen.getByTestId('tool-block')).toHaveTextContent('42ms')
+    render(<AssistantMessage msg={msg} onShowActivity={vi.fn()} />)
+    expect(screen.getByTestId('activity-line')).toHaveTextContent('Worked for 42ms · shell')
   })
 
-  it('shows a running tool before its result arrives', () => {
+  it('shows a running tool while streaming', () => {
     const msg = play([{ type: 'tool_start', tool_call: { id: 'c1', name: 'web_fetch' } }])
-    render(<AssistantMessage msg={msg} />)
-    expect(screen.getByTestId('tool-status')).toHaveTextContent('running…')
+    render(<AssistantMessage msg={msg} onShowActivity={vi.fn()} />)
+    expect(screen.getByTestId('activity-line')).toHaveTextContent('Running web_fetch…')
   })
-
-  it('renders a standalone replayed tool block', () => {
-    render(
-      <ToolBlock
-        tool={{ id: 'c9', name: 'calculate', status: 'error', digest: 'division by zero' }}
-      />,
-    )
-    expect(screen.getByTestId('tool-status')).toHaveTextContent('error')
-  })
-
 
   it('parks visibly while a permission request is pending', () => {
     const msg = play([

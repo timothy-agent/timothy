@@ -39,6 +39,7 @@ describe('fromTranscript', () => {
       role: 'assistant',
       text: 'hi **there**',
       reasoning: 'thinking about it',
+      tools: [],
       streaming: false,
       meta: { provider: 'zai-glm', model: 'glm-4.7', usage: { input_tokens: 81, output_tokens: 396 } },
     })
@@ -70,7 +71,104 @@ describe('fromTranscript', () => {
     expect(items[0]).toMatchObject({ role: 'assistant', meta: undefined })
   })
 
-  it('skips tool items until the tool loop lands', () => {
+  it('groups tool items into the following assistant turn', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'user', text: 'q', created_at: at },
+      {
+        seq: 2,
+        kind: 'tool',
+        tool: { call_id: 'c1', name: 'shell', status: 'ok', result_digest: 'notes.md', duration_ms: 42 },
+        created_at: at,
+      },
+      { seq: 3, kind: 'assistant', blocks: [{ type: 'text', text: 'a' }], created_at: at },
+    ])
+    expect(items.map((i) => i.role)).toEqual(['user', 'assistant'])
+    expect(items[1]).toMatchObject({
+      role: 'assistant',
+      text: 'a',
+      tools: [{ id: 'c1', name: 'shell', status: 'ok', digest: 'notes.md', durationMs: 42 }],
+    })
+  })
+
+  it('groups a run of several tool calls onto one following assistant turn', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'tool',
+        tool: { call_id: 'c1', name: 'web_search', status: 'ok', duration_ms: 10 },
+        created_at: at,
+      },
+      {
+        seq: 2,
+        kind: 'tool',
+        tool: { call_id: 'c2', name: 'web_fetch', status: 'ok', duration_ms: 20 },
+        created_at: at,
+      },
+      { seq: 3, kind: 'assistant', blocks: [{ type: 'text', text: 'done' }], created_at: at },
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ role: 'assistant', text: 'done' })
+    if (items[0].role === 'assistant') {
+      expect(items[0].tools.map((t) => t.id)).toEqual(['c1', 'c2'])
+    }
+  })
+
+  it('flushes trailing tool calls with no following assistant turn as a bare activity item', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'user', text: 'q', created_at: at },
+      {
+        seq: 2,
+        kind: 'tool',
+        tool: { call_id: 'c1', name: 'shell', status: 'error', duration_ms: 5 },
+        created_at: at,
+      },
+    ])
+    expect(items.map((i) => i.role)).toEqual(['user', 'assistant'])
+    expect(items[1]).toMatchObject({
+      id: 'replay-2',
+      role: 'assistant',
+      text: '',
+      tools: [{ id: 'c1', status: 'error' }],
+    })
+  })
+
+  it('flushes pending tools before a compaction or interrupted item, never leaking across them', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'tool',
+        tool: { call_id: 'c1', name: 'shell', status: 'ok' },
+        created_at: at,
+      },
+      { seq: 2, kind: 'compaction', text: 'summarized', created_at: at },
+      {
+        seq: 3,
+        kind: 'tool',
+        tool: { call_id: 'c2', name: 'shell', status: 'ok' },
+        created_at: at,
+      },
+      { seq: 4, kind: 'interrupted', text: 'partial', created_at: at },
+    ])
+    expect(items.map((i) => i.role)).toEqual(['assistant', 'compaction', 'assistant', 'interrupted'])
+    expect(items[0]).toMatchObject({ tools: [{ id: 'c1' }] })
+    expect(items[2]).toMatchObject({ tools: [{ id: 'c2' }] })
+  })
+
+  it('falls back to ok status for an unrecognized tool status', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'tool',
+        tool: { call_id: 'c1', name: 'shell', status: 'unknown' },
+        created_at: at,
+      },
+    ])
+    if (items[0].role === 'assistant') {
+      expect(items[0].tools[0].status).toBe('ok')
+    }
+  })
+
+  it('drops tool items with no tool payload', () => {
     const items = fromTranscript([
       { seq: 1, kind: 'user', text: 'q', created_at: at },
       { seq: 2, kind: 'tool', created_at: at },

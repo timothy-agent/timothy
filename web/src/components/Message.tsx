@@ -1,12 +1,13 @@
-import { Copy01Icon, Link04Icon, Tick02Icon, WrenchIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { Copy01Icon, Link04Icon, Tick02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+import { ActivityLine } from './Activity'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
-import type { AssistantState, ToolRun } from '../lib/chat'
+import type { AssistantState } from '../lib/chat'
 import { cn } from '../lib/utils'
 import 'highlight.js/styles/github-dark.css'
 
@@ -44,7 +45,7 @@ function SourcesPanel({ citations }: { citations: { title: string; url: string }
 // (AssistantMessage's wrapper); alwaysVisible drops that dependency
 // for contexts with no such group (e.g. inside a collapsible details
 // block, already hidden until expanded).
-function CopyButton({
+export function CopyButton({
   text,
   label,
   alwaysVisible = false,
@@ -129,66 +130,20 @@ export function InterruptedMessage({ text }: { text: string }) {
   )
 }
 
-// ToolBlock renders one tool call: name, status, duration, and a
-// collapsible result digest. Raw results never reach the browser —
-// the digest is all there is.
-export function ToolBlock({ tool }: { tool: ToolRun }) {
-  const statusStyles: Record<ToolRun['status'], string> = {
-    running: 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400',
-    ok: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    error: 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400',
-    denied: 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  }
-  return (
-    <details
-      className="w-full max-w-3xl rounded-lg border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700"
-      data-testid="tool-block"
-    >
-      <summary className="flex cursor-pointer items-center gap-2 select-none">
-        <HugeiconsIcon icon={WrenchIcon} className="size-3.5 text-zinc-400" />
-        <span className="font-mono text-zinc-600 dark:text-zinc-300">{tool.name}</span>
-        <Badge variant="outline" className={statusStyles[tool.status]} data-testid="tool-status">
-          {tool.status === 'running' ? 'running…' : tool.status}
-        </Badge>
-        {tool.durationMs !== undefined && (
-          <span className="text-zinc-400">{formatDuration(tool.durationMs)}</span>
-        )}
-      </summary>
-      <div className="mt-2 space-y-2">
-        {tool.args && (
-          <pre className="overflow-x-auto rounded bg-zinc-100 p-2 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-            {tool.args}
-          </pre>
-        )}
-        {tool.digest && (
-          <div className="relative">
-            <pre className="max-h-64 overflow-auto rounded bg-zinc-100 p-2 pr-8 whitespace-pre-wrap text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-              {tool.digest}
-            </pre>
-            <div className="absolute top-1 right-1">
-              <CopyButton text={tool.digest} label="Copy tool response" alwaysVisible />
-            </div>
-          </div>
-        )}
-      </div>
-    </details>
-  )
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
 export function AssistantMessage({
   msg,
   onRetry,
+  onShowActivity,
 }: {
   msg: AssistantState
   // Present only for the trailing item when it's safe to retry (an
   // error and not mid-stream) — Chat.tsx decides that, this component
   // just renders whatever it's handed.
   onRetry?: () => void
+  // Opens the Activity detail panel for this turn — Chat.tsx owns the
+  // Sheet and passes this through. Omitted, the activity line simply
+  // doesn't render (there's nowhere for it to open).
+  onShowActivity?: () => void
 }) {
   const tokens = msg.meta?.usage
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
@@ -201,16 +156,7 @@ export function AssistantMessage({
     : splitSources(collapseRepeatedTail(msg.text))
   return (
     <div className="group/message flex flex-col items-start gap-2">
-      {msg.reasoning !== '' && (
-        <details className="w-full max-w-3xl rounded-lg border border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-          <summary className="cursor-pointer select-none">Reasoning</summary>
-          <div className="mt-2 whitespace-pre-wrap">{msg.reasoning}</div>
-        </details>
-      )}
-
-      {msg.tools.map((t) => (
-        <ToolBlock key={t.id} tool={t} />
-      ))}
+      {onShowActivity && <ActivityLine msg={msg} onOpen={onShowActivity} />}
 
       {msg.permissions.length > 0 && (
         <Badge
