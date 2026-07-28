@@ -147,6 +147,47 @@ func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 	return m, nil
 }
 
+// Delete permanently removes a terminal mission: its row (mission_events
+// and notifications cascade via FK, migrations 0025/0027) plus every
+// other trace this package owns. This is NOT a violation of the
+// append-only discipline that governs mission_events within a mission's
+// life — that rule protects a LIVE mission's history from being
+// rewritten mid-flight; deleting the whole aggregate once it has
+// finished (test-fixture cleanup, an operator purging old runs) is
+// removal of the aggregate, not mutation of it. Refuses with
+// ErrNotTerminal if the mission's Phase hasn't reached done/failed
+// (covers cancelled too — cancel ends as mission.failed) and
+// ErrNotFound for an unknown id. Returns the deleted mission so the
+// caller (the API layer, which also owns the session store and
+// Workspace) can tear down the hidden session and the on-disk
+// workspace — both outside this package's remit.
+func (s *Store) Delete(ctx context.Context, id string) (Mission, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return Mission{}, fmt.Errorf("missions delete: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return Mission{}, fmt.Errorf("missions delete begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	m, err := scanMission(tx.QueryRow(ctx, `SELECT `+missionColumns+` FROM missions WHERE id = $1 FOR UPDATE`, id))
+	if err != nil {
+		return Mission{}, fmt.Errorf("mission %s: %w", id, ErrNotFound)
+	}
+	if !m.Phase.Terminal() {
+		return Mission{}, fmt.Errorf("mission %s: %w", id, ErrNotTerminal)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM missions WHERE id = $1`, id); err != nil {
+		return Mission{}, fmt.Errorf("missions delete: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Mission{}, fmt.Errorf("missions delete commit: %w", err)
+	}
+	return m, nil
+}
+
 // ListFilter narrows List's result set — the zero value (no filter,
 // no limit) is the original "every mission" behavior. Added for a
 // recurring schedule's fire history view (?schedule_id=) and any

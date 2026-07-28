@@ -46,6 +46,13 @@ import (
 // driven budgets arrive when model rows carry context windows.
 const defaultTokenBudget = 60_000
 
+// sensitiveToolSuffixes is the single source of truth for which tools'
+// output must never leave the sensitive route floor once called: the
+// in-turn pin (loop.Agent.SetForceRoute) and the side-call route
+// (session.SensitiveTools, chat/memoryd/compactor) both key off this
+// same list, so a tool added here is covered everywhere at once.
+var sensitiveToolSuffixes = []string{"gmail_read", "gmail_read_attachment"}
+
 const (
 	serviceName = "brain"
 	defaultPort = 8080
@@ -205,21 +212,34 @@ func main() {
 		})
 	}
 
+	// Single source of truth for "this turn/session executed a sensitive
+	// tool": the loop's in-turn SetForceRoute pin above and this
+	// SensitiveTools value share sensitiveToolSuffixes, so side-calls
+	// (extraction, compaction summarize) honor the same route floor the
+	// tool loop already pinned the turn to. Nil when SENSITIVE_TOOL_ROUTE
+	// is unset — every side-call keeps today's behavior.
+	var sensitiveTools *session.SensitiveTools
+	if sensitiveRoute := os.Getenv("SENSITIVE_TOOL_ROUTE"); sensitiveRoute != "" {
+		sensitiveTools = &session.SensitiveTools{Suffixes: sensitiveToolSuffixes, Route: sensitiveRoute}
+	}
+
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
 		agentReg.Resolve, app.Log)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
-	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) {
+	svc.SetSensitiveTools(sensitiveTools)
+	compactor.SetSensitiveTools(sensitiveTools)
+	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
 		}
 		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 		defer cancel()
-		if _, err := mc.Extract(ectx, sessionID, seq, text); err != nil {
+		if _, err := mc.Extract(ectx, sessionID, seq, text, route); err != nil {
 			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
 		}
 	})
-	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text string) []string {
+	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) []string {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return nil
 		}
@@ -227,7 +247,7 @@ func main() {
 		// never starve the summarize that follows it.
 		ectx, cancel := context.WithTimeout(ctx, preCompactExtractBudget)
 		defer cancel()
-		ids, err := mc.Extract(ectx, sessionID, seq, text)
+		ids, err := mc.Extract(ectx, sessionID, seq, text, route)
 		if err != nil {
 			app.Log.Warn("pre-compaction extraction failed", "session_id", sessionID, "error", err)
 			return nil
@@ -519,8 +539,9 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	// route the turn started on — optional, since not everyone runs a
 	// local model.
 	if sensitiveRoute := os.Getenv("SENSITIVE_TOOL_ROUTE"); sensitiveRoute != "" {
-		agent.SetForceRoute("gmail_read", sensitiveRoute)
-		agent.SetForceRoute("gmail_read_attachment", sensitiveRoute)
+		for _, suffix := range sensitiveToolSuffixes {
+			agent.SetForceRoute(suffix, sensitiveRoute)
+		}
 	} else {
 		log.Warn("SENSITIVE_TOOL_ROUTE not set; gmail_read/gmail_read_attachment output is processed on the turn's normal route, same as everything else")
 	}

@@ -329,6 +329,11 @@ func mergeGuard(members []string, merged string) string {
 func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, llmTimeout)
 	defer cancel()
+	// Always sideRoute, never a sensitive-tool route override: this
+	// merges lines from already-active memories across an unbounded,
+	// cross-session batch, not one turn/session whose sensitivity is
+	// known — there is no single caller-side sensitivity flag that
+	// would even apply here.
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
 		Route: sideRoute,
 		Purpose:      "memory-consolidate",

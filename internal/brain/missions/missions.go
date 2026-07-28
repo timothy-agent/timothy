@@ -146,4 +146,10 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrBranchConflict = errors.New("workspace or branch already claimed by an active mission")
 	ErrTerminal       = errors.New("mission already finished")
+	// ErrNotTerminal guards Store.Delete: only a mission whose Phase has
+	// reached done or failed (which includes cancelled — cancel ends as
+	// mission.failed, there is no separate terminal status) may be
+	// deleted, so a live mission's row/events/workspace can never vanish
+	// out from under a running Driver.Advance.
+	ErrNotTerminal = errors.New("mission is not terminal")
 )
