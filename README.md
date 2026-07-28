@@ -34,7 +34,6 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `web`        | React + Tailwind interface — chat, missions, usage, settings            |
 | `searxng`    | Internal metasearch backend for the web_search tool                     |
 | `markitdown` | Internal Python sidecar — file→markdown conversion                      |
-| `ollama`     | Optional local model runner (OpenAI-compatible)                         |
 
 Sessions are an append-only event log: every turn, tool run, and compaction is an immutable event, so conversations survive crashes mid-stream and replay exactly as they happened.
 

@@ -56,19 +56,10 @@ services:
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng.
 
-  # Local model runner: an OpenAI-compatible endpoint at /v1, registered
-  # in Settings as a regular "openaicompat" provider — no gateway code
-  # needed. Pull a model once with:
-  #   docker compose exec ollama ollama pull qwen2.5:14b
-  ollama:
-    <<: *service
-    image: ollama/ollama@sha256:c3886c198155aa7d45a29851100cc16f5d6ea6777d635ddd0597fe95874161af
-    volumes:
-      - ollama-models:/root/.ollama
-    # internal-only by default; uncomment to reach it from the host
-    # (e.g. `ollama pull` from your Mac instead of via compose exec):
-    # ports:
-    #   - "${OLLAMA_PORT:-11434}:11434"
+  # Local models: run Ollama natively on the host (Metal/CUDA — a
+  # containerized runner gets CPU only and can't serve big models) and
+  # register http://host.docker.internal:11434/v1 in Settings as a
+  # regular "openaicompat" provider — no gateway code needed.
 
   brain:
     <<: *go-service
@@ -178,7 +169,7 @@ services:
     # internal-only: no published ports; brain is the sole caller.
     # Second network (not just `timothy`): sandboxd is strictly more
     # privileged than any other internal service (it holds the socket),
-    # so it reaches only brain, not searxng/markitdown/ollama/web. No
+    # so it reaches only brain, not searxng/markitdown/web. No
     # auth header on the API — a shared secret would have to live in
     # brain's own env, the exact thing this split assumes may be
     # compromised (same reasoning as memoryd's unauthenticated internal
@@ -279,7 +270,6 @@ volumes:
   pgdata:
   web_node_modules:
   workspace:
-  ollama-models:
 
 networks:
   timothy:
