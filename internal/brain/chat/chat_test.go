@@ -635,7 +635,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 		text      string
 	}
 	got := make(chan call, 1)
-	svc.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text string) {
+	svc.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text, _ string) {
 		got <- call{sessionID, seq, text}
 	})
 
@@ -668,7 +668,7 @@ func TestMemoryExtractWithoutDistillSendsAssistantText(t *testing.T) {
 	svc := newService(gw, log) // no distiller
 
 	got := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text, _ string) {
 		got <- text
 	})
 
@@ -765,7 +765,7 @@ func TestMemoryExtractFiresOnTextlessTurn(t *testing.T) {
 	}}
 	svc := newService(gw, log)
 	got := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text, _ string) {
 		got <- text
 	})
 
@@ -1056,4 +1056,76 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 		}
 	}
 	t.Fatal("no title request recorded")
+}
+
+// TestMemoryExtractUsesSensitiveRouteWhenTurnRanSensitiveTool pins the
+// side-call route pin: a turn that executed a tool matching the wired
+// SensitiveTools sends its extraction on the sensitive route instead of
+// memoryd's own default, mirroring the in-turn SetForceRoute pin.
+func TestMemoryExtractUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "c1", Name: "personal_gmail_read", Status: "ok"}},
+		{Type: stream.EventChunk, Text: "the answer"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+
+	got := make(chan string, 1)
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
+		got <- route
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize my inbox"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case route := <-got:
+		if route != "local" {
+			t.Fatalf("route = %q, want local (sensitive tool ran this turn)", route)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("memory extract never invoked")
+	}
+}
+
+// TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool proves
+// the pin is per-turn, not global: a turn with no matching tool call
+// leaves the route empty (memoryd's own default) even with
+// SensitiveTools wired.
+func TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "c1", Name: "shell", Status: "ok"}},
+		{Type: stream.EventChunk, Text: "the answer"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+
+	got := make(chan string, 1)
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
+		got <- route
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "run a shell command"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case route := <-got:
+		if route != "" {
+			t.Fatalf("route = %q, want empty (no sensitive tool ran)", route)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("memory extract never invoked")
+	}
 }

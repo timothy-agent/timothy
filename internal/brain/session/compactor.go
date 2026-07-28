@@ -56,17 +56,21 @@ type Compactor struct {
 	// budget resolves the fallback cap when no model window is
 	// resolvable — a func because it is a runtime setting, editable
 	// without a restart.
-	budget   func(context.Context) int
-	extract  MemoryExtract
-	logger   *slog.Logger
-	compacts prometheus.Counter // nil-safe: may be unset in tests
+	budget    func(context.Context) int
+	extract   MemoryExtract
+	sensitive *SensitiveTools // nil: no sensitive-tool route pin for summarize
+	logger    *slog.Logger
+	compacts  prometheus.Counter // nil-safe: may be unset in tests
 }
 
 // MemoryExtract sends turns about to be summarized to memoryd and
 // returns the extracted memory ids. Runs BEFORE summarization so
 // names, dates, and commitments survive the summary (D-011). Failures
-// return nil — extraction must never block compaction.
-type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string) []string
+// return nil — extraction must never block compaction. route carries
+// the sensitive-tool route pin (see SetSensitiveTools) when the
+// session being extracted from is sensitive, "" otherwise — matches
+// chat.MemoryExtract's param order.
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string) []string
 
 func NewCompactor(log Log, gw Gateway, windows Windows, budget func(context.Context) int, logger *slog.Logger, compacts prometheus.Counter) *Compactor {
 	return &Compactor{log: log, gw: gw, windows: windows, budget: budget, logger: logger, compacts: compacts}
@@ -75,6 +79,12 @@ func NewCompactor(log Log, gw Gateway, windows Windows, budget func(context.Cont
 // SetMemoryExtract wires the memoryd hook. Optional — nil skips
 // pre-compaction extraction.
 func (c *Compactor) SetMemoryExtract(fn MemoryExtract) { c.extract = fn }
+
+// SetSensitiveTools wires the sensitive-tool route pin for the
+// summarize call: a session where any tool_execution event matches
+// summarizes on t.Route instead of the compactor's own default route.
+// Optional — nil leaves every session's summarize on today's behavior.
+func (c *Compactor) SetSensitiveTools(t *SensitiveTools) { c.sensitive = t }
 
 // budgetFor sizes the token budget to the model that served the
 // session's last turn: 60% of its context window per the gateway's
@@ -95,6 +105,31 @@ func (c *Compactor) budgetFor(ctx context.Context, sessionID string, events []Ev
 		return w * 60 / 100
 	}
 	return c.budget(ctx)
+}
+
+// sessionIsSensitive reports whether any tool_execution event anywhere
+// in the session matches sensitive — scoped to the whole session, not
+// just the span about to be summarized, since a later compaction pass
+// can summarize a span that never itself ran the sensitive tool but
+// still sits downstream of a turn that did (D-007 residue can carry
+// content forward). nil sensitive (feature off) always reports false.
+func sessionIsSensitive(events []Event, sensitive *SensitiveTools) bool {
+	if sensitive == nil {
+		return false
+	}
+	for _, ev := range events {
+		if ev.Kind != KindToolExecution {
+			continue
+		}
+		var te ToolExecution
+		if decode(ev, &te) != nil {
+			continue
+		}
+		if sensitive.Matches(te.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // lastModel returns the model of the newest assistant_turn, or "".
@@ -140,20 +175,35 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 		return nil // nothing safely summarizable (e.g. one giant turn)
 	}
 
+	// Sensitive if ANY tool_execution event in the WHOLE session matches
+	// — compaction can summarize any span of the session's history, not
+	// just the newest turns, so a sensitive tool call anywhere in it
+	// taints both the extract and summarize calls for the same reason
+	// the loop pins the rest of a sensitive TURN's route (the content
+	// downstream of it may quote raw sensitive output). Computed once so
+	// extract and summarize agree on the same verdict.
+	sensitive := sessionIsSensitive(events, c.sensitive)
+
 	// Extract BEFORE summarizing: once the summary replaces these
-	// turns, whatever it dropped is gone for good (D-011).
+	// turns, whatever it dropped is gone for good (D-011). The turns
+	// being extracted are exactly the ones that may carry sensitive
+	// content, so extraction rides the same route pin as summarize.
 	facts := []string{}
 	if c.extract != nil {
 		var b strings.Builder
 		for _, m := range toSummarize {
 			b.WriteString(m.Role + ": " + m.Content + "\n\n")
 		}
-		if ids := c.extract(ctx, sessionID, boundary, b.String()); ids != nil {
+		extractRoute := ""
+		if sensitive && c.sensitive != nil {
+			extractRoute = c.sensitive.Route
+		}
+		if ids := c.extract(ctx, sessionID, boundary, b.String(), extractRoute); ids != nil {
 			facts = ids
 		}
 	}
 
-	summary, err := c.summarize(ctx, sessionID, toSummarize)
+	summary, err := c.summarize(ctx, sessionID, toSummarize, sensitive)
 	if err != nil {
 		return fmt.Errorf("session: compact %s: %w", sessionID, err)
 	}
@@ -258,16 +308,20 @@ func planCompaction(events []Event) (boundary int64, toSummarize []provider.Mess
 	return 0, nil, false // projection/event mismatch: refuse to guess
 }
 
-func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []provider.Message) (string, error) {
+func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []provider.Message, sensitive bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
 
+	route := "summarize"
+	if sensitive && c.sensitive != nil && c.sensitive.Route != "" {
+		route = c.sensitive.Route
+	}
 	var b strings.Builder
 	for _, m := range msgs {
 		b.WriteString(m.Role + ": " + m.Content + "\n\n")
 	}
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: "summarize",
+		Route: route,
 		Purpose:      "compaction",
 		System:       summarizeSystem,
 		Messages:     []provider.Message{{Role: "user", Content: b.String()}},

@@ -210,6 +210,23 @@ func TestExtractInsertsAndPromotes(t *testing.T) {
 	}
 }
 
+// TestExtractUsesRequestRouteOverride pins the sensitive-route
+// override: a non-empty Request.Route rides the LLM call instead of
+// sideRoute, so extraction honors the same floor the tool loop already
+// pinned a sensitive turn/session to.
+func TestExtractUsesRequestRouteOverride(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	_, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x", Route: "local"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(gw.routes) != 1 || gw.routes[0] != "local" {
+		t.Fatalf("routes = %v, want [local] (Request.Route overrides sideRoute)", gw.routes)
+	}
+}
+
 func TestExtractDropsExactDuplicate(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9}]`}}

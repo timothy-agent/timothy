@@ -23,7 +23,7 @@ func TestExtractRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ids, err := New(srv.URL).Extract(t.Context(), "s1", 42, "turn text")
+	ids, err := New(srv.URL).Extract(t.Context(), "s1", 42, "turn text", "")
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -35,6 +35,26 @@ func TestExtractRoundTrip(t *testing.T) {
 	}
 }
 
+// TestExtractSendsRouteOverride pins the sensitive-route pass-through:
+// a non-empty route reaches the wire so memoryd's extraction honors the
+// same floor the tool loop already pinned a sensitive turn to.
+func TestExtractSendsRouteOverride(t *testing.T) {
+	t.Parallel()
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(map[string]any{"memory_ids": []string{}})
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "local"); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if got["route"] != "local" {
+		t.Fatalf("request body = %v, want route=local", got)
+	}
+}
+
 func TestExtractSurfacesHTTPError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -42,7 +62,7 @@ func TestExtractSurfacesHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x"); err == nil {
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", ""); err == nil {
 		t.Fatal("Extract succeeded on 502, want error")
 	}
 }
