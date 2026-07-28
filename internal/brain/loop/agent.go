@@ -55,6 +55,12 @@ const (
 	// re-offloading a retrieval would chase its own tail, so it
 	// truncates with an honest note instead.
 	retrieveInlineCap = 32 << 10
+	// digestCeiling bounds the tool-result digest shown to the
+	// browser's activity panel and recorded in the audit trail. Results
+	// over tools.DefaultOffloadThreshold (8KB) are offloaded before
+	// this point, so most full results already fit within 4KB — a
+	// smaller cap would needlessly hide mid-size results from view.
+	digestCeiling = 4000
 )
 
 // maxStepRetries bounds automatic retry of one step's stream (D-038):
@@ -502,8 +508,8 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 		digest = "skill loaded"
 	} else {
 		digest = content
-		if len(digest) > 1000 {
-			digest = digest[:1000] + "…"
+		if len(digest) > digestCeiling {
+			digest = digest[:digestCeiling] + "…"
 		}
 	}
 
