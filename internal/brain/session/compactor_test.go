@@ -41,6 +41,7 @@ type summarizerGW struct {
 	summary   string
 	sawText   string
 	sawSystem string
+	sawRoute  string
 	calls     int
 }
 
@@ -48,6 +49,7 @@ func (g *summarizerGW) Stream(_ context.Context, req gwclient.StreamRequest) (<-
 	g.calls++
 	g.sawText = req.Messages[0].Content
 	g.sawSystem = req.System
+	g.sawRoute = req.Route
 	ch := make(chan stream.StreamEvent, 2)
 	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: g.summary}
 	ch <- stream.StreamEvent{Type: stream.EventDone}
@@ -446,7 +448,7 @@ func TestCompactionExtractsBeforeSummarizing(t *testing.T) {
 
 	var sawText string
 	var extractedAtCall int
-	c.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text string) []string {
+	c.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text, _ string) []string {
 		sawText = text
 		extractedAtCall = gw.calls // 0 = before the summarizer ran
 		if sessionID != "s1" || seq == 0 {
@@ -479,13 +481,123 @@ func TestCompactionExtractsBeforeSummarizing(t *testing.T) {
 	}
 }
 
+// TestCompactionUsesSensitiveRouteWhenSessionRanSensitiveTool pins the
+// summarize route pin: a session carrying ANY tool_execution event that
+// matches the wired SensitiveTools summarizes on the sensitive route
+// instead of the compactor's own default, mirroring the in-turn
+// SetForceRoute pin the loop already applies within a turn.
+func TestCompactionUsesSensitiveRouteWhenSessionRanSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	gw := &summarizerGW{summary: "short summary"}
+	seedConversation(t, log, "s1", 10)
+	if _, err := log.Append(context.Background(), "s1", KindToolExecution, ToolExecution{
+		CallID: "c1", Name: "personal_gmail_read", Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+
+	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if gw.calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1", gw.calls)
+	}
+	if gw.sawRoute != "local" {
+		t.Fatalf("summarize route = %q, want local (session ran a sensitive tool)", gw.sawRoute)
+	}
+}
+
+// TestCompactionUsesDefaultRouteWithoutSensitiveTool proves the pin is
+// per-session, not global: a session with no matching tool_execution
+// event summarizes on the compactor's own default route even with
+// SensitiveTools wired.
+func TestCompactionUsesDefaultRouteWithoutSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	gw := &summarizerGW{summary: "short summary"}
+	seedConversation(t, log, "s1", 10)
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+
+	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if gw.calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1", gw.calls)
+	}
+	if gw.sawRoute != "summarize" {
+		t.Fatalf("summarize route = %q, want summarize (no sensitive tool ran)", gw.sawRoute)
+	}
+}
+
+// TestCompactionExtractUsesSensitiveRouteWhenSessionRanSensitiveTool
+// proves the pre-compaction extract hook honors the same route pin as
+// summarize: the turns handed to extract are exactly the ones that may
+// carry sensitive content, so a sensitive tool call anywhere in the
+// session must pin the extract call's route too.
+func TestCompactionExtractUsesSensitiveRouteWhenSessionRanSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	gw := &summarizerGW{summary: "short summary"}
+	seedConversation(t, log, "s1", 10)
+	if _, err := log.Append(context.Background(), "s1", KindToolExecution, ToolExecution{
+		CallID: "c1", Name: "personal_gmail_read", Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+
+	var sawRoute string
+	c.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) []string {
+		sawRoute = route
+		return nil
+	})
+
+	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if sawRoute != "local" {
+		t.Fatalf("extract route = %q, want local (session ran a sensitive tool)", sawRoute)
+	}
+}
+
+// TestCompactionExtractUsesEmptyRouteWithoutSensitiveTool proves the
+// extract route pin is per-session, not global: a session with no
+// matching tool_execution event extracts on "" even with
+// SensitiveTools wired.
+func TestCompactionExtractUsesEmptyRouteWithoutSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newMemLog()
+	gw := &summarizerGW{summary: "short summary"}
+	seedConversation(t, log, "s1", 10)
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: "local"})
+
+	sawRoute := "unset"
+	c.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) []string {
+		sawRoute = route
+		return nil
+	})
+
+	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if sawRoute != "" {
+		t.Fatalf("extract route = %q, want empty (no sensitive tool ran)", sawRoute)
+	}
+}
+
 func TestCompactionSurvivesExtractionFailure(t *testing.T) {
 	t.Parallel()
 	log := newMemLog()
 	gw := &summarizerGW{summary: "short summary"}
 	seedConversation(t, log, "s1", 10)
 	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
-	c.SetMemoryExtract(func(context.Context, string, int64, string) []string {
+	c.SetMemoryExtract(func(context.Context, string, int64, string, string) []string {
 		return nil // extraction failed upstream; hook contract returns nil
 	})
 

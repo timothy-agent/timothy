@@ -73,6 +73,12 @@ type Request struct {
 	SessionID string `json:"session_id"`
 	SourceSeq int64  `json:"source_seq"`
 	Text      string `json:"text"`
+	// Route overrides sideRoute for this job's LLM call — set by the
+	// caller when the source turn/session executed a sensitive tool, so
+	// extraction honors the same route floor the tool loop already
+	// pinned the turn to instead of falling back to sideRoute's cloud
+	// model.
+	Route string `json:"route,omitempty"`
 }
 
 // Extractor runs the pipeline.
@@ -192,8 +198,12 @@ func (e *Extractor) proposeOnce(ctx context.Context, req Request) (string, error
 	ctx, cancel := context.WithTimeout(ctx, llmTimeout)
 	defer cancel()
 
+	route := sideRoute
+	if req.Route != "" {
+		route = req.Route
+	}
 	events, err := e.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: sideRoute,
+		Route: route,
 		Purpose:      "memory-extract",
 		System:       system,
 		Messages:     []provider.Message{{Role: "user", Content: req.Text}},

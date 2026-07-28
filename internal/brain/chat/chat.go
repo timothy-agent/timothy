@@ -82,8 +82,10 @@ type Compactor interface {
 // MemoryExtract posts one turn's text to memoryd for long-term memory
 // extraction. Fire-and-forget from chat's view: chat invokes it on a
 // goroutine, the wrapper owns timeout and error logging, and no
-// failure may touch the user-facing turn.
-type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string)
+// failure may touch the user-facing turn. route is "" for the normal
+// side-call route, or the sensitive route pin when the turn executed a
+// sensitive tool (see Service.sensitive).
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string)
 
 // MemoryRetrieve returns the rendered long-term memory block for a
 // user message, or "" for nothing relevant. The wrapper owns timeout
@@ -107,6 +109,7 @@ type Service struct {
 	skillAllow  func(context.Context, string) bool // nil: all packs allowed
 	skillBodies map[string]string                  // name -> full pack body, for skill_hint
 	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
+	sensitive   *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
 	logger      *slog.Logger
 }
 
@@ -116,6 +119,12 @@ func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
 
 // SetMemoryRetrieve wires per-turn memory recall. Optional.
 func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
+
+// SetSensitiveTools wires the sensitive-tool route pin for side-calls
+// (memory extraction): a turn that executed a matching tool sends its
+// extraction on t.Route instead of memoryd's own default. Optional —
+// nil leaves every turn's side-calls on today's behavior.
+func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t }
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
 // request naming the autoAgentName sentinel resolves through candidates
@@ -426,6 +435,15 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	var usage *stream.Usage
 	sawDone := false
 	flushed := 0
+	// turnSensitive flips once any tool this turn executed matches
+	// s.sensitive — memory extraction then rides the sensitive route
+	// pin instead of its own default (see persistTurn).
+	turnSensitive := false
+	noteToolResult := func(ev stream.StreamEvent) {
+		if ev.Type == stream.EventToolResult && ev.ToolResult != nil && s.sensitive.Matches(ev.ToolResult.Name) {
+			turnSensitive = true
+		}
+	}
 
 	// flushPending checkpoints the partial answer DURING the stream so
 	// even a SIGKILL mid-turn loses at most one flush interval — the
@@ -458,9 +476,10 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				sawDone = true
 				meta = ev.Meta
 			}
+			noteToolResult(ev)
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive)
 	}
 
 	ticker := time.NewTicker(s.flushEvery)
@@ -484,6 +503,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				sawDone = true
 				meta = ev.Meta
 			}
+			noteToolResult(ev)
 			select {
 			case out <- ev:
 			case <-ctx.Done():
@@ -501,7 +521,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	}
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, turnSensitive bool) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -586,7 +606,16 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		} else if text != "" {
 			mtext += "\n\nassistant: " + text
 		}
-		go s.memory(context.Background(), sessionID, turnSeq, mtext)
+		// A turn that executed a sensitive tool pins its extraction to
+		// the same route the loop already forced the turn onto — the
+		// text extraction sees can quote raw sensitive output (e.g.
+		// email), so it must never fall back to memoryd's own default
+		// side-call route.
+		extractRoute := ""
+		if turnSensitive && s.sensitive != nil {
+			extractRoute = s.sensitive.Route
+		}
+		go s.memory(context.Background(), sessionID, turnSeq, mtext, extractRoute)
 	}
 
 	if s.compactor != nil {
