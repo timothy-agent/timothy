@@ -7,11 +7,12 @@ import {
   answerMissionPermission,
   cancelMission,
   getMission,
+  listSchedules,
   missionEvents,
   missionUsage,
   resumeMission,
 } from '../api/client'
-import type { Mission, MissionEvent, MissionUsage } from '../api/types'
+import type { Mission, MissionEvent, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
@@ -21,7 +22,13 @@ import { TimelineSection } from '../components/missions/TimelineSection'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { errText } from '../components/settings/util'
+import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
+
+function formatDate(v?: string): string {
+  if (!v) return '—'
+  return new Date(v).toLocaleString()
+}
 
 const pollIntervalIdle = 5000
 const pollIntervalPending = 1500
@@ -34,6 +41,7 @@ export function MissionDetail() {
   const [mission, setMission] = useState<Mission | null>(null)
   const [events, setEvents] = useState<MissionEvent[]>([])
   const [usage, setUsage] = useState<MissionUsage | null>(null)
+  const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [busy, setBusy] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
 
@@ -55,6 +63,20 @@ export function MissionDetail() {
     const timer = setInterval(refresh, interval)
     return () => clearInterval(timer)
   }, [refresh, pendingPermission, phase])
+
+  // No GET-by-id for schedules; the list is small, so find the one
+  // this mission fired from rather than adding a single-row endpoint.
+  const scheduleID = mission?.schedule_id
+  useEffect(() => {
+    if (!scheduleID) {
+      setSchedule(null)
+      return
+    }
+    listSchedules().then(
+      (rows) => setSchedule(rows.find((s) => s.id === scheduleID) ?? null),
+      () => undefined,
+    )
+  }, [scheduleID])
 
   // Chime only on the transition into a permission block, not on every
   // poll while it stays pending — the banner itself is the persistent
@@ -168,6 +190,11 @@ export function MissionDetail() {
             {mission.branch && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {mission.branch} @ {mission.base_commit?.slice(0, 8)}
+              </p>
+            )}
+            {schedule && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Recurring · {describeCron(schedule.cron)} · next run {formatDate(schedule.next_run)}
               </p>
             )}
             {pauseDetail && (

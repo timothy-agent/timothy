@@ -382,7 +382,7 @@ export interface ProgressNote {
 export interface Mission {
   id: string
   goal: string
-  kind: 'coding' | 'research' | 'scheduled'
+  kind: 'coding' | 'research'
   agent_id?: string
   phase: 'research' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
@@ -454,4 +454,36 @@ export interface AdminConnector {
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
+}
+
+// MissionTemplate is the frozen mission-creation payload a schedule
+// fires at each tick (internal/brain/missions.MissionTemplate) — same
+// shape as CreateMissionInput, minus repo_path (out of scope for
+// scheduled missions in v1).
+export interface MissionTemplate {
+  goal: string
+  kind: 'coding' | 'research'
+  agent_id?: string
+  route?: string
+  review_route?: string
+  max_iterations?: number
+  budget_usd?: number
+  auto_approve_safe?: boolean
+}
+
+// Schedule is a recurring cron trigger that fires mission_template
+// (internal/brain/missions.Schedule), managed from the Missions page's
+// recurring schedules section. next_run is server-computed, present
+// whenever the cron parses.
+export interface Schedule {
+  id: string
+  name: string
+  cron: string
+  mission_template: MissionTemplate
+  enabled: boolean
+  expires_at?: string
+  last_run?: string
+  next_run?: string
+  created_at: string
+  updated_at: string
 }

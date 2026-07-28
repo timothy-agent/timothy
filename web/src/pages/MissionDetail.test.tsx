@@ -14,6 +14,7 @@ vi.mock('../api/client', () => ({
   cancelMission: vi.fn(),
   answerMissionPermission: vi.fn(),
   listMissionFiles: vi.fn(),
+  listSchedules: vi.fn(),
   pushMission: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
@@ -27,6 +28,7 @@ import {
   getMission,
   listConnectors,
   listMissionFiles,
+  listSchedules,
   missionEvents,
   missionUsage,
   resumeMission,
@@ -116,6 +118,7 @@ beforeEach(() => {
     models: [],
   })
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
+  vi.mocked(listSchedules).mockResolvedValue([])
   vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
   vi.mocked(listConnectors).mockResolvedValue([])
 })
@@ -349,5 +352,29 @@ describe('MissionDetail', () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText('Result')).toBeNull()
+  })
+
+  it('shows a recurring schedule strip when the mission fired from a schedule', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, schedule_id: 'sc1' })
+    vi.mocked(listSchedules).mockResolvedValue([
+      {
+        id: 'sc1',
+        name: 'daily-brief',
+        cron: '0 7 * * *',
+        mission_template: { goal: 'brief', kind: 'research' },
+        enabled: true,
+        next_run: '2026-01-02T07:00:00Z',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText(/Recurring · Daily, 7:00 AM · next run/)).toBeTruthy()
+  })
+
+  it('omits the recurring strip for a one-off mission', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText(/Recurring ·/)).toBeNull()
   })
 })
