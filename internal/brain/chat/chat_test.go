@@ -711,9 +711,11 @@ func TestMemoryRetrieveInjectsIntoSystemTail(t *testing.T) {
 	if !strings.HasSuffix(sent.System, block) {
 		t.Fatalf("memory block not at system tail:\n%s", sent.System)
 	}
-	// The stable prefix stays byte-identical (D-018).
+	// The stable prefix (identity + skills index) stays byte-identical
+	// (D-018); only the per-turn tail (date line, then memory) varies.
 	base := newService(gw, log)
-	if !strings.HasPrefix(sent.System, assembleSystem(skills.Index(base.allowedPacks(t.Context(), agents.Agent{Memory: true})))) {
+	stablePrefix := systemPrompt + "\n\n" + skills.Index(base.allowedPacks(t.Context(), agents.Agent{Memory: true}))
+	if !strings.HasPrefix(sent.System, stablePrefix) {
 		t.Fatal("system prefix changed by memory injection")
 	}
 }
@@ -747,7 +749,7 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 	drain(t, ch)
 
 	got := chatRequest(t, gw).System
-	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})))
+	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})), time.Now())
 	if got != want {
 		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, want)
 	}
