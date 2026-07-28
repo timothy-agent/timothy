@@ -16,19 +16,25 @@ Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents — ru
 - **Multi-provider chat** — Anthropic, Amazon Bedrock, and any OpenAI-compatible API behind one gateway; providers, models, and per-task routing are database configuration, editable at runtime from the settings panel with hot reload.
 - **Sessions that survive** — every conversation is an append-only event log; kill a container mid-stream and the session resumes and replays exactly.
 - **Tools, permissions, skills** — the agent loop executes tools behind a constraint/permission chain (destructive actions require explicit approval in the UI); skill packs load lazily by task.
+- **Missions** — long-running agent tasks with a pure state machine, harness-owned verification (artifacts must exist before any model claim counts), per-mission sandboxes, budgets, and LLM review; recurring missions fire from cron schedules.
 - **Long-term memory** — staged fact extraction with a confirmation queue, hybrid pgvector retrieval (vector + text + entity, RRF-fused) under a strict token budget.
 - **Cost accounting** — every request lands in a ledger with honest pricing (unknown price is recorded as null, never guessed); usage dashboard, spend budgets with alerts, Prometheus metrics on every service.
+- **Privacy floor** — tools whose output carries sensitive data (raw email) pin the rest of their turn, and every downstream side-call (memory extraction, compaction), to a dedicated route you can chain to a local model.
 
 ## Architecture
 
 Go microservices behind a single public API, one PostgreSQL database, React web UI.
 
-| Service   | Role                                                               |
-|-----------|--------------------------------------------------------------------|
-| `brain`   | Public API — chat orchestration, event-sourced sessions, streaming |
-| `gateway` | Internal LLM gateway — multi-provider routing, cost ledger         |
-| `memoryd` | Internal memory service — pgvector-backed recall                   |
-| `web`     | React + Tailwind chat interface                                    |
+| Service      | Role                                                                    |
+|--------------|-------------------------------------------------------------------------|
+| `brain`      | Public API — chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming |
+| `gateway`    | Internal LLM gateway — multi-provider routing, cost ledger              |
+| `memoryd`    | Internal memory service — pgvector-backed recall                        |
+| `sandboxd`   | Internal service holding the Docker socket — per-mission sandbox containers |
+| `web`        | React + Tailwind interface — chat, missions, usage, settings            |
+| `searxng`    | Internal metasearch backend for the web_search tool                     |
+| `markitdown` | Internal Python sidecar — file→markdown conversion                      |
+| `ollama`     | Optional local model runner (OpenAI-compatible)                         |
 
 Sessions are an append-only event log: every turn, tool run, and compaction is an immutable event, so conversations survive crashes mid-stream and replay exactly as they happened.
 
