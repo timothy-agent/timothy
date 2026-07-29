@@ -71,7 +71,7 @@ export const providerPresets: ProviderPreset[] = [
     driver: 'openaicompat',
     description: "Zhipu's GLM models",
     logo: 'zai',
-    brandColor: '#4B5563',
+    brandColor: '#000000',
     baseURL: 'https://api.z.ai/api/paas/v4',
     requiresKey: true,
     defaultRef: 'ZAI_API_KEY',
@@ -100,10 +100,10 @@ export const providerPresets: ProviderPreset[] = [
     description: 'Local models, no key needed',
     logo: 'ollama',
     brandColor: '#4B5563',
-    // The gateway runs in Docker; the ollama compose service is the
-    // one actually deployed (see deploy/docker-compose.yml) — reached
-    // by its service name on the shared network, not the host.
-    baseURL: 'http://ollama:11434/v1',
+    // Ollama runs natively on the host for GPU access (the compose
+    // service was removed); the gateway reaches it via Docker's host
+    // alias.
+    baseURL: 'http://host.docker.internal:11434/v1',
     requiresKey: false,
     validateModel: 'qwen2.5:7b',
   },
@@ -127,6 +127,16 @@ export function matchPreset(p: AdminProvider): ProviderPreset {
   const custom = providerPresets.find((x) => x.id === 'custom')!
   if (p.driver === 'anthropic' || p.driver === 'bedrock') {
     return providerPresets.find((x) => x.driver === p.driver) ?? custom
+  }
+  // Ollama's fixed default port (11434) is a stronger signal than
+  // hostname, which varies across deployments (ollama, localhost,
+  // host.docker.internal).
+  try {
+    if (new URL(p.base_url).port === '11434') {
+      return providerPresets.find((x) => x.id === 'ollama') ?? custom
+    }
+  } catch {
+    // fall through to host matching below
   }
   const byURL = providerPresets.find((x) => {
     if (!x.baseURL || x.id === 'custom') return false

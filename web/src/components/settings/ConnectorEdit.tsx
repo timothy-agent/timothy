@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from '../ui/dialog'
 import { Input } from '../ui/input'
-import { ConnectorLogo, ConnectorLogoSprite } from './ConnectorLogo'
+import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { Field } from './shared'
@@ -107,7 +107,6 @@ export function ConnectorEdit() {
 
   return (
     <div className="mt-6 w-full space-y-6">
-      <ConnectorLogoSprite />
       <Link
         to="/settings/connectors"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
