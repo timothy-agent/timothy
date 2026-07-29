@@ -107,31 +107,6 @@ func (c *Compactor) budgetFor(ctx context.Context, sessionID string, events []Ev
 	return c.budget(ctx)
 }
 
-// sessionIsSensitive reports whether any tool_execution event anywhere
-// in the session matches sensitive — scoped to the whole session, not
-// just the span about to be summarized, since a later compaction pass
-// can summarize a span that never itself ran the sensitive tool but
-// still sits downstream of a turn that did (D-007 residue can carry
-// content forward). nil sensitive (feature off) always reports false.
-func sessionIsSensitive(events []Event, sensitive *SensitiveTools) bool {
-	if sensitive == nil {
-		return false
-	}
-	for _, ev := range events {
-		if ev.Kind != KindToolExecution {
-			continue
-		}
-		var te ToolExecution
-		if decode(ev, &te) != nil {
-			continue
-		}
-		if sensitive.Matches(te.Name) {
-			return true
-		}
-	}
-	return false
-}
-
 // lastModel returns the model of the newest assistant_turn, or "".
 func lastModel(events []Event) string {
 	for i := len(events) - 1; i >= 0; i-- {
@@ -182,7 +157,7 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 	// the loop pins the rest of a sensitive TURN's route (the content
 	// downstream of it may quote raw sensitive output). Computed once so
 	// extract and summarize agree on the same verdict.
-	sensitive := sessionIsSensitive(events, c.sensitive)
+	sensitive := c.sensitive.SessionSensitive(events)
 
 	// Extract BEFORE summarizing: once the summary replaces these
 	// turns, whatever it dropped is gone for good (D-011). The turns

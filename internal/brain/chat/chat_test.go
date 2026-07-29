@@ -1604,3 +1604,184 @@ func TestDistillUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T) {
 		t.Fatal("distill never invoked")
 	}
 }
+
+// seedSensitiveSession pre-populates a session's log with a completed
+// turn that ran a sensitive tool — standing in for "a prior turn in
+// this session already executed gmail_read", the trigger for the
+// whole-session route pin under test below.
+func seedSensitiveSession(t *testing.T, log *fakeLog, sessionID string) {
+	t.Helper()
+	if _, err := log.Append(t.Context(), sessionID, session.KindToolExecution, session.ToolExecution{
+		CallID: "c0", Name: "personal_gmail_read", Status: "ok",
+	}); err != nil {
+		t.Fatalf("seed tool_execution: %v", err)
+	}
+	if _, err := log.Append(t.Context(), sessionID, session.KindAssistantTurn, session.AssistantTurn{}); err != nil {
+		t.Fatalf("seed assistant_turn: %v", err)
+	}
+}
+
+// TestChatPinsSessionSensitiveRouteOnNextTurn is the feature under
+// test: once a PRIOR turn in the session executed a sensitive tool, the
+// NEXT Chat() call — which itself runs no sensitive tool — must still
+// be served on the sensitive route, with the route picker ignored and
+// the model hint dropped (a hint outranks the route at the gateway,
+// same reason the in-turn SetForceRoute pin drops it).
+func TestChatPinsSessionSensitiveRouteOnNextTurn(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	seedSensitiveSession(t, log, "s1")
+	gw := &fakeGW{events: okEvents("the answer")}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "another question", Route: "mini", ModelHint: "big-model"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastRequest()
+	if sent.Route != "local" {
+		t.Fatalf("route = %q, want local (session pinned by a prior sensitive tool call)", sent.Route)
+	}
+	if sent.ModelHint != "" {
+		t.Fatalf("model hint = %q, want empty (dropped alongside the route pin)", sent.ModelHint)
+	}
+}
+
+// TestChatSessionPinNoopWhenSensitiveRouteUnset proves the pin is
+// active only when sensitive_tool_route is actually configured: a nil
+// Route func (the feature off) leaves a sensitive session's next turn
+// on ordinary routing, matching today's behavior everywhere.
+func TestChatSessionPinNoopWhenSensitiveRouteUnset(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	seedSensitiveSession(t, log, "s1")
+	gw := &fakeGW{events: okEvents("the answer")}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "" }})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "another question", Route: "mini", ModelHint: "big-model"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastRequest()
+	if sent.Route != "mini" {
+		t.Fatalf("route = %q, want mini (sensitive route unset, picker honored)", sent.Route)
+	}
+	if sent.ModelHint != "big-model" {
+		t.Fatalf("model hint = %q, want big-model (unset route means no pin)", sent.ModelHint)
+	}
+}
+
+// TestChatFreshSessionRoutesNormally proves the pin only fires once a
+// sensitive tool has actually run: a session with no prior turns at all
+// routes exactly as requested.
+func TestChatFreshSessionRoutesNormally(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("the answer")}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "a question", Route: "mini", ModelHint: "big-model"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastRequest()
+	if sent.Route != "mini" {
+		t.Fatalf("route = %q, want mini (fresh session, no sensitive tool ran yet)", sent.Route)
+	}
+	if sent.ModelHint != "big-model" {
+		t.Fatalf("model hint = %q, want big-model (no pin on a fresh session)", sent.ModelHint)
+	}
+}
+
+// TestRetryPinsSessionSensitiveRoute mirrors the Chat pin for Retry: a
+// session already pinned by a prior sensitive tool call re-runs its
+// last turn on the sensitive route even though Retry reuses the
+// original request's own route/model_hint verbatim.
+func TestRetryPinsSessionSensitiveRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	seedSensitiveSession(t, log, "s1")
+	if _, err := log.Append(t.Context(), "s1", session.KindUserMessage, session.UserMessage{
+		Text: "retry me", Route: "mini", Agent: "default", ModelHint: "big-model",
+	}); err != nil {
+		t.Fatalf("seed user_message: %v", err)
+	}
+	gw := &fakeGW{events: okEvents("the answer")}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+
+	_, ch, err := svc.Retry(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastRequest()
+	if sent.Route != "local" {
+		t.Fatalf("route = %q, want local (session pinned by a prior sensitive tool call)", sent.Route)
+	}
+	if sent.ModelHint != "" {
+		t.Fatalf("model hint = %q, want empty (dropped alongside the route pin)", sent.ModelHint)
+	}
+}
+
+// TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive proves
+// persistTurn's side-call route resolution (distill, memory extract)
+// treats "session pinned by an earlier turn" the same as "this turn
+// itself ran a sensitive tool": the context this turn saw still carries
+// the earlier turn's sensitive content even though THIS turn's own
+// tool calls are unrelated.
+func TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	seedSensitiveSession(t, log, "s1")
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "c1", Name: "shell", Status: "ok"}},
+		{Type: stream.EventChunk, Text: "the answer"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	distillRoute := make(chan string, 1)
+	distill := func(_ context.Context, _, _, route string) *session.TurnMemory {
+		distillRoute <- route
+		return nil
+	}
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+
+	extractRoute := make(chan string, 1)
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
+		extractRoute <- route
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "run a shell command, unrelated to email"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case route := <-distillRoute:
+		if route != "local" {
+			t.Fatalf("distill route = %q, want local (session pinned by an earlier turn)", route)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("distill never invoked")
+	}
+	select {
+	case route := <-extractRoute:
+		if route != "local" {
+			t.Fatalf("memory extract route = %q, want local (session pinned by an earlier turn)", route)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("memory extract never invoked")
+	}
+}

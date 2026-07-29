@@ -36,9 +36,9 @@ const (
 	// "summarize" cloud route — local now serves a reasoning model that
 	// burns its completion budget thinking before the strict-JSON
 	// answer, so it's reserved for sensitive turns pinned there
-	// deliberately. autoTitle uses defaultRoute instead — a session's
-	// name deserves the same model quality as the conversation it's
-	// naming, not the cheapest available one.
+	// deliberately. autoTitle uses defaultRoute instead when the turn
+	// isn't sensitive — a session's name deserves the same model quality
+	// as the conversation it's naming, not the cheapest available one.
 	classifyRoute = "local"
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
@@ -391,13 +391,42 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// instead of "no PRIOR message exists" makes titling retry on every
 	// later message too, until one finally succeeds.
 	needsTitle := !hasCompletedTurn(events)
+	modelHint := req.ModelHint
+	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
 
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: req.ModelHint,
+		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint,
 	}); err != nil {
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, req.Message, req.ModelHint, req.SkillHint, skillBody, route, profile, needsTitle)
+	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle)
+}
+
+// pinSensitiveRoute promotes the session-wide privacy floor above the
+// turn-scoped one (SetForceRoute/turnSensitive): once ANY prior turn in
+// the session has executed a sensitive tool, the email/etc. content it
+// pulled into context is still there on every LATER turn even though
+// this turn ran no sensitive tool itself — so every subsequent turn
+// must start on the sensitive route, not just the turn that triggered
+// it. Overrides the route picker, the agent's own route, and the
+// default alike (same "safety floor beats user choice" rule the in-turn
+// pin already enforces), and drops modelHint for the same reason
+// SetForceRoute does: a hint outranks the route at the gateway's
+// Resolve, so a surviving hint would let the model bypass the pinned
+// route's chain entirely. A no-op whenever sensitive-tool routing is
+// unconfigured (s.sensitive nil or its Route resolves empty) — current
+// behavior everywhere until an operator sets sensitive_tool_route.
+func (s *Service) pinSensitiveRoute(ctx context.Context, events []session.Event, route, modelHint string) (string, string) {
+	if s.sensitive == nil || s.sensitive.Route == nil {
+		return route, modelHint
+	}
+	if !s.sensitive.SessionSensitive(events) {
+		return route, modelHint
+	}
+	if forced := s.sensitive.Route(ctx); forced != "" {
+		return forced, ""
+	}
+	return route, modelHint
 }
 
 // ErrNoRetryableTurn marks a Retry call whose session isn't in a
@@ -439,7 +468,9 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if route == "" {
 		route = defaultRoute
 	}
-	return s.runTurn(ctx, sessionID, last.Text, last.ModelHint, "", "", route, profile, needsTitle)
+	modelHint := last.ModelHint
+	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
+	return s.runTurn(ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle)
 }
 
 // runTurn is the shared tail of Chat and Retry: compact, project
@@ -468,6 +499,12 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	if err != nil {
 		return sessionID, nil, err
 	}
+	// sessionSensitive reuses this same fetch: a session pinned by a
+	// PRIOR turn still carries that turn's sensitive content in the
+	// context just projected above, even when THIS turn runs no
+	// sensitive tool itself — so persistTurn's side-calls (distill,
+	// extraction) must be pinned too, same as turnSensitive.
+	sessionSensitive := s.sensitive.SessionSensitive(events)
 
 	// Retrieved memory and a hinted skill both ride the system
 	// prompt's TAIL: the stable prefix stays byte-identical for
@@ -506,15 +543,18 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	}
 
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, upstream, out)
+	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, upstream, out)
 	return sessionID, out, nil
 }
 
 // relay forwards events to the client while accumulating the turn,
 // then persists it. Persistence uses a cancel-detached context: a
 // client disconnect or brain shutdown mid-turn must still leave a
-// durable pending_state (the kill-test contract).
-func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+// durable pending_state (the kill-test contract). sessionSensitive
+// carries forward whether a PRIOR turn in this session already pinned
+// it (see runTurn) — persistTurn ORs it with this turn's own
+// turnSensitive flip so side-calls stay pinned on every later turn too.
+func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -601,7 +641,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			notePermission(ev)
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive)
 	}
 
 	ticker := time.NewTicker(s.flushEvery)
@@ -644,7 +684,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	}
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, turnSensitive bool) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -698,12 +738,15 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		s.logger.Warn("persist last category", "session_id", sessionID, "error", err)
 	}
 
-	// A turn that executed a sensitive tool pins its side-calls to the
-	// same route the loop already forced the turn onto — both
-	// distillation and extraction below can see raw sensitive output
-	// (e.g. email), so neither may fall back to its own cheap default.
+	// A turn that executed a sensitive tool itself, OR one served on an
+	// already session-pinned route (a PRIOR turn's sensitive content is
+	// still in this turn's context — see runTurn's sessionSensitive),
+	// pins its side-calls to the same route the loop/pin already forced
+	// the turn onto — both distillation and extraction below can see raw
+	// sensitive output (e.g. email), so neither may fall back to its own
+	// cheap default.
 	sensitiveRoute := ""
-	if turnSensitive && s.sensitive != nil && s.sensitive.Route != nil {
+	if sensitive && s.sensitive != nil && s.sensitive.Route != nil {
 		sensitiveRoute = s.sensitive.Route(context.Background())
 	}
 
@@ -749,21 +792,33 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		cancel()
 	}
 	if needsTitle {
-		s.autoTitle(sessionID, userText, text)
+		s.autoTitle(sessionID, userText, text, sensitiveRoute)
 	}
 }
 
 // autoTitle names a session after its first exchange via a mini call;
-// best-effort and never clobbers a user-chosen title.
-func (s *Service) autoTitle(sessionID, userText, reply string) {
+// best-effort and never clobbers a user-chosen title. sensitiveRoute is
+// the same pin persistTurn resolved for distill/extraction above: the
+// title prompt's input includes reply (the assistant's own synthesized
+// text, truncated), which is exactly the channel a sensitive tool's
+// output can be quoted through — the same reasoning distill/extract
+// already pin on — so titling rides the identical route pin rather than
+// staying on defaultRoute whenever this turn (or an earlier one this
+// session) is sensitive. An empty sensitiveRoute (the common case) falls
+// through to defaultRoute exactly as before.
+func (s *Service) autoTitle(sessionID, userText, reply, sensitiveRoute string) {
 	ctx, cancel := context.WithTimeout(context.Background(), titleTimeout)
 	defer cancel()
 
 	const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
 	input := userText + "\n\n" + truncateRunes(reply, 200)
 
+	route := defaultRoute
+	if sensitiveRoute != "" {
+		route = sensitiveRoute
+	}
 	events, err := s.gw.Stream(ctx, gwclient.StreamRequest{
-		Route:    defaultRoute,
+		Route:    route,
 		Purpose:  "title",
 		System:   titleSystem,
 		Messages: []provider.Message{{Role: "user", Content: input}},

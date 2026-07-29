@@ -36,3 +36,30 @@ func (s *SensitiveTools) Matches(toolName string) bool {
 	}
 	return false
 }
+
+// SessionSensitive reports whether any tool_execution event anywhere in
+// events matches s — scoped to the WHOLE session, not just a span about
+// to be summarized or the current turn, since content downstream of a
+// sensitive tool call (e.g. quoted email text) can carry forward into
+// later turns and later compaction spans alike (D-007 residue). Shared
+// by the compactor (which span to summarize/extract on) and chat
+// (which route to serve the next turn on) so both apply the same
+// verdict. nil sensitive (feature off) always reports false.
+func (s *SensitiveTools) SessionSensitive(events []Event) bool {
+	if s == nil {
+		return false
+	}
+	for _, ev := range events {
+		if ev.Kind != KindToolExecution {
+			continue
+		}
+		var te ToolExecution
+		if decode(ev, &te) != nil {
+			continue
+		}
+		if s.Matches(te.Name) {
+			return true
+		}
+	}
+	return false
+}
