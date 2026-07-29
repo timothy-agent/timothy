@@ -320,14 +320,17 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 }
 
 // ErrNoRetryableTurn marks a Retry call whose session isn't in a
-// retryable state — its last event isn't a user message left dangling
-// by a failed attempt (persistTurn only completes a turn on sawDone).
+// retryable state — its last user_message already has a completed
+// (assistant_turn) turn after it, or there's no user_message at all.
 var ErrNoRetryableTurn = errors.New("no retryable turn")
 
 // Retry re-runs generation for a session's last turn WITHOUT persisting
 // a second user_message: Chat unconditionally appends before streaming
 // (line above), so a failed attempt already leaves that message durable
-// with no assistant_turn after it. Retry reuses it verbatim — same
+// with no assistant_turn after it. A dead attempt (brain restart mid-turn)
+// can also leave trailing tool_execution/pending_state/permission events
+// after that message — lastUserMessage looks past those; only a
+// completed turn blocks retry. Retry reuses the message verbatim — same
 // route/agent/model_hint the original request resolved to, since those
 // live on the persisted UserMessage, not the transient Request. A
 // skill_hint is NOT persisted (it's a rare, deliberate one-off pick),
@@ -760,16 +763,34 @@ func hasCompletedTurn(events []session.Event) bool {
 	return false
 }
 
-// lastUserMessage returns the log's last event when — and only when —
-// it is a user_message: the signature of a turn that never completed
-// (persistTurn only appends assistant_turn on sawDone). Any other
-// trailing kind means there's nothing dangling to retry.
+// lastUserMessage returns the session's last user_message when it has
+// no completed turn after it — the signature of a turn that never
+// finished (persistTurn only appends assistant_turn on sawDone). A
+// brain restart or crash mid-turn can leave trailing tool_execution,
+// pending_state, or permission_request/resolved events after that
+// message; none of those are turn-terminal, so they must not block a
+// retry. LLMContext already treats them as inert for anything but the
+// newest pending_state (spliced in as an interrupted assistant message
+// only if still live), so replaying them costs nothing — the retried
+// turn's context is exactly what the dead attempt's would have been.
 func lastUserMessage(events []session.Event) (session.UserMessage, bool) {
-	if len(events) == 0 || events[len(events)-1].Kind != session.KindUserMessage {
+	var lastMsg *session.Event
+	for i := len(events) - 1; i >= 0; i-- {
+		switch events[i].Kind {
+		case session.KindAssistantTurn:
+			return session.UserMessage{}, false // turn after it completed
+		case session.KindUserMessage:
+			lastMsg = &events[i]
+		}
+		if lastMsg != nil {
+			break
+		}
+	}
+	if lastMsg == nil {
 		return session.UserMessage{}, false
 	}
 	var msg session.UserMessage
-	if err := json.Unmarshal(events[len(events)-1].Payload, &msg); err != nil {
+	if err := json.Unmarshal(lastMsg.Payload, &msg); err != nil {
 		return session.UserMessage{}, false
 	}
 	return msg, true

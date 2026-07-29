@@ -1146,6 +1146,123 @@ func TestRetryRejectsWhenNothingToRetry(t *testing.T) {
 	}
 }
 
+// A brain restart mid-turn can leave tool_execution/permission events
+// (and no pending_state, if the crash landed before a flush) after the
+// dangling user_message — the turn never reached persistTurn at all.
+// Retry must still treat that message as retryable: none of those
+// trailing kinds are turn-terminal, and LLMContext already excludes
+// tool_execution/permission_request/permission_resolved from the
+// model-facing projection, so the retried turn sees exactly the
+// original user message with nothing appended — a clean restart.
+func TestRetrySurvivesTrailingToolAndPermissionEvents(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	if _, err := log.Append(t.Context(), "s1", session.KindUserMessage, session.UserMessage{
+		Text: "the question", Route: "mini", Agent: "default",
+	}); err != nil {
+		t.Fatalf("seed user_message: %v", err)
+	}
+	if _, err := log.Append(t.Context(), "s1", session.KindToolExecution, session.ToolExecution{
+		CallID: "c1", Name: "shell", Status: "ok",
+	}); err != nil {
+		t.Fatalf("seed tool_execution: %v", err)
+	}
+	if _, err := log.Append(t.Context(), "s1", session.KindPermissionRequest, session.PermissionRequest{
+		ID: "p1", CallID: "c2", Tool: "shell",
+	}); err != nil {
+		t.Fatalf("seed permission_request: %v", err)
+	}
+	if _, err := log.Append(t.Context(), "s1", session.KindPermissionResolved, session.PermissionResolved{
+		ID: "p1", Decision: "once",
+	}); err != nil {
+		t.Fatalf("seed permission_resolved: %v", err)
+	}
+	if _, err := log.Append(t.Context(), "s1", session.KindToolExecution, session.ToolExecution{
+		CallID: "c2", Name: "shell", Status: "ok",
+	}); err != nil {
+		t.Fatalf("seed second tool_execution: %v", err)
+	}
+
+	gw := &fakeGW{events: okEvents("the answer")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Retry(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool {
+		kinds := log.kinds("s1")
+		return len(kinds) > 0 && kinds[len(kinds)-1] == session.KindAssistantTurn
+	})
+
+	kinds := log.kinds("s1")
+	want := []string{
+		session.KindUserMessage, session.KindToolExecution, session.KindPermissionRequest,
+		session.KindPermissionResolved, session.KindToolExecution, session.KindAssistantTurn,
+	}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds after retry = %v, want %v (no duplicated user_message)", kinds, want)
+	}
+
+	// The context handed to the gateway must be exactly the original
+	// user message — tool_execution and permission events never enter
+	// LLMContext, and there is no pending_state here to splice in as an
+	// interrupted assistant message. A clean restart, not a replay of
+	// the dead attempt's partial state.
+	sent := chatRequest(t, gw)
+	if len(sent.Messages) != 1 || sent.Messages[0].Role != "user" || sent.Messages[0].Content != "the question" {
+		t.Fatalf("retried context = %+v, want exactly [{user the question}]", sent.Messages)
+	}
+	if sent.Route != "mini" {
+		t.Fatalf("retried route = %q, want mini (the original message's persisted route)", sent.Route)
+	}
+}
+
+// A trailing pending_state (a periodic checkpoint the dead attempt
+// flushed before dying) is the one trailing kind LLMContext does splice
+// back in — as an interrupted assistant message — so the retried turn
+// picks up where the checkpoint left off instead of starting blind.
+func TestRetryReplaysTrailingPendingStateAsInterrupted(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	if _, err := log.Append(t.Context(), "s1", session.KindUserMessage, session.UserMessage{
+		Text: "the question", Route: "mini", Agent: "default",
+	}); err != nil {
+		t.Fatalf("seed user_message: %v", err)
+	}
+	if _, err := log.Append(t.Context(), "s1", session.KindPendingState, session.PendingState{
+		Partial: "partial answer so far",
+	}); err != nil {
+		t.Fatalf("seed pending_state: %v", err)
+	}
+
+	gw := &fakeGW{events: okEvents("the rest of the answer")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Retry(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool {
+		kinds := log.kinds("s1")
+		return len(kinds) > 0 && kinds[len(kinds)-1] == session.KindAssistantTurn
+	})
+
+	sent := chatRequest(t, gw)
+	if len(sent.Messages) != 2 {
+		t.Fatalf("retried context = %+v, want [user, interrupted-assistant]", sent.Messages)
+	}
+	if sent.Messages[0].Role != "user" || sent.Messages[0].Content != "the question" {
+		t.Fatalf("message[0] = %+v", sent.Messages[0])
+	}
+	if sent.Messages[1].Role != "assistant" || !strings.Contains(sent.Messages[1].Content, "partial answer so far") ||
+		!strings.Contains(sent.Messages[1].Content, "interrupted") {
+		t.Fatalf("message[1] = %+v, want the spliced interrupted partial", sent.Messages[1])
+	}
+}
+
 // TestAutoTitleUsesDefaultRouteNotClassifyRoute pins a real behavior
 // change: a session's name deserves the same model quality as the
 // conversation it's naming, not the cheapest classification route
