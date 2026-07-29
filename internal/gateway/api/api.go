@@ -128,6 +128,13 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	// Flush headers now, before the first provider attempt starts: the
+	// first token can be arbitrarily slow (e.g. a local model cold-loading),
+	// and the caller's response-header timeout must never trip on that —
+	// every later failure already streams as an SSE error event
+	// (chain_exhausted), so nothing downstream relies on a non-200 here.
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
 	send := func(ev stream.StreamEvent) {
 		data, err := json.Marshal(ev)

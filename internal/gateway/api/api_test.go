@@ -70,6 +70,20 @@ func oaiOK(t *testing.T, text string) *httptest.Server {
 	return srv
 }
 
+// oaiSlow blocks until release is closed before writing anything —
+// standing in for a local model still cold-loading or mid-prefill.
+func oaiSlow(t *testing.T, release <-chan struct{}, text string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\n", text)
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // oaiFail always answers 401 (permanent, no retry).
 func oaiFail(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -181,6 +195,51 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(a.providerCalls.WithLabelValues("one", "coding", "ok")); got != 1 {
 		t.Fatalf("provider_calls_total{one,coding,ok} = %v, want 1", got)
+	}
+}
+
+// TestStreamHeadersFlushBeforeFirstProviderEvent pins the fix for the
+// gateway sitting silent past the caller's response-header timeout
+// while a slow-to-first-token provider (e.g. a cold-loading local
+// model) is still working: headers must reach the client as soon as
+// the handler starts, not on the first send().
+func TestStreamHeadersFlushBeforeFirstProviderEvent(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	a, _ := newAPI(snapshotFor(t, oaiSlow(t, release, "hello").URL, oaiFail(t).URL))
+
+	srv := httptest.NewServer(http.HandlerFunc(a.handleStream))
+	t.Cleanup(srv.Close)
+
+	// Shorter than any deliberate delay in this test: if headers only
+	// went out on the first send(), this would time out while the
+	// provider is still blocked on release.
+	client := &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 500 * time.Millisecond}}
+
+	resp, err := client.Post(srv.URL, "application/json", strings.NewReader(
+		`{"route":"coding","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("post: %v (headers did not arrive before the provider produced anything)", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 before any provider event", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type = %q, want text/event-stream", ct)
+	}
+
+	// Now let the provider finish and confirm the stream still drains
+	// normally end to end.
+	close(release)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	events := sseEvents(t, string(body))
+	if len(events) == 0 || events[len(events)-1].Type != stream.EventDone {
+		t.Fatalf("events = %+v, want trailing done", events)
 	}
 }
 
