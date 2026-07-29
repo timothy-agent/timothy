@@ -140,14 +140,18 @@ func (d *memDir) SetTitleIfEmpty(context.Context, string, string) error { return
 func (d *memDir) SetLastRoute(context.Context, string, string, string) error { return nil }
 
 // fakeGateway yields a canned event sequence, or fails when err set.
+// blockCh, when set, delays every event past the first until closed —
+// lets a test observe "mid-turn" state (turn_active, a /live replay)
+// before the stream completes.
 type fakeGateway struct {
-	events []stream.StreamEvent
-	err    error
-	got    gwclient.StreamRequest
-	calls  int
+	events  []stream.StreamEvent
+	err     error
+	got     gwclient.StreamRequest
+	calls   int
+	blockCh chan struct{}
 }
 
-func (f *fakeGateway) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	f.calls++
 	if f.calls == 1 { // record the chat call, not the title call
 		f.got = req
@@ -155,11 +159,39 @@ func (f *fakeGateway) Stream(_ context.Context, req gwclient.StreamRequest) (<-c
 	if f.err != nil {
 		return nil, f.err
 	}
-	ch := make(chan stream.StreamEvent, len(f.events))
-	for _, ev := range f.events {
-		ch <- ev
+	if f.blockCh == nil {
+		ch := make(chan stream.StreamEvent, len(f.events))
+		for _, ev := range f.events {
+			ch <- ev
+		}
+		close(ch)
+		return ch, nil
 	}
-	close(ch)
+	ch := make(chan stream.StreamEvent)
+	events := append([]stream.StreamEvent(nil), f.events...)
+	block := f.blockCh
+	go func() {
+		defer close(ch)
+		if len(events) > 0 {
+			select {
+			case ch <- events[0]:
+			case <-ctx.Done():
+				return
+			}
+		}
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return
+		}
+		for _, ev := range events[1:] {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	return ch, nil
 }
 
@@ -187,6 +219,7 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	m.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	m.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
+	a.registerLive(m.Handle)
 	m.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
 	m.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))

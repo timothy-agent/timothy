@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatStreamOptions } from '../api/client'
 import type { ChatEvent, ChatRequest } from '../api/types'
+import type { Signal } from '../lib/events'
 import { Chat } from './Chat'
 
 vi.mock('../api/client', () => ({
@@ -15,16 +16,38 @@ vi.mock('../api/client', () => ({
   },
   chatStream: vi.fn(),
   retryStream: vi.fn(),
+  streamLive: vi.fn(),
   getTranscript: vi.fn(),
   answerPermission: vi.fn(),
   listRoutes: vi.fn(),
   listAgents: vi.fn(),
 }))
 
+vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
+
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { answerPermission, ChatError, chatStream, getTranscript, listAgents, listRoutes } from '../api/client'
+import {
+  answerPermission,
+  ChatError,
+  chatStream,
+  getTranscript,
+  listAgents,
+  listRoutes,
+  streamLive,
+} from '../api/client'
+import { subscribeEvents } from '../lib/events'
 import { toast } from 'sonner'
+
+// captureSubscribe grabs the onSignal callback subscribeEvents was
+// last called with, so a test can fire a "session" signal directly
+// instead of driving a real SSE stream — same helper shape as
+// Missions.test.tsx's own captureSubscribe.
+function captureSubscribe() {
+  return {
+    fireSignal: (sig: Signal) => vi.mocked(subscribeEvents).mock.calls.at(-1)?.[0](sig),
+  }
+}
 
 function renderChat() {
   return render(
@@ -57,9 +80,11 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.mocked(listAgents).mockResolvedValue([])
   vi.mocked(listRoutes).mockResolvedValue(routes)
+  vi.mocked(subscribeEvents).mockReturnValue(vi.fn())
   vi.mocked(getTranscript).mockResolvedValue({
     session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
     items: [],
+    turn_active: false,
   })
   vi.mocked(chatStream).mockImplementation(
     async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
@@ -120,6 +145,7 @@ describe('replayed permission asks', () => {
           created_at: '',
         },
       ],
+      turn_active: false,
     })
 
     render(
@@ -137,6 +163,7 @@ describe('replayed permission asks', () => {
     vi.mocked(getTranscript).mockResolvedValue({
       session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
       items: [{ seq: 1, kind: 'user', text: 'do the thing', created_at: '' }],
+      turn_active: false,
     })
 
     render(
@@ -169,6 +196,7 @@ describe('replayed permission asks', () => {
           created_at: '',
         },
       ],
+      turn_active: false,
     })
     vi.mocked(answerPermission).mockRejectedValue(new ChatError(404, 'unknown or already-answered'))
 
@@ -185,5 +213,112 @@ describe('replayed permission asks', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(screen.queryByTestId('permission-modal')).not.toBeInTheDocument()
+  })
+})
+
+describe('live reattach', () => {
+  it('attaches streamLive when the session is turn_active, replacing the stale interrupted item', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [
+        { seq: 1, kind: 'user', text: 'do the thing', created_at: '' },
+        { seq: 2, kind: 'interrupted', text: 'partial answer so ', created_at: '' },
+      ],
+      turn_active: true,
+    })
+    // A real streamLive's promise stays pending until the stream
+    // actually ends (terminal meta) — resolve it ourselves once the
+    // test feeds that terminal event, matching that lifecycle instead
+    // of settling immediately like a bare mock would.
+    let feed!: (ev: ChatEvent) => void
+    let resolveStream!: () => void
+    const streamDone = new Promise<void>((r) => {
+      resolveStream = r
+    })
+    vi.mocked(streamLive).mockImplementation(async (_id, onEvent) => {
+      feed = onEvent
+      await streamDone
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(streamLive).toHaveBeenCalledWith('s1', expect.any(Function), expect.anything()))
+    // The stale 'interrupted' item is gone; the replay buffer (fed
+    // below) is what repopulates the text, not the persisted partial.
+    expect(screen.queryByTestId('interrupted')).not.toBeInTheDocument()
+
+    feed({ type: 'chunk', text: 'far so good' })
+    await screen.findByText('far so good')
+
+    feed({ type: 'meta', session_id: 's1' })
+    resolveStream()
+    // Terminal meta clears streaming — same reducer/finalization path a
+    // locally-started turn goes through.
+    await waitFor(() => expect(screen.queryByText('▍')).not.toBeInTheDocument())
+  })
+
+  it('does not attach live when turn_active is false', async () => {
+    renderChat()
+    await screen.findByRole('button', { name: 'Agent and route' })
+    expect(streamLive).not.toHaveBeenCalled()
+  })
+
+  it('refetches the transcript on a session signal for the open session while unattached', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [{ seq: 1, kind: 'user', text: 'first load', created_at: '' }],
+      turn_active: false,
+    })
+    const { fireSignal } = captureSubscribe()
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('first load')
+
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [
+        { seq: 1, kind: 'user', text: 'first load', created_at: '' },
+        { seq: 2, kind: 'user', text: 'appeared via signal', created_at: '' },
+      ],
+      turn_active: false,
+    })
+    fireSignal({ kind: 'session', id: 's1' })
+
+    await screen.findByText('appeared via signal')
+  })
+
+  it('ignores a session signal for a different session', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [{ seq: 1, kind: 'user', text: 'first load', created_at: '' }],
+      turn_active: false,
+    })
+    const { fireSignal } = captureSubscribe()
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('first load')
+    vi.mocked(getTranscript).mockClear()
+
+    fireSignal({ kind: 'session', id: 'some-other-session' })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(getTranscript).not.toHaveBeenCalled()
   })
 })

@@ -143,6 +143,32 @@ type Service struct {
 	// an unexpired matching row exists.
 	seededMu sync.Mutex
 	seeded   map[string]bool
+
+	// turns is the live-turn broadcaster registry (broadcast.go): a
+	// session ID present here means that session has a turn in flight,
+	// full stop. There is no separate turn_active bool anywhere — the
+	// GET /v1/sessions/{id} handler and the live-reattach endpoint both
+	// read this same map through TurnActive/Subscribe, so the flag and
+	// the broadcaster can never disagree about whether a turn is
+	// running (no prior busy-state registry existed to reuse; this is
+	// the only one).
+	turnsMu sync.Mutex
+	turns   map[string]*turnBroadcaster
+
+	publishSession func(sessionID string) // nil: no session-signal push (today's default)
+}
+
+// SetSessionHub wires the "session" signal push: fires once a turn's
+// terminal is durable (see persistTurn), same after-commit ordering
+// missions.Store/Notifier already use for their own hub.Publish calls.
+// A plain func rather than an interface on *missions.Hub: chat sits
+// lower than missions in the import graph (missions already reaches
+// into session-shaped types; the reverse would cycle), so main wires
+// this the same way it wires every other optional side-effect hook
+// (SetMemoryExtract, SetApprovalGrants, ...). Nil (today's default,
+// and every test) makes this a no-op.
+func (s *Service) SetSessionHub(publish func(sessionID string)) {
+	s.publishSession = publish
 }
 
 // SetMemoryExtract wires the memoryd hook. Optional — nil leaves
@@ -547,8 +573,16 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 		return sessionID, nil, err
 	}
 
+	// Register the broadcaster BEFORE relay can forward a single event:
+	// turn_active and a late /live subscriber's replay both read this
+	// entry, so it must exist the instant the turn starts, not once the
+	// first event happens to land. Registered even with zero
+	// subscribers — presence means "turn in flight", not "someone is
+	// watching" (see broadcast.go).
+	bc := s.turnBroadcast(sessionID)
+
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, upstream, out)
+	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -561,8 +595,13 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 // turnSensitive flip so side-calls stay pinned on every later turn too.
 // start is runTurn's wall-clock beginning, stamped onto the terminal
 // done event's Meta (and passed to persistTurn) so live and replayed
-// stats show the same duration.
-func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+// stats show the same duration. bc is this turn's broadcaster
+// (registered by runTurn before this goroutine started): every event
+// this relay sees — including ones the ORIGINAL client never gets
+// because it already disconnected (drainAndPersist) — still reaches
+// bc, since a GET /live subscriber may be attached independently of
+// the POST that started the turn.
+func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -648,9 +687,20 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			}
 			noteToolResult(ev)
 			notePermission(ev)
+			bc.publish(ev)
 		}
 		close(out)
 		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive)
+		// Terminal persist is now durable: free the broadcaster (closes
+		// every live /live subscriber) and push the session signal, in
+		// that order — mirrors missions.Store's own "publish only after
+		// commit" discipline, so a client that sees turn_active flip
+		// false (via the freed entry) or gets a session signal is
+		// guaranteed the transcript already reflects the finished turn.
+		s.turnDone(sessionID)
+		if s.publishSession != nil {
+			s.publishSession(sessionID)
+		}
 	}
 
 	ticker := time.NewTicker(s.flushEvery)
@@ -677,6 +727,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			}
 			noteToolResult(ev)
 			notePermission(ev)
+			bc.publish(ev)
 			select {
 			case out <- ev:
 			case <-ctx.Done():

@@ -95,6 +95,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
+	a.registerLive(srv.Handle)
 	srv.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
 	srv.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	srv.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
@@ -269,7 +270,14 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []session.TranscriptItem{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": meta, "items": items})
+	// turn_active is read straight off chat.Service's own broadcaster
+	// registry (TurnActive) — the single source of truth for "is a turn
+	// running right now", not a separate flag that could drift from it.
+	// a.svc is never nil (Register always constructs one), and
+	// TurnActive itself is nil-map-safe, so this needs no guard.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": meta, "items": items, "turn_active": a.svc.TurnActive(id),
+	})
 }
 
 func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {

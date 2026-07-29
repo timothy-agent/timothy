@@ -130,6 +130,11 @@ export interface TranscriptItem {
 export interface Transcript {
   session: SessionMeta
   items: TranscriptItem[]
+  // Whether a turn is currently streaming for this session server-side
+  // — sourced from chat.Service's own turn registry, not a client
+  // guess. Lets a tab that opens a session mid-turn know to attach
+  // streamLive instead of rendering the last event as stale/interrupted.
+  turn_active: boolean
 }
 
 // One long-term memory row as served by the management API.

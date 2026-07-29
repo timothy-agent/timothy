@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { answerPermission, ChatError, chatStream, getTranscript, retryStream } from '../api/client'
+import {
+  answerPermission,
+  ChatError,
+  chatStream,
+  getTranscript,
+  retryStream,
+  streamLive,
+} from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
 import { Composer } from '../components/Composer'
@@ -14,6 +21,7 @@ import {
   emptyAssistant,
   type AssistantState,
 } from '../lib/chat'
+import { subscribeEvents } from '../lib/events'
 import { useSessions } from '../lib/sessions'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
 import type { ChatIntent } from './Home'
@@ -112,11 +120,15 @@ export function Chat({
     adoptedRef.current = null
     let stale = false
     getTranscript(routeSession)
-      .then(({ session, items }) => {
+      .then(({ session, items, turn_active }) => {
         if (stale) return
         setItems(fromTranscript(items))
         if (session.agent) setAgent(session.agent)
         setRoute(session.last_route ?? '')
+        // A turn was already streaming when this tab opened the session
+        // (opened mid-turn, or a reload during one): attach to it live
+        // instead of leaving the transcript's replay looking stale.
+        if (turn_active) attachLive(routeSession)
       })
       .catch((err: unknown) => {
         if (stale) return
@@ -126,7 +138,28 @@ export function Chat({
     return () => {
       stale = true
     }
+    // attachLive is stable across renders in effect (closes over setters
+    // only) but isn't itself memoized — omitted deliberately, same
+    // pattern as the intent-consuming effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeSession, onNeedToken])
+
+  // Tier 1 fallback: while NOT attached to a live stream for the open
+  // session, a "session" signal means some turn elsewhere finished (or
+  // this tab missed the transition) — refetch the transcript so a tab
+  // that never got to attach live still catches up promptly instead of
+  // waiting on the next navigation. Attached tabs skip this: they're
+  // already getting every event live, and a mid-stream refetch would
+  // race the reducer's own state.
+  useEffect(() => {
+    return subscribeEvents((sig) => {
+      if (sig.kind !== 'session' || sig.id !== sessionRef.current) return
+      if (streaming) return
+      getTranscript(sig.id)
+        .then(({ items }) => setItems(fromTranscript(items)))
+        .catch(() => undefined)
+    })
+  }, [streaming])
 
   useEffect(() => {
     if (pinnedRef.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -156,6 +189,76 @@ export function Chat({
         next[next.length - 1] = { ...fn(last), id: last.id, role: 'assistant' }
       return next
     })
+
+  // attachLive reattaches to a turn that was already streaming when
+  // this tab opened the session (turn_active from getTranscript): a
+  // trailing 'interrupted' item is the server's replay of a mid-turn
+  // pending_state checkpoint — without this it would sit there forever
+  // looking dead. Replacing it with a live streaming assistant item and
+  // feeding streamLive's events through the SAME applyEvent reducer
+  // sendMessage uses makes a reattached turn indistinguishable from one
+  // this tab started itself: streaming indicator, activity line,
+  // permission modal all just work. The replay buffer already contains
+  // every chunk that built up the interrupted partial, so the new item
+  // starts empty rather than double-seeding with the persisted text.
+  const attachLive = (sessionId: string) => {
+    setStreaming(true)
+    pinnedRef.current = true
+    setItems((prev) => {
+      const next = [...prev]
+      const last = next[next.length - 1]
+      if (last && (last.role === 'interrupted' || last.role === 'assistant'))
+        next[next.length - 1] = { id: last.id, role: 'assistant', ...emptyAssistant() }
+      else next.push({ id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() })
+      return next
+    })
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    let sawTerminal = false
+    streamLive(
+      sessionId,
+      (ev: ChatEvent) => {
+        if (ev.type === 'meta') sawTerminal = true
+        updateLast((m) => applyEvent(m, ev))
+      },
+      controller.signal,
+    )
+      .then(() => {
+        if (controller.signal.aborted) return
+        // The live stream can end without a terminal meta event if this
+        // subscriber got dropped for lagging (turnBroadcaster's
+        // drop-on-full) rather than the turn actually finishing — a
+        // one-shot refetch recovers either way: either it shows the
+        // now-completed turn, or it shows the turn still running and
+        // the next session signal (Tier 1) prompts another refetch.
+        if (!sawTerminal) {
+          getTranscript(sessionId)
+            .then(({ items }) => setItems(fromTranscript(items)))
+            .catch(() => undefined)
+        }
+        refresh()
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return
+        // A 404 (no_active_turn) means the turn finished in the gap
+        // between getTranscript and this attach — refetch once to pick
+        // up the now-completed transcript rather than leaving the
+        // freshly-blanked item stuck empty. Any other error just falls
+        // back the same way.
+        getTranscript(sessionId)
+          .then(({ items }) => setItems(fromTranscript(items)))
+          .catch(() => undefined)
+        if (err instanceof ChatError && (err.status === 401 || err.status === 503)) onNeedToken()
+      })
+      .finally(() => {
+        abortRef.current = null
+        if (!controller.signal.aborted) {
+          setStreaming(false)
+          updateLast((m) => ({ ...m, streaming: false }))
+        }
+      })
+  }
 
   const sendMessage = async (
     text: string,

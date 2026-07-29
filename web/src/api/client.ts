@@ -131,6 +131,49 @@ export async function retryStream(
   return postSSE(`/v1/sessions/${sessionId}/messages/retry`, undefined, onEvent, opts)
 }
 
+// streamLive reattaches to a session's in-flight turn (Tier 2 of live
+// reattach): GET .../live replays whatever the turn already emitted
+// then follows it live until the terminal, wire-identical to
+// chatStream/retryStream's SSE frames — same createSSEParser, same
+// ChatEvent shape, same terminal meta contract — so a caller feeds
+// events through the exact same applyEvent reducer regardless of
+// which of the three started the stream. Throws ChatError(404,
+// 'no_active_turn') when nothing is running; the caller's fallback is
+// a plain transcript refetch, not a retry loop.
+export async function streamLive(
+  sessionId: string,
+  onEvent: (ev: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/v1/sessions/${sessionId}/live`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '')
+    let code: string | undefined
+    let message = text
+    try {
+      const parsed = JSON.parse(text) as { error?: string; message?: string }
+      code = parsed.error
+      message = parsed.message ?? text
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `live stream failed (${res.status})`, code)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  const parser = createSSEParser(onEvent)
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    parser.feed(decoder.decode(value, { stream: true }))
+  }
+  parser.end()
+}
+
 // postSSE is chatStream and retryStream's shared body: POST, surface a
 // structured ChatError on failure, then relay the SSE stream until the
 // terminal meta event.

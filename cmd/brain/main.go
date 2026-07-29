@@ -235,6 +235,15 @@ func main() {
 		agentReg.Resolve, app.Log)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
+	// Nil-safe: missionHub is nil when WORKSPACES is unset (see
+	// buildMissions), in which case SetSessionHub's publish func is
+	// never called (chat.go only invokes it when non-nil), leaving
+	// today's behavior (no push) unchanged.
+	if missionHub != nil {
+		svc.SetSessionHub(func(sessionID string) {
+			missionHub.Publish(missions.Signal{Kind: "session", ID: sessionID})
+		})
+	}
 	// Same Permissions instance (and session_grants table) the chat
 	// agent loop's own Resolve chain reads from — seeding here is
 	// visible to that exact chain, not a parallel grant store.
