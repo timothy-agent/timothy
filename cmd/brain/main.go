@@ -108,8 +108,8 @@ func main() {
 	budgetFn := func(ctx context.Context) int { return flags.TokenBudget(ctx, defaultTokenBudget) }
 	compactor := session.NewCompactor(store, gwc, gwc, budgetFn, app.Log,
 		app.Metrics.NewCounter("session_compactions_total", "Sessions compacted to stay under the context budget."))
-	distill := func(ctx context.Context, sessionID, turnText string) *session.TurnMemory {
-		return loop.DistillTurn(ctx, gwc, sessionID, turnText)
+	distill := func(ctx context.Context, sessionID, turnText, route string) *session.TurnMemory {
+		return loop.DistillTurn(ctx, gwc, sessionID, turnText, route)
 	}
 
 	workspace := os.Getenv("WORKSPACE_ROOT")

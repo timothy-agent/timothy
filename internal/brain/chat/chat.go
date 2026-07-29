@@ -27,14 +27,17 @@ const (
 	// me" (D-034 follow-up): the composer's "Auto" choice, resolved
 	// through candidates+classify before the normal agent lookup.
 	autoAgentName = "auto"
-	// classifyRoute serves the auto-dispatch classification call —
-	// same cheap side-call route distillation and extraction still use.
+	// classifyRoute serves the auto-dispatch classification call.
 	// "local" is a real, always-provisioned fixed route
 	// (migrations/0022_local_route.sql); "mini" was never seeded by
-	// any migration and every call on it failed with no_route. autoTitle
-	// uses defaultRoute instead — a session's name deserves the same
-	// model quality as the conversation it's naming, not the cheapest
-	// available one.
+	// any migration and every call on it failed with no_route. Unlike
+	// classification, distillation and extraction default to the
+	// "summarize" cloud route — local now serves a reasoning model that
+	// burns its completion budget thinking before the strict-JSON
+	// answer, so it's reserved for sensitive turns pinned there
+	// deliberately. autoTitle uses defaultRoute instead — a session's
+	// name deserves the same model quality as the conversation it's
+	// naming, not the cheapest available one.
 	classifyRoute = "local"
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
@@ -42,7 +45,7 @@ const (
 	// Each persistence stage gets its OWN deadline: LLM-backed stages
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
-	distillBudget  = 65 * time.Second // two 30s attempts + slack
+	distillBudget  = 190 * time.Second // two 90s attempts + slack
 	// Compaction runs an extraction round trip AND a summarize on slow
 	// reasoning providers; a tight budget starves the summarize and
 	// compaction never converges. Post-turn passes are off the user's
@@ -71,8 +74,10 @@ type SessionLog interface {
 }
 
 // Distill extracts turn residue; loop.DistillTurn curried with the
-// gateway in main, stubbed in tests. May return nil.
-type Distill func(ctx context.Context, sessionID, turnText string) *session.TurnMemory
+// gateway in main, stubbed in tests. May return nil. route is "" for
+// the normal side-call route, or the sensitive route pin when the turn
+// executed a sensitive tool — same convention as MemoryExtract's route.
+type Distill func(ctx context.Context, sessionID, turnText, route string) *session.TurnMemory
 
 // Compactor keeps a session's projection under budget.
 type Compactor interface {
@@ -613,10 +618,19 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		s.logger.Warn("persist last category", "session_id", sessionID, "error", err)
 	}
 
+	// A turn that executed a sensitive tool pins its side-calls to the
+	// same route the loop already forced the turn onto — both
+	// distillation and extraction below can see raw sensitive output
+	// (e.g. email), so neither may fall back to its own cheap default.
+	sensitiveRoute := ""
+	if turnSensitive && s.sensitive != nil && s.sensitive.Route != nil {
+		sensitiveRoute = s.sensitive.Route(context.Background())
+	}
+
 	var tm *session.TurnMemory
 	if s.distill != nil && text != "" {
 		dctx, dcancel := context.WithTimeout(context.Background(), distillBudget)
-		tm = s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text)
+		tm = s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text, sensitiveRoute)
 		dcancel()
 		if tm != nil && (len(tm.FilesChanged) > 0 || len(tm.Failures) > 0 || len(tm.KeyFindings) > 0) {
 			mctx, mcancel := context.WithTimeout(context.Background(), persistTimeout)
@@ -644,16 +658,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		} else if text != "" {
 			mtext += "\n\nassistant: " + text
 		}
-		// A turn that executed a sensitive tool pins its extraction to
-		// the same route the loop already forced the turn onto — the
-		// text extraction sees can quote raw sensitive output (e.g.
-		// email), so it must never fall back to memoryd's own default
-		// side-call route.
-		extractRoute := ""
-		if turnSensitive && s.sensitive != nil && s.sensitive.Route != nil {
-			extractRoute = s.sensitive.Route(context.Background())
-		}
-		go s.memory(context.Background(), sessionID, turnSeq, mtext, extractRoute)
+		go s.memory(context.Background(), sessionID, turnSeq, mtext, sensitiveRoute)
 	}
 
 	if s.compactor != nil {

@@ -23,9 +23,18 @@ type Gateway interface {
 }
 
 const (
-	distillTimeout     = 30 * time.Second
+	// distillTimeout must cover the reasoning route: qwen3 (the local
+	// route's model) spends completion budget THINKING before it emits
+	// the strict-JSON answer, so both the timeout and MaxTokens below
+	// are sized for a thinking model, not a plain instruct one.
+	distillTimeout     = 90 * time.Second
 	maxKeyFindings     = 5
 	distillMaxAttempts = 2
+
+	// sideRoute is the default for non-sensitive turns: cheap and fast
+	// enough to run after every turn without burning local GPU time.
+	// Mirrors extract.sideRoute (internal/memory/extract/extract.go).
+	sideRoute = "summarize"
 )
 
 // distillSystem demands strict JSON. The schema mirrors
@@ -37,10 +46,16 @@ Rules: key_findings has at most 5 items, one sentence each, only durable facts w
 // DistillTurn extracts a TurnMemory from one turn's raw text via a
 // mini-category call. Invalid output retries once; a second failure
 // returns nil — distillation must never block or fail the turn
-// (callers log and move on).
-func DistillTurn(ctx context.Context, gw Gateway, sessionID, turnText string) *session.TurnMemory {
+// (callers log and move on). route overrides sideRoute for this
+// call — the caller passes the sensitive route pin when the turn
+// executed a sensitive tool (same pattern as extract.Request.Route,
+// internal/memory/extract/extract.go), "" otherwise.
+func DistillTurn(ctx context.Context, gw Gateway, sessionID, turnText, route string) *session.TurnMemory {
+	if route == "" {
+		route = sideRoute
+	}
 	for attempt := 0; attempt < distillMaxAttempts; attempt++ {
-		tm, err := distillOnce(ctx, gw, sessionID, turnText)
+		tm, err := distillOnce(ctx, gw, sessionID, turnText, route)
 		if err == nil {
 			return tm
 		}
@@ -51,19 +66,16 @@ func DistillTurn(ctx context.Context, gw Gateway, sessionID, turnText string) *s
 	return nil
 }
 
-func distillOnce(ctx context.Context, gw Gateway, sessionID, turnText string) (*session.TurnMemory, error) {
+func distillOnce(ctx context.Context, gw Gateway, sessionID, turnText, route string) (*session.TurnMemory, error) {
 	ctx, cancel := context.WithTimeout(ctx, distillTimeout)
 	defer cancel()
 
-	// "local" is the real, always-provisioned fixed route
-	// (migrations/0022_local_route.sql); "mini" was never seeded by
-	// any migration and every call on it failed with no_route.
 	events, err := gw.Stream(ctx, gwclient.StreamRequest{
-		Route: "local",
+		Route:        route,
 		Purpose:      "distill",
 		System:       distillSystem,
 		Messages:     []provider.Message{{Role: "user", Content: turnText}},
-		MaxTokens:    500,
+		MaxTokens:    1500,
 		SessionID:    sessionID,
 	})
 	if err != nil {
