@@ -153,7 +153,7 @@ func main() {
 	sensitiveRoute := func(ctx context.Context) string {
 		return flags.Value(ctx, settings.ValueSensitiveToolRoute)
 	}
-	agent, broker, outputs, builtinSet, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute)
+	agent, broker, outputs, builtinSet, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -235,6 +235,10 @@ func main() {
 		agentReg.Resolve, app.Log)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
+	// Same Permissions instance (and session_grants table) the chat
+	// agent loop's own Resolve chain reads from — seeding here is
+	// visible to that exact chain, not a parallel grant store.
+	svc.SetApprovalGrants(chatPerms)
 	compactor.SetSensitiveTools(sensitiveTools)
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
@@ -509,7 +513,7 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
@@ -531,7 +535,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	}
 	constrained, defs, err := compileToolset(set, nil, log, toolCalls)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 
 	perms := tools.NewPermissions(db, workspace)
@@ -551,7 +555,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	for _, suffix := range sensitiveToolSuffixes {
 		agent.SetForceRoute(suffix, sensitiveRoute)
 	}
-	return agent, broker, outputs, set, nil
+	return agent, broker, outputs, set, perms, nil
 }
 
 // compileToolset registers builtin + connector tools into a fresh

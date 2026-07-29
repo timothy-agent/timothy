@@ -23,11 +23,13 @@ import (
 // Agent is the API shape of one agents row. Empty Skills/Tools mean
 // "everything allowed"; empty Route means the default route.
 //
-// ReviewRoute, BudgetUSD, and ApprovalAllowlist are meaningless to a
-// chat-only agent and stay at their zero values for one; a
-// mission-capable agent (internal/brain/missions) sets all three —
-// missions reference this table directly rather than a parallel
-// agent_profiles table.
+// ReviewRoute and BudgetUSD are meaningless to a chat-only agent and
+// stay at their zero values for one; a mission-capable agent
+// (internal/brain/missions) sets both — missions reference this table
+// directly rather than a parallel agent_profiles table. ApprovalAllowlist
+// applies to both: missions grant it at provisioning time
+// (missions/driver.go), chat seeds the same session_grants rows on a
+// session's first turn under the agent (chat.Service.SetApprovalGrants).
 type Agent struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`

@@ -1251,3 +1251,167 @@ func TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T)
 		t.Fatal("memory extract never invoked")
 	}
 }
+
+// fakeGranter is an in-memory Granter that records every Grant call —
+// stands in for tools.Permissions in chat-level tests, which never
+// touch a real session_grants table.
+type fakeGranter struct {
+	mu    sync.Mutex
+	calls []grantCall
+}
+
+type grantCall struct {
+	sessionID, tool, pattern string
+}
+
+func (g *fakeGranter) Grant(_ context.Context, sessionID, tool, pattern string, _ time.Duration) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, grantCall{sessionID, tool, pattern})
+	return nil
+}
+
+func (g *fakeGranter) grantedTools(sessionID string) []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for _, c := range g.calls {
+		if c.sessionID == sessionID {
+			out = append(out, c.tool)
+		}
+	}
+	return out
+}
+
+// TestChatSeedsApprovalAllowlistAsStandingGrant proves the mechanism
+// this feature adds: a turn served by an agent with a non-empty
+// ApprovalAllowlist grants every listed tool for the session before
+// the turn runs — the same session_grants row missions/driver.go's
+// grantSessionDefaults writes, so tools.Permissions.Resolve's
+// matchGrant (D-036 suffix rule) allows the connector-namespaced call
+// without an ask on the very first turn.
+func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
+			ApprovalAllowlist: []string{"calendar_list_events"}}, true
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	granter := &fakeGranter{}
+	svc.SetApprovalGrants(granter)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's on my calendar", Agent: "scheduler"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	got := granter.grantedTools("s1")
+	if len(got) != 1 || got[0] != "calendar_list_events" {
+		t.Fatalf("granted tools = %v, want [calendar_list_events]", got)
+	}
+}
+
+// TestChatWithoutAllowlistGrantsNothing proves the seeder only ever
+// widens consent the agent's own config already lists — an agent with
+// no ApprovalAllowlist gets no grants, so its tools keep asking exactly
+// like before this feature existed.
+func TestChatWithoutAllowlistGrantsNothing(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		return agents.Agent{ID: "agent-2", Name: "plain", Memory: true}, true
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	granter := &fakeGranter{}
+	svc.SetApprovalGrants(granter)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "plain"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	if got := granter.grantedTools("s1"); len(got) != 0 {
+		t.Fatalf("granted tools = %v, want none (agent has no allowlist)", got)
+	}
+}
+
+// TestChatSeedsApprovalAllowlistOnceIdempotent proves a long-lived
+// session doesn't re-INSERT the same grant row on every turn: a second
+// turn served by the SAME agent in the SAME session must not call
+// Grant again.
+func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
+			ApprovalAllowlist: []string{"calendar_list_events"}}, true
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	granter := &fakeGranter{}
+	svc.SetApprovalGrants(granter)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first", Agent: "scheduler"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "scheduler"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	if got := granter.grantedTools("s1"); len(got) != 1 {
+		t.Fatalf("granted tools after two turns = %v, want exactly one grant call", got)
+	}
+}
+
+// TestChatAgentSwitchGrantsNewAllowlist proves the "once per
+// session+agent" key (not "once per session") handles a mid-session
+// agent switch: a second turn in the same session served by a
+// DIFFERENT agent grants that agent's own list too.
+func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		switch name {
+		case "scheduler":
+			return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
+				ApprovalAllowlist: []string{"calendar_list_events"}}, true
+		case "mailer":
+			return agents.Agent{ID: "agent-2", Name: "mailer", Memory: true,
+				ApprovalAllowlist: []string{"gmail_search"}}, true
+		default:
+			return agents.Agent{}, false
+		}
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	granter := &fakeGranter{}
+	svc.SetApprovalGrants(granter)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first", Agent: "scheduler"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "mailer"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	got := granter.grantedTools("s1")
+	want := []string{"calendar_list_events", "gmail_search"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("granted tools = %v, want %v (both agents' allowlists)", got, want)
+	}
+}
