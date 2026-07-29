@@ -690,7 +690,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 	distillStarted := make(chan struct{})
 	distillRelease := make(chan struct{})
 	var startedOnce sync.Once
-	distill := func(ctx context.Context, sessionID, turnText string) *session.TurnMemory {
+	distill := func(ctx context.Context, sessionID, turnText, _ string) *session.TurnMemory {
 		startedOnce.Do(func() { close(distillStarted) })
 		select {
 		case <-distillRelease:
@@ -746,7 +746,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
 	gw := &fakeGW{events: okEvents("the answer")}
-	distill := func(context.Context, string, string) *session.TurnMemory {
+	distill := func(context.Context, string, string, string) *session.TurnMemory {
 		return &session.TurnMemory{KeyFindings: []string{"user moved to Porto"}}
 	}
 	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
@@ -1530,5 +1530,77 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 	want := []string{"calendar_list_events", "gmail_search"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("granted tools = %v, want %v (both agents' allowlists)", got, want)
+	}
+}
+
+// TestDistillUsesSensitiveRouteWhenTurnRanSensitiveTool mirrors the
+// memory-extract pin above: a turn that executed a sensitive tool must
+// keep its distillation on the same pinned route, not the cheap
+// "summarize" default — the turn text can quote raw sensitive output.
+func TestDistillUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "c1", Name: "personal_gmail_read", Status: "ok"}},
+		{Type: stream.EventChunk, Text: "the answer"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	got := make(chan string, 1)
+	distill := func(_ context.Context, _, _, route string) *session.TurnMemory {
+		got <- route
+		return nil
+	}
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize my inbox"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case route := <-got:
+		if route != "local" {
+			t.Fatalf("route = %q, want local (sensitive tool ran this turn)", route)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("distill never invoked")
+	}
+}
+
+// TestDistillUsesEmptyRouteWhenTurnDidNotRunSensitiveTool proves the
+// pin is per-turn: a turn with no matching tool call leaves the route
+// empty (loop.DistillTurn's own "summarize" default) even with
+// SensitiveTools wired.
+func TestDistillUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "c1", Name: "shell", Status: "ok"}},
+		{Type: stream.EventChunk, Text: "the answer"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	got := make(chan string, 1)
+	distill := func(_ context.Context, _, _, route string) *session.TurnMemory {
+		got <- route
+		return nil
+	}
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "run a shell command"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case route := <-got:
+		if route != "" {
+			t.Fatalf("route = %q, want empty (no sensitive tool ran)", route)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("distill never invoked")
 	}
 }

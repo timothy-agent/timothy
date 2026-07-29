@@ -13,9 +13,11 @@ type scriptedGW struct {
 	replies []string
 	errs    []bool
 	calls   int
+	lastReq gwclient.StreamRequest
 }
 
 func (g *scriptedGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	g.lastReq = req
 	i := g.calls
 	g.calls++
 	ch := make(chan stream.StreamEvent, 3)
@@ -38,7 +40,7 @@ func TestDistillTurnParsesValidReply(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGW{replies: []string{validJSON}}
 
-	tm := DistillTurn(t.Context(), gw, "s1", "user: hi / assistant: hello")
+	tm := DistillTurn(t.Context(), gw, "s1", "user: hi / assistant: hello", "")
 	if tm == nil {
 		t.Fatal("DistillTurn returned nil for valid reply")
 	}
@@ -54,7 +56,7 @@ func TestDistillTurnStripsFences(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGW{replies: []string{"```json\n" + validJSON + "\n```"}}
 
-	if tm := DistillTurn(t.Context(), gw, "s1", "turn"); tm == nil || tm.FilesChanged[0] != "main.go" {
+	if tm := DistillTurn(t.Context(), gw, "s1", "turn", ""); tm == nil || tm.FilesChanged[0] != "main.go" {
 		t.Fatalf("fenced reply not parsed: %+v", tm)
 	}
 }
@@ -63,7 +65,7 @@ func TestDistillTurnRetriesOnceThenGivesUp(t *testing.T) {
 	t.Parallel()
 	// invalid then valid → parsed on the retry
 	gw := &scriptedGW{replies: []string{"sorry, here is the JSON you asked for", validJSON}}
-	if tm := DistillTurn(t.Context(), gw, "s1", "turn"); tm == nil {
+	if tm := DistillTurn(t.Context(), gw, "s1", "turn", ""); tm == nil {
 		t.Fatal("retry after invalid output did not recover")
 	}
 	if gw.calls != 2 {
@@ -72,7 +74,7 @@ func TestDistillTurnRetriesOnceThenGivesUp(t *testing.T) {
 
 	// invalid twice → nil, never an error that blocks the turn
 	gw = &scriptedGW{replies: []string{"not json", "still not json"}}
-	if tm := DistillTurn(t.Context(), gw, "s1", "turn"); tm != nil {
+	if tm := DistillTurn(t.Context(), gw, "s1", "turn", ""); tm != nil {
 		t.Fatalf("expected nil after two invalid replies, got %+v", tm)
 	}
 	if gw.calls != 2 {
@@ -83,8 +85,38 @@ func TestDistillTurnRetriesOnceThenGivesUp(t *testing.T) {
 func TestDistillTurnProviderErrorRetries(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGW{errs: []bool{true, false}, replies: []string{validJSON, validJSON}}
-	if tm := DistillTurn(t.Context(), gw, "s1", "turn"); tm == nil {
+	if tm := DistillTurn(t.Context(), gw, "s1", "turn", ""); tm == nil {
 		t.Fatal("provider error on first attempt should retry and recover")
+	}
+}
+
+// TestDistillTurnDefaultsToSummarizeRoute pins the fix: non-sensitive
+// turns distill on the cheap cloud side-call route, not always-local —
+// the local route now serves a reasoning model that burns its whole
+// completion budget thinking before the JSON answer.
+func TestDistillTurnDefaultsToSummarizeRoute(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGW{replies: []string{validJSON}}
+
+	DistillTurn(t.Context(), gw, "s1", "turn", "")
+
+	if gw.lastReq.Route != "summarize" {
+		t.Fatalf("route = %q, want summarize", gw.lastReq.Route)
+	}
+}
+
+// TestDistillTurnHonorsSensitiveRoutePin proves a turn that ran a
+// sensitive tool keeps its distillation on the pinned route instead of
+// falling back to the cheap default — same privacy floor as memory
+// extraction (extract.Request.Route).
+func TestDistillTurnHonorsSensitiveRoutePin(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGW{replies: []string{validJSON}}
+
+	DistillTurn(t.Context(), gw, "s1", "turn", "local")
+
+	if gw.lastReq.Route != "local" {
+		t.Fatalf("route = %q, want local (sensitive pin)", gw.lastReq.Route)
 	}
 }
 
