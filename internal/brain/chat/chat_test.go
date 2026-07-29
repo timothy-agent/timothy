@@ -215,6 +215,128 @@ func TestChatPersistsTurnAsEvents(t *testing.T) {
 	}
 }
 
+// TestChatPersistsPermissionAsks confirms the relay appends
+// permission_request and permission_resolved as their own durable
+// session events the moment they cross the stream — not batched into
+// persistTurn at turn end, since a parked ask is exactly the case
+// where the turn hasn't ended yet. A replay of the session must then
+// carry the resolved pair, and UITranscript must drop it once
+// answered (only a still-pending ask belongs in replay).
+func TestChatPersistsPermissionAsks(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{
+			ID: "perm-1", CallID: "call-1", Tool: "shell", Args: "{}",
+			Danger: "destructive", Rationale: "runs a shell command",
+		}},
+		{Type: stream.EventPermissionResolved, Resolved: &stream.PermissionResolvedEvent{
+			ID: "perm-1", Decision: "once",
+		}},
+		{Type: stream.EventChunk, Text: "done"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led"}},
+	}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "run a command"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 5 })
+	kinds := log.kinds("s1")
+	want := []string{
+		session.KindSessionStarted, session.KindUserMessage,
+		session.KindPermissionRequest, session.KindPermissionResolved,
+		session.KindAssistantTurn,
+	}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
+	}
+
+	events, _ := log.Events(t.Context(), "s1")
+	var req session.PermissionRequest
+	if err := json.Unmarshal(events[2].Payload, &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if req.ID != "perm-1" || req.Tool != "shell" || req.Danger != "destructive" {
+		t.Fatalf("request = %+v", req)
+	}
+	var res session.PermissionResolved
+	if err := json.Unmarshal(events[3].Payload, &res); err != nil {
+		t.Fatalf("decode resolved: %v", err)
+	}
+	if res.ID != "perm-1" || res.Decision != "once" {
+		t.Fatalf("resolved = %+v", res)
+	}
+
+	// A resolved ask must not appear in a replay: only a still-pending
+	// prompt belongs in the UI transcript.
+	items, err := session.UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	for _, it := range items {
+		if it.Kind == "permission" {
+			t.Fatalf("resolved ask still in replay: %+v", it)
+		}
+	}
+}
+
+// TestChatReplayCarriesUnresolvedPermissionAsk confirms a session
+// whose turn is still parked on an ask exposes it in the UI transcript
+// projection — the whole point of persisting the request at all.
+func TestChatReplayCarriesUnresolvedPermissionAsk(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	block := make(chan struct{})
+	gw := &fakeGW{blockCh: block, events: []stream.StreamEvent{
+		{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{
+			ID: "perm-1", CallID: "call-1", Tool: "shell", Args: "{}",
+			Danger: "safe", Rationale: "runs a shell command",
+		}},
+		// No resolution, no terminal — the turn is still parked.
+	}}
+	s := newService(gw, log)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, ch, err := s.Chat(ctx, Request{SessionID: "s1", Message: "run a command"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	close(block)
+	<-ch // receive the permission_request
+
+	waitFor(t, func() bool {
+		for _, k := range log.kinds("s1") {
+			if k == session.KindPermissionRequest {
+				return true
+			}
+		}
+		return false
+	})
+
+	events, _ := log.Events(t.Context(), "s1")
+	items, err := session.UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	var found bool
+	for _, it := range items {
+		if it.Kind == "permission" {
+			found = true
+			if it.Permission == nil || it.Permission.ID != "perm-1" {
+				t.Fatalf("permission item = %+v", it)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("unresolved ask missing from replay")
+	}
+}
+
 func TestChatHistoryComesFromProjection(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()

@@ -445,6 +445,42 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 		}
 	}
 
+	// notePermission persists an ask (and its resolution) the moment it
+	// crosses the relay, not at turn end: a parked turn can sit for the
+	// full permissionTimeout, and the whole point of this event is that
+	// a session opened while that's happening shows the same prompt the
+	// live stream shows. Same detached-timeout, best-effort pattern as
+	// flushPending — a failed write here loses the replay prompt, never
+	// the turn itself.
+	notePermission := func(ev stream.StreamEvent) {
+		var kind string
+		var payload any
+		switch ev.Type {
+		case stream.EventPermissionRequest:
+			if ev.Permission == nil {
+				return
+			}
+			kind = session.KindPermissionRequest
+			payload = session.PermissionRequest{
+				ID: ev.Permission.ID, CallID: ev.Permission.CallID, Tool: ev.Permission.Tool,
+				Args: ev.Permission.Args, Danger: ev.Permission.Danger, Rationale: ev.Permission.Rationale,
+			}
+		case stream.EventPermissionResolved:
+			if ev.Resolved == nil {
+				return
+			}
+			kind = session.KindPermissionResolved
+			payload = session.PermissionResolved{ID: ev.Resolved.ID, Decision: ev.Resolved.Decision}
+		default:
+			return
+		}
+		wctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		defer cancel()
+		if _, err := s.log.Append(wctx, sessionID, kind, payload); err != nil {
+			s.logger.Warn("persist permission event", "session_id", sessionID, "kind", kind, "error", err)
+		}
+	}
+
 	// flushPending checkpoints the partial answer DURING the stream so
 	// even a SIGKILL mid-turn loses at most one flush interval — the
 	// projection splices the last pending in, and a completed turn
@@ -477,6 +513,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				meta = ev.Meta
 			}
 			noteToolResult(ev)
+			notePermission(ev)
 		}
 		close(out)
 		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive)
@@ -504,6 +541,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				meta = ev.Meta
 			}
 			noteToolResult(ev)
+			notePermission(ev)
 			select {
 			case out <- ev:
 			case <-ctx.Done():

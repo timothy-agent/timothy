@@ -1463,3 +1463,54 @@ func TestAgentAttendedAskStillParks(t *testing.T) {
 		}
 	}
 }
+
+// TestAskUserEmitsResolvedOnAnswer confirms askUser follows its
+// permission_request with a permission_resolved event carrying the
+// same ID and the decision the broker delivered — the persistence path
+// (chat's relay) and any replay client learn the outcome from the
+// stream itself, not just from the tool_result that happens to follow.
+func TestAskUserEmitsResolvedOnAnswer(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("after decision"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = askPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evs []stream.StreamEvent
+	var requestID string
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				resolved := ofType(evs, stream.EventPermissionResolved)
+				if len(resolved) != 1 {
+					t.Fatalf("permission_resolved count = %d, want 1: %+v", len(resolved), resolved)
+				}
+				if resolved[0].Resolved.ID != requestID {
+					t.Fatalf("resolved id = %q, want %q", resolved[0].Resolved.ID, requestID)
+				}
+				if resolved[0].Resolved.Decision != DecideOnce {
+					t.Fatalf("resolved decision = %q, want %q", resolved[0].Resolved.Decision, DecideOnce)
+				}
+				return
+			}
+			evs = append(evs, ev)
+			if ev.Type == stream.EventPermissionRequest {
+				requestID = ev.Permission.ID
+				if !a.broker.Resolve(ev.Permission.ID, DecideOnce) {
+					t.Fatal("broker did not know the prompt id")
+				}
+			}
+		case <-deadline:
+			t.Fatal("loop never finished")
+		}
+	}
+}
+

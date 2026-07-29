@@ -169,15 +169,16 @@ func renderTurnMemory(tm *TurnMemory) string {
 
 // TranscriptItem is one renderable unit of the UI replay.
 type TranscriptItem struct {
-	Seq       int64          `json:"seq"`
-	Kind      string         `json:"kind"` // user | assistant | tool | compaction | interrupted
-	Text      string         `json:"text,omitempty"`
-	Blocks    []UIBlock      `json:"blocks,omitempty"`
-	Provider  string         `json:"provider,omitempty"`
-	Model     string         `json:"model,omitempty"`
-	Usage     *stream.Usage  `json:"usage,omitempty"`
-	Tool      *ToolExecution `json:"tool,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
+	Seq        int64              `json:"seq"`
+	Kind       string             `json:"kind"` // user | assistant | tool | permission | compaction | interrupted
+	Text       string             `json:"text,omitempty"`
+	Blocks     []UIBlock          `json:"blocks,omitempty"`
+	Provider   string             `json:"provider,omitempty"`
+	Model      string             `json:"model,omitempty"`
+	Usage      *stream.Usage      `json:"usage,omitempty"`
+	Tool       *ToolExecution     `json:"tool,omitempty"`
+	Permission *PermissionRequest `json:"permission,omitempty"`
+	CreatedAt  time.Time          `json:"created_at"`
 }
 
 // UITranscript projects the log into the full rich replay. Unlike the
@@ -186,6 +187,10 @@ type TranscriptItem struct {
 // interrupted turn.
 func UITranscript(events []Event) ([]TranscriptItem, error) {
 	livePending := livePendingSeq(events)
+	resolved, err := resolvedPermissionIDs(events)
+	if err != nil {
+		return nil, err
+	}
 	var items []TranscriptItem
 	for _, ev := range events {
 		item := TranscriptItem{Seq: ev.Seq, CreatedAt: ev.CreatedAt}
@@ -211,6 +216,17 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 				return nil, err
 			}
 			item.Kind, item.Tool = "tool", &te
+		case KindPermissionRequest:
+			var p PermissionRequest
+			if err := decode(ev, &p); err != nil {
+				return nil, err
+			}
+			if resolved[p.ID] {
+				continue // answered — the live client drops these too
+			}
+			item.Kind, item.Permission = "permission", &p
+		case KindPermissionResolved:
+			continue // no standalone item; only gates the request above
 		case KindCompactionApplied:
 			var c CompactionApplied
 			if err := decode(ev, &c); err != nil {
@@ -233,4 +249,23 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+// resolvedPermissionIDs collects every permission id that has a
+// matching permission_resolved event, so UITranscript can skip
+// answered asks — a parked prompt only belongs in replay while it is
+// still actually pending.
+func resolvedPermissionIDs(events []Event) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, ev := range events {
+		if ev.Kind != KindPermissionResolved {
+			continue
+		}
+		var r PermissionResolved
+		if err := decode(ev, &r); err != nil {
+			return nil, err
+		}
+		out[r.ID] = true
+	}
+	return out, nil
 }

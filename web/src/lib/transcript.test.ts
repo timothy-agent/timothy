@@ -180,4 +180,74 @@ describe('fromTranscript', () => {
   it('handles the empty transcript of a fresh session', () => {
     expect(fromTranscript([])).toEqual([])
   })
+
+  it('exposes a still-unresolved replayed ask in permissions[]', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'user', text: 'q', created_at: at },
+      {
+        seq: 2,
+        kind: 'permission',
+        permission: {
+          id: 'perm-1',
+          call_id: 'c1',
+          tool: 'shell',
+          args: '{}',
+          danger_level: 'destructive',
+          rationale: 'runs a shell command',
+        },
+        created_at: at,
+      },
+    ])
+    expect(items.map((i) => i.role)).toEqual(['user', 'assistant'])
+    if (items[1].role === 'assistant') {
+      expect(items[1].permissions).toEqual([
+        {
+          id: 'perm-1',
+          call_id: 'c1',
+          tool: 'shell',
+          args: '{}',
+          danger_level: 'destructive',
+          rationale: 'runs a shell command',
+        },
+      ])
+    }
+  })
+
+  it('folds a replayed ask into the assistant turn that follows it', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'permission',
+        permission: {
+          id: 'perm-1',
+          call_id: 'c1',
+          tool: 'shell',
+          args: '{}',
+          danger_level: 'safe',
+          rationale: 'runs a shell command',
+        },
+        created_at: at,
+      },
+      { seq: 2, kind: 'assistant', blocks: [{ type: 'text', text: 'done' }], created_at: at },
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ role: 'assistant', text: 'done' })
+    if (items[0].role === 'assistant') {
+      expect(items[0].permissions.map((p) => p.id)).toEqual(['perm-1'])
+    }
+  })
+
+  it('never surfaces a resolved ask — the server projection already drops it', () => {
+    // The server never emits a `permission` item for an id that has a
+    // matching permission_resolved event, so replay has nothing to
+    // reconstruct here; this only guards that an empty transcript of
+    // asks renders no stray permissions.
+    const items = fromTranscript([
+      { seq: 1, kind: 'user', text: 'q', created_at: at },
+      { seq: 2, kind: 'assistant', blocks: [{ type: 'text', text: 'a' }], created_at: at },
+    ])
+    if (items[1].role === 'assistant') {
+      expect(items[1].permissions).toEqual([])
+    }
+  })
 })

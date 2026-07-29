@@ -31,6 +31,11 @@ export interface PermissionRequestEvent {
   rationale: string
 }
 
+export interface PermissionResolvedEvent {
+  id: string
+  decision: string
+}
+
 export interface StreamEvent {
   type:
     | 'chunk'
@@ -39,6 +44,7 @@ export interface StreamEvent {
     | 'tool_end'
     | 'tool_result'
     | 'permission_request'
+    | 'permission_resolved'
     | 'usage'
     | 'retry'
     | 'incomplete'
@@ -48,6 +54,7 @@ export interface StreamEvent {
   tool_call?: ToolCallEvent
   tool_result?: ToolResultEvent
   permission?: PermissionRequestEvent
+  resolved?: PermissionResolvedEvent
   usage?: Usage
   error?: { code: string; message: string; retryable: boolean }
   retry?: { attempt: number; backoff_ms: number; reason: string }
@@ -103,12 +110,15 @@ export interface ToolExecution {
 
 // One renderable unit of the UI replay projection. The transcript
 // hides nothing: compactions and interrupted turns are items too.
+// A 'permission' item is a still-unresolved ask (an answered one is
+// dropped by the server projection, same as the live client drops it).
 export interface TranscriptItem {
   seq: number
-  kind: 'user' | 'assistant' | 'tool' | 'compaction' | 'interrupted'
+  kind: 'user' | 'assistant' | 'tool' | 'permission' | 'compaction' | 'interrupted'
   text?: string
   blocks?: UIBlock[]
   tool?: ToolExecution
+  permission?: PermissionRequestEvent
   provider?: string
   model?: string
   usage?: Usage

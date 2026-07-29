@@ -25,23 +25,25 @@ const (
 	EventError          EventType = "error"           // terminal: failure
 
 	// Agent-loop events (brain-side; never emitted by providers).
-	EventToolResult        EventType = "tool_result"        // a tool execution finished
-	EventPermissionRequest EventType = "permission_request" // the turn parked awaiting approval
+	EventToolResult         EventType = "tool_result"         // a tool execution finished
+	EventPermissionRequest  EventType = "permission_request"  // the turn parked awaiting approval
+	EventPermissionResolved EventType = "permission_resolved" // the parked ask got a decision
 )
 
 // StreamEvent is one normalized event. Exactly the field matching Type
 // is populated; Meta additionally rides the terminal done event when
 // the gateway API attributes the serving provider.
 type StreamEvent struct {
-	Type       EventType               `json:"type"`
-	Text       string                  `json:"text,omitempty"`
-	ToolCall   *ToolCallEvent          `json:"tool_call,omitempty"`
-	ToolResult *ToolResultEvent        `json:"tool_result,omitempty"`
-	Permission *PermissionRequestEvent `json:"permission,omitempty"`
-	Usage      *Usage                  `json:"usage,omitempty"`
-	Err        *StreamError            `json:"error,omitempty"`
-	Retry      *RetryInfo              `json:"retry,omitempty"`
-	Meta       *Meta                   `json:"meta,omitempty"`
+	Type       EventType                `json:"type"`
+	Text       string                   `json:"text,omitempty"`
+	ToolCall   *ToolCallEvent           `json:"tool_call,omitempty"`
+	ToolResult *ToolResultEvent         `json:"tool_result,omitempty"`
+	Permission *PermissionRequestEvent  `json:"permission,omitempty"`
+	Resolved   *PermissionResolvedEvent `json:"resolved,omitempty"`
+	Usage      *Usage                   `json:"usage,omitempty"`
+	Err        *StreamError             `json:"error,omitempty"`
+	Retry      *RetryInfo               `json:"retry,omitempty"`
+	Meta       *Meta                    `json:"meta,omitempty"`
 }
 
 // ToolResultEvent reports a finished tool execution to the client:
@@ -65,6 +67,16 @@ type PermissionRequestEvent struct {
 	Args      string `json:"args"`
 	Danger    string `json:"danger_level"`
 	Rationale string `json:"rationale"`
+}
+
+// PermissionResolvedEvent tells the client (and the persistence path)
+// a parked ask got a decision, however it arrived: an explicit
+// once/session/deny answer, or the permissionTimeout/ctx-cancellation
+// deny askUser falls back to. ID ties it to the PermissionRequestEvent
+// it resolves.
+type PermissionResolvedEvent struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision"`
 }
 
 // Meta identifies who served a request — attached to the done event by

@@ -653,7 +653,11 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 // the decision (timeout = deny, D-010). Turn durability while parked
 // comes from the relay's periodic pending_state flushes; the prompt
 // itself is in-memory only — a restart drops it, which resolves as a
-// deny.
+// deny. Whatever the outcome — an explicit answer, a timeout, or ctx
+// cancellation — a permission_resolved event follows so anything
+// tracking the request (persistence, a replay client) learns the
+// outcome too; the live web client already clears its prompt off
+// tool_result, so this is additive, not a behavior change for it.
 func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.Resolution, emit func(stream.StreamEvent)) string {
 	id, answer := a.broker.Create()
 	defer a.broker.Forget(id)
@@ -665,16 +669,22 @@ func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.R
 		Rationale: res.Rationale,
 	}})
 
-	timer := time.NewTimer(permissionTimeout)
-	defer timer.Stop()
-	select {
-	case d := <-answer:
-		return d
-	case <-timer.C:
-		return DecideDeny
-	case <-ctx.Done():
-		return DecideDeny
-	}
+	decision := func() string {
+		timer := time.NewTimer(permissionTimeout)
+		defer timer.Stop()
+		select {
+		case d := <-answer:
+			return d
+		case <-timer.C:
+			return DecideDeny
+		case <-ctx.Done():
+			return DecideDeny
+		}
+	}()
+	emit(stream.StreamEvent{Type: stream.EventPermissionResolved, Resolved: &stream.PermissionResolvedEvent{
+		ID: id, Decision: decision,
+	}})
+	return decision
 }
 
 func (a *Agent) offloadIfBig(ctx context.Context, sessionID, tool, content string) (string, error) {

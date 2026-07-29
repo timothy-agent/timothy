@@ -32,25 +32,36 @@ function toToolRun(tool: NonNullable<TranscriptItem['tool']>): ToolRun {
 // tool items with no following assistant turn (trailing tool loop, or
 // one cut short by a user/compaction/interrupted item) still flushes,
 // as a tools-only assistant item so replay never drops executed calls.
+// `kind: 'permission'` items (a still-unresolved ask — the projection
+// already dropped answered ones) fold the same way, landing in
+// `permissions[]` so the existing PermissionModal renders on reload
+// exactly as it does live.
 export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
   const out: ChatItem[] = []
-  let pending: { seq: number; tool: NonNullable<TranscriptItem['tool']> }[] = []
+  let pendingTools: { seq: number; tool: NonNullable<TranscriptItem['tool']> }[] = []
+  let pendingPermissions: { seq: number; permission: NonNullable<TranscriptItem['permission']> }[] = []
 
   const flush = () => {
-    if (pending.length === 0) return
-    const tools = pending.map((p) => toToolRun(p.tool))
+    if (pendingTools.length === 0 && pendingPermissions.length === 0) return
+    const tools = pendingTools.map((p) => toToolRun(p.tool))
+    const permissions = pendingPermissions.map((p) => p.permission)
+    const seq = Math.min(
+      ...pendingTools.map((p) => p.seq),
+      ...pendingPermissions.map((p) => p.seq),
+    )
     out.push({
-      id: `replay-${pending[0].seq}`,
+      id: `replay-${seq}`,
       role: 'assistant',
       text: '',
       reasoning: '',
       notices: [],
       tools,
-      permissions: [],
+      permissions,
       streaming: false,
       meta: undefined,
     })
-    pending = []
+    pendingTools = []
+    pendingPermissions = []
   }
 
   for (const item of items) {
@@ -61,7 +72,10 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
         out.push({ id, role: 'user', text: item.text ?? '' })
         break
       case 'tool':
-        if (item.tool) pending.push({ seq: item.seq, tool: item.tool })
+        if (item.tool) pendingTools.push({ seq: item.seq, tool: item.tool })
+        break
+      case 'permission':
+        if (item.permission) pendingPermissions.push({ seq: item.seq, permission: item.permission })
         break
       case 'assistant': {
         let text = ''
@@ -72,8 +86,10 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           if (b.type === 'text') text += b.text ?? ''
           else if (b.type === 'reasoning') reasoning += b.text ?? ''
         }
-        const tools = pending.map((p) => toToolRun(p.tool))
-        pending = []
+        const tools = pendingTools.map((p) => toToolRun(p.tool))
+        const permissions = pendingPermissions.map((p) => p.permission)
+        pendingTools = []
+        pendingPermissions = []
         out.push({
           id,
           role: 'assistant',
@@ -81,7 +97,7 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           reasoning,
           notices: [],
           tools,
-          permissions: [],
+          permissions,
           streaming: false,
           meta: item.provider
             ? { provider: item.provider, model: item.model, usage: item.usage }

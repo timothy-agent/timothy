@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
+import { toast } from 'sonner'
 import { answerPermission, ChatError, chatStream, getTranscript, retryStream } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
@@ -300,9 +301,15 @@ export function Chat({
   const pendingPermission = last?.role === 'assistant' ? last.permissions[0] : undefined
   const decide = (id: string, decision: 'once' | 'session' | 'deny') => {
     updateLast((m) => clearPermission(m, id))
-    answerPermission(id, decision).catch(() => {
-      // The 10-minute server timeout resolves an undeliverable
-      // decision as deny; nothing useful to render here.
+    answerPermission(id, decision).catch((err: unknown) => {
+      // A replayed ask whose turn died (brain restart) answers 404
+      // "unknown or already-answered" — the prompt is already gone
+      // locally (above), so just tell the user why nothing happened.
+      // Any other error is the same 10-minute-timeout-resolves-as-deny
+      // case as before: nothing useful to render.
+      if (err instanceof ChatError && err.status === 404) {
+        toast.error('This request is no longer waiting for a response')
+      }
     })
   }
 

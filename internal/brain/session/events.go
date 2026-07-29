@@ -14,13 +14,15 @@ import (
 
 // Event kinds. The log is append-only: kinds are added, never changed.
 const (
-	KindSessionStarted    = "session_started"
-	KindUserMessage       = "user_message"
-	KindAssistantTurn     = "assistant_turn"
-	KindToolExecution     = "tool_execution"
-	KindCompactionApplied = "compaction_applied"
-	KindPendingState      = "pending_state"
-	KindTurnMemory        = "turn_memory"
+	KindSessionStarted     = "session_started"
+	KindUserMessage        = "user_message"
+	KindAssistantTurn      = "assistant_turn"
+	KindToolExecution      = "tool_execution"
+	KindCompactionApplied  = "compaction_applied"
+	KindPendingState       = "pending_state"
+	KindTurnMemory         = "turn_memory"
+	KindPermissionRequest  = "permission_request"
+	KindPermissionResolved = "permission_resolved"
 )
 
 // Event is one row of a session's log.
@@ -115,6 +117,28 @@ type CompactionApplied struct {
 // abnormally; the next request splices it in, then it is superseded.
 type PendingState struct {
 	Partial string `json:"partial"`
+}
+
+// PermissionRequest records a parked tool call awaiting approval
+// (mirrors stream.PermissionRequestEvent). A session opened while the
+// turn is still parked replays this so the same approval prompt the
+// live stream shows appears on reload too; a matching
+// PermissionResolved (by ID) means it is no longer pending.
+type PermissionRequest struct {
+	ID        string `json:"id"`
+	CallID    string `json:"call_id"`
+	Tool      string `json:"tool"`
+	Args      string `json:"args"`
+	Danger    string `json:"danger_level"`
+	Rationale string `json:"rationale"`
+}
+
+// PermissionResolved records the decision a parked ask received
+// (mirrors stream.PermissionResolvedEvent). ID ties it to the
+// PermissionRequest it resolves.
+type PermissionResolved struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision"`
 }
 
 // decode unmarshals an event payload into out with kind context on
