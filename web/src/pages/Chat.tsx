@@ -18,6 +18,7 @@ import { fromTranscript, type ChatItem } from '../lib/transcript'
 import type { ChatIntent } from './Home'
 
 const agentKey = 'timothy.agent'
+const routeKey = 'timothy.route'
 
 export function Chat({
   onNeedToken,
@@ -52,6 +53,13 @@ export function Chat({
   // direction. Empty string = the server-side default agent.
   const [agent, setAgent] = useState(
     () => (lockedSkillHint ? 'researcher' : (localStorage.getItem(agentKey) ?? '')),
+  )
+  // Same locked-page carve-out as agent: a dedicated page fixes its
+  // own route (or leaves it Auto) and never touches the shared
+  // preference. Empty string = Auto (the agent's own route, or the
+  // server default).
+  const [route, setRoute] = useState(
+    () => (lockedSkillHint ? '' : (localStorage.getItem(routeKey) ?? '')),
   )
   // A skill picked from the home screen: pinned, not text the user
   // can accidentally mangle. Rides every turn until removed. Locked
@@ -107,6 +115,7 @@ export function Chat({
         if (stale) return
         setItems(fromTranscript(items))
         if (session.agent) setAgent(session.agent)
+        setRoute(session.last_route ?? '')
       })
       .catch((err: unknown) => {
         if (stale) return
@@ -133,6 +142,11 @@ export function Chat({
     localStorage.setItem(agentKey, a)
   }
 
+  const pickRoute = (r: string) => {
+    setRoute(r)
+    localStorage.setItem(routeKey, r)
+  }
+
   const updateLast = (fn: (m: AssistantState) => AssistantState) =>
     setItems((prev) => {
       const next = [...prev]
@@ -142,7 +156,12 @@ export function Chat({
       return next
     })
 
-  const sendMessage = async (text: string, agentName: string, hint = skillHint) => {
+  const sendMessage = async (
+    text: string,
+    agentName: string,
+    hint = skillHint,
+    routeName = route,
+  ) => {
     const message = text.trim()
     if (!message || streaming) return
     setDraft('')
@@ -166,7 +185,13 @@ export function Chat({
     }
     try {
       await chatStream(
-        { session_id: sessionRef.current, message, agent: agentName, skill_hint: hint },
+        {
+          session_id: sessionRef.current,
+          message,
+          agent: agentName,
+          route: routeName || undefined,
+          skill_hint: hint,
+        },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
           updateLast((m) => applyEvent(m, ev))
@@ -253,13 +278,16 @@ export function Chat({
   useEffect(() => {
     if (lockedSkillHint || intentConsumedRef.current) return
     const intent = location.state as ChatIntent | null
-    if (!intent || (!intent.send && !intent.draft && !intent.agent && !intent.skillHint)) return
+    if (!intent || (!intent.send && !intent.draft && !intent.agent && !intent.route && !intent.skillHint))
+      return
     intentConsumedRef.current = true
     window.history.replaceState(null, '') // don't refire on back/refresh
     const who = intent.agent ?? agent
+    const whichRoute = intent.route ?? route
     if (intent.agent) pickAgent(intent.agent)
+    if (intent.route) pickRoute(intent.route)
     if (intent.skillHint) setSkillHint(intent.skillHint)
-    if (intent.send) void sendMessage(intent.send, who, intent.skillHint)
+    if (intent.send) void sendMessage(intent.send, who, intent.skillHint, whichRoute)
     else if (intent.draft) setDraft(intent.draft)
     // Mount-time only by design: the intent rides the navigation that
     // created this page instance; the ref guards strict-mode replays.
@@ -350,7 +378,9 @@ export function Chat({
           onSend={send}
           agent={agent}
           onAgent={pickAgent}
-          hideAgentPicker={Boolean(lockedSkillHint)}
+          route={route}
+          onRoute={pickRoute}
+          hidePicker={Boolean(lockedSkillHint)}
           skillHint={skillHint}
           onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
           disabled={streaming}

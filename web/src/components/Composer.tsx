@@ -2,7 +2,7 @@ import { ArrowUp01Icon, Cancel01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef } from 'react'
 import { skillLabels } from '../lib/skills'
-import { AgentPicker } from './AgentPicker'
+import { AgentRoutePicker } from './AgentRoutePicker'
 
 // Composer is the one message box: the chat page's docked input and
 // the home page's hero input are the same component so behavior
@@ -13,7 +13,9 @@ export function Composer({
   onSend,
   agent,
   onAgent,
-  hideAgentPicker = false,
+  route,
+  onRoute,
+  hidePicker = false,
   skillHint,
   onRemoveSkillHint,
   disabled = false,
@@ -25,7 +27,9 @@ export function Composer({
   onSend: () => void
   agent: string
   onAgent: (a: string) => void
-  hideAgentPicker?: boolean
+  route?: string
+  onRoute?: (r: string) => void
+  hidePicker?: boolean
   skillHint?: string
   onRemoveSkillHint?: () => void
   disabled?: boolean
@@ -79,7 +83,11 @@ export function Composer({
         }}
       />
       <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
-        {hideAgentPicker ? <span /> : <AgentPicker value={agent} onChange={onAgent} />}
+        <div className="flex items-center gap-2">
+          {!hidePicker && (
+            <AgentRoutePicker agent={agent} onAgent={onAgent} route={route} onRoute={onRoute} />
+          )}
+        </div>
         <button
           type="button"
           onClick={onSend}
