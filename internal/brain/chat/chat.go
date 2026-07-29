@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
@@ -49,6 +50,11 @@ const (
 	// clock; the rare pre-send pass accepts the latency.
 	compactBudget = 150 * time.Second
 	titleTimeout  = 15 * time.Second
+	// approvalGrantTTL matches missions/driver.go's missionGrantTTL and
+	// loop's own sessionGrantTTL (12h) — a chat session idle longer than
+	// that just re-seeds the grant on its next turn, same degrade as a
+	// mission outliving its grant.
+	approvalGrantTTL = 12 * time.Hour
 )
 
 // ErrBadRequest marks caller mistakes (empty message) so the API can
@@ -93,6 +99,16 @@ type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text s
 // beats no turn.
 type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
 
+// Granter is the narrow slice of *tools.Permissions chat needs to seed
+// standing grants for a serving agent's ApprovalAllowlist — the same
+// shape missions/driver.go's sessionGranter uses against the same
+// session_grants table, so a grant recorded here is visible to (and
+// glob-matched by) the exact same Permissions.Resolve chain a mission
+// goes through.
+type Granter interface {
+	Grant(ctx context.Context, sessionID, tool, pattern string, ttl time.Duration) error
+}
+
 // Service orchestrates turns against the event store.
 type Service struct {
 	gw          Gateway
@@ -111,6 +127,17 @@ type Service struct {
 	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
 	sensitive   *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
 	logger      *slog.Logger
+
+	grants Granter // nil: chat never seeds standing grants (today's behavior)
+	// seeded remembers which (session, agent) pairs already had their
+	// ApprovalAllowlist granted this process's lifetime, so a long chat
+	// session doesn't re-INSERT the same grant row on every turn.
+	// Process-local by design (same tradeoff as driver.go's gatekeepers
+	// map): a restart just re-seeds once more, a harmless duplicate row,
+	// never a correctness problem, since matchGrant only cares whether
+	// an unexpired matching row exists.
+	seededMu sync.Mutex
+	seeded   map[string]bool
 }
 
 // SetMemoryExtract wires the memoryd hook. Optional — nil leaves
@@ -133,6 +160,55 @@ func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t
 // an empty name.
 func (s *Service) SetAutoDispatch(candidates AgentCandidates, classify agents.Classify) {
 	s.candidates, s.classify = candidates, classify
+}
+
+// SetApprovalGrants wires the standing-grant seeder: once wired, a
+// turn served by an agent with a non-empty ApprovalAllowlist gets
+// those tools granted for its session before the turn runs, extending
+// the user's Settings-authored per-agent consent to interactive chat.
+// Optional — nil (today's default) leaves every allowlisted tool
+// asking on its first chat call, exactly like before this existed.
+//
+// Safety framing (D-010 chain, see tools/permissions.go): this only
+// ever ADDS a session_grants row that Permissions.Resolve already knew
+// how to consult — it does not change the chain itself. Destructive-
+// classified shell commands still hard-force DecisionAsk before any
+// grant (session or allowlist-seeded) is even looked at, so an
+// allowlisted destructive command parks exactly as it would for a
+// mission. The allowlist is user-authored config (Settings' per-agent
+// editor), not a model choice — seeding it as grants widens nothing
+// beyond what the user already consented to for that agent.
+func (s *Service) SetApprovalGrants(g Granter) {
+	s.grants = g
+	if s.seeded == nil {
+		s.seeded = map[string]bool{}
+	}
+}
+
+// seedApprovalGrants grants every tool in profile's ApprovalAllowlist
+// for sessionID, once per (session, agent) — an agent switch mid-
+// session (a new profile.ID) seeds again, since the key includes it.
+// Best-effort and fire-and-forget on error, same convention as
+// missions/driver.go's grantSessionDefaults: a failed grant just means
+// this turn's allowlisted tools ask once more, never a broken turn.
+func (s *Service) seedApprovalGrants(ctx context.Context, sessionID string, profile agents.Agent) {
+	if s.grants == nil || len(profile.ApprovalAllowlist) == 0 {
+		return
+	}
+	key := sessionID + "\x00" + profile.ID
+	s.seededMu.Lock()
+	if s.seeded[key] {
+		s.seededMu.Unlock()
+		return
+	}
+	s.seeded[key] = true
+	s.seededMu.Unlock()
+
+	for _, tool := range profile.ApprovalAllowlist {
+		if err := s.grants.Grant(ctx, sessionID, tool, "*", approvalGrantTTL); err != nil {
+			s.logger.Warn("chat: approval allowlist grant failed", "session_id", sessionID, "tool", tool, "error", err)
+		}
+	}
 }
 
 // New builds the service. packs are the loaded skill definitions: their
@@ -366,6 +442,7 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 // has already ensured exactly the right user_message sits durable at
 // the end of the log — this never appends one itself.
 func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool) (string, <-chan stream.StreamEvent, error) {
+	s.seedApprovalGrants(ctx, sessionID, profile)
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
