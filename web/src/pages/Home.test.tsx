@@ -7,9 +7,11 @@ import { Home } from './Home'
 vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
   listMemories: vi.fn(),
+  listRoutes: vi.fn(),
 }))
 
-import { listAgents, listMemories } from '../api/client'
+import type { AdminRoute } from '../api/types'
+import { listAgents, listMemories, listRoutes } from '../api/client'
 
 let landed: { pathname: string; state: ChatIntent | null } | null = null
 
@@ -57,6 +59,14 @@ const researchAgent = {
   is_default: false,
   enabled: true,
 }
+const routes: AdminRoute[] = [{ name: 'summarize', strategy: 'ordered', enabled: true, chain: [] }]
+
+// Radix opens dropdowns on pointerdown, not click.
+function openMenu(name: string) {
+  const trigger = screen.getByRole('button', { name })
+  fireEvent.pointerDown(trigger, { button: 0, pointerId: 1 })
+  fireEvent.click(trigger)
+}
 
 afterEach(cleanup)
 beforeEach(() => {
@@ -64,6 +74,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listAgents).mockResolvedValue([generalAgent, researchAgent])
   vi.mocked(listMemories).mockResolvedValue([])
+  vi.mocked(listRoutes).mockRejectedValue(new Error('not used on this page'))
   localStorage.clear()
 })
 
@@ -85,6 +96,21 @@ describe('Home', () => {
     expect(landed?.state?.send).toBe('hello there')
     // Agent may be '' (server default) — the intent just carries it.
     expect(landed?.state).toHaveProperty('agent')
+  })
+
+  it('submitting with a picked route includes it in the navigate state', async () => {
+    vi.mocked(listRoutes).mockResolvedValue(routes)
+    renderHome()
+
+    await screen.findByRole('button', { name: 'Agent and route' })
+    openMenu('Agent and route')
+    fireEvent.click(await screen.findByText('summarize'))
+
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello there' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(landed?.state?.route).toBe('summarize')
+    expect(localStorage.getItem('timothy.route')).toBe('summarize')
   })
 
   it('an empty composer does not navigate', () => {

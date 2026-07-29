@@ -11,6 +11,7 @@ import { Composer } from '../components/Composer'
 import { usePendingMemories } from '../lib/memory'
 
 const agentKey = 'timothy.agent'
+const routeKey = 'timothy.route'
 
 // ChatIntent carries a home-screen action into the chat page: `send`
 // fires immediately, `draft` only prefills the composer, `skillHint`
@@ -19,6 +20,7 @@ export interface ChatIntent {
   send?: string
   draft?: string
   agent?: string
+  route?: string
   skillHint?: string
 }
 
@@ -32,16 +34,22 @@ export function Home() {
   const agents = useAgents()
   const [draft, setDraft] = useState('')
   const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
+  const [route, setRoute] = useState(() => localStorage.getItem(routeKey) ?? '')
 
   const pickAgent = (a: string) => {
     setAgent(a)
     localStorage.setItem(agentKey, a)
   }
 
+  const pickRoute = (r: string) => {
+    setRoute(r)
+    localStorage.setItem(routeKey, r)
+  }
+
   const send = () => {
     const message = draft.trim()
     if (!message) return
-    navigate('/chat', { state: { send: message, agent } satisfies ChatIntent })
+    navigate('/chat', { state: { send: message, agent, route: route || undefined } satisfies ChatIntent })
   }
 
   const openAgent = (name: string) => {
@@ -63,6 +71,8 @@ export function Home() {
             onSend={send}
             agent={agent}
             onAgent={pickAgent}
+            route={route}
+            onRoute={pickRoute}
             autoFocus
             placeholder="Ask anything…"
           />
