@@ -226,6 +226,27 @@ func TestUITranscript(t *testing.T) {
 	}
 }
 
+// TestUITranscriptExposesDuration confirms UITranscript carries an
+// assistant_turn's DurationMs through to the replay item — replayed
+// sessions must show the same turn-stats duration the live SSE meta
+// event carried.
+func TestUITranscriptExposesDuration(t *testing.T) {
+	t.Parallel()
+	var a AssistantTurn
+	a.LLM.Message = "hi"
+	a.UI.Blocks = []UIBlock{{Type: "text", Text: "hi"}}
+	a.DurationMs = 81234
+	events := []Event{ev(t, 1, KindAssistantTurn, a)}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 1 || items[0].DurationMs != 81234 {
+		t.Fatalf("items = %+v, want duration_ms 81234", items)
+	}
+}
+
 // TestLLMContextPrefixStability pins the D-018 contract: growing a log
 // without a compaction never rewrites earlier projected messages.
 // Pending checkpoints are deliberately absent from the generator: an

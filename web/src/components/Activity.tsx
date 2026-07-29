@@ -5,11 +5,17 @@ import { SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 import { CopyButton } from './Message'
 import type { AssistantState, ToolRun } from '../lib/chat'
 
-// formatDuration renders a tool call's wall time compactly: sub-second
-// as milliseconds, otherwise one decimal of seconds.
+// formatDuration renders a wall time compactly: sub-second as
+// milliseconds, sub-minute as one decimal of seconds, otherwise whole
+// minutes plus whole seconds (e.g. "1m 21s") — a turn's duration can
+// run minutes, unlike a single tool call.
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const totalSeconds = Math.round(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
 }
 
 // prettyArgs pretty-prints a tool call's JSON args; malformed or

@@ -100,7 +100,7 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           permissions,
           streaming: false,
           meta: item.provider
-            ? { provider: item.provider, model: item.model, usage: item.usage }
+            ? { provider: item.provider, model: item.model, usage: item.usage, durationMs: item.duration_ms }
             : undefined,
         })
         break

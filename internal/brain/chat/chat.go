@@ -478,6 +478,11 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 // has already ensured exactly the right user_message sits durable at
 // the end of the log — this never appends one itself.
 func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool) (string, <-chan stream.StreamEvent, error) {
+	// start marks the turn's wall-clock beginning for the stats line's
+	// duration: here, not Chat/Retry's entry, so a retried turn's
+	// duration covers only the retried run — the dead attempt's gap
+	// never counts (runTurn is the shared tail both call fresh).
+	start := time.Now()
 	s.seedApprovalGrants(ctx, sessionID, profile)
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
@@ -543,7 +548,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	}
 
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, upstream, out)
+	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -554,7 +559,10 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 // carries forward whether a PRIOR turn in this session already pinned
 // it (see runTurn) — persistTurn ORs it with this turn's own
 // turnSensitive flip so side-calls stay pinned on every later turn too.
-func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+// start is runTurn's wall-clock beginning, stamped onto the terminal
+// done event's Meta (and passed to persistTurn) so live and replayed
+// stats show the same duration.
+func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -635,7 +643,8 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				usage = ev.Usage
 			case stream.EventDone:
 				sawDone = true
-				meta = ev.Meta
+				meta = stampDuration(ev.Meta, start)
+				ev.Meta = meta
 			}
 			noteToolResult(ev)
 			notePermission(ev)
@@ -663,7 +672,8 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				usage = ev.Usage
 			case stream.EventDone:
 				sawDone = true
-				meta = ev.Meta
+				meta = stampDuration(ev.Meta, start)
+				ev.Meta = meta
 			}
 			noteToolResult(ev)
 			notePermission(ev)
@@ -682,6 +692,19 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			return
 		}
 	}
+}
+
+// stampDuration copies base (the gateway-attributed Meta, possibly
+// nil when no provider attempt succeeded) and sets DurationMs from
+// start — a copy because base may be a shared struct decoded once per
+// SSE event, not something relay owns to mutate in place.
+func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
+	m := stream.Meta{}
+	if base != nil {
+		m = *base
+	}
+	m.DurationMs = time.Since(start).Milliseconds()
+	return &m
 }
 
 func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool) {
@@ -719,6 +742,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	}
 	if meta != nil {
 		turn.Provider, turn.Model, turn.LedgerID = meta.Provider, meta.Model, meta.LedgerID
+		turn.DurationMs = meta.DurationMs
 	}
 	turn.Usage = usage
 

@@ -68,6 +68,7 @@ export interface MetaEvent {
   model?: string
   usage?: Usage
   ledger_id?: string
+  duration_ms?: number
 }
 
 export type ChatEvent = StreamEvent | MetaEvent
@@ -122,6 +123,7 @@ export interface TranscriptItem {
   provider?: string
   model?: string
   usage?: Usage
+  duration_ms?: number
   created_at: string
 }
 

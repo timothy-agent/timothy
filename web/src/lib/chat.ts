@@ -20,7 +20,7 @@ export interface AssistantState {
   tools: ToolRun[]
   permissions: PermissionRequestEvent[]
   error?: string
-  meta?: { provider?: string; model?: string; usage?: Usage }
+  meta?: { provider?: string; model?: string; usage?: Usage; durationMs?: number }
   streaming: boolean
 }
 
@@ -85,7 +85,7 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
         ...msg,
         streaming: false,
         permissions: [],
-        meta: { provider: ev.provider, model: ev.model, usage: ev.usage },
+        meta: { provider: ev.provider, model: ev.model, usage: ev.usage, durationMs: ev.duration_ms },
       }
     default:
       // done (terminal marker) and usage (folded into meta by brain)

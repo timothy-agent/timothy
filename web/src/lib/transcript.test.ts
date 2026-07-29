@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { TranscriptItem } from '../api/types'
+import type { ChatEvent, TranscriptItem } from '../api/types'
+import { applyEvent, emptyAssistant } from './chat'
 import { fromTranscript } from './transcript'
 
 const at = '2026-07-10T12:00:00Z'
@@ -235,6 +236,53 @@ describe('fromTranscript', () => {
     if (items[0].role === 'assistant') {
       expect(items[0].permissions.map((p) => p.id)).toEqual(['perm-1'])
     }
+  })
+
+  it('carries turn-stats duration on replay, matching the live meta event shape', () => {
+    // Replay path: server projection's duration_ms on the assistant item.
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'assistant',
+        blocks: [{ type: 'text', text: 'done' }],
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        usage: { input_tokens: 81, output_tokens: 396 },
+        duration_ms: 81234,
+        created_at: at,
+      },
+    ])
+    expect(items[0]).toMatchObject({
+      role: 'assistant',
+      meta: {
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        usage: { input_tokens: 81, output_tokens: 396 },
+        durationMs: 81234,
+      },
+    })
+
+    // Live path: the same fields, folded from usage + terminal meta
+    // events, must land in the same shape on AssistantState.
+    const events: ChatEvent[] = [
+      { type: 'chunk', text: 'done' },
+      { type: 'usage', usage: { input_tokens: 81, output_tokens: 396 } },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        usage: { input_tokens: 81, output_tokens: 396 },
+        duration_ms: 81234,
+      },
+    ]
+    const live = events.reduce(applyEvent, emptyAssistant())
+    expect(live.meta).toEqual({
+      provider: 'zai-glm',
+      model: 'glm-4.7',
+      usage: { input_tokens: 81, output_tokens: 396 },
+      durationMs: 81234,
+    })
   })
 
   it('never surfaces a resolved ask — the server projection already drops it', () => {

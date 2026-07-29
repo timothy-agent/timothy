@@ -176,6 +176,7 @@ type TranscriptItem struct {
 	Provider   string             `json:"provider,omitempty"`
 	Model      string             `json:"model,omitempty"`
 	Usage      *stream.Usage      `json:"usage,omitempty"`
+	DurationMs int64              `json:"duration_ms,omitempty"`
 	Tool       *ToolExecution     `json:"tool,omitempty"`
 	Permission *PermissionRequest `json:"permission,omitempty"`
 	CreatedAt  time.Time          `json:"created_at"`
@@ -210,6 +211,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			item.Blocks = t.UI.Blocks
 			item.Provider, item.Model = t.Provider, t.Model
 			item.Usage = t.Usage
+			item.DurationMs = t.DurationMs
 		case KindToolExecution:
 			var te ToolExecution
 			if err := decode(ev, &te); err != nil {

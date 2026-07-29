@@ -81,10 +81,14 @@ type PermissionResolvedEvent struct {
 
 // Meta identifies who served a request — attached to the done event by
 // the gateway API so callers attribute without a second lookup.
+// DurationMs is never set by the gateway (it has no notion of a brain-
+// level turn); brain's chat package stamps it on the relayed event
+// before forwarding downstream.
 type Meta struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	LedgerID string `json:"ledger_id,omitempty"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	LedgerID   string `json:"ledger_id,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
 }
 
 // ToolCallEvent identifies a tool call. Input carries the complete

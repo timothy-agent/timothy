@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
-import { ActivityLine } from './Activity'
+import { ActivityLine, formatDuration } from './Activity'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import type { AssistantState } from '../lib/chat'
@@ -172,6 +172,9 @@ export function AssistantMessage({
   const tokens = msg.meta?.usage
     ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
     : null
+  // Absent on turns persisted before duration tracking shipped — the
+  // pill simply doesn't render rather than showing a guessed 0.
+  const duration = msg.meta?.durationMs !== undefined ? formatDuration(msg.meta.durationMs) : null
   // Citations only split out once the answer is done streaming: a
   // partial "## Sources" heading mid-stream would otherwise flicker
   // the body text as more of it arrives.
@@ -233,6 +236,11 @@ export function AssistantMessage({
               <Badge variant="secondary">{msg.meta.provider}</Badge>
               <Badge variant="secondary">{msg.meta.model}</Badge>
               {tokens && <Badge variant="secondary">{tokens}</Badge>}
+              {duration && (
+                <Badge variant="secondary" data-testid="duration-badge">
+                  {duration}
+                </Badge>
+              )}
             </div>
           )}
           {msg.text !== '' && <CopyButton text={msg.text} label="Copy reply" />}

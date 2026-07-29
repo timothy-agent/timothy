@@ -399,12 +399,13 @@ func (a *API) handleRetry(w http.ResponseWriter, r *http.Request) {
 // model, usage, and ledger_id are best-effort — absent when no
 // provider attempt succeeded.
 type meta struct {
-	Type      string        `json:"type"` // always "meta"
-	SessionID string        `json:"session_id"`
-	Provider  string        `json:"provider,omitempty"`
-	Model     string        `json:"model,omitempty"`
-	Usage     *stream.Usage `json:"usage,omitempty"`
-	LedgerID  string        `json:"ledger_id,omitempty"`
+	Type       string        `json:"type"` // always "meta"
+	SessionID  string        `json:"session_id"`
+	Provider   string        `json:"provider,omitempty"`
+	Model      string        `json:"model,omitempty"`
+	Usage      *stream.Usage `json:"usage,omitempty"`
+	LedgerID   string        `json:"ledger_id,omitempty"`
+	DurationMs int64         `json:"duration_ms,omitempty"`
 }
 
 // streamTurn runs run (chat.Service.Chat or Retry) and relays its
@@ -459,6 +460,7 @@ func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, run func(contex
 		}
 		if ev.Meta != nil {
 			m.Provider, m.Model, m.LedgerID = ev.Meta.Provider, ev.Meta.Model, ev.Meta.LedgerID
+			m.DurationMs = ev.Meta.DurationMs
 		}
 		send(ev)
 	}

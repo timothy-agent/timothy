@@ -140,6 +140,20 @@ func (g *fakeGW) lastRequest() gwclient.StreamRequest {
 	return g.requests[len(g.requests)-1]
 }
 
+// lastChatRequest skips side-calls (title, distill, extract) that race
+// the assertion after drain — the async auto-title on a fresh session
+// can land after the chat request and make lastRequest nondeterministic.
+func (g *fakeGW) lastChatRequest() gwclient.StreamRequest {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i := len(g.requests) - 1; i >= 0; i-- {
+		if g.requests[i].Purpose == "chat" {
+			return g.requests[i]
+		}
+	}
+	return gwclient.StreamRequest{}
+}
+
 func okEvents(text string) []stream.StreamEvent {
 	return []stream.StreamEvent{
 		{Type: stream.EventChunk, Text: text},
@@ -212,6 +226,36 @@ func TestChatPersistsTurnAsEvents(t *testing.T) {
 	}
 	if turn.LLM.Message != "the answer" || turn.Provider != "prov" || turn.LedgerID != "led" {
 		t.Fatalf("turn = %+v", turn)
+	}
+}
+
+// TestChatPersistsTurnDuration confirms the persisted assistant_turn
+// carries a wall-clock DurationMs covering the turn — a stand-in
+// upstream delay proves it's measuring real elapsed time, not just
+// echoing a zero default.
+func TestChatPersistsTurnDuration(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	block := make(chan struct{})
+	gw := &fakeGW{events: okEvents("the answer"), blockCh: block}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(block)
+	drain(t, ch)
+
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	events, _ := log.Events(t.Context(), "s1")
+	var turn session.AssistantTurn
+	if err := json.Unmarshal(events[2].Payload, &turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if turn.DurationMs < 50 {
+		t.Fatalf("turn.DurationMs = %d, want >= 50ms", turn.DurationMs)
 	}
 }
 
@@ -1641,7 +1685,7 @@ func TestChatPinsSessionSensitiveRouteOnNextTurn(t *testing.T) {
 	}
 	drain(t, ch)
 
-	sent := gw.lastRequest()
+	sent := gw.lastChatRequest()
 	if sent.Route != "local" {
 		t.Fatalf("route = %q, want local (session pinned by a prior sensitive tool call)", sent.Route)
 	}
@@ -1668,7 +1712,7 @@ func TestChatSessionPinNoopWhenSensitiveRouteUnset(t *testing.T) {
 	}
 	drain(t, ch)
 
-	sent := gw.lastRequest()
+	sent := gw.lastChatRequest()
 	if sent.Route != "mini" {
 		t.Fatalf("route = %q, want mini (sensitive route unset, picker honored)", sent.Route)
 	}
@@ -1693,7 +1737,7 @@ func TestChatFreshSessionRoutesNormally(t *testing.T) {
 	}
 	drain(t, ch)
 
-	sent := gw.lastRequest()
+	sent := gw.lastChatRequest()
 	if sent.Route != "mini" {
 		t.Fatalf("route = %q, want mini (fresh session, no sensitive tool ran yet)", sent.Route)
 	}
@@ -1725,7 +1769,7 @@ func TestRetryPinsSessionSensitiveRoute(t *testing.T) {
 	}
 	drain(t, ch)
 
-	sent := gw.lastRequest()
+	sent := gw.lastChatRequest()
 	if sent.Route != "local" {
 		t.Fatalf("route = %q, want local (session pinned by a prior sensitive tool call)", sent.Route)
 	}

@@ -319,3 +319,44 @@ describe('tool calls', () => {
     expect(msg.permissions[0].call_id).toBe('c2')
   })
 })
+
+describe('duration badge', () => {
+  it('renders a duration pill beside the existing meta pills', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        usage: { input_tokens: 11, output_tokens: 204 },
+        duration_ms: 81_000,
+      },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    const badge = screen.getByTestId('meta-badge')
+    expect(badge).toHaveTextContent('zai-glm')
+    expect(badge).toHaveTextContent('glm-4.7')
+    expect(badge).toHaveTextContent('11→204 tok')
+    expect(screen.getByTestId('duration-badge')).toHaveTextContent('1m 21s')
+  })
+
+  it('renders sub-minute durations via formatDuration', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'zai-glm', model: 'glm-4.7', duration_ms: 6700 },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.getByTestId('duration-badge')).toHaveTextContent('6.7s')
+  })
+
+  it('omits the duration pill when duration_ms is absent (old turns)', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'zai-glm', model: 'glm-4.7' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.queryByTestId('duration-badge')).not.toBeInTheDocument()
+  })
+})

@@ -93,6 +93,10 @@ type AssistantTurn struct {
 	Model    string        `json:"model,omitempty"`
 	LedgerID string        `json:"ledger_id,omitempty"`
 	Usage    *stream.Usage `json:"usage,omitempty"`
+	// DurationMs is the turn's wall-clock time (runTurn entry to
+	// persistence), not the sum of tool durations — set by chat.go so
+	// live and replayed stats agree.
+	DurationMs int64 `json:"duration_ms,omitempty"`
 }
 
 // ToolExecution stores a digest only; full results are transient.
