@@ -320,6 +320,50 @@ func TestOpenAICompat400ReasoningEffortStripAndRetry(t *testing.T) {
 	}
 }
 
+func TestOpenAICompat400ConfigReasoningEffortStripAndRetry(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	var efforts []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		efforts = append(efforts, readReasoningEffort(t, r))
+		mu.Unlock()
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		oaiWrite(w, `{"choices":[{"delta":{"content":"ok"}}]}`)
+		oaiWrite(w, "[DONE]")
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAICompat(OpenAICompatConfig{
+		Name: "oai-test", BaseURL: srv.URL, APIKey: "test-key",
+		Timeout: 10 * time.Second, ReasoningEffort: "none",
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2 (retry after 400)", calls.Load())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(efforts) != 2 || efforts[0] != "none" || efforts[1] != "" {
+		t.Fatalf("efforts across attempts = %v, want [none, \"\"]", efforts)
+	}
+	if got := textOf(events, stream.EventChunk); got != "ok" {
+		t.Fatalf("chunks = %q, want ok", got)
+	}
+	if lastType(t, events) != stream.EventDone {
+		t.Fatalf("last = %v, want done", lastType(t, events))
+	}
+}
+
 func TestOpenAICompat400TwiceSurfacesError(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

@@ -135,3 +135,135 @@ func TestStoreReloadReflectsSQLChanges(t *testing.T) {
 		t.Fatalf("attempts = %+v, want itest-prov/itest-model", attempts)
 	}
 }
+
+func TestStoreLoadsReasoningEffortFromOptions(t *testing.T) {
+	s := integrationStore(t)
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	_, _ = db.Exec(t.Context(), "DELETE FROM providers WHERE name = 'itest-reasoning-prov'")
+	if _, err := db.Exec(t.Context(), `INSERT INTO providers
+		(name, kind, driver, base_url, default_model, credential_ref, options, enabled)
+		VALUES ('itest-reasoning-prov', 'api', 'openaicompat', 'https://itest.invalid/v1', 'itest-model',
+			'ITEST_REASONING_KEY', '{"reasoning_effort": "none"}'::jsonb, true)`); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, "DELETE FROM providers WHERE name = 'itest-reasoning-prov'"); err != nil {
+			t.Errorf("cleanup provider: %v", err)
+		}
+	})
+
+	t.Setenv("ITEST_REASONING_KEY", "test-key-value")
+	if err := s.Load(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	rows, _ := s.Snapshot().Providers()
+	var found bool
+	for _, row := range rows {
+		if row.Name != "itest-reasoning-prov" {
+			continue
+		}
+		found = true
+		if row.ReasoningEffort != "none" {
+			t.Fatalf("ReasoningEffort = %q, want %q", row.ReasoningEffort, "none")
+		}
+	}
+	if !found {
+		t.Fatal("itest-reasoning-prov not found in snapshot")
+	}
+}
+
+func TestStoreLoadsRequestTimeoutFromOptions(t *testing.T) {
+	s := integrationStore(t)
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	_, _ = db.Exec(t.Context(), "DELETE FROM providers WHERE name = 'itest-timeout-prov'")
+	if _, err := db.Exec(t.Context(), `INSERT INTO providers
+		(name, kind, driver, base_url, default_model, credential_ref, options, enabled)
+		VALUES ('itest-timeout-prov', 'api', 'openaicompat', 'https://itest.invalid/v1', 'itest-model',
+			'ITEST_TIMEOUT_KEY', '{"request_timeout": "20m"}'::jsonb, true)`); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, "DELETE FROM providers WHERE name = 'itest-timeout-prov'"); err != nil {
+			t.Errorf("cleanup provider: %v", err)
+		}
+	})
+
+	t.Setenv("ITEST_TIMEOUT_KEY", "test-key-value")
+	if err := s.Load(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	rows, _ := s.Snapshot().Providers()
+	var found bool
+	for _, row := range rows {
+		if row.Name != "itest-timeout-prov" {
+			continue
+		}
+		found = true
+		if row.Timeout != 20*time.Minute {
+			t.Fatalf("Timeout = %v, want 20m", row.Timeout)
+		}
+	}
+	if !found {
+		t.Fatal("itest-timeout-prov not found in snapshot")
+	}
+}
+
+func TestStoreLoadFailsOnInvalidRequestTimeout(t *testing.T) {
+	s := integrationStore(t)
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	_, _ = db.Exec(t.Context(), "DELETE FROM providers WHERE name = 'itest-bad-timeout-prov'")
+	if _, err := db.Exec(t.Context(), `INSERT INTO providers
+		(name, kind, driver, base_url, default_model, credential_ref, options, enabled)
+		VALUES ('itest-bad-timeout-prov', 'api', 'openaicompat', 'https://itest.invalid/v1', 'itest-model',
+			'ITEST_BAD_TIMEOUT_KEY', '{"request_timeout": "banana"}'::jsonb, true)`); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, "DELETE FROM providers WHERE name = 'itest-bad-timeout-prov'"); err != nil {
+			t.Errorf("cleanup provider: %v", err)
+		}
+	})
+
+	t.Setenv("ITEST_BAD_TIMEOUT_KEY", "test-key-value")
+	if err := s.Load(t.Context()); err == nil {
+		t.Fatal("Load succeeded with an invalid request_timeout, want error")
+	}
+}

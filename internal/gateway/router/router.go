@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
@@ -46,6 +47,14 @@ type ProviderRow struct {
 	// should never be silently appended as a fallback on the shared
 	// default/summarize/embedding routes production mission traffic runs on.
 	ExcludeFromBootstrap bool
+	// ReasoningEffort comes from options.reasoning_effort (D-040) and
+	// overrides per-request reasoning effort for the openaicompat driver
+	// only — e.g. "none" to disable a local Ollama model's thinking.
+	ReasoningEffort string
+	// Timeout comes from options.request_timeout (D-041) — a per-request
+	// hard timeout override for slow backends (e.g. a CPU-only remote
+	// Ollama). Zero leaves the driver's own default in place.
+	Timeout time.Duration
 }
 
 // ChainEntry is one step of a route chain.
@@ -138,12 +147,14 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 		s.healthy[row.Name] = row.Driver == "bedrock" ||
 			row.CredentialRef == "" || lookup(row.CredentialRef) != ""
 		cfgs = append(cfgs, provider.Config{
-			Name:          row.Name,
-			Kind:          provider.Kind(row.Kind),
-			Driver:        row.Driver,
-			BaseURL:       row.BaseURL,
-			CredentialRef: row.CredentialRef,
-			Headers:       row.Headers,
+			Name:            row.Name,
+			Kind:            provider.Kind(row.Kind),
+			Driver:          row.Driver,
+			BaseURL:         row.BaseURL,
+			CredentialRef:   row.CredentialRef,
+			Headers:         row.Headers,
+			ReasoningEffort: row.ReasoningEffort,
+			Timeout:         row.Timeout,
 		})
 	}
 

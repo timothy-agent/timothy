@@ -230,6 +230,10 @@ type Provider struct {
 	// providers (e.g. Ollama) that should never silently serve
 	// production traffic as a fallback.
 	ExcludeFromBootstrap bool `json:"exclude_from_bootstrap"`
+	// Options is an open bag of driver-specific settings; only
+	// reasoning_effort (D-040, openaicompat) and request_timeout (D-041,
+	// a Go duration string like "20m") are recognized today.
+	Options map[string]string `json:"options"`
 }
 
 func validateProvider(p Provider) error {
@@ -248,7 +252,26 @@ func validateProvider(p Provider) error {
 	if !credentialRefPattern.MatchString(p.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path (env var, Vault path, AWS profile), never a secret value")
 	}
+	if _, err := parseRequestTimeout(p.Options); err != nil {
+		return err
+	}
 	return nil
+}
+
+// parseRequestTimeout parses options.request_timeout (D-041) into a
+// duration. An absent or empty value returns zero — the driver's own
+// default applies. An unparseable value is a config error, never a
+// silent fallback.
+func parseRequestTimeout(opts map[string]string) (time.Duration, error) {
+	raw := opts["request_timeout"]
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("options.request_timeout %q: %w", raw, err)
+	}
+	return d, nil
 }
 
 // List returns every provider row, config order by name.
@@ -258,7 +281,7 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 		return nil, fmt.Errorf("admin providers: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-		models, credential_ref, headers, enabled, exclude_from_bootstrap FROM providers ORDER BY name`)
+		models, credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("admin providers: %w", err)
 	}
@@ -267,11 +290,11 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 	out := []Provider{}
 	for rows.Next() {
 		var (
-			p            Provider
-			models, hdrs []byte
+			p                  Provider
+			models, hdrs, opts []byte
 		)
 		if err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL,
-			&p.DefaultModel, &models, &p.CredentialRef, &hdrs, &p.Enabled, &p.ExcludeFromBootstrap); err != nil {
+			&p.DefaultModel, &models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap); err != nil {
 			return nil, fmt.Errorf("admin providers: %w", err)
 		}
 		if err := json.Unmarshal(models, &p.Models); err != nil {
@@ -279,6 +302,9 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 		}
 		if err := json.Unmarshal(hdrs, &p.Headers); err != nil {
 			return nil, fmt.Errorf("admin providers: headers: %w", err)
+		}
+		if err := json.Unmarshal(opts, &p.Options); err != nil {
+			return nil, fmt.Errorf("admin providers: options: %w", err)
 		}
 		normalizeProvider(&p)
 		out = append(out, p)
@@ -297,12 +323,12 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
-	models, hdrs := jsonOr(p.Models, "[]"), jsonOr(p.Headers, "{}")
+	models, hdrs, opts := jsonOr(p.Models, "[]"), jsonOr(p.Headers, "{}"), jsonOr(p.Options, "{}")
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO providers
-			(name, kind, driver, base_url, default_model, models, credential_ref, headers, enabled, exclude_from_bootstrap)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-		p.Name, p.Kind, p.Driver, p.BaseURL, p.DefaultModel, models, p.CredentialRef, hdrs, p.Enabled, p.ExcludeFromBootstrap).Scan(&id)
+			(name, kind, driver, base_url, default_model, models, credential_ref, headers, options, enabled, exclude_from_bootstrap)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+		p.Name, p.Kind, p.Driver, p.BaseURL, p.DefaultModel, models, p.CredentialRef, hdrs, opts, p.Enabled, p.ExcludeFromBootstrap).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
@@ -374,11 +400,17 @@ type ProviderPatch struct {
 	Headers              *map[string]string  `json:"headers"`
 	Enabled              *bool               `json:"enabled"`
 	ExcludeFromBootstrap *bool               `json:"exclude_from_bootstrap"`
+	Options              *map[string]string  `json:"options"`
 }
 
 func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error {
 	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
+	}
+	if patch.Options != nil {
+		if _, err := parseRequestTimeout(*patch.Options); err != nil {
+			return err
+		}
 	}
 
 	db, err := a.db.Get()
@@ -420,12 +452,15 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 	if patch.ExcludeFromBootstrap != nil {
 		after.ExcludeFromBootstrap = *patch.ExcludeFromBootstrap
 	}
+	if patch.Options != nil {
+		after.Options = *patch.Options
+	}
 
 	tag, err := tx.Exec(ctx, `UPDATE providers SET base_url = $2, default_model = $3,
-			models = $4, credential_ref = $5, headers = $6, enabled = $7, exclude_from_bootstrap = $8, updated_at = now()
+			models = $4, credential_ref = $5, headers = $6, enabled = $7, exclude_from_bootstrap = $8, options = $9, updated_at = now()
 		WHERE id = $1`,
 		id, after.BaseURL, after.DefaultModel, jsonOr(after.Models, "[]"),
-		after.CredentialRef, jsonOr(after.Headers, "{}"), after.Enabled, after.ExcludeFromBootstrap)
+		after.CredentialRef, jsonOr(after.Headers, "{}"), after.Enabled, after.ExcludeFromBootstrap, jsonOr(after.Options, "{}"))
 	if err != nil {
 		return fmt.Errorf("admin patch: %w", err)
 	}
@@ -729,7 +764,7 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 		return TestResult{}, fmt.Errorf("provider %s has no default model; pass one", p.Name)
 	}
 
-	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model))
+	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model), probeTimeout(p.Options))
 	a.audit(ctx, "test", "provider", id, nil, res)
 	return res, nil
 }
@@ -750,20 +785,26 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		return TestResult{}, fmt.Errorf("a model is required to validate a provider")
 	}
 
+	timeout, err := parseRequestTimeout(p.Options)
+	if err != nil {
+		return TestResult{}, err
+	}
 	reg, err := provider.Build([]provider.Config{{
-		Name:          p.Name,
-		Kind:          provider.KindAPI,
-		Driver:        p.Driver,
-		BaseURL:       p.BaseURL,
-		CredentialRef: p.CredentialRef,
-		Headers:       p.Headers,
+		Name:            p.Name,
+		Kind:            provider.KindAPI,
+		Driver:          p.Driver,
+		BaseURL:         p.BaseURL,
+		CredentialRef:   p.CredentialRef,
+		Headers:         p.Headers,
+		ReasoningEffort: p.Options["reasoning_effort"],
+		Timeout:         timeout,
 	}}, a.credentialLookup())
 	if err != nil {
 		return TestResult{}, err
 	}
 	drv, _ := reg.Get(p.Name)
 
-	res := a.probe(ctx, drv, p.Name, model, nil)
+	res := a.probe(ctx, drv, p.Name, model, nil, probeTimeout(p.Options))
 	a.audit(ctx, "validate", "provider", p.Name, nil, res)
 	return res, nil
 }
@@ -808,11 +849,27 @@ func (a *Admin) credentialLookup() func(string) string {
 	}
 }
 
+// probeTimeout bounds a connection probe's context: a provider with
+// options.request_timeout set (D-041) — a slow CPU-only remote Ollama,
+// say — gets that value instead of the fixed 20s default, so its own
+// probe isn't killed by a ceiling shorter than the timeout it declared
+// for real traffic. request_timeout was already validated when the
+// provider was written, so a parse failure here can only mean stale
+// data racing a concurrent edit; falling back to the default is safer
+// than failing the probe outright.
+func probeTimeout(opts map[string]string) time.Duration {
+	if d, err := parseRequestTimeout(opts); err == nil && d > 0 {
+		return d
+	}
+	return testTimeout
+}
+
 // probe runs one one-token completion against drv and books it under
 // purpose='test'. Shared by Test (persisted provider) and Validate
-// (unsaved config).
-func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string, prices *router.ModelPrices) TestResult {
-	tctx, cancel := context.WithTimeout(ctx, testTimeout)
+// (unsaved config). timeout bounds the probe's context — testTimeout
+// (20s) unless the provider declares its own options.request_timeout.
+func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string, prices *router.ModelPrices, timeout time.Duration) TestResult {
+	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
 	ch, err := drv.Stream(tctx, provider.CompletionRequest{
@@ -873,18 +930,19 @@ func (a *Admin) getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Provide
 
 func scanProvider(ctx context.Context, q pgxQuerier, id, lock string) (Provider, error) {
 	var (
-		p            Provider
-		models, hdrs []byte
+		p                  Provider
+		models, hdrs, opts []byte
 	)
 	err := q.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-			models, credential_ref, headers, enabled, exclude_from_bootstrap FROM providers WHERE id = $1 `+lock, id).
+			models, credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers WHERE id = $1 `+lock, id).
 		Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL, &p.DefaultModel,
-			&models, &p.CredentialRef, &hdrs, &p.Enabled, &p.ExcludeFromBootstrap)
+			&models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
 	if err != nil {
 		return Provider{}, fmt.Errorf("provider %s: %w", id, ErrNotFound)
 	}
 	_ = json.Unmarshal(models, &p.Models)
 	_ = json.Unmarshal(hdrs, &p.Headers)
+	_ = json.Unmarshal(opts, &p.Options)
 	normalizeProvider(&p)
 	return p, nil
 }
@@ -897,6 +955,9 @@ func normalizeProvider(p *Provider) {
 	}
 	if p.Headers == nil {
 		p.Headers = map[string]string{}
+	}
+	if p.Options == nil {
+		p.Options = map[string]string{}
 	}
 }
 

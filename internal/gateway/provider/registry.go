@@ -17,6 +17,9 @@ type Config struct {
 	CredentialRef string
 	Headers       map[string]string
 	Timeout       time.Duration
+	// ReasoningEffort overrides per-request reasoning effort for the
+	// openaicompat driver only (D-040); anthropic and bedrock ignore it.
+	ReasoningEffort string
 }
 
 // Registry holds the built providers by name. It is immutable after
@@ -60,6 +63,7 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 			p = NewOpenAICompat(OpenAICompatConfig{
 				Name: c.Name, BaseURL: c.BaseURL, APIKey: key,
 				Headers: c.Headers, Timeout: c.Timeout,
+				ReasoningEffort: c.ReasoningEffort,
 			})
 		case "bedrock":
 			// base_url holds the AWS region; credential_ref names a local

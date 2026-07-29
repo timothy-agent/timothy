@@ -91,7 +91,7 @@ func (s *Store) Load(ctx context.Context) error {
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
 	rows, err := tx.Query(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-		models, credential_ref, headers, enabled FROM providers`)
+		models, credential_ref, headers, options, enabled FROM providers`)
 	if err != nil {
 		return fmt.Errorf("router: query providers: %w", err)
 	}
@@ -103,9 +103,10 @@ func (s *Store) Load(ctx context.Context) error {
 			row         ProviderRow
 			modelsJSON  []byte
 			headersJSON []byte
+			optionsJSON []byte
 		)
 		if err := rows.Scan(&row.ID, &row.Name, &row.Kind, &row.Driver, &row.BaseURL,
-			&row.DefaultModel, &modelsJSON, &row.CredentialRef, &headersJSON, &row.Enabled); err != nil {
+			&row.DefaultModel, &modelsJSON, &row.CredentialRef, &headersJSON, &optionsJSON, &row.Enabled); err != nil {
 			return fmt.Errorf("router: scan provider: %w", err)
 		}
 		if err := json.Unmarshal(modelsJSON, &row.Models); err != nil {
@@ -113,6 +114,9 @@ func (s *Store) Load(ctx context.Context) error {
 		}
 		if err := json.Unmarshal(headersJSON, &row.Headers); err != nil {
 			return fmt.Errorf("router: provider %s headers: %w", row.Name, err)
+		}
+		if err := applyProviderOptions(&row, optionsJSON); err != nil {
+			return fmt.Errorf("router: provider %s options: %w", row.Name, err)
 		}
 		provRows = append(provRows, row)
 	}
@@ -157,6 +161,30 @@ func (s *Store) Load(ctx context.Context) error {
 	}
 	s.snap.Store(snap)
 	s.log.Info("routing config loaded", "providers", len(provRows), "routes", len(routes))
+	return nil
+}
+
+// applyProviderOptions decodes a providers row's options jsonb into row.
+// Only reasoning_effort and request_timeout are recognized today (D-040,
+// D-041); unknown keys are ignored silently. An unparseable
+// request_timeout fails the load outright — config honesty, never a
+// silent fallback to the driver default.
+func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
+	var opts struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+		RequestTimeout  string `json:"request_timeout"`
+	}
+	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
+		return err
+	}
+	row.ReasoningEffort = opts.ReasoningEffort
+	if opts.RequestTimeout != "" {
+		d, err := time.ParseDuration(opts.RequestTimeout)
+		if err != nil {
+			return fmt.Errorf("request_timeout %q: %w", opts.RequestTimeout, err)
+		}
+		row.Timeout = d
+	}
 	return nil
 }
 

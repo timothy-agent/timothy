@@ -23,6 +23,11 @@ type OpenAICompatConfig struct {
 	APIKey  string            // resolved secret value, never logged
 	Headers map[string]string // extra request headers
 	Timeout time.Duration     // hard per-request timeout, default 5m
+	// ReasoningEffort, when set, overrides the request's own Effort on
+	// every call to this provider instance (D-040) — e.g. "none" to
+	// disable a local Ollama model's thinking on its OpenAI-compat
+	// endpoint, where the native "think": false flag is ignored.
+	ReasoningEffort string
 }
 
 // OpenAICompat streams from an OpenAI-compatible chat/completions API.
@@ -299,6 +304,12 @@ func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 	out.StreamOptions.IncludeUsage = true
 	if req.Effort == "low" {
 		out.ReasoningEffort = "low"
+	}
+	// A provider-level override wins over the per-request hint (D-040):
+	// some OpenAI-compat backends need reasoning_effort forced (e.g.
+	// "none") regardless of what the caller asked for.
+	if o.cfg.ReasoningEffort != "" {
+		out.ReasoningEffort = o.cfg.ReasoningEffort
 	}
 	if req.System != "" {
 		out.Messages = append(out.Messages, oaiMessage{Role: "system", Content: req.System})

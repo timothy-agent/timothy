@@ -118,3 +118,17 @@ func TestOpenAICompatEffortDial(t *testing.T) {
 		t.Fatal("normal effort must omit the field entirely")
 	}
 }
+
+func TestOpenAICompatConfigReasoningEffortOverridesEffort(t *testing.T) {
+	t.Parallel()
+	o := NewOpenAICompat(OpenAICompatConfig{BaseURL: "http://x", APIKey: "k", ReasoningEffort: "none"})
+
+	withLow := o.buildRequest(CompletionRequest{Model: "m", Effort: "low"})
+	if withLow.ReasoningEffort != "none" {
+		t.Fatalf("ReasoningEffort = %q, want %q (config overrides Effort=low)", withLow.ReasoningEffort, "none")
+	}
+	withoutEffort := o.buildRequest(CompletionRequest{Model: "m"})
+	if withoutEffort.ReasoningEffort != "none" {
+		t.Fatalf("ReasoningEffort = %q, want %q (config applies even without a request Effort)", withoutEffort.ReasoningEffort, "none")
+	}
+}

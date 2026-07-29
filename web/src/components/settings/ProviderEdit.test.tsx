@@ -37,9 +37,22 @@ const bedrockProvider: AdminProvider = {
   enabled: true,
 }
 
-function renderPage() {
+const openaicompatProvider: AdminProvider = {
+  id: 'p2',
+  name: 'Ollama',
+  kind: 'api',
+  driver: 'openaicompat',
+  base_url: 'http://ollama.local/v1',
+  default_model: 'qwen3',
+  models: [{ id: 'qwen3' }],
+  credential_ref: '',
+  headers: {},
+  enabled: true,
+}
+
+function renderPage(id = 'p1') {
   return render(
-    <MemoryRouter initialEntries={['/settings/providers/p1']}>
+    <MemoryRouter initialEntries={[`/settings/providers/${id}`]}>
       <Routes>
         <Route path="/settings/providers/:id" element={<ProviderEdit />} />
       </Routes>
@@ -137,5 +150,76 @@ describe('ProviderEdit models section', () => {
 
     expect(await screen.findByText('amazon.titan-embed-text-v1')).toBeTruthy()
     expect(screen.getByText('embeddings')).toBeTruthy()
+  })
+})
+
+describe('ProviderEdit reasoning section', () => {
+  beforeEach(() => {
+    vi.mocked(availableModels).mockResolvedValue([])
+  })
+
+  it('omits the reasoning section for non-openaicompat drivers', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
+    renderPage('p1')
+
+    await screen.findByText('AWS Bedrock')
+    expect(screen.queryByRole('switch', { name: 'Disable reasoning' })).toBeNull()
+  })
+
+  it('writes options.reasoning_effort = "none" when the toggle is switched on', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const toggle = await screen.findByRole('switch', { name: 'Disable reasoning' })
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { reasoning_effort: 'none' } }),
+    )
+  })
+
+  it('omits reasoning_effort entirely when the toggle is switched back off', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...openaicompatProvider, options: { reasoning_effort: 'none' } },
+    ])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const toggle = await screen.findByRole('switch', { name: 'Disable reasoning' })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
+  })
+
+  it('writes options.request_timeout on blur', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('5m')
+    fireEvent.change(input, { target: { value: '20m' } })
+    fireEvent.blur(input)
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { request_timeout: '20m' } }),
+    )
+  })
+
+  it('omits request_timeout entirely when cleared', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...openaicompatProvider, options: { request_timeout: '20m' } },
+    ])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('5m')
+    expect((input as HTMLInputElement).value).toBe('20m')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
   })
 })

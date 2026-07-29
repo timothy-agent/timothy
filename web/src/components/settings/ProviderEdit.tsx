@@ -27,7 +27,7 @@ import { ModelInput, type ModelSuggestion } from './ModelInput'
 import { modelCatalog } from './modelCatalog'
 import { matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
-import { Field } from './shared'
+import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { backendLabel, errText, stripPaste, secretField } from './util'
 
@@ -95,6 +95,9 @@ export function ProviderEdit() {
             onChanged={refresh}
             defaultBackend={defaultBackend}
           />
+        )}
+        {provider.driver === 'openaicompat' && (
+          <ReasoningSection provider={provider} onChanged={refresh} />
         )}
         <ModelsSection provider={provider} onChanged={refresh} />
       </div>
@@ -318,6 +321,71 @@ function CredentialSection({
           </details>
         </div>
       )}
+    </section>
+  )
+}
+
+// ReasoningSection lets an openaicompat provider force reasoning off
+// (D-040) — e.g. Ollama's /v1/chat/completions endpoint silently
+// ignores the native "think": false flag but honors
+// reasoning_effort: "none". Disabled is the only override exposed;
+// toggling on omits the key entirely rather than writing a default.
+// The same section also holds the request timeout override (D-041), a
+// Go duration string (e.g. "20m") for slow backends — a CPU-only
+// remote Ollama, say — that need more than the driver's 5m default.
+function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
+  const [saving, setSaving] = useState(false)
+  const [timeout, setTimeoutValue] = useState(provider.options?.request_timeout ?? '')
+  const disabled = provider.options?.reasoning_effort === 'none'
+
+  const toggle = async (on: boolean) => {
+    setSaving(true)
+    try {
+      const { reasoning_effort: _reasoningEffort, ...rest } = provider.options ?? {}
+      await patchProvider(provider.id, {
+        options: on ? { ...rest, reasoning_effort: 'none' } : rest,
+      })
+      onChanged()
+    } catch (err) {
+      toast.error('Could not update reasoning setting', { description: errText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const saveTimeout = async () => {
+    const trimmed = timeout.trim()
+    if (trimmed === (provider.options?.request_timeout ?? '')) return
+    const { request_timeout: _requestTimeout, ...rest } = provider.options ?? {}
+    try {
+      await patchProvider(provider.id, {
+        options: trimmed ? { ...rest, request_timeout: trimmed } : rest,
+      })
+      onChanged()
+    } catch (err) {
+      setTimeoutValue(provider.options?.request_timeout ?? '')
+      toast.error('Could not update request timeout', { description: errText(err) })
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-sm font-semibold">Reasoning</h2>
+      <label className="flex items-center gap-3 text-sm">
+        <Toggle on={disabled} onChange={(v) => void toggle(v)} label="Disable reasoning" />
+        <span className="text-muted-foreground">
+          {saving ? 'Saving…' : 'Disable reasoning ("thinking") for every request to this provider.'}
+        </span>
+      </label>
+      <Field label="Request timeout" hint='Go duration, e.g. "20m" — empty uses the default'>
+        <Input
+          value={timeout}
+          onChange={(e) => setTimeoutValue(e.target.value)}
+          onBlur={() => void saveTimeout()}
+          placeholder="5m"
+          className="mt-1.5 h-10 max-w-40"
+        />
+      </Field>
     </section>
   )
 }

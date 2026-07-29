@@ -36,6 +36,35 @@ func TestBuildRegistry(t *testing.T) {
 	}
 }
 
+func TestBuildPassesReasoningEffortToOpenAICompat(t *testing.T) {
+	t.Parallel()
+	r, err := Build([]Config{
+		{Name: "ollama", Kind: KindAPI, Driver: "openaicompat", BaseURL: "http://ollama.local/v1", ReasoningEffort: "none"},
+		{Name: "grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1"},
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	p, ok := r.Get("ollama")
+	if !ok {
+		t.Fatal("ollama missing")
+	}
+	oai, ok := p.(*OpenAICompat)
+	if !ok {
+		t.Fatalf("ollama provider type = %T, want *OpenAICompat", p)
+	}
+	if oai.cfg.ReasoningEffort != "none" {
+		t.Fatalf("ReasoningEffort = %q, want %q", oai.cfg.ReasoningEffort, "none")
+	}
+
+	p2, _ := r.Get("grok")
+	grokOai := p2.(*OpenAICompat)
+	if grokOai.cfg.ReasoningEffort != "" {
+		t.Fatalf("grok ReasoningEffort = %q, want empty when unset", grokOai.cfg.ReasoningEffort)
+	}
+}
+
 func TestBuildErrors(t *testing.T) {
 	t.Parallel()
 	noLookup := func(string) string { return "" }
