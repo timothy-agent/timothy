@@ -270,4 +270,41 @@ describe('ProviderEdit reasoning section', () => {
 
     await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
   })
+
+  it('saves request_timeout on Enter, not just blur', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('5m')
+    fireEvent.change(input, { target: { value: '45m' } })
+    // jsdom doesn't blur on Enter by itself — the component calls
+    // currentTarget.blur() itself, which real browsers do too; fire the
+    // resulting blur here to observe that save path (not onBlur directly).
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { request_timeout: '45m' } }),
+    )
+  })
+
+  it('resyncs the displayed request_timeout after a sibling field refetches the provider', async () => {
+    vi.mocked(listProviders)
+      .mockResolvedValueOnce([openaicompatProvider])
+      .mockResolvedValueOnce([{ ...openaicompatProvider, options: { request_timeout: '30m' } }])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const input = (await screen.findByPlaceholderText('5m')) as HTMLInputElement
+    expect(input.value).toBe('')
+
+    // A different field's save (e.g. the reasoning toggle) triggers the
+    // same refresh() this section relies on — it must pick up the new
+    // provider.options.request_timeout, not keep showing stale state.
+    const toggle = await screen.findByRole('switch', { name: 'Disable reasoning' })
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(input.value).toBe('30m'))
+  })
 })
