@@ -131,8 +131,8 @@ func TestToolMatches(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := toolMatches(tc.tool, tc.rowTool); got != tc.want {
-				t.Errorf("toolMatches(%q, %q) = %v, want %v", tc.tool, tc.rowTool, got, tc.want)
+			if got := ToolMatches(tc.tool, tc.rowTool); got != tc.want {
+				t.Errorf("ToolMatches(%q, %q) = %v, want %v", tc.tool, tc.rowTool, got, tc.want)
 			}
 		})
 	}

@@ -1177,6 +1177,90 @@ func TestAgentUnknownToolRejectedBeforePermissionChain(t *testing.T) {
 	}
 }
 
+// TestFilterDefs pins filterDefs' suffix-matching against an agent's
+// ToolAllow list (D-036): connector tools register namespaced as
+// "<connector-name>_<tool-name>" (connectors.Manager.Tools), so an
+// allowlist entry authored before any connector name is known must
+// still match at offer time. Mirrors tools.ToolMatches' semantics and
+// its existing test expectations exactly — the grants layer and this
+// layer must never disagree about what a config name refers to.
+func TestFilterDefs(t *testing.T) {
+	t.Parallel()
+	defOf := func(name string) provider.ToolDef { return provider.ToolDef{Name: name} }
+
+	tests := []struct {
+		name  string
+		defs  []string
+		allow []string
+		want  []string
+	}{
+		{
+			name:  "empty allow keeps everything",
+			defs:  []string{"web_search", "shell"},
+			allow: nil,
+			want:  []string{"web_search", "shell"},
+		},
+		{
+			name:  "exact name still matches",
+			defs:  []string{"shell"},
+			allow: []string{"shell"},
+			want:  []string{"shell"},
+		},
+		{
+			name:  "gmail_search allows connector-namespaced gmail_gmail_search",
+			defs:  []string{"gmail_gmail_search", "shell"},
+			allow: []string{"gmail_search"},
+			want:  []string{"gmail_gmail_search"},
+		},
+		{
+			name:  "calendar_list_events allows google-calendar_calendar_list_events",
+			defs:  []string{"google-calendar_calendar_list_events"},
+			allow: []string{"calendar_list_events"},
+			want:  []string{"google-calendar_calendar_list_events"},
+		},
+		{
+			name:  "search matches web_search under the same suffix rule as matchGrant",
+			defs:  []string{"web_search"},
+			allow: []string{"search"},
+			want:  []string{"web_search"},
+		},
+		{
+			name:  "no underscore boundary rejected",
+			defs:  []string{"notcalendar_list_events"},
+			allow: []string{"calendar_list_events"},
+			want:  nil,
+		},
+		{
+			name:  "sandbox sentinel never suffix-matches",
+			defs:  []string{"foo___sandbox__"},
+			allow: []string{tools.SandboxGrantTool},
+			want:  nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var defs []provider.ToolDef
+			for _, n := range tc.defs {
+				defs = append(defs, defOf(n))
+			}
+			got := filterDefs(defs, tc.allow)
+			var gotNames []string
+			for _, d := range got {
+				gotNames = append(gotNames, d.Name)
+			}
+			if len(gotNames) != len(tc.want) {
+				t.Fatalf("filterDefs(%v, %v) = %v, want %v", tc.defs, tc.allow, gotNames, tc.want)
+			}
+			for i, n := range gotNames {
+				if n != tc.want[i] {
+					t.Fatalf("filterDefs(%v, %v) = %v, want %v", tc.defs, tc.allow, gotNames, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // TestAgentToolAllowExcludedToolRejected pins the wiring between
 // filterDefs and toolNames (run, agent.go ~line 214/241): toolNames
 // must be built from the POST-ToolAllow-filter defs, not the raw

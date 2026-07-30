@@ -724,18 +724,26 @@ func firstLine(s string) string {
 // filterDefs narrows the tool surface to an agent's allowlist. The
 // model never sees a disallowed tool, so there is nothing to refuse
 // at execution time; empty allow means the full surface.
+//
+// D-036: connector tools register namespaced as
+// "<connector-name>_<tool-name>" (connectors.Manager.Tools), so an
+// allowlist entry like "gmail_search" (agent-authored, before any
+// connector name is known) must still match
+// "gmail_gmail_search" at offer time. tools.ToolMatches already
+// implements this suffix rule for the permission-grant chain; reused
+// here so the two layers can never disagree about what a name in an
+// agent config refers to.
 func filterDefs(defs []provider.ToolDef, allow []string) []provider.ToolDef {
 	if len(allow) == 0 {
 		return defs
 	}
-	allowed := make(map[string]bool, len(allow))
-	for _, name := range allow {
-		allowed[name] = true
-	}
 	out := make([]provider.ToolDef, 0, len(defs))
 	for _, d := range defs {
-		if allowed[d.Name] {
-			out = append(out, d)
+		for _, name := range allow {
+			if tools.ToolMatches(d.Name, name) {
+				out = append(out, d)
+				break
+			}
 		}
 	}
 	return out

@@ -265,7 +265,7 @@ func (p *Permissions) matchGrant(ctx context.Context, sessionID, tool, subject s
 		if err := rows.Scan(&rowTool, &pattern, &source); err != nil {
 			return false, "", fmt.Errorf("tools: match grant: %w", err)
 		}
-		if !toolMatches(tool, rowTool) {
+		if !ToolMatches(tool, rowTool) {
 			continue
 		}
 		if globMatch(pattern, subject) {
@@ -275,12 +275,14 @@ func (p *Permissions) matchGrant(ctx context.Context, sessionID, tool, subject s
 	return false, "", rows.Err()
 }
 
-// toolMatches reports whether a grant/allowlist row named rowTool
+// ToolMatches reports whether a grant/allowlist row named rowTool
 // covers a call to tool: exact match, or tool ends with "_"+rowTool
 // (connector namespacing — see matchGrant's D-036 note). rowTool ==
 // SandboxGrantTool never suffix-matches; it is a stored sandbox root,
-// not a grantable tool name.
-func toolMatches(tool, rowTool string) bool {
+// not a grantable tool name. Exported so loop.filterDefs can apply the
+// same suffix semantics to an agent's ToolAllow list — the two layers
+// must never disagree about what a config-authored name refers to.
+func ToolMatches(tool, rowTool string) bool {
 	if tool == rowTool {
 		return true
 	}
