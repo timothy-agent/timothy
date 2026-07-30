@@ -8,3 +8,13 @@
 INSERT INTO routes (name)
 VALUES ('local')
 ON CONFLICT (name) DO NOTHING;
+
+-- Seeds a 6th fixed route name: 'coding' — GLM primary (glm-5.2, the
+-- stronger of the two Z.ai models already configured) with Nova Pro
+-- as fallback (a reasoning-capable model, unlike the nova-lite already
+-- used elsewhere). No chain here: like 'local' above, the chain is
+-- provider-instance-specific and gets set via PATCH once the
+-- providers exist in this deployment, not hardcoded into a migration.
+INSERT INTO routes (name)
+VALUES ('coding')
+ON CONFLICT (name) DO NOTHING;

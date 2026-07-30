@@ -34,7 +34,19 @@ CREATE TABLE IF NOT EXISTS missions (
     pending_permission    text,
     schedule_id           uuid,
     created_at            timestamptz NOT NULL DEFAULT now(),
-    updated_at            timestamptz NOT NULL DEFAULT now()
+    updated_at            timestamptz NOT NULL DEFAULT now(),
+    -- Opt-in escalation ladder: when set, worker turns switch to this
+    -- route after a worker failure or review rework instead of burning
+    -- more iterations on a model that already proved too weak for the
+    -- unit. Empty (the default) disables escalation entirely -- route
+    -- changes must never be a surprise cost jump.
+    escalation_route      text NOT NULL DEFAULT '',
+    -- PromptOverlay snapshots the creating agent's prompt_overlay at
+    -- create time (like route/review_route already do) — a mission
+    -- outlives the request that made it, so it can't re-resolve a live
+    -- agent lookup later without risking a surprise prompt change
+    -- mid-mission if the agent row is edited while the mission runs.
+    prompt_overlay        text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

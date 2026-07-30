@@ -72,3 +72,12 @@ VALUES (
     'research'
 )
 ON CONFLICT (name) DO NOTHING;
+
+-- Seeds the 'coder' agent: coding missions pick this from the agent
+-- dropdown at creation time (missions.go's create handler resolves an
+-- agent's route the same way chat sessions do) to get the
+-- GLM-then-Nova-reasoning chain instead of the general default.
+INSERT INTO agents (name, description, prompt_overlay, route, review_route)
+VALUES
+  ('coder', 'Coding missions and tasks: GLM primary, Nova reasoning fallback.', '', 'coding', 'coding')
+ON CONFLICT (name) DO NOTHING;
