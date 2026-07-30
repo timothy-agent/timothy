@@ -129,11 +129,32 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var nre *router.NoRouteError
 		if errors.As(err, &nre) {
-			jsonError(w, http.StatusBadGateway, "no_route", nre.Error())
+			// D-046 safety net: brain flips an image message to "vision"
+			// unconditionally (it has no cheap way to know whether the
+			// route exists on this install). When "vision" is missing,
+			// disabled, or has an empty chain, Resolve returns a
+			// NoRouteError with no Skipped entries — nothing was even
+			// tried. That's distinct from the chain existing but every
+			// entry lacking the vision capability (Skipped is non-empty
+			// there): THAT case must still error, since falling back
+			// would silently serve an image turn on a model that can't
+			// see it. Any other unknown/misconfigured route keeps
+			// erroring — this fallback is vision-only, not generic
+			// route-aliasing.
+			if req.Route == "vision" && len(nre.Skipped) == 0 {
+				a.log.Warn("vision route unresolvable, falling back to default", "reason", nre.Error())
+				req.Route = "default"
+				attempts, err = snap.Resolve(req.Route, req.ModelHint, sticky, requiredVisionCapability(req.Messages)...)
+			}
+		}
+		if err != nil {
+			if errors.As(err, &nre) {
+				jsonError(w, http.StatusBadGateway, "no_route", nre.Error())
+				return
+			}
+			jsonError(w, http.StatusInternalServerError, "resolve_failed", err.Error())
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "resolve_failed", err.Error())
-		return
 	}
 
 	flusher, ok := w.(http.Flusher)

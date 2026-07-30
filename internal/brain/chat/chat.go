@@ -46,6 +46,12 @@ const (
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
 	defaultRoute = "default"
+	// visionRoute serves turns whose message carries an image attachment
+	// (D-046) — a cheapest-first vision chain, so an image message never
+	// rides an agent's or the default route's (usually pricier) chain
+	// just because the capability gate happens to find a vision-capable
+	// model there too.
+	visionRoute = "vision"
 	// Each persistence stage gets its OWN deadline: LLM-backed stages
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
@@ -412,9 +418,23 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		}
 		skillBody = body
 	}
-	// Routing precedence: explicit request override, then the agent's
-	// route, then the default chain.
+	// Routing precedence: explicit request override, then images auto-flip
+	// to the vision route, then the agent's route, then the default chain
+	// (sensitive-pin below still overrides all of this).
 	route := req.Route
+	if route == "" && len(images) > 0 {
+		// D-046: brain has no cheap way to know whether a "vision" route
+		// exists/is enabled/has a non-empty chain (gwclient exposes no
+		// routes-listing, and adding one just for this check is exactly
+		// the kind of new polling machinery we want to avoid) — so the
+		// flip is unconditional here. The gateway-side safety net
+		// (internal/gateway/api/api.go's handleStream) falls back to
+		// "default" when "vision" resolves to a missing/disabled/empty
+		// chain, so installs that never created the route still work;
+		// an existing vision route wins outright since its cheapest-first
+		// chain is exactly the point of this feature.
+		route = visionRoute
+	}
 	if route == "" {
 		route = profile.Route
 	}

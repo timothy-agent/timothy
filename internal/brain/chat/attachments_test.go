@@ -201,3 +201,135 @@ func TestRetryReplaysImageRefs(t *testing.T) {
 		t.Fatalf("retried message Images = %+v, want the original image replayed", first.Images)
 	}
 }
+
+// TestChatImageMessageAutoFlipsToVisionRoute is the D-046 feature under
+// test: a message carrying an attachment with no explicit route picked
+// gets routed to "vision" instead of riding the agent's/default chain.
+func TestChatImageMessageAutoFlipsToVisionRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("described")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("img1", "image/png", []byte("bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != "vision" {
+		t.Fatalf("route = %q, want vision (image message, no explicit route)", sent.Route)
+	}
+}
+
+// TestChatImageMessageWithExplicitRouteIsHonored confirms the request's
+// own route pick outranks the vision auto-flip — precedence #2 beats #3.
+func TestChatImageMessageWithExplicitRouteIsHonored(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("described")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("img1", "image/png", []byte("bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{
+		SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}, Route: "research",
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != "research" {
+		t.Fatalf("route = %q, want research (explicit request route wins over the vision flip)", sent.Route)
+	}
+}
+
+// TestChatImageMessageOnSensitivePinnedSessionKeepsPinnedRoute confirms
+// the session-wide sensitive pin (precedence #1) beats the vision flip:
+// an image message on a pinned session stays on the pinned route even
+// though it may then correctly fail the gateway's vision capability gate.
+func TestChatImageMessageOnSensitivePinnedSessionKeepsPinnedRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	seedSensitiveSession(t, log, "s1")
+	gw := &fakeGW{events: okEvents("described")}
+	svc := newService(gw, log)
+	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+	fa := newFakeAttachments()
+	fa.seed("img1", "image/png", []byte("bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != "local" {
+		t.Fatalf("route = %q, want local (sensitive pin beats the vision flip)", sent.Route)
+	}
+}
+
+// TestChatNoImagesLeavesRouteUnchanged confirms a plain-text message
+// never triggers the vision flip.
+func TestChatNoImagesLeavesRouteUnchanged(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("hi")}
+	svc := newService(gw, log)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != defaultRoute {
+		t.Fatalf("route = %q, want %q (no images, no flip)", sent.Route, defaultRoute)
+	}
+}
+
+// TestRetryOfImageTurnStaysOnVisionRoute confirms Retry reuses the
+// persisted (already-flipped) route: the vision flip happens once at
+// Chat time and is durable on the user_message event, so a retried
+// image turn never needs its own vision-detection logic.
+func TestRetryOfImageTurnStaysOnVisionRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{{Type: stream.EventError, Err: &stream.StreamError{Code: "boom", Message: "boom"}}}}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("img1", "image/png", []byte("bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return !svc.TurnActive("s1") })
+
+	gw.mu.Lock()
+	gw.events = okEvents("retried answer")
+	gw.mu.Unlock()
+
+	_, ch, err = svc.Retry(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != "vision" {
+		t.Fatalf("retried route = %q, want vision (persisted route replayed)", sent.Route)
+	}
+}

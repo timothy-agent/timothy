@@ -64,7 +64,10 @@ CREATE INDEX IF NOT EXISTS cost_ledger_session_idx ON cost_ledger (session_id) W
 --   'embedding' — gateway /v1/embeddings (internal/gateway/api)
 --   'research'  — min-retrieval floor keys on this route name (D-009)
 --                 and the researcher agent routes here
+--   'vision'    — image messages auto-flip here (D-046,
+--                 internal/brain/chat); gateway falls back to
+--                 'default' when this route is missing/disabled/empty
 -- All start with an empty chain and disabled.
 INSERT INTO routes (name)
-VALUES ('default'), ('summarize'), ('embedding'), ('research')
+VALUES ('default'), ('summarize'), ('embedding'), ('research'), ('vision')
 ON CONFLICT (name) DO NOTHING;

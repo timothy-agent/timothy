@@ -7,11 +7,13 @@ import (
 
 // bootstrapRoutes are the fixed system routes a connected provider can
 // auto-fill: chat-capable for default/summarize, embeddings-capable
-// for embedding. research is agent-specific and stays hand-configured.
+// for embedding, vision-capable for vision (D-046). research is
+// agent-specific and stays hand-configured.
 var bootstrapRoutes = map[string]string{
 	"default":   "chat",
 	"summarize": "chat",
 	"embedding": "embeddings",
+	"vision":    "vision",
 }
 
 // BootstrapChain computes route-name -> new-chain-entry for a newly

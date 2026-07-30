@@ -135,6 +135,35 @@ func TestBootstrapChainExcludedProviderYieldsNoUpdates(t *testing.T) {
 	}
 }
 
+// TestBootstrapChainSeedsVisionRoute confirms a newly connected
+// vision-capable provider auto-chains into the "vision" route (D-046),
+// the same as the other fixed bootstrap routes.
+func TestBootstrapChainSeedsVisionRoute(t *testing.T) {
+	p := ProviderRow{ID: "p1", Models: []ModelInfo{
+		priced("cheap-vision", 2, "chat", "vision"),
+		priced("pricey-vision", 8, "chat", "vision"),
+	}}
+
+	got := BootstrapChain(p, map[string][]ChainEntry{})
+
+	chain := got["vision"]
+	if len(chain) != 1 || chain[0].ProviderID != "p1" || chain[0].Model != "cheap-vision" {
+		t.Fatalf("vision chain = %+v, want single cheapest vision-capable entry", chain)
+	}
+}
+
+// TestBootstrapChainOmitsVisionForNonVisionProvider confirms a provider
+// with no vision-capable model never touches the "vision" route.
+func TestBootstrapChainOmitsVisionForNonVisionProvider(t *testing.T) {
+	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("chat-only", 1, "chat")}}
+
+	got := BootstrapChain(p, map[string][]ChainEntry{})
+
+	if _, ok := got["vision"]; ok {
+		t.Fatalf("vision present = %+v, want omitted (no vision-capable model)", got["vision"])
+	}
+}
+
 func TestBootstrapChainIgnoresResearchRoute(t *testing.T) {
 	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("m", 1, "chat")}}
 

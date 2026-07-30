@@ -369,6 +369,179 @@ func TestStreamValidation(t *testing.T) {
 	}
 }
 
+// visionMessages is a one-turn request carrying an image, forcing
+// requiredVisionCapability to demand CapVision at Resolve.
+const visionMessages = `[{"role":"user","content":"look","images":[{"media_type":"image/png","data":"AAAA"}]}]`
+
+// TestStreamVisionRouteMissingFallsBackToDefault is the D-046 gateway
+// safety net under test: "vision" was never created on this install (no
+// route row at all), so Resolve's NoRouteError carries zero Skipped
+// entries — nothing was even tried. handleStream retries on "default",
+// which chains a vision-capable model, and the image turn still serves.
+func TestStreamVisionRouteMissingFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	srv := oaiOK(t, "described")
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat", BaseURL: srv.URL,
+			DefaultModel: "m1", Enabled: true,
+			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat", "vision"}}}},
+	}
+	routes := []router.RouteRow{
+		{Name: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+		// no "vision" route row at all.
+	}
+	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	a, rec := newAPI(snap)
+
+	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
+	}
+	events := sseEvents(t, w.Body.String())
+	var text string
+	for _, ev := range events {
+		if ev.Type == stream.EventChunk {
+			text += ev.Text
+		}
+		if ev.Type == stream.EventError {
+			t.Fatalf("error event leaked to client: %+v", ev)
+		}
+	}
+	if text != "described" {
+		t.Fatalf("chunks = %q", text)
+	}
+	entries := rec.all()
+	if len(entries) != 1 || entries[0].Route != "default" {
+		t.Fatalf("ledger = %+v, want single entry booked under the fallback route", entries)
+	}
+}
+
+// TestStreamVisionRouteDisabledFallsBackToDefault covers the "route
+// exists but disabled" flavor of the same missing/empty class: disabled
+// routes never enter the snapshot's routes map (BuildSnapshot only
+// loads Enabled rows), so Resolve produces the identical empty-Skipped
+// NoRouteError as a route that was never created.
+func TestStreamVisionRouteDisabledFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	srv := oaiOK(t, "described")
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat", BaseURL: srv.URL,
+			DefaultModel: "m1", Enabled: true,
+			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat", "vision"}}}},
+	}
+	routes := []router.RouteRow{
+		{Name: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+		{Name: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: false},
+	}
+	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	a, rec := newAPI(snap)
+
+	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
+	}
+	entries := rec.all()
+	if len(entries) != 1 || entries[0].Route != "default" {
+		t.Fatalf("ledger = %+v, want single entry booked under the fallback route", entries)
+	}
+}
+
+// TestStreamVisionRoutePresentNoFallback confirms a real, enabled,
+// vision-capable "vision" route is served directly — no fallback fires,
+// and the ledger books the request under "vision" itself, not "default".
+func TestStreamVisionRoutePresentNoFallback(t *testing.T) {
+	t.Parallel()
+	visionSrv := oaiOK(t, "from-vision-route")
+	defaultSrv := oaiOK(t, "from-default-route")
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "vprov", Kind: "api", Driver: "openaicompat", BaseURL: visionSrv.URL,
+			DefaultModel: "vm", Enabled: true,
+			Models: []router.ModelInfo{{ID: "vm", Capabilities: []string{"chat", "vision"}}}},
+		{ID: "p2", Name: "dprov", Kind: "api", Driver: "openaicompat", BaseURL: defaultSrv.URL,
+			DefaultModel: "dm", Enabled: true,
+			Models: []router.ModelInfo{{ID: "dm", Capabilities: []string{"chat", "vision"}}}},
+	}
+	routes := []router.RouteRow{
+		{Name: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "vm"}}, Enabled: true},
+		{Name: "default", Chain: []router.ChainEntry{{ProviderID: "p2", Model: "dm"}}, Enabled: true},
+	}
+	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	a, rec := newAPI(snap)
+
+	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
+	}
+	events := sseEvents(t, w.Body.String())
+	var text string
+	for _, ev := range events {
+		if ev.Type == stream.EventChunk {
+			text += ev.Text
+		}
+	}
+	if text != "from-vision-route" {
+		t.Fatalf("chunks = %q, want served by the real vision route (no fallback)", text)
+	}
+	entries := rec.all()
+	if len(entries) != 1 || entries[0].Route != "vision" {
+		t.Fatalf("ledger = %+v, want single entry booked under vision", entries)
+	}
+}
+
+// TestStreamVisionCapabilityExhaustedNoFallback confirms the fallback
+// does NOT fire when "vision" exists and is enabled but every chain
+// entry lacks the vision capability: Resolve's NoRouteError carries
+// non-empty Skipped ("lacks vision capability") in that case, the
+// signal that something was tried and rejected — falling back here
+// would silently serve an image turn on a model that can't see it.
+func TestStreamVisionCapabilityExhaustedNoFallback(t *testing.T) {
+	t.Parallel()
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "textonly", Kind: "api", Driver: "openaicompat", BaseURL: oaiOK(t, "x").URL,
+			DefaultModel: "m1", Enabled: true,
+			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat"}}}}, // no vision
+	}
+	routes := []router.RouteRow{
+		{Name: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+	}
+	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	a, rec := newAPI(snap)
+
+	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("code = %d, want 502 (capability-exhausted must still error, no fallback)", w.Code)
+	}
+	if len(rec.all()) != 0 {
+		t.Fatalf("ledger entries = %+v, want none (Resolve failed before any attempt)", rec.all())
+	}
+}
+
+// TestStreamNonVisionUnknownRouteStillErrors confirms the fallback is
+// vision-only: a request for any other unknown/misconfigured route
+// keeps erroring exactly as before (TestStreamValidation's "nope" case,
+// duplicated here to pin it explicitly against this feature).
+func TestStreamNonVisionUnknownRouteStillErrors(t *testing.T) {
+	t.Parallel()
+	a, _ := newAPI(snapshotFor(t, oaiFail(t).URL, oaiFail(t).URL))
+
+	w := postJSON(t, a.handleStream, `{"route":"nope","messages":[{"role":"user","content":"x"}]}`)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("code = %d, want 502 (non-vision unknown route, no fallback)", w.Code)
+	}
+}
+
 func TestEmbedHappyPath(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(snapshotFor(t, oaiOK(t, "x").URL, oaiFail(t).URL))

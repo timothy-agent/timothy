@@ -351,7 +351,7 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 		return
 	}
 	existing := map[string][]router.ChainEntry{}
-	for _, name := range []string{"default", "summarize", "embedding"} {
+	for _, name := range []string{"default", "summarize", "embedding", "vision"} {
 		var chainJSON []byte
 		if err := db.QueryRow(ctx, `SELECT chain FROM routes WHERE name = $1`, name).Scan(&chainJSON); err != nil {
 			a.log.Warn("route bootstrap: read route", "route", name, "error", err)
