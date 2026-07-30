@@ -94,6 +94,19 @@ func oaiFail(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// oaiEmptyDone streams usage then [DONE] with zero content deltas — a
+// provider stream that terminates cleanly but produced no output
+// (D-044).
+func oaiEmptyDone(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":0}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // snapshotFor builds a two-provider snapshot with a coding route
 // chaining first→second and an embedding route on first.
 func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
@@ -195,6 +208,46 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(a.providerCalls.WithLabelValues("one", "coding", "ok")); got != 1 {
 		t.Fatalf("provider_calls_total{one,coding,ok} = %v, want 1", got)
+	}
+}
+
+// TestStreamEmptyOutputBookedIncomplete pins D-044: a provider stream
+// that terminates cleanly with zero content deltas ([DONE] only) must
+// not be booked as a success. res.streamed is set only by content
+// events (chunk/reasoning/tool) — never by EventUsage — so the ledger
+// status flips to "incomplete" even though usage/cost are still known
+// (a real, reported zero, not the unknown-so-NULL case D-013 covers).
+// The client sees an EventIncomplete before the terminal done, the same
+// shape a cut-off stream already uses.
+func TestStreamEmptyOutputBookedIncomplete(t *testing.T) {
+	t.Parallel()
+	a, rec := newAPI(snapshotFor(t, oaiEmptyDone(t).URL, oaiFail(t).URL))
+
+	w := postJSON(t, a.handleStream, `{"route":"coding","session_id":"s1","messages":[{"role":"user","content":"hi"}]}`)
+
+	events := sseEvents(t, w.Body.String())
+	if len(events) < 2 {
+		t.Fatalf("events = %+v, want at least incomplete+done", events)
+	}
+	last := events[len(events)-1]
+	if last.Type != stream.EventDone {
+		t.Fatalf("last event = %v, want done", last.Type)
+	}
+	prev := events[len(events)-2]
+	if prev.Type != stream.EventIncomplete {
+		t.Fatalf("event before done = %v, want incomplete", prev.Type)
+	}
+
+	entries := rec.all()
+	if len(entries) != 1 {
+		t.Fatalf("ledger entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.Status != "incomplete" {
+		t.Fatalf("status = %q, want incomplete", e.Status)
+	}
+	if e.Usage == nil || e.Usage.OutputTokens != 0 {
+		t.Fatalf("usage = %+v, want reported zero output tokens", e.Usage)
 	}
 }
 

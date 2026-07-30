@@ -261,6 +261,13 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			res.streamed = true
 			send(ev)
 		case stream.EventDone:
+			// A stream that closes clean but produced no content (e.g.
+			// [DONE] with zero deltas) is not a success (D-044): tell the
+			// client before the terminal done, the same incomplete-then-
+			// done shape a cut-off stream already uses (see httpx.go).
+			if !res.streamed {
+				send(stream.StreamEvent{Type: stream.EventIncomplete, Text: "provider produced no output"})
+			}
 			// Attribute the serving provider on the terminal event so
 			// callers need no second lookup.
 			ev.Meta = &stream.Meta{
@@ -285,6 +292,14 @@ func finalStatus(res attemptResult) string {
 		return res.entry.Status
 	case res.failed, res.entry.ErrorCode != "":
 		return "error"
+	// A drained stream that produced no content is not a success (D-044):
+	// booking it "ok" would also poison LastSuccess stickiness (ledger.go
+	// filters status='ok'), sticking a session onto a provider that just
+	// returned nothing. res.streamed is set only by content events
+	// (chunk/reasoning/tool); EventUsage deliberately does not set it, so
+	// a usage-only stream still lands here.
+	case !res.streamed:
+		return "incomplete"
 	default:
 		return "ok"
 	}
