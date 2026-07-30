@@ -22,6 +22,7 @@ import {
   listSecretBackends,
   patchProvider,
   secretStatus,
+  setSecret,
 } from '../../api/client'
 
 const bedrockProvider: AdminProvider = {
@@ -35,6 +36,11 @@ const bedrockProvider: AdminProvider = {
   credential_ref: '',
   headers: {},
   enabled: true,
+}
+
+const bedrockProviderWithRef: AdminProvider = {
+  ...bedrockProvider,
+  credential_ref: 'BEDROCK_KEY',
 }
 
 const openaicompatProvider: AdminProvider = {
@@ -351,5 +357,75 @@ describe('ProviderEdit region section', () => {
     await waitFor(() =>
       expect(patchProvider).toHaveBeenCalledWith('p1', { options: { region: 'ap-southeast-2' } }),
     )
+  })
+})
+
+describe('ProviderEdit bedrock credential section', () => {
+  beforeEach(() => {
+    vi.mocked(availableModels).mockRejectedValue(new Error('driver bedrock cannot list models'))
+  })
+
+  it('renders two labeled key inputs instead of a generic key field', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
+    renderPage('p1')
+
+    expect(await screen.findByPlaceholderText('AKIA…')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('paste key')).not.toBeInTheDocument()
+  })
+
+  it('keeps the generic single key input for a non-bedrock provider', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    expect(await screen.findByPlaceholderText('paste key')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('AKIA…')).not.toBeInTheDocument()
+  })
+
+  it('disables Save until both access key id and secret access key are filled', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
+    renderPage('p1')
+
+    await screen.findByPlaceholderText('AKIA…')
+    const saveButton = screen.getByRole('button', { name: 'Save' })
+    expect(saveButton).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    expect(saveButton).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), {
+      target: { value: 'secretvalue123' },
+    })
+    expect(saveButton).not.toBeDisabled()
+  })
+
+  it('rotates the stored secret with a JSON blob built from the two fields', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderPage('p1')
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), {
+      target: { value: 'AKIAROTATED' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), {
+      target: { value: 'rotatedsecret' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalled())
+    const [ref, payload] = vi.mocked(setSecret).mock.calls[0]
+    expect(ref).toBe('BEDROCK_KEY')
+    expect(JSON.parse(payload)).toEqual({
+      access_key_id: 'AKIAROTATED',
+      secret_access_key: 'rotatedsecret',
+    })
+  })
+
+  it('mentions no JSON in the bedrock credential hint copy', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
+    renderPage('p1')
+
+    await screen.findByPlaceholderText('AKIA…')
+    expect(screen.queryByText(/JSON/)).not.toBeInTheDocument()
   })
 })

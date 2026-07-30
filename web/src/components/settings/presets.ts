@@ -91,7 +91,7 @@ export const providerPresets: ProviderPreset[] = [
     baseURL: '',
     region: 'us-east-1',
     requiresKey: true,
-    keyHint: 'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}).',
+    keyHint: 'Create an IAM user with Bedrock access and generate an access key pair.',
     keyURL: 'https://console.aws.amazon.com/iam/home#/users',
     validateModel: 'amazon.nova-lite-v1:0',
   },

@@ -251,8 +251,10 @@ describe('Providers tab', () => {
     expect(await screen.findByText('Add AWS Bedrock')).toBeTruthy()
     expect(screen.getByText('Region')).toBeTruthy()
     expect(screen.getByRole('combobox')).toBeTruthy()
-    // Static keys are the only bedrock auth now: the key field is required.
-    expect(screen.getByText('API key')).toBeTruthy()
+    // Static keys are the only bedrock auth now: access key id + secret
+    // access key are collected directly, not a generic API key field.
+    expect(screen.getByText('Access Key ID')).toBeTruthy()
+    expect(screen.getByText('Secret Access Key')).toBeTruthy()
   })
 
   it('disables Add until a test passes, then stores the key and creates enabled', async () => {

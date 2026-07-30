@@ -142,6 +142,9 @@ function CredentialSection({
   const [configured, setConfigured] = useState(false)
   const [storedBackend, setStoredBackend] = useState('')
   const [secretValue, setSecretValue] = useState('')
+  const [accessKeyId, setAccessKeyId] = useState('')
+  const [secretAccessKey, setSecretAccessKey] = useState('')
+  const [sessionToken, setSessionToken] = useState('')
   const [savingSecret, setSavingSecret] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -173,12 +176,27 @@ function CredentialSection({
     })
   }
 
+  const bedrockKeyJSON = () =>
+    JSON.stringify({
+      access_key_id: stripPaste(accessKeyId.trim()),
+      secret_access_key: stripPaste(secretAccessKey.trim()),
+      ...(sessionToken.trim() ? { session_token: stripPaste(sessionToken.trim()) } : {}),
+    })
+
   const saveSecretValue = async () => {
-    if (!ref || !secretValue) return
+    if (!ref) return
+    if (bedrock) {
+      if (!accessKeyId.trim() || !secretAccessKey.trim()) return
+    } else if (!secretValue) {
+      return
+    }
     setSavingSecret(true)
     try {
-      await setSecret(ref, stripPaste(secretValue))
+      await setSecret(ref, bedrock ? bedrockKeyJSON() : stripPaste(secretValue))
       setSecretValue('')
+      setAccessKeyId('')
+      setSecretAccessKey('')
+      setSessionToken('')
       refreshSecretStatus()
       onChanged()
       toast.success('Key saved')
@@ -263,25 +281,74 @@ function CredentialSection({
             </button>
           )}
         </div>
-        <div className="flex gap-2">
-          <Input
-            type={secretField(defaultBackend ?? 'db', '').type}
-            value={secretValue}
-            onChange={(e) => setSecretValue(e.target.value)}
-            placeholder={
-              secretField(defaultBackend ?? 'db', configured ? 'paste new key to rotate' : 'paste key')
-                .placeholder
-            }
-            className="h-10"
-            autoComplete="off"
-          />
-          <Button variant="outline" disabled={savingSecret || !secretValue || !ref} onClick={() => void saveSecretValue()}>
-            Save
-          </Button>
-        </div>
+        {bedrock ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                type="password"
+                value={accessKeyId}
+                onChange={(e) => setAccessKeyId(e.target.value)}
+                placeholder="AKIA…"
+                className="h-10"
+                autoComplete="off"
+                aria-label="Access Key ID"
+              />
+              <Input
+                type="password"
+                value={secretAccessKey}
+                onChange={(e) => setSecretAccessKey(e.target.value)}
+                placeholder={configured ? 'paste new secret key to rotate' : 'wJalrXUtnFEMI/K7MDEN...'}
+                className="h-10"
+                autoComplete="off"
+                aria-label="Secret Access Key"
+              />
+            </div>
+            <Button
+              variant="outline"
+              disabled={savingSecret || !accessKeyId.trim() || !secretAccessKey.trim() || !ref}
+              onClick={() => void saveSecretValue()}
+            >
+              Save
+            </Button>
+            <details className="pt-1">
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+                Advanced — session token
+              </summary>
+              <Input
+                type="password"
+                value={sessionToken}
+                onChange={(e) => setSessionToken(e.target.value)}
+                placeholder="paste session token"
+                className="mt-1.5 h-10"
+                autoComplete="off"
+                aria-label="Session Token"
+              />
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                Only needed for temporary STS credentials.
+              </p>
+            </details>
+          </>
+        ) : (
+          <div className="flex gap-2">
+            <Input
+              type={secretField(defaultBackend ?? 'db', '').type}
+              value={secretValue}
+              onChange={(e) => setSecretValue(e.target.value)}
+              placeholder={
+                secretField(defaultBackend ?? 'db', configured ? 'paste new key to rotate' : 'paste key')
+                  .placeholder
+              }
+              className="h-10"
+              autoComplete="off"
+            />
+            <Button variant="outline" disabled={savingSecret || !secretValue || !ref} onClick={() => void saveSecretValue()}>
+              Save
+            </Button>
+          </div>
+        )}
         <p className="text-sm text-muted-foreground">
           {bedrock
-            ? 'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}).'
+            ? 'Create an IAM user with Bedrock access and generate an access key pair.'
             : defaultBackend === 'vault'
               ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
               : defaultBackend === 'asm'

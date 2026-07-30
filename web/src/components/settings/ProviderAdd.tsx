@@ -40,6 +40,9 @@ export function ProviderAdd() {
   const [baseURL, setBaseURL] = useState('')
   const [region, setRegion] = useState('us-east-1')
   const [key, setKey] = useState('')
+  const [accessKeyId, setAccessKeyId] = useState('')
+  const [secretAccessKey, setSecretAccessKey] = useState('')
+  const [sessionToken, setSessionToken] = useState('')
   const [ref, setRef] = useState('')
   const [refEdited, setRefEdited] = useState(false)
   const [model, setModel] = useState('')
@@ -59,6 +62,9 @@ export function ProviderAdd() {
     setBaseURL(preset.baseURL)
     setRegion(preset.region ?? 'us-east-1')
     setKey('')
+    setAccessKeyId('')
+    setSecretAccessKey('')
+    setSessionToken('')
     setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
@@ -108,6 +114,21 @@ export function ProviderAdd() {
   const isBedrock = preset.driver === 'bedrock'
   const wantsKey = preset.requiresKey
 
+  // Bedrock's two-input split (access key id / secret access key) only
+  // applies when the store writes the raw secret value itself (the
+  // "db" backend, secretField's 'password' mode). vault/asm/file take
+  // a reference to a secret already stored externally — the operator
+  // must have pre-populated that external secret with the JSON blob,
+  // so the generic single reference input stays for those backends.
+  const bedrockSplit = isBedrock && secretField(defaultBackend, '').type === 'password'
+  const bedrockKeyJSON = () =>
+    JSON.stringify({
+      access_key_id: stripPaste(accessKeyId.trim()),
+      secret_access_key: stripPaste(secretAccessKey.trim()),
+      ...(sessionToken.trim() ? { session_token: stripPaste(sessionToken.trim()) } : {}),
+    })
+  const hasKey = bedrockSplit ? !!(accessKeyId.trim() && secretAccessKey.trim()) : !!key.trim()
+
   // Any edit invalidates a previous test — the config it validated no
   // longer matches what's on screen.
   const invalidate = () => {
@@ -119,8 +140,12 @@ export function ProviderAdd() {
   }
 
   const runTest = async () => {
-    if (wantsKey && !key.trim()) {
-      setKeyError('An API key is required to test this provider.')
+    if (wantsKey && !hasKey) {
+      setKeyError(
+        bedrockSplit
+          ? 'An access key ID and secret access key are required to test this provider.'
+          : 'An API key is required to test this provider.',
+      )
       return
     }
     if (!name.trim()) {
@@ -131,9 +156,9 @@ export function ProviderAdd() {
     setBusy(true)
     setTest(null)
     try {
-      if (wantsKey && key) {
+      if (wantsKey && hasKey) {
         if (!ref.trim()) throw new Error('a credential reference name is required to store the key')
-        await setSecret(ref.trim(), stripPaste(key))
+        await setSecret(ref.trim(), bedrockSplit ? bedrockKeyJSON() : stripPaste(key))
       }
       const config = {
         name: name.trim(),
@@ -250,7 +275,84 @@ export function ProviderAdd() {
             />
           </Field>
         )}
+        {wantsKey && bedrockSplit && (
+          <div>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Access Key ID">
+                <Input
+                  type="password"
+                  value={accessKeyId}
+                  onChange={(e) => {
+                    setAccessKeyId(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder="AKIA…"
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                  aria-invalid={keyError != null}
+                />
+              </Field>
+              <Field label="Secret Access Key">
+                <Input
+                  type="password"
+                  value={secretAccessKey}
+                  onChange={(e) => {
+                    setSecretAccessKey(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder="wJalrXUtnFEMI/K7MDEN..."
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                  aria-invalid={keyError != null}
+                />
+              </Field>
+            </div>
+            {keyError && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                {keyError}
+              </p>
+            )}
+            {!keyError && preset.keyHint && (
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {preset.keyHint}
+                {preset.keyURL && (
+                  <>
+                    {' '}
+                    <a
+                      href={preset.keyURL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                    >
+                      Open {preset.name} →
+                    </a>
+                  </>
+                )}
+              </p>
+            )}
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+                Advanced — session token
+              </summary>
+              <Field label="Session Token (optional)" hint="only needed for temporary STS credentials">
+                <Input
+                  type="password"
+                  value={sessionToken}
+                  onChange={(e) => {
+                    setSessionToken(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder="paste session token"
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                />
+              </Field>
+            </details>
+          </div>
+        )}
         {wantsKey &&
+          !bedrockSplit &&
           (() => {
             const field = secretField(defaultBackend, preset.keyPlaceholder ?? 'paste key')
             return (
