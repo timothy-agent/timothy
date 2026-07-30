@@ -7,15 +7,18 @@ package chat
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -104,6 +107,15 @@ type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text s
 // beats no turn.
 type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
 
+// AttachmentStore is the slice of *attachments.Store chat needs: Get
+// validates a ref exists (400 before any event append), Open resolves
+// its bytes to base64 at request-build time. Nil disables attachments
+// — a Request naming any Attachments id gets ErrBadRequest.
+type AttachmentStore interface {
+	Get(ctx context.Context, id string) (attachments.Attachment, error)
+	Open(ctx context.Context, id string) (io.ReadCloser, attachments.Attachment, error)
+}
+
 // Granter is the narrow slice of *tools.Permissions chat needs to seed
 // standing grants for a serving agent's ApprovalAllowlist — the same
 // shape missions/driver.go's sessionGranter uses against the same
@@ -131,6 +143,7 @@ type Service struct {
 	skillBodies map[string]string                  // name -> full pack body, for skill_hint
 	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
 	sensitive   *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
+	attachments AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
 	logger      *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -183,6 +196,10 @@ func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 // extraction on t.Route instead of memoryd's own default. Optional —
 // nil leaves every turn's side-calls on today's behavior.
 func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t }
+
+// SetAttachments wires the attachment store (D-045). Optional — nil
+// (ATTACHMENTS_DIR unset) rejects any Request naming Attachments ids.
+func (s *Service) SetAttachments(store AttachmentStore) { s.attachments = store }
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
 // request naming the autoAgentName sentinel resolves through candidates
@@ -356,6 +373,10 @@ type Request struct {
 	// skip: the pack's body is in the system prompt before the first
 	// token streams.
 	SkillHint string `json:"skill_hint,omitempty"`
+	// Attachments are attachment ids (internal/brain/attachments)
+	// the user attached to this message — refs only, resolved into
+	// base64 at request-build time (D-045).
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 // Chat streams one turn. The user message is durably appended before
@@ -363,8 +384,12 @@ type Request struct {
 // abnormal end) is appended when the stream finishes. The returned
 // channel follows the stream package's terminal contract.
 func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.StreamEvent, error) {
-	if strings.TrimSpace(req.Message) == "" {
-		return "", nil, fmt.Errorf("chat: %w: message is required", ErrBadRequest)
+	if strings.TrimSpace(req.Message) == "" && len(req.Attachments) == 0 {
+		return "", nil, fmt.Errorf("chat: %w: message or an attachment is required", ErrBadRequest)
+	}
+	images, err := s.validateAttachments(ctx, req.Attachments)
+	if err != nil {
+		return "", nil, err
 	}
 	agentName := req.Agent
 	if agentName == autoAgentName {
@@ -429,12 +454,80 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}
 
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint,
+		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
 	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
+}
+
+// resolveImages fills each message's Images from its ImageRefs
+// in-place, reading each attachment's bytes and base64-encoding them.
+// The only call site (runTurn, immediately before the gateway request
+// is built) — nothing else in the turn's lifecycle ever needs bytes
+// (D-045). A no-op when nothing carries refs (the common case). Once
+// resolved, ImageRefs is cleared: it never crosses the gwclient wire
+// anyway (json:"-"), but clearing avoids holding two views of the same
+// data past the point either is needed.
+func (s *Service) resolveImages(ctx context.Context, msgs []provider.Message) error {
+	for i := range msgs {
+		if len(msgs[i].ImageRefs) == 0 {
+			continue
+		}
+		if s.attachments == nil {
+			return fmt.Errorf("chat: resolve images: attachments are not enabled")
+		}
+		images := make([]provider.ImageData, 0, len(msgs[i].ImageRefs))
+		for _, ref := range msgs[i].ImageRefs {
+			data, err := s.readAttachment(ctx, ref.ID)
+			if err != nil {
+				return fmt.Errorf("chat: resolve image %q: %w", ref.ID, err)
+			}
+			images = append(images, provider.ImageData{MediaType: ref.Mime, Data: data})
+		}
+		msgs[i].Images = images
+		msgs[i].ImageRefs = nil
+	}
+	return nil
+}
+
+// readAttachment opens and base64-encodes one attachment's bytes.
+func (s *Service) readAttachment(ctx context.Context, id string) (string, error) {
+	r, _, err := s.attachments.Open(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = r.Close() }()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// validateAttachments checks every id exists in the attachment store
+// BEFORE the turn's exclusivity is won or anything is appended (D-042:
+// store lookups are read-only and safe before turnBegin, but a bad ref
+// must 400 before even the user_message persists). Empty ids returns
+// nil, nil without touching the store — attachments stay off when
+// unconfigured, and a message with none never needs it wired.
+func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if s.attachments == nil {
+		return nil, fmt.Errorf("chat: %w: attachments are not enabled", ErrBadRequest)
+	}
+	refs := make([]session.ImageRef, 0, len(ids))
+	for _, id := range ids {
+		att, err := s.attachments.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+		}
+		refs = append(refs, session.ImageRef{ID: att.ID, Mime: att.Mime})
+	}
+	return refs, nil
 }
 
 // pinSensitiveRoute promotes the session-wide privacy floor above the
@@ -551,6 +644,14 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	}
 	msgs, err := session.LLMContext(events, s.budget(ctx))
 	if err != nil {
+		s.turnDone(sessionID)
+		return sessionID, nil, err
+	}
+	// Resolve image refs into base64 ONLY here, right before the
+	// gateway call: this is the sole point in the whole turn where
+	// attachment bytes exist in memory at all (D-045). ImageRefs never
+	// crosses the wire (json:"-"); Images (the resolved payload) does.
+	if err := s.resolveImages(ctx, msgs); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}

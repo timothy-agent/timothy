@@ -73,7 +73,14 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			if err := decode(ev, &m); err != nil {
 				return nil, err
 			}
-			msgs = append(msgs, provider.Message{Role: "user", Content: m.Text})
+			msg := provider.Message{Role: "user", Content: m.Text}
+			// Refs only, no bytes (D-045): chat.runTurn resolves these
+			// into Images just before the gateway call. Projection stays
+			// store-free.
+			for _, img := range m.Images {
+				msg.ImageRefs = append(msg.ImageRefs, provider.ImageRef{ID: img.ID, Mime: img.Mime})
+			}
+			msgs = append(msgs, msg)
 		case KindAssistantTurn:
 			var t AssistantTurn
 			if err := decode(ev, &t); err != nil {
@@ -182,6 +189,7 @@ type TranscriptItem struct {
 	Kind       string             `json:"kind"` // user | assistant | tool | permission | compaction | interrupted | error
 	Text       string             `json:"text,omitempty"`
 	Blocks     []UIBlock          `json:"blocks,omitempty"`
+	Images     []ImageRef         `json:"images,omitempty"`
 	Provider   string             `json:"provider,omitempty"`
 	Model      string             `json:"model,omitempty"`
 	Usage      *stream.Usage      `json:"usage,omitempty"`
@@ -210,7 +218,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			if err := decode(ev, &m); err != nil {
 				return nil, err
 			}
-			item.Kind, item.Text = "user", m.Text
+			item.Kind, item.Text, item.Images = "user", m.Text, m.Images
 		case KindAssistantTurn:
 			var t AssistantTurn
 			if err := decode(ev, &t); err != nil {
