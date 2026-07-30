@@ -154,6 +154,18 @@ export function InterruptedMessage({ text }: { text: string }) {
   )
 }
 
+// ErrorMessage renders a turn that persisted as failed (D-043): a
+// terminal error/incomplete with nothing worth keeping, or a completed
+// turn with no text, reasoning, or tool calls. Surfacing this IS the
+// point — the turn used to vanish from the transcript silently.
+export function ErrorMessage({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-2" data-testid="turn-failed">
+      <Badge variant="destructive">{text || 'this turn failed'}</Badge>
+    </div>
+  )
+}
+
 export function AssistantMessage({
   msg,
   onRetry,

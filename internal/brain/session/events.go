@@ -23,6 +23,12 @@ const (
 	KindTurnMemory         = "turn_memory"
 	KindPermissionRequest  = "permission_request"
 	KindPermissionResolved = "permission_resolved"
+	// KindTurnFailed records a turn that ended without a usable answer —
+	// a terminal error/incomplete with nothing worth keeping as partial
+	// text, or a completed turn with no text, reasoning, or tool
+	// executions (D-044) — so the event log carries evidence instead of
+	// silence.
+	KindTurnFailed = "turn_failed"
 )
 
 // Event is one row of a session's log.
@@ -121,6 +127,15 @@ type CompactionApplied struct {
 // abnormally; the next request splices it in, then it is superseded.
 type PendingState struct {
 	Partial string `json:"partial"`
+}
+
+// TurnFailed records a turn that produced no usable answer: Code is a
+// short machine-readable reason (e.g. a terminal error/incomplete's
+// code, or "empty_response" for a completed turn with nothing to
+// show), Message is the human-readable detail.
+type TurnFailed struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // PermissionRequest records a parked tool call awaiting approval

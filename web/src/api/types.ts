@@ -115,7 +115,7 @@ export interface ToolExecution {
 // dropped by the server projection, same as the live client drops it).
 export interface TranscriptItem {
   seq: number
-  kind: 'user' | 'assistant' | 'tool' | 'permission' | 'compaction' | 'interrupted'
+  kind: 'user' | 'assistant' | 'tool' | 'permission' | 'compaction' | 'interrupted' | 'error'
   text?: string
   blocks?: UIBlock[]
   tool?: ToolExecution

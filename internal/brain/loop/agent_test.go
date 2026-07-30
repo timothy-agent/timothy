@@ -439,6 +439,42 @@ func TestAgentFlushesUsageOnGatewayError(t *testing.T) {
 	}
 }
 
+// TestAgentIncompleteThenDoneNotTreatedAsCleanFinish pins D-044: the
+// gateway sends incomplete THEN done for a cut-off or zero-output
+// stream. Before the fix, terminal was last-write-wins, so done
+// clobbered incomplete and the step's abnormal-end guard never fired —
+// the turn looked like a clean finish with an empty answer. The loop
+// must instead follow the same surface-and-stop path an error step
+// takes today: the client sees the incomplete terminal, never a done.
+func TestAgentIncompleteThenDoneNotTreatedAsCleanFinish(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		{
+			{Type: stream.EventUsage, Usage: &stream.Usage{InputTokens: 10, OutputTokens: 0}},
+			{Type: stream.EventIncomplete, Text: "provider produced no output"},
+			{Type: stream.EventDone, Meta: &stream.Meta{Provider: "fake", Model: "fake-1"}},
+		},
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if len(ofType(evs, stream.EventDone)) != 0 {
+		t.Fatalf("events = %+v, want no done event reaching the client", evs)
+	}
+	incomplete := ofType(evs, stream.EventIncomplete)
+	if len(incomplete) != 1 || incomplete[0].Text != "provider produced no output" {
+		t.Fatalf("incomplete events = %+v, want exactly one carrying the original text", incomplete)
+	}
+	if evs[len(evs)-1].Type != stream.EventIncomplete {
+		t.Fatalf("last event = %v, want incomplete (the step's abnormal-end terminal)", evs[len(evs)-1].Type)
+	}
+}
+
 func TestAgentPerToolOffloadThreshold(t *testing.T) {
 	t.Parallel()
 	// A 100-byte result: default threshold keeps it inline, a 50-byte

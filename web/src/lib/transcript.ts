@@ -9,6 +9,7 @@ export type ChatItem = { id: string } & (
   | ({ role: 'assistant' } & AssistantState)
   | { role: 'compaction'; text: string }
   | { role: 'interrupted'; text: string }
+  | { role: 'error'; text: string }
 )
 
 function toToolRun(tool: NonNullable<TranscriptItem['tool']>): ToolRun {
@@ -112,6 +113,10 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
       case 'interrupted':
         flush()
         out.push({ id, role: 'interrupted', text: item.text ?? '' })
+        break
+      case 'error':
+        flush()
+        out.push({ id, role: 'error', text: item.text ?? '' })
         break
     }
   }

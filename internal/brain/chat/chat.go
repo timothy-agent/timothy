@@ -633,9 +633,34 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	// s.sensitive — memory extraction then rides the sensitive route
 	// pin instead of its own default (see persistTurn).
 	turnSensitive := false
+	// ranTool records whether ANY tool executed this turn (regardless of
+	// sensitivity) — persistTurn's empty-response guard (D-044) must not
+	// flag a turn whose answer is entirely tool/reasoning traffic with
+	// no text.
+	ranTool := false
+	// failure captures a terminal EventError/EventIncomplete's code and
+	// message (D-044): the relay used to just drop these on the floor
+	// after streaming them to the client, leaving a turn with nothing
+	// persisted. persistTurn appends it as KindTurnFailed when there is
+	// no partial text worth keeping instead.
+	var failure *session.TurnFailed
 	noteToolResult := func(ev stream.StreamEvent) {
-		if ev.Type == stream.EventToolResult && ev.ToolResult != nil && s.sensitive.Matches(ev.ToolResult.Name) {
+		if ev.Type != stream.EventToolResult || ev.ToolResult == nil {
+			return
+		}
+		ranTool = true
+		if s.sensitive.Matches(ev.ToolResult.Name) {
 			turnSensitive = true
+		}
+	}
+	noteFailure := func(ev stream.StreamEvent) {
+		switch ev.Type {
+		case stream.EventError:
+			if ev.Err != nil {
+				failure = &session.TurnFailed{Code: ev.Err.Code, Message: ev.Err.Message}
+			}
+		case stream.EventIncomplete:
+			failure = &session.TurnFailed{Code: "incomplete", Message: ev.Text}
 		}
 	}
 
@@ -708,11 +733,12 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				ev.Meta = meta
 			}
 			noteToolResult(ev)
+			noteFailure(ev)
 			notePermission(ev)
 			bc.publish(ev)
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order — mirrors missions.Store's own "publish only after
@@ -748,6 +774,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				ev.Meta = meta
 			}
 			noteToolResult(ev)
+			noteFailure(ev)
 			notePermission(ev)
 			bc.publish(ev)
 			select {
@@ -780,7 +807,7 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -791,6 +818,34 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 			if _, err := s.log.Append(ctx, sessionID, session.KindPendingState, session.PendingState{Partial: text}); err != nil {
 				s.logger.Error("persist pending state", "session_id", sessionID, "error", err)
 			}
+			return
+		}
+		// No partial worth keeping: a captured terminal error/incomplete
+		// (D-044) becomes durable evidence instead of the turn silently
+		// vanishing — same detached-context, best-effort append as the
+		// pending-state write above.
+		if failure != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+			defer cancel()
+			if _, err := s.log.Append(ctx, sessionID, session.KindTurnFailed, *failure); err != nil {
+				s.logger.Error("persist turn failed", "session_id", sessionID, "error", err)
+			}
+		}
+		return
+	}
+
+	// A completed turn with no text, no reasoning, and no tool
+	// executions is not a success (D-044) — persist evidence instead of
+	// a blank assistant_turn. Keyed on all three being empty so a
+	// tool/reasoning-only turn (a real, valid shape some providers use)
+	// stays untouched.
+	if text == "" && reasoning == "" && !ranTool {
+		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		defer cancel()
+		if _, err := s.log.Append(ctx, sessionID, session.KindTurnFailed, session.TurnFailed{
+			Code: "empty_response", Message: "the turn completed with no text, reasoning, or tool calls",
+		}); err != nil {
+			s.logger.Error("persist turn failed", "session_id", sessionID, "error", err)
 		}
 		return
 	}

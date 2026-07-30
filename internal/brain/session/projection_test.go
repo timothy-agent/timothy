@@ -193,6 +193,30 @@ func TestLLMContextIgnoresToolExecutions(t *testing.T) {
 	}
 }
 
+// TestLLMContextRendersTurnFailed pins D-044: a persisted turn_failed
+// event rides the LLM context as a bracketed user-role note (same
+// register as compaction/turn-memory asides), never as an assistant
+// message the model might imitate.
+func TestLLMContextRendersTurnFailed(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		user(t, 1, "do the thing"),
+		ev(t, 2, KindTurnFailed, TurnFailed{Code: "chain_exhausted", Message: "every provider failed"}),
+		user(t, 3, "try again"),
+	}
+
+	msgs, err := LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %+v, want 3 (user, failed note, user)", msgs)
+	}
+	if msgs[1].Role != "user" || !strings.Contains(msgs[1].Content, "every provider failed") {
+		t.Fatalf("turn_failed note = %+v", msgs[1])
+	}
+}
+
 func TestUITranscript(t *testing.T) {
 	t.Parallel()
 	events := []Event{
@@ -223,6 +247,29 @@ func TestUITranscript(t *testing.T) {
 	}
 	if items[2].Provider != "prov" || len(items[2].Blocks) != 1 {
 		t.Fatalf("assistant item = %+v", items[2])
+	}
+}
+
+// TestUITranscriptRendersTurnFailed pins D-044's UI side: a persisted
+// turn_failed event surfaces as its own "error" replay item carrying
+// the human-readable message — the whole point is that a failed turn
+// is visible on reload, not silently dropped like session_started.
+func TestUITranscriptRendersTurnFailed(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		user(t, 1, "do the thing"),
+		ev(t, 2, KindTurnFailed, TurnFailed{Code: "empty_response", Message: "the turn completed with no text, reasoning, or tool calls"}),
+	}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %+v, want 2", items)
+	}
+	if items[1].Kind != "error" || items[1].Text != "the turn completed with no text, reasoning, or tool calls" {
+		t.Fatalf("turn_failed item = %+v", items[1])
 	}
 }
 

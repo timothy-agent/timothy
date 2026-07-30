@@ -12,7 +12,7 @@ import {
 import type { ChatEvent } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
 import { Composer } from '../components/Composer'
-import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from '../components/Message'
+import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from '../components/Message'
 import { PermissionModal } from '../components/PermissionModal'
 import { Sheet } from '../components/ui/sheet'
 import {
@@ -480,6 +480,8 @@ export function Chat({
               return <CompactionDivider key={item.id} text={item.text} />
             case 'interrupted':
               return <InterruptedMessage key={item.id} text={item.text} />
+            case 'error':
+              return <ErrorMessage key={item.id} text={item.text} />
             default:
               return (
                 <AssistantMessage

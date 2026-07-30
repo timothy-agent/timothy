@@ -182,6 +182,15 @@ describe('fromTranscript', () => {
     expect(fromTranscript([])).toEqual([])
   })
 
+  it('renders a turn_failed event as its own error item', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'user', text: 'do the thing', created_at: at },
+      { seq: 2, kind: 'error', text: 'every provider failed', created_at: at },
+    ])
+    expect(items.map((i) => i.role)).toEqual(['user', 'error'])
+    expect(items[1]).toMatchObject({ role: 'error', text: 'every provider failed' })
+  })
+
   it('exposes a still-unresolved replayed ask in permissions[]', () => {
     const items = fromTranscript([
       { seq: 1, kind: 'user', text: 'q', created_at: at },
