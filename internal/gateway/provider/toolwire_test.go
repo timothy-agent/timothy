@@ -96,7 +96,8 @@ func TestOpenAICompatToolRoundTrip(t *testing.T) {
 		t.Fatalf("tool result = %+v", res1)
 	}
 	res2 := req.Messages[3]
-	if !strings.HasPrefix(res2.Content, "ERROR: ") {
+	content, ok := res2.Content.(string)
+	if !ok || !strings.HasPrefix(content, "ERROR: ") {
 		t.Fatalf("error result unmarked: %+v", res2)
 	}
 }

@@ -201,9 +201,12 @@ type Sticky struct {
 // "ordered" routes, score order for "auto"/"price"/"latency" (recent
 // ledger stats + declared prices). Disabled, unhealthy, and
 // capability-lacking providers are skipped; each candidate is tried at
-// most once.
-func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error) {
-	required := requiredCapability(route)
+// most once. extra names additional capabilities every candidate must
+// also declare beyond the route's own requiredCapability — e.g.
+// CapVision when the request carries images (D-045); most callers pass
+// none.
+func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.Capability) ([]Attempt, error) {
+	required := append([]provider.Capability{requiredCapability(route)}, extra...)
 	var attempts []Attempt
 	var skipped []string
 	seen := map[string]bool{} // "name/model" dedupe across hint + sticky + chain
@@ -267,7 +270,7 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error)
 // candidate. It returns the built driver plus empty subject/reason when
 // usable, or a skip subject ("name", or "name/model" for capability
 // misses) and reason matching the NoRouteError wording.
-func (s *Snapshot) entryGate(row ProviderRow, model string, required provider.Capability) (provider.Provider, string, string) {
+func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.Capability) (provider.Provider, string, string) {
 	p, inRegistry := s.registry.Get(row.Name)
 	switch {
 	case !row.Enabled:
@@ -276,8 +279,11 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required provider.Ca
 		return nil, row.Name, fmt.Sprintf("unhealthy: credential %s unresolved", row.CredentialRef)
 	case !inRegistry:
 		return nil, row.Name, "not in registry"
-	case !attemptCapable(p, row, model, required):
-		return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", required)
+	}
+	for _, want := range required {
+		if !attemptCapable(p, row, model, want) {
+			return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", want)
+		}
 	}
 	return p, "", ""
 }
@@ -326,7 +332,7 @@ type ResolvedEntry struct {
 func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 	chain := s.routes[route]
 	w, scoredStrategy := strategyWeights[s.strategy[route]]
-	required := requiredCapability(route)
+	required := []provider.Capability{requiredCapability(route)}
 
 	// Gather each entry's raw factors first: normalization needs the
 	// best value across the candidate set.

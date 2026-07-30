@@ -51,6 +51,18 @@ type UserMessage struct {
 	Route  string `json:"route,omitempty"`
 	Agent  string `json:"agent,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
+	// Images are refs to attachments (internal/brain/attachments),
+	// never bytes — base64 exists only transiently at request-build
+	// time (D-045). Additive: a message with no images omits this.
+	Images []ImageRef `json:"images,omitempty"`
+}
+
+// ImageRef points at a stored attachment; Mime rides alongside so
+// projections and drivers can build a data: URL without a store
+// round-trip.
+type ImageRef struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
 }
 
 // UIBlock is one renderable piece of an assistant turn.

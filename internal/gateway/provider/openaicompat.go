@@ -48,7 +48,7 @@ func (o *OpenAICompat) Name() string { return o.cfg.Name }
 func (o *OpenAICompat) Kind() Kind   { return KindAPI }
 
 func (o *OpenAICompat) Capabilities() []Capability {
-	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings}
+	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings, CapVision}
 }
 
 // Embed implements Embedder via the /embeddings endpoint, under the
@@ -126,10 +126,24 @@ func (o *OpenAICompat) Embed(ctx context.Context, model string, texts []string) 
 // wire types (request)
 
 type oaiMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content"`
+	Role string `json:"role"`
+	// Content is a plain string for every text-only message (the
+	// original, unchanged wire shape — some OpenAI-compat servers
+	// reject a content-parts array) and only becomes []oaiContentPart
+	// when the message carries images (D-045).
+	Content    any           `json:"content"`
 	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
+}
+
+// oaiContentPart is one OpenAI chat/completions content-parts array
+// entry: {"type":"text",...} or {"type":"image_url",...}.
+type oaiContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
 }
 
 type oaiToolCall struct {
@@ -295,6 +309,26 @@ func isHTTP400(ev stream.StreamEvent) bool {
 	return ev.Type == stream.EventError && ev.Err != nil && ev.Err.Code == "http_400"
 }
 
+// imageContentParts builds the OpenAI chat/completions content-parts
+// array for a message carrying images: a leading text part (only when
+// non-empty — an image-only message needs no empty text part) followed
+// by one image_url part per image, each a data: URL (D-045).
+func imageContentParts(text string, images []ImageData) []oaiContentPart {
+	parts := make([]oaiContentPart, 0, len(images)+1)
+	if text != "" {
+		parts = append(parts, oaiContentPart{Type: "text", Text: text})
+	}
+	for _, img := range images {
+		parts = append(parts, oaiContentPart{
+			Type: "image_url",
+			ImageURL: &struct {
+				URL string `json:"url"`
+			}{URL: "data:" + img.MediaType + ";base64," + img.Data},
+		})
+	}
+	return parts
+}
+
 func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 	out := oaiRequest{
 		Model:     req.Model,
@@ -316,15 +350,19 @@ func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 	}
 	for _, m := range req.Messages {
 		om := oaiMessage{Role: m.Role, Content: m.Content}
+		if len(m.Images) > 0 {
+			om.Content = imageContentParts(m.Content, m.Images)
+		}
 		switch {
 		case m.Role == "tool" && m.ToolResult != nil:
 			om.ToolCallID = m.ToolResult.ID
-			om.Content = m.ToolResult.Content
+			content := m.ToolResult.Content
 			if m.ToolResult.IsError {
 				// The chat/completions shape has no is_error flag;
 				// the marker keeps the failure visible to the model.
-				om.Content = "ERROR: " + om.Content
+				content = "ERROR: " + content
 			}
+			om.Content = content
 		case len(m.ToolCalls) > 0:
 			for _, tc := range m.ToolCalls {
 				var oc oaiToolCall

@@ -119,7 +119,7 @@ func TestNewBedrock(t *testing.T) {
 		t.Fatalf("kind = %v", p.Kind())
 	}
 	caps := p.Capabilities()
-	if len(caps) != 4 || caps[0] != CapChat || caps[2] != CapTools {
+	if len(caps) != 5 || caps[0] != CapChat || caps[2] != CapTools || caps[4] != CapVision {
 		t.Fatalf("caps = %v", caps)
 	}
 }

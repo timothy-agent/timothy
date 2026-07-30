@@ -119,8 +119,12 @@ services:
       # just idles degraded). Empty keeps the original in-process exec
       # behavior; brain never touches the Docker socket directly.
       SANDBOXD_URL: ${MISSION_SANDBOX_IMAGE:+http://sandboxd:8083}
+      # Content-addressed image attachment bytes (metadata only in
+      # Postgres); compose-internal path, not user-facing.
+      ATTACHMENTS_DIR: /attachments
     volumes:
       - workspace:/workspace
+      - attachments:/attachments
     ports:
       - "${BRAIN_PORT:-8300}:8080"
     depends_on:
@@ -288,6 +292,7 @@ volumes:
   pgdata:
   web_node_modules:
   workspace:
+  attachments:
 
 networks:
   timothy:

@@ -19,6 +19,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/api"
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -313,10 +314,19 @@ func main() {
 		return memclient.RenderBlock(memories)
 	})
 
+	attachmentStore := buildAttachments(app.DB, app.Log)
+	// Nil-safe: a nil *attachments.Store boxed into the AttachmentStore
+	// interface would be a non-nil interface value, breaking chat.go's
+	// `s.attachments == nil` gate — so this only wires when non-nil,
+	// same guard shape as the missionHub check above.
+	if attachmentStore != nil {
+		svc.SetAttachments(attachmentStore)
+	}
+
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, missionHub, &http.Client{}, whisperURL, token, app.Log)
+		missionWorkspace, resolveSecret, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -339,6 +349,18 @@ func buildSecretStore(db *pgpool.Pool, log *slog.Logger) (*secretstore.Store, er
 		return nil, fmt.Errorf("secret store init failed: %w", err)
 	}
 	return secrets, nil
+}
+
+// buildAttachments wires the image-attachment store (D-045).
+// ATTACHMENTS_DIR unset means the feature is off: no store, chat
+// rejects attachment refs, and the API surface stays unmounted.
+func buildAttachments(db *pgpool.Pool, log *slog.Logger) *attachments.Store {
+	dir := os.Getenv("ATTACHMENTS_DIR")
+	if dir == "" {
+		log.Info("ATTACHMENTS_DIR not set; image attachments disabled")
+		return nil
+	}
+	return attachments.New(dir, db)
 }
 
 // buildConnectors wires the integration control plane. secrets is

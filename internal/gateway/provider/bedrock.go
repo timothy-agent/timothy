@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -67,7 +68,7 @@ func (b *Bedrock) Name() string { return b.cfg.Name }
 func (b *Bedrock) Kind() Kind   { return KindAPI }
 
 func (b *Bedrock) Capabilities() []Capability {
-	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings}
+	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings, CapVision}
 }
 
 // lazyClient builds the AWS client on first use (default credential
@@ -280,9 +281,24 @@ func converseMessages(msgs []Message) []types.Message {
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
+			blocks := []types.ContentBlock{&types.ContentBlockMemberText{Value: m.Content}}
+			// Text-only messages keep the single text block (unchanged);
+			// only a message actually carrying images pays for decoding
+			// them (D-045). Bytes only exist here transiently, decoded
+			// straight from the base64 chat.runTurn filled in.
+			for _, img := range m.Images {
+				raw, err := base64.StdEncoding.DecodeString(img.Data)
+				if err != nil {
+					continue // malformed image data must not abort the whole turn
+				}
+				blocks = append(blocks, &types.ContentBlockMemberImage{Value: types.ImageBlock{
+					Format: bedrockImageFormat(img.MediaType),
+					Source: &types.ImageSourceMemberBytes{Value: raw},
+				}})
+			}
 			out = append(out, types.Message{
 				Role:    types.ConversationRoleUser,
-				Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: m.Content}},
+				Content: blocks,
 			})
 		case "assistant":
 			blocks := []types.ContentBlock{}
@@ -333,6 +349,24 @@ func converseMessages(msgs []Message) []types.Message {
 		}
 	}
 	return out
+}
+
+// bedrockImageFormat maps an attachment MIME type to Converse's
+// ImageFormat enum. Callers only ever pass one of the four MIME types
+// the attachments store allows (image/png, image/jpeg, image/webp,
+// image/gif); anything else falls back to png rather than sending an
+// empty Format Converse would reject outright.
+func bedrockImageFormat(mime string) types.ImageFormat {
+	switch mime {
+	case "image/jpeg":
+		return types.ImageFormatJpeg
+	case "image/webp":
+		return types.ImageFormatWebp
+	case "image/gif":
+		return types.ImageFormatGif
+	default:
+		return types.ImageFormatPng
+	}
 }
 
 func toolResultStatus(isError bool) types.ToolResultStatus {
