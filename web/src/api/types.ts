@@ -215,6 +215,19 @@ export interface UsagePoint {
   unpriced_output_tokens: number
 }
 
+// GroupTotal is one group's totals over a whole range — the
+// non-time-bucketed sibling of UsagePoint, for tables/charts that rank
+// groups rather than plot them over time.
+export interface GroupTotal {
+  group: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
+}
+
 // One mission's total ledger footprint. unpriced_requests counts turns
 // whose cost is unknown (NULL in the ledger) — cost_usd is then a
 // floor, not the whole bill.

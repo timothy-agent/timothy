@@ -11,6 +11,7 @@ import type {
   ChatEvent,
   ChatRequest,
   EntityGraphData,
+  GroupTotal,
   LatencyRow,
   MemoryItem,
   Mission,
@@ -449,6 +450,17 @@ export async function usageSeries(
     `/v1/admin/usage/series?${rangeParams(from, to, { bucket, group })}`,
   )
   return points ?? []
+}
+
+export async function usageTotals(
+  from: Date,
+  to: Date,
+  group: 'provider' | 'model' | 'route',
+): Promise<GroupTotal[]> {
+  const { totals } = await request<{ totals: GroupTotal[] }>(
+    `/v1/admin/usage/totals?${rangeParams(from, to, { group })}`,
+  )
+  return totals ?? []
 }
 
 export async function usageSessions(from: Date, to: Date, limit = 10): Promise<SessionUsage[]> {

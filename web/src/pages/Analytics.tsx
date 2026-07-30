@@ -19,10 +19,12 @@ import {
   usageSeries,
   usageSessions,
   usageSummary,
+  usageTotals,
 } from '../api/client'
 import type {
   BudgetStatus,
   CacheRow,
+  GroupTotal,
   LatencyRow,
   SessionUsage,
   UsagePoint,
@@ -65,6 +67,8 @@ interface Loaded {
   byProvider: UsagePoint[]
   byModel: UsagePoint[]
   byRoute: UsagePoint[]
+  providerTotals: GroupTotal[]
+  modelTotals: GroupTotal[]
   sessions: SessionUsage[]
   latency: LatencyRow[]
   cache: CacheRow[]
@@ -72,11 +76,16 @@ interface Loaded {
 }
 
 // pivot turns (bucket, group) points into recharts rows keyed by
-// bucket with one column per group.
-function pivot(points: UsagePoint[], metric: (p: UsagePoint) => number) {
-  const groups = [...new Set(points.map((p) => p.group))]
+// bucket with one column per group. onlyGroups, when given, restricts
+// both the emitted columns and the rows' contents to that set — how
+// zero-cost groups get excluded from cost charts without touching the
+// token charts fed by the same series.
+function pivot(points: UsagePoint[], metric: (p: UsagePoint) => number, onlyGroups?: Set<string>) {
+  const allGroups = [...new Set(points.map((p) => p.group))]
+  const groups = onlyGroups ? allGroups.filter((g) => onlyGroups.has(g)) : allGroups
   const rows = new Map<string, Record<string, number | string>>()
   for (const p of points) {
+    if (onlyGroups && !onlyGroups.has(p.group)) continue
     const key = p.bucket
     const row = rows.get(key) ?? { bucket: key }
     row[p.group] = ((row[p.group] as number) ?? 0) + metric(p)
@@ -104,6 +113,28 @@ const bucketLabel = (iso: string, bucket: string) => {
   return bucket === 'hour'
     ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+// useHiddenKeys backs a chart's selectable legend: clicking an entry
+// toggles its data key out of the rendered series (and struck-through
+// in the legend itself) rather than filtering the underlying data.
+function useHiddenKeys() {
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const onLegendClick = (entry: { dataKey?: unknown }) => {
+    const key = String(entry.dataKey ?? '')
+    if (!key) return
+    setHidden((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+  const legendFormatter = (value: string, entry: { dataKey?: unknown }) => {
+    const key = String(entry.dataKey ?? value)
+    return <span style={{ textDecoration: hidden.has(key) ? 'line-through' : 'none' }}>{value}</span>
+  }
+  return { hidden, onLegendClick, legendFormatter }
 }
 
 export function Analytics() {
@@ -141,6 +172,8 @@ export function Analytics() {
       usageSeries(from, to, bucket, 'provider'),
       usageSeries(from, to, bucket, 'model'),
       usageSeries(from, to, bucket, 'route'),
+      usageTotals(from, to, 'provider'),
+      usageTotals(from, to, 'model'),
       usageSessions(from, to, 10),
       usageLatency(from, to),
       usageCache(from, to),
@@ -159,10 +192,12 @@ export function Analytics() {
         byProvider: val(results[3], []),
         byModel: val(results[4], []),
         byRoute: val(results[5], []),
-        sessions: val(results[6], []),
-        latency: val(results[7], []),
-        cache: val(results[8], []),
-        budget: val<BudgetStatus | null>(results[9], null),
+        providerTotals: val(results[6], []),
+        modelTotals: val(results[7], []),
+        sessions: val(results[8], []),
+        latency: val(results[9], []),
+        cache: val(results[10], []),
+        budget: val<BudgetStatus | null>(results[11], null),
       })
     })
     return () => {
@@ -171,9 +206,28 @@ export function Analytics() {
   }, [range])
 
   const { bucket } = rangeDates(range)
-  const cost = useMemo(
-    () => (data ? pivot(data.byProvider, (p) => p.cost_usd) : { groups: [], rows: [] }),
+
+  const costLegend = useHiddenKeys()
+  const tokensLegend = useHiddenKeys()
+  const modelCostLegend = useHiddenKeys()
+  const modelTokensLegend = useHiddenKeys()
+
+  // Zero-cost groups (unpriced NULL rows and genuinely-free providers
+  // like local Ollama) add no signal to a cost view — excluded from
+  // the provider/model cost tables and bar charts, but never from
+  // token charts fed by the same series.
+  const pricedProviders = useMemo(
+    () => new Set((data?.providerTotals ?? []).filter((g) => g.cost_usd > 0).map((g) => g.group)),
     [data],
+  )
+  const pricedModels = useMemo(
+    () => new Set((data?.modelTotals ?? []).filter((g) => g.cost_usd > 0).map((g) => g.group)),
+    [data],
+  )
+
+  const cost = useMemo(
+    () => (data ? pivot(data.byProvider, (p) => p.cost_usd, pricedProviders) : { groups: [], rows: [] }),
+    [data, pricedProviders],
   )
   const tokens = useMemo(() => {
     if (!data) return []
@@ -185,6 +239,35 @@ export function Analytics() {
       byBucket.set(p.bucket, row)
     }
     return [...byBucket.values()]
+  }, [data])
+
+  const modelCost = useMemo(
+    () => (data ? pivot(data.byModel, (p) => p.cost_usd, pricedModels) : { groups: [], rows: [] }),
+    [data, pricedModels],
+  )
+  const modelTokens = useMemo(() => {
+    if (!data) return { groups: [], rows: [] }
+    const inputSeries = pivot(data.byModel, (p) => p.input_tokens)
+    const outputByBucket = new Map<string, Record<string, number>>()
+    for (const p of data.byModel) {
+      const row = outputByBucket.get(p.bucket) ?? {}
+      row[p.group] = (row[p.group] ?? 0) + p.output_tokens
+      outputByBucket.set(p.bucket, row)
+    }
+    // Suffix output columns so a stacked bar can show both input and
+    // output per model without one key clobbering the other.
+    const rows = inputSeries.rows.map((row) => {
+      const bucketKey = String(row.bucket)
+      const out = outputByBucket.get(bucketKey) ?? {}
+      const merged: Record<string, number | string> = { bucket: bucketKey }
+      for (const g of inputSeries.groups) {
+        merged[`${g} in`] = (row[g] as number) ?? 0
+        merged[`${g} out`] = out[g] ?? 0
+      }
+      return merged
+    })
+    const groups = inputSeries.groups.flatMap((g) => [`${g} in`, `${g} out`])
+    return { groups, rows }
   }, [data])
 
   // Advisory estimates for calls the ledger recorded without a price
@@ -332,9 +415,19 @@ export function Analytics() {
                     labelFormatter={(v) => bucketLabel(String(v), bucket)}
                     formatter={(v) => money(Number(v))}
                   />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12 }}
+                    onClick={costLegend.onLegendClick}
+                    formatter={costLegend.legendFormatter}
+                  />
                   {cost.groups.map((g, i) => (
-                    <Bar key={g} dataKey={g} stackId="cost" fill={palette[i % palette.length]} />
+                    <Bar
+                      key={g}
+                      dataKey={g}
+                      stackId="cost"
+                      fill={palette[i % palette.length]}
+                      hide={costLegend.hidden.has(g)}
+                    />
                   ))}
                 </BarChart>
               </ResponsiveContainer>
@@ -358,47 +451,146 @@ export function Analytics() {
                     labelFormatter={(v) => bucketLabel(String(v), bucket)}
                     formatter={(v) => compact(Number(v))}
                   />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="input" stroke={palette[0]} dot={false} strokeWidth={2} />
-                  <Line type="monotone" dataKey="output" stroke={palette[2]} dot={false} strokeWidth={2} />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12 }}
+                    onClick={tokensLegend.onLegendClick}
+                    formatter={tokensLegend.legendFormatter}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="input"
+                    stroke={palette[0]}
+                    dot={false}
+                    strokeWidth={2}
+                    hide={tokensLegend.hidden.has('input')}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="output"
+                    stroke={palette[2]}
+                    dot={false}
+                    strokeWidth={2}
+                    hide={tokensLegend.hidden.has('output')}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </section>
         </div>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-3">
-          <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
-          <BreakdownTable title="By route" rows={data ? totals(data.byRoute) : []} />
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Top sessions by cost</h2>
-            <table className="mt-3 w-full text-sm">
-              <tbody>
-                {(data?.sessions ?? []).map((sess) => (
-                  <tr key={sess.session_id} className="border-t border-border/60">
-                    <td className="py-2 pr-2">
-                      <Link
-                        to={`/chat/${sess.session_id}`}
-                        className="block max-w-40 truncate text-blue-600 hover:underline dark:text-blue-400"
-                      >
-                        {sess.session_id.slice(0, 8)}…
-                      </Link>
-                    </td>
-                    <td className="py-2 text-right text-muted-foreground">{sess.requests} req</td>
-                    <td className="py-2 text-right font-medium">{money(sess.cost_usd)}</td>
-                  </tr>
-                ))}
-                {data && data.sessions.length === 0 && (
-                  <tr>
-                    <td className="py-6 text-center text-muted-foreground">
-                      No session spend in range.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            <h2 className="text-sm font-medium">Cost by model</h2>
+            <div className="mt-3 h-64">
+              <ResponsiveContainer>
+                <BarChart data={modelCost.rows}>
+                  <CartesianGrid strokeOpacity={0.12} vertical={false} />
+                  <XAxis
+                    dataKey="bucket"
+                    tickFormatter={(v: string) => bucketLabel(v, bucket)}
+                    {...axis}
+                  />
+                  <YAxis tickFormatter={(v: number) => money(v)} width={70} {...axis} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    labelFormatter={(v) => bucketLabel(String(v), bucket)}
+                    formatter={(v) => money(Number(v))}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12 }}
+                    onClick={modelCostLegend.onLegendClick}
+                    formatter={modelCostLegend.legendFormatter}
+                  />
+                  {modelCost.groups.map((g, i) => (
+                    <Bar
+                      key={g}
+                      dataKey={g}
+                      stackId="modelCost"
+                      fill={palette[i % palette.length]}
+                      hide={modelCostLegend.hidden.has(g)}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            {modelCost.groups.length === 0 && data && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                No priced model usage in range (free/unpriced models are excluded from cost views).
+              </p>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-border p-4">
+            <h2 className="text-sm font-medium">Token consumption per model</h2>
+            <div className="mt-3 h-64">
+              <ResponsiveContainer>
+                <BarChart data={modelTokens.rows}>
+                  <CartesianGrid strokeOpacity={0.12} vertical={false} />
+                  <XAxis
+                    dataKey="bucket"
+                    tickFormatter={(v: string) => bucketLabel(v, bucket)}
+                    {...axis}
+                  />
+                  <YAxis tickFormatter={(v: number) => compact(v)} width={55} {...axis} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    labelFormatter={(v) => bucketLabel(String(v), bucket)}
+                    formatter={(v) => compact(Number(v))}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12 }}
+                    onClick={modelTokensLegend.onLegendClick}
+                    formatter={modelTokensLegend.legendFormatter}
+                  />
+                  {modelTokens.groups.map((g, i) => (
+                    <Bar
+                      key={g}
+                      dataKey={g}
+                      stackId="modelTokens"
+                      fill={palette[i % palette.length]}
+                      hide={modelTokensLegend.hidden.has(g)}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </section>
         </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
+          <ProviderCostTable rows={data?.providerTotals ?? []} />
+          <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
+          <BreakdownTable title="By route" rows={data ? totals(data.byRoute) : []} />
+        </div>
+
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <h2 className="text-sm font-medium">Top sessions by cost</h2>
+          <table className="mt-3 w-full text-sm">
+            <tbody>
+              {(data?.sessions ?? []).map((sess) => (
+                <tr key={sess.session_id} className="border-t border-border/60">
+                  <td className="py-2 pr-2">
+                    <Link
+                      to={`/chat/${sess.session_id}`}
+                      className="block max-w-40 truncate text-blue-600 hover:underline dark:text-blue-400"
+                    >
+                      {sess.session_id.slice(0, 8)}…
+                    </Link>
+                  </td>
+                  <td className="py-2 text-right text-muted-foreground">{sess.requests} req</td>
+                  <td className="py-2 text-right font-medium">{money(sess.cost_usd)}</td>
+                </tr>
+              ))}
+              {data && data.sessions.length === 0 && (
+                <tr>
+                  <td className="py-6 text-center text-muted-foreground">
+                    No session spend in range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
 
         <section className="mt-6 rounded-xl border border-border p-4">
           <h2 className="text-sm font-medium">Latency per provider</h2>
@@ -473,6 +665,87 @@ function BreakdownTable({
           {rows.length === 0 && (
             <tr>
               <td className="py-6 text-center text-muted-foreground">Nothing in range.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
+type SortKey = 'group' | 'cost_usd' | 'requests'
+
+// ProviderCostTable is the sortable "cost by provider" table backed by
+// usageTotals — the non-time-bucketed sibling of the stacked bar chart
+// above it. Zero-cost providers (unpriced NULL rows tallied elsewhere,
+// or a genuinely free local model) are excluded: they add no signal to
+// a cost ranking.
+function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
+  const [sortKey, setSortKey] = useState<SortKey>('cost_usd')
+  const [asc, setAsc] = useState(false)
+
+  const priced = useMemo(() => rows.filter((r) => r.cost_usd > 0), [rows])
+  const totalCost = useMemo(() => priced.reduce((n, r) => n + r.cost_usd, 0), [priced])
+  const sorted = useMemo(() => {
+    const copy = [...priced]
+    copy.sort((a, b) => {
+      const dir = asc ? 1 : -1
+      if (sortKey === 'group') return a.group.localeCompare(b.group) * dir
+      return (a[sortKey] - b[sortKey]) * dir
+    })
+    return copy
+  }, [priced, sortKey, asc])
+
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) setAsc((a) => !a)
+    else {
+      setSortKey(key)
+      setAsc(false)
+    }
+  }
+
+  const sortIndicator = (key: SortKey) => (sortKey === key ? (asc ? ' ▲' : ' ▼') : '')
+
+  return (
+    <section className="rounded-xl border border-border p-4">
+      <h2 className="text-sm font-medium">Provider cost breakdown</h2>
+      <table className="mt-3 w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-muted-foreground">
+            <th className="cursor-pointer pb-2 font-medium" onClick={() => toggleSort('group')}>
+              Provider{sortIndicator('group')}
+            </th>
+            <th
+              className="cursor-pointer pb-2 text-right font-medium"
+              onClick={() => toggleSort('requests')}
+            >
+              Requests{sortIndicator('requests')}
+            </th>
+            <th
+              className="cursor-pointer pb-2 text-right font-medium"
+              onClick={() => toggleSort('cost_usd')}
+            >
+              Cost{sortIndicator('cost_usd')}
+            </th>
+            <th className="pb-2 text-right font-medium">% of total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => (
+            <tr key={r.group} className="border-t border-border/60">
+              <td className="max-w-28 truncate py-2 pr-2">{r.group}</td>
+              <td className="py-2 text-right text-muted-foreground">{compact(r.requests)}</td>
+              <td className="py-2 text-right font-medium">{money(r.cost_usd)}</td>
+              <td className="py-2 text-right text-muted-foreground">
+                {totalCost > 0 ? `${((r.cost_usd / totalCost) * 100).toFixed(0)}%` : '—'}
+              </td>
+            </tr>
+          ))}
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={4} className="py-6 text-center text-muted-foreground">
+                Nothing in range.
+              </td>
             </tr>
           )}
         </tbody>
