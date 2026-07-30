@@ -28,7 +28,7 @@ FROM alpine:3.22.2 AS runtime-shell
 RUN apk add --no-cache curl git
 COPY --from=build /out/app /app
 COPY skills/ /skills/
-RUN mkdir -p /workspace && chown nobody:nobody /workspace
+RUN mkdir -p /workspace /attachments && chown nobody:nobody /workspace /attachments
 USER nobody
 ENTRYPOINT ["/app"]
 
