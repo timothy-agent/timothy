@@ -74,6 +74,21 @@ type streamRequest struct {
 	MissionID string             `json:"mission_id,omitempty"`
 }
 
+// requiredVisionCapability derives whether this request needs a
+// vision-capable chain entry from the message content itself — no
+// explicit flag on streamRequest (D-045). A sensitive-pinned session
+// routed to a local non-vision model correctly gets NoRouteError's
+// "lacks vision capability" here; that's the intended v1 behavior, not
+// a bug to route around.
+func requiredVisionCapability(msgs []provider.Message) []provider.Capability {
+	for _, m := range msgs {
+		if len(m.Images) > 0 {
+			return []provider.Capability{provider.CapVision}
+		}
+	}
+	return nil
+}
+
 func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -110,7 +125,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	attempts, err := snap.Resolve(req.Route, req.ModelHint, sticky)
+	attempts, err := snap.Resolve(req.Route, req.ModelHint, sticky, requiredVisionCapability(req.Messages)...)
 	if err != nil {
 		var nre *router.NoRouteError
 		if errors.As(err, &nre) {

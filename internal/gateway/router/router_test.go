@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
 func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
@@ -253,6 +255,84 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	_, err = snap.Resolve("coding", "", Sticky{})
 	if err == nil || !strings.Contains(err.Error(), "bedrock/titan-embed (lacks chat capability") {
 		t.Fatalf("err = %v, want model-naming capability reason", err)
+	}
+}
+
+// TestResolveVisionRejectsModelDeclaringOnlyChat confirms a model row
+// that lists capabilities WITHOUT "vision" is skipped when the caller
+// asks for CapVision as an extra requirement (D-045) — the model's own
+// declaration wins over the driver's Capabilities() honesty.
+func TestResolveVisionRejectsModelDeclaringOnlyChat(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+		DefaultModel: "haiku", CredentialRef: "A_KEY", Enabled: true,
+		Models: []ModelInfo{
+			{ID: "haiku", Capabilities: []string{"chat", "streaming", "tools"}}, // no vision
+			{ID: "sonnet"}, // undeclared: driver decides
+		},
+	}}
+	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "haiku"},
+		{ProviderID: "p1", Model: "sonnet"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// haiku's explicit capability list omits vision: skipped. sonnet is
+	// undeclared, so the anthropic driver's own CapVision decides: kept.
+	if got := attemptNames(attempts); got != "anthropic/sonnet" {
+		t.Fatalf("attempts = %s, want anthropic/sonnet only", got)
+	}
+}
+
+// TestResolveVisionFallsToDriverWhenModelUndeclared confirms a model
+// with NO capability list at all is judged by the driver alone, same
+// rule attemptCapable already applies to every other capability.
+func TestResolveVisionFallsToDriverWhenModelUndeclared(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys()) // "sonnet" and "grok-4" both undeclared
+
+	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// Both the anthropic and openaicompat drivers declare CapVision;
+	// neither model row restricts it, so both survive same as Resolve
+	// without the extra requirement.
+	if got := attemptNames(attempts); got != "anthropic/sonnet,grok/grok-4" {
+		t.Fatalf("attempts = %s", got)
+	}
+}
+
+// TestResolveVisionExhaustionMentionsVision confirms a chain with no
+// vision-capable entry surfaces NoRouteError text naming "vision" —
+// the sensitive-pinned-session-to-local-non-vision-model case reads
+// clearly rather than a generic "no usable provider".
+func TestResolveVisionExhaustionMentionsVision(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "local", Kind: "api", Driver: "anthropic",
+		DefaultModel: "haiku", CredentialRef: "A_KEY", Enabled: true,
+		Models: []ModelInfo{{ID: "haiku", Capabilities: []string{"chat", "streaming"}}}, // no vision
+	}}
+	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "haiku"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	_, err = snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	if err == nil || !strings.Contains(err.Error(), "lacks vision capability") {
+		t.Fatalf("err = %v, want a reason mentioning vision", err)
 	}
 }
 
