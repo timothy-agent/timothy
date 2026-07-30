@@ -307,4 +307,34 @@ describe('fromTranscript', () => {
       expect(items[1].permissions).toEqual([])
     }
   })
+
+  it('maps a user item\'s Images into the chat item', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'user',
+        text: 'look at this',
+        images: [
+          { id: 'att-1', mime: 'image/png' },
+          { id: 'att-2', mime: 'image/jpeg' },
+        ],
+        created_at: at,
+      },
+    ])
+    expect(items[0]).toMatchObject({
+      role: 'user',
+      text: 'look at this',
+      images: [
+        { id: 'att-1', mime: 'image/png' },
+        { id: 'att-2', mime: 'image/jpeg' },
+      ],
+    })
+  })
+
+  it('omits images on a user item that carries none', () => {
+    const items = fromTranscript([{ seq: 1, kind: 'user', text: 'hello', created_at: at }])
+    if (items[0].role === 'user') {
+      expect(items[0].images).toBeUndefined()
+    }
+  })
 })

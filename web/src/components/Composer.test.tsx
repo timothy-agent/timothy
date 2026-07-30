@@ -1,11 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Composer } from './Composer'
+import { Composer, type PendingAttachment } from './Composer'
 
 vi.mock('../api/client', () => ({
   listAgents: vi.fn().mockResolvedValue([]),
   listRoutes: vi.fn().mockResolvedValue([]),
   transcribe: vi.fn(),
+  uploadAttachment: vi.fn(),
 }))
 
 vi.mock('sonner', () => ({
@@ -136,5 +137,143 @@ describe('Composer mic button', () => {
         'Microphone input is not available in this browser or context',
       ),
     )
+  })
+})
+
+function makeImageFile(name = 'photo.png', type = 'image/png', size = 1024): File {
+  const file = new File([new Uint8Array(size)], name, { type })
+  return file
+}
+
+describe('Composer attachments', () => {
+  beforeEach(() => {
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => `blob:mock-${Math.random()}`),
+      revokeObjectURL: vi.fn(),
+    })
+  })
+
+  it('does not render the paperclip button when onAttachments is omitted', () => {
+    render(<Composer {...baseProps()} />)
+    expect(screen.queryByRole('button', { name: 'Attach image' })).toBeNull()
+  })
+
+  it('renders the paperclip button when onAttachments is given', () => {
+    render(<Composer {...baseProps()} onAttachments={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeTruthy()
+  })
+
+  it('uploads a selected file and adds a chip on success', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-1',
+      mime: 'image/png',
+      size_bytes: 1024,
+    })
+    const onAttachments = vi.fn()
+    const { rerender } = render(
+      <Composer {...baseProps()} attachments={[]} onAttachments={onAttachments} />,
+    )
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const file = makeImageFile()
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(file))
+    await waitFor(() =>
+      expect(onAttachments).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: 'att-1', mime: 'image/png', uploading: false }),
+      ]),
+    )
+
+    const [[chips]] = onAttachments.mock.calls.slice(-1)
+    rerender(<Composer {...baseProps()} attachments={chips} onAttachments={onAttachments} />)
+    expect(screen.getByAltText('photo.png')).toBeTruthy()
+  })
+
+  it('toasts and skips the upload for an oversize file', async () => {
+    const client = await import('../api/client')
+    const { toast } = await import('sonner')
+    const onAttachments = vi.fn()
+    render(<Composer {...baseProps()} onAttachments={onAttachments} />)
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const big = makeImageFile('big.png', 'image/png', 11 * 1024 * 1024)
+    fireEvent.change(input, { target: { files: [big] } })
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('big.png: exceeds the 10MB limit'),
+    )
+    expect(client.uploadAttachment).not.toHaveBeenCalled()
+    expect(onAttachments).not.toHaveBeenCalled()
+  })
+
+  it('toasts and skips the upload for an unsupported file type', async () => {
+    const client = await import('../api/client')
+    const { toast } = await import('sonner')
+    const onAttachments = vi.fn()
+    render(<Composer {...baseProps()} onAttachments={onAttachments} />)
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const pdf = makeImageFile('doc.pdf', 'application/pdf')
+    fireEvent.change(input, { target: { files: [pdf] } })
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('doc.pdf: unsupported image type'),
+    )
+    expect(client.uploadAttachment).not.toHaveBeenCalled()
+    expect(onAttachments).not.toHaveBeenCalled()
+  })
+
+  it('removes a chip and revokes its object URL', () => {
+    const onAttachments = vi.fn()
+    const attachments: PendingAttachment[] = [
+      { id: 'att-1', mime: 'image/png', previewUrl: 'blob:existing', name: 'a.png' },
+    ]
+    render(<Composer {...baseProps()} attachments={attachments} onAttachments={onAttachments} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }))
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:existing')
+    expect(onAttachments).toHaveBeenCalledWith([])
+  })
+
+  it('enables send when attachments exist even with an empty draft', () => {
+    const attachments: PendingAttachment[] = [
+      { id: 'att-1', mime: 'image/png', previewUrl: 'blob:existing', name: 'a.png' },
+    ]
+    render(
+      <Composer
+        {...baseProps()}
+        draft=""
+        attachments={attachments}
+        onAttachments={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Send' })).not.toBeDisabled()
+  })
+
+  it('keeps send disabled with an empty draft and no attachments', () => {
+    render(<Composer {...baseProps()} draft="" onAttachments={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+  })
+
+  it('uploads a pasted image from the clipboard', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-2',
+      mime: 'image/png',
+      size_bytes: 1024,
+    })
+    const onAttachments = vi.fn()
+    render(<Composer {...baseProps()} onAttachments={onAttachments} />)
+
+    const file = makeImageFile('pasted.png')
+    const clipboardData = {
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
+    }
+    fireEvent.paste(screen.getByRole('textbox', { name: 'Message' }), { clipboardData })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(file))
   })
 })

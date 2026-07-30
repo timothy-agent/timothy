@@ -80,6 +80,7 @@ export interface ChatRequest {
   route?: string
   model_hint?: string
   skill_hint?: string
+  attachments?: string[]
 }
 
 // --- session management (mirrors brain's /v1/sessions surface) ---
@@ -97,6 +98,13 @@ export interface SessionMeta {
 export interface UIBlock {
   type: 'text' | 'reasoning'
   text: string
+}
+
+// ImageRef is one attachment carried by a user transcript item — the
+// attachment's id (content hash) and MIME type, never the bytes.
+export interface ImageRef {
+  id: string
+  mime: string
 }
 
 // One executed tool call in the replay projection (digest only).
@@ -118,6 +126,7 @@ export interface TranscriptItem {
   kind: 'user' | 'assistant' | 'tool' | 'permission' | 'compaction' | 'interrupted' | 'error'
   text?: string
   blocks?: UIBlock[]
+  images?: ImageRef[]
   tool?: ToolExecution
   permission?: PermissionRequestEvent
   provider?: string

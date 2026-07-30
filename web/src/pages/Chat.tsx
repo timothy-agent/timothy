@@ -11,7 +11,7 @@ import {
 } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
-import { Composer } from '../components/Composer'
+import { Composer, type PendingAttachment } from '../components/Composer'
 import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from '../components/Message'
 import { PermissionModal } from '../components/PermissionModal'
 import { Sheet } from '../components/ui/sheet'
@@ -56,6 +56,13 @@ export function Chat({
   const { refresh } = useSessions()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  // Optimistic sends' local object URLs, keyed by chat item id, so a
+  // just-sent message's thumbnails render instantly (UserMessage's
+  // localUrls prop) without round-tripping through AuthedImage's
+  // authed fetch — cleared per item only on unmount of the page, since
+  // a resumed/replayed session recreates items server-side anyway.
+  const localUrlsRef = useRef(new Map<string, Map<string, string>>())
   // Locked pages fix their own agent and never touch the shared
   // localStorage preference — a research page reading (or clobbering)
   // whatever agent general chat last used would be a leak either
@@ -95,6 +102,19 @@ export function Chat({
 
   // Cancel any in-flight stream when the page unmounts (route change).
   useEffect(() => () => abortRef.current?.abort(), [])
+
+  // Revoke every optimistic-send object URL when the page unmounts —
+  // they only exist to make a just-sent thumbnail instant, and a
+  // route change means AuthedImage's authed fetch takes over on
+  // remount (resume replays the transcript from scratch either way).
+  useEffect(
+    () => () => {
+      for (const urls of localUrlsRef.current.values()) {
+        for (const url of urls.values()) URL.revokeObjectURL(url)
+      }
+    },
+    [],
+  )
 
   // Resume: replay the session's transcript projection, exactly as the
   // server recorded it, and restore its last task category.
@@ -265,15 +285,30 @@ export function Chat({
     agentName: string,
     hint = skillHint,
     routeName = route,
+    sentAttachments: PendingAttachment[] = [],
   ) => {
     const message = text.trim()
-    if (!message || streaming) return
+    // Uploads still in flight aren't sendable ids yet — only completed
+    // ones ride the request; the composer's cap+toast already stops a
+    // user from expecting an in-flight one to count.
+    const ready = sentAttachments.filter((a) => !a.uploading)
+    if ((!message && ready.length === 0) || streaming) return
     setDraft('')
+    setAttachments([])
     setStreaming(true)
     pinnedRef.current = true // sending always re-follows the answer
+    const userItemId = crypto.randomUUID()
+    if (ready.length > 0) {
+      localUrlsRef.current.set(userItemId, new Map(ready.map((a) => [a.id, a.previewUrl])))
+    }
     setItems((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), role: 'user', text: message },
+      {
+        id: userItemId,
+        role: 'user',
+        text: message,
+        images: ready.length > 0 ? ready.map((a) => ({ id: a.id, mime: a.mime })) : undefined,
+      },
       { id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() },
     ])
 
@@ -296,6 +331,7 @@ export function Chat({
           agent: agentName,
           route: routeName || undefined,
           skill_hint: hint,
+          attachments: ready.length > 0 ? ready.map((a) => a.id) : undefined,
         },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
@@ -336,7 +372,7 @@ export function Chat({
     }
   }
 
-  const send = () => void sendMessage(draft, agent)
+  const send = () => void sendMessage(draft, agent, skillHint, route, attachments)
 
   // retryLast re-runs the last (failed) turn: the session already
   // carries the dangling user message server-side (chat.Service.Retry),
@@ -404,7 +440,15 @@ export function Chat({
   useEffect(() => {
     if (lockedSkillHint || intentConsumedRef.current) return
     const intent = location.state as ChatIntent | null
-    if (!intent || (!intent.send && !intent.draft && !intent.agent && !intent.route && !intent.skillHint))
+    if (
+      !intent ||
+      (!intent.send &&
+        !intent.draft &&
+        !intent.agent &&
+        !intent.route &&
+        !intent.skillHint &&
+        !intent.attachments)
+    )
       return
     intentConsumedRef.current = true
     window.history.replaceState(null, '') // don't refire on back/refresh
@@ -413,7 +457,8 @@ export function Chat({
     if (intent.agent) pickAgent(intent.agent)
     if (intent.route) pickRoute(intent.route)
     if (intent.skillHint) setSkillHint(intent.skillHint)
-    if (intent.send) void sendMessage(intent.send, who, intent.skillHint, whichRoute)
+    if (intent.send || intent.attachments)
+      void sendMessage(intent.send ?? '', who, intent.skillHint, whichRoute, intent.attachments)
     else if (intent.draft) setDraft(intent.draft)
     // Mount-time only by design: the intent rides the navigation that
     // created this page instance; the ref guards strict-mode replays.
@@ -470,6 +515,8 @@ export function Chat({
                 <UserMessage
                   key={item.id}
                   text={item.text}
+                  images={item.images}
+                  localUrls={localUrlsRef.current.get(item.id)}
                   // A trailing user message means the turn died before any
                   // assistant event reached the transcript — retry re-runs
                   // it server-side, same trailing-only condition as above.
@@ -519,6 +566,8 @@ export function Chat({
           onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
           disabled={streaming}
           placeholder={placeholder}
+          attachments={attachments}
+          onAttachments={setAttachments}
         />
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
           Enter to send · Shift+Enter for a new line

@@ -322,6 +322,53 @@ export async function transcribe(blob: Blob): Promise<string> {
   return text
 }
 
+// AttachmentUpload is the store's view of a saved attachment (PR
+// #120): id is the content hash, used as both the transcript
+// reference and the /v1/attachments/{id} download path.
+export interface AttachmentUpload {
+  id: string
+  mime: string
+  size_bytes: number
+}
+
+// uploadAttachment posts one file to /v1/attachments (multipart field
+// "file") and returns its stored id/mime/size. Raw multipart, not
+// JSON — same bypass of request()'s JSON content type as transcribe.
+export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/v1/attachments', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { message?: string }
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `upload failed (${res.status})`)
+  }
+  return (await res.json()) as AttachmentUpload
+}
+
+// fetchAttachmentBlob reads an uploaded attachment's bytes for inline
+// rendering (AuthedImage) — GET /v1/attachments/{id} requires the
+// bearer header, so a bare <img src> cannot fetch it directly.
+export async function fetchAttachmentBlob(id: string): Promise<Blob> {
+  const res = await fetch(`/v1/attachments/${id}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) {
+    throw new ChatError(res.status, `request failed (${res.status})`)
+  }
+  return res.blob()
+}
+
 // --- Long-term memory (queue + browser) ---
 
 export async function listMemories(

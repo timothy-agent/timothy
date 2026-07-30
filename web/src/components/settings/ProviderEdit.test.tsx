@@ -125,6 +125,54 @@ describe('ProviderEdit models section', () => {
     )
   })
 
+  it('adds a vision model with the capability flag and keeps it as default', async () => {
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage()
+
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: 'amazon.nova-pro-vision' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Vision/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p1', {
+        models: [{ id: 'amazon.nova-pro-vision', capabilities: ['vision'] }],
+        default_model: 'amazon.nova-pro-vision',
+      }),
+    )
+  })
+
+  it('combines embeddings and vision flags into one capabilities array', async () => {
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage()
+
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: 'combo-model' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Embeddings model/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Vision/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p1', {
+        models: [{ id: 'combo-model', capabilities: ['embeddings', 'vision'] }],
+      }),
+    )
+  })
+
+  it('shows a vision badge on declared vision models', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      {
+        ...bedrockProvider,
+        default_model: 'us.amazon.nova-pro-v1:0',
+        models: [{ id: 'us.amazon.nova-pro-v1:0', capabilities: ['vision'] }],
+      },
+    ])
+    renderPage()
+
+    expect(await screen.findByText('us.amazon.nova-pro-v1:0')).toBeTruthy()
+    expect(screen.getByText('vision')).toBeTruthy()
+  })
+
   it('suggests catalog model ids for bedrock, which has no live listing', async () => {
     renderPage()
 

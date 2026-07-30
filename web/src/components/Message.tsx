@@ -1,15 +1,105 @@
-import { Copy01Icon, Link04Icon, Tick02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import {
+  Copy01Icon,
+  ImageNotFound01Icon,
+  Link04Icon,
+  Loading03Icon,
+  Tick02Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+import { fetchAttachmentBlob } from '../api/client'
+import type { ImageRef } from '../api/types'
 import { ActivityLine, formatDuration } from './Activity'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import type { AssistantState } from '../lib/chat'
 import { cn } from '../lib/utils'
 import 'highlight.js/styles/github-dark.css'
+
+// Object URLs fetched per attachment id, cached module-level: an
+// attachment is content-addressed and immutable (D-045), so replaying
+// the same transcript (reload, resumed session) never refetches it.
+const attachmentURLCache = new Map<string, string>()
+
+// AuthedImage renders one attachment thumbnail. GET
+// /v1/attachments/{id} requires the bearer header, so a bare <img
+// src> can't fetch it directly — this fetches the bytes through the
+// authed client and renders them as a blob object URL, with a loading
+// shimmer while in flight and a broken-image fallback on failure.
+// Click opens the same resolved blob URL in a new tab — a raw
+// /v1/attachments/{id} href would 401 without the bearer header.
+// `localUrl`, when given (an optimistic item's own object URL from
+// the composer), is used directly and never fetched.
+function AuthedImage({ id, mime, localUrl }: { id: string; mime: string; localUrl?: string }) {
+  const [url, setUrl] = useState<string | undefined>(localUrl ?? attachmentURLCache.get(id))
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    if (localUrl || url) return
+    let stale = false
+    fetchAttachmentBlob(id)
+      .then((blob) => {
+        if (stale) return
+        const objectUrl = URL.createObjectURL(blob)
+        attachmentURLCache.set(id, objectUrl)
+        setUrl(objectUrl)
+      })
+      .catch(() => {
+        if (!stale) setFailed(true)
+      })
+    return () => {
+      stale = true
+    }
+  }, [id, localUrl, url])
+
+  if (failed) {
+    return (
+      <div
+        data-testid="attachment-error"
+        className="flex size-full min-h-24 items-center justify-center rounded-lg bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+        title={id}
+      >
+        <HugeiconsIcon icon={ImageNotFound01Icon} className="size-6" />
+      </div>
+    )
+  }
+
+  if (!url) {
+    return (
+      <div
+        data-testid="attachment-loading"
+        className="flex size-full min-h-24 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800"
+      >
+        <HugeiconsIcon icon={Loading03Icon} className="size-5 animate-spin text-zinc-400" />
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={url}
+      alt={mime}
+      onClick={() => window.open(url, '_blank')}
+      className="max-h-50 max-w-full cursor-pointer rounded-lg object-cover"
+    />
+  )
+}
+
+// ImageGrid renders a user message's attached images above the text.
+// Optimistic items carry their own local object URL (localUrls keyed
+// by id) so the just-sent thumbnail never round-trips the network.
+function ImageGrid({ images, localUrls }: { images: ImageRef[]; localUrls?: Map<string, string> }) {
+  return (
+    <div className="flex max-w-2xl flex-wrap justify-end gap-1.5">
+      {images.map((img) => (
+        <AuthedImage key={img.id} id={img.id} mime={img.mime} localUrl={localUrls?.get(img.id)} />
+      ))}
+    </div>
+  )
+}
 
 // SourcesPanel renders a research answer's citations as a distinct,
 // clickable list — separate from the prose so "these are the sources"
@@ -87,9 +177,18 @@ export function CopyButton({
 
 export function UserMessage({
   text,
+  images,
+  localUrls,
   onRetry,
 }: {
   text: string
+  // Attached images (transcript's Images, or the live turn's own
+  // optimistic list) — thumbnails render above the text bubble.
+  images?: ImageRef[]
+  // Optimistic-send local object URLs keyed by attachment id, so a
+  // just-sent message's thumbnails render instantly without
+  // round-tripping through AuthedImage's authed fetch.
+  localUrls?: Map<string, string>
   // Present only for a trailing dangling user message (the turn died
   // before any assistant event landed) — Chat.tsx decides that, this
   // component just renders whatever it's handed.
@@ -97,11 +196,14 @@ export function UserMessage({
 }) {
   return (
     <div className="flex flex-col items-end gap-1">
+      {images && images.length > 0 && <ImageGrid images={images} localUrls={localUrls} />}
       <div className="group/message flex items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
-        <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 whitespace-pre-wrap text-white">
-          {text}
-        </div>
+        {text !== '' && (
+          <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 whitespace-pre-wrap text-white">
+            {text}
+          </div>
+        )}
       </div>
       {onRetry && (
         <div className="flex items-center gap-2 text-muted-foreground">

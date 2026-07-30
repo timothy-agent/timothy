@@ -1,15 +1,32 @@
 import {
+  Attachment02Icon,
   ArrowUp01Icon,
   Cancel01Icon,
   Loading03Icon,
   Mic01Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
+import type { ClipboardEvent, DragEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { transcribe } from '../api/client'
+import { transcribe, uploadAttachment } from '../api/client'
 import { skillLabels } from '../lib/skills'
 import { AgentRoutePicker } from './AgentRoutePicker'
+
+// PendingAttachment is one upload in flight or done, owned by the
+// page (same pattern as `draft`) so the send flow can read and clear
+// it. previewUrl is a local object URL — revoked on removal/send.
+export interface PendingAttachment {
+  id: string
+  mime: string
+  previewUrl: string
+  name?: string
+  uploading?: boolean
+}
+
+const allowedMimes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+const maxAttachmentBytes = 10 * 1024 * 1024
+const maxAttachments = 8
 
 // Composer is the one message box: the chat page's docked input and
 // the home page's hero input are the same component so behavior
@@ -28,6 +45,8 @@ export function Composer({
   disabled = false,
   autoFocus = false,
   placeholder = 'Message Timothy…',
+  attachments = [],
+  onAttachments,
 }: {
   draft: string
   onDraft: (v: string) => void
@@ -42,10 +61,18 @@ export function Composer({
   disabled?: boolean
   autoFocus?: boolean
   placeholder?: string
+  attachments?: PendingAttachment[]
+  onAttachments?: (next: PendingAttachment[]) => void
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<BlobPart[]>([])
+  // The attachments array is owned by the page, but the upload flow
+  // needs the latest value inside async callbacks that started before
+  // a later render — same stale-closure guard as draftRef below.
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
   // The recorder's onstop closure outlives renders; read the draft
   // through a ref so a transcript appends to what the user typed
   // DURING the recording, not to a stale snapshot from record-start.
@@ -120,8 +147,106 @@ export function Composer({
   // change) — the MediaRecorder and its track must not keep running.
   useEffect(() => () => recorderRef.current?.stop(), [])
 
+  // uploadFiles validates each file client-side (type, size, cap) then
+  // uploads it, adding a chip immediately in an "uploading" state so
+  // the spinner overlay has something to render, and swapping it for
+  // the real id on success or dropping it on failure. previewUrl uses
+  // the local file directly — no need to round-trip through the
+  // server just to show a thumbnail.
+  async function uploadFiles(files: File[]) {
+    if (!onAttachments) return
+    for (const file of files) {
+      if (!allowedMimes.includes(file.type)) {
+        toast.error(`${file.name || 'file'}: unsupported image type`)
+        continue
+      }
+      if (file.size > maxAttachmentBytes) {
+        toast.error(`${file.name || 'file'}: exceeds the 10MB limit`)
+        continue
+      }
+      if (attachmentsRef.current.length >= maxAttachments) {
+        toast.error(`You can attach up to ${maxAttachments} images`)
+        break
+      }
+      const tempId = crypto.randomUUID()
+      const previewUrl = URL.createObjectURL(file)
+      const placeholder: PendingAttachment = {
+        id: tempId,
+        mime: file.type,
+        previewUrl,
+        name: file.name,
+        uploading: true,
+      }
+      attachmentsRef.current = [...attachmentsRef.current, placeholder]
+      onAttachments(attachmentsRef.current)
+      try {
+        const uploaded = await uploadAttachment(file)
+        attachmentsRef.current = attachmentsRef.current.map((a) =>
+          a.id === tempId ? { ...a, id: uploaded.id, uploading: false } : a,
+        )
+        onAttachments(attachmentsRef.current)
+      } catch (err) {
+        URL.revokeObjectURL(previewUrl)
+        attachmentsRef.current = attachmentsRef.current.filter((a) => a.id !== tempId)
+        onAttachments(attachmentsRef.current)
+        toast.error(err instanceof Error ? err.message : 'Upload failed')
+      }
+    }
+  }
+
+  function removeAttachment(id: string) {
+    if (!onAttachments) return
+    const target = attachments.find((a) => a.id === id)
+    if (target) URL.revokeObjectURL(target.previewUrl)
+    onAttachments(attachments.filter((a) => a.id !== id))
+  }
+
+  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...e.clipboardData.items]
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null)
+    if (files.length > 0) void uploadFiles(files)
+  }
+
+  function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'))
+    if (files.length > 0) void uploadFiles(files)
+  }
+
   return (
-    <div className="rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40">
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleDrop}
+      className="rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40"
+    >
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 px-3 pt-2.5">
+          {attachments.map((a) => (
+            <div
+              key={a.id}
+              className="group relative size-12 shrink-0 overflow-hidden rounded-lg border border-zinc-950/10 dark:border-white/10"
+              title={a.name}
+            >
+              <img src={a.previewUrl} alt={a.name ?? 'attachment'} className="size-full object-cover" />
+              {a.uploading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                  <HugeiconsIcon icon={Loading03Icon} className="size-4 animate-spin text-white" />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => removeAttachment(a.id)}
+                aria-label={`Remove ${a.name ?? 'attachment'}`}
+                className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition group-hover:opacity-100"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} className="size-2.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {skillHint && (
         <div className="flex items-center gap-1 px-3 pt-2.5">
           <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 py-1 pr-1.5 pl-2.5 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
@@ -148,6 +273,7 @@ export function Composer({
         placeholder={placeholder}
         className="max-h-50 w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-base/6 text-zinc-900 outline-none placeholder:text-zinc-400 sm:text-sm/6 dark:text-white dark:placeholder:text-zinc-500"
         onChange={(e) => onDraft(e.target.value)}
+        onPaste={onAttachments ? handlePaste : undefined}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
@@ -159,6 +285,31 @@ export function Composer({
         <div className="flex items-center gap-2">
           {!hidePicker && (
             <AgentRoutePicker agent={agent} onAgent={onAgent} route={route} onRoute={onRoute} />
+          )}
+          {onAttachments && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = [...(e.target.files ?? [])]
+                  e.target.value = ''
+                  if (files.length > 0) void uploadFiles(files)
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Attach image"
+                disabled={disabled}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600"
+              >
+                <HugeiconsIcon icon={Attachment02Icon} className="size-4" />
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -182,7 +333,7 @@ export function Composer({
           type="button"
           onClick={onSend}
           aria-label="Send"
-          disabled={disabled || draft.trim() === ''}
+          disabled={disabled || (draft.trim() === '' && attachments.length === 0)}
           className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-500"
         >
           <HugeiconsIcon icon={ArrowUp01Icon} className="size-4" />

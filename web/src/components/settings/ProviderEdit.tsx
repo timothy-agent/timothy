@@ -398,6 +398,7 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
   const [fetched, setFetched] = useState<string[]>([])
   const [entry, setEntry] = useState('')
   const [embeddings, setEmbeddings] = useState(false)
+  const [vision, setVision] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const declared = useMemo(() => new Set(provider.models.map((m) => m.id)), [provider.models])
@@ -440,15 +441,17 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
     const trimmed = entry.trim()
     if (!trimmed || declared.has(trimmed)) return
     const prices = (modelCatalog[preset.id] ?? []).find((m) => m.id === trimmed)?.prices
+    const capabilities = [...(embeddings ? ['embeddings'] : []), ...(vision ? ['vision'] : [])]
     const model: AdminModel = {
       id: trimmed,
-      ...(embeddings ? { capabilities: ['embeddings'] } : {}),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
       ...(prices ? { prices } : {}),
     }
     const models = [...provider.models, model]
     await patchModels(models, embeddings ? undefined : provider.default_model || trimmed)
     setEntry('')
     setEmbeddings(false)
+    setVision(false)
   }
 
   const remove = async (id: string) => {
@@ -471,6 +474,11 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
             {m.capabilities?.includes('embeddings') && (
               <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
                 embeddings
+              </span>
+            )}
+            {m.capabilities?.includes('vision') && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
+                vision
               </span>
             )}
             {provider.default_model === m.id ? (
@@ -528,6 +536,15 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
           className="size-4 rounded border-border"
         />
         Embeddings model — routes the embedding route to this instead of chat
+      </label>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={vision}
+          onChange={(e) => setVision(e.target.checked)}
+          className="size-4 rounded border-border"
+        />
+        Vision — this model can accept image attachments
       </label>
     </section>
   )
