@@ -147,6 +147,10 @@ func main() {
 
 	searxngURL := os.Getenv("SEARXNG_URL")
 	markitdownURL := os.Getenv("MARKITDOWN_URL")
+	whisperURL := os.Getenv("WHISPER_URL")
+	if whisperURL == "" {
+		app.Log.Warn("WHISPER_URL not set; the web mic button's /v1/transcribe endpoint is unavailable")
+	}
 
 	toolCalls := app.Metrics.NewCounterVec("tool_calls_total",
 		"Tool executions by tool name and outcome.", "tool", "outcome")
@@ -312,7 +316,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, missionHub, token, app.Log)
+		missionWorkspace, resolveSecret, missionHub, &http.Client{}, whisperURL, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
