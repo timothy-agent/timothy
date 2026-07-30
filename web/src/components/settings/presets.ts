@@ -63,6 +63,8 @@ export const providerPresets: ProviderPreset[] = [
     baseURL: '',
     region: 'us-east-1',
     requiresKey: false,
+    keyHint:
+      'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}), or leave the secret unset to use an AWS profile name from the host’s ~/.aws.',
     validateModel: 'amazon.nova-lite-v1:0',
   },
   {

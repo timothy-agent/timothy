@@ -243,7 +243,7 @@ function CredentialSection({
 
       {bedrock ? (
         <div>
-          <Field label="AWS profile">
+          <Field label="AWS profile or credential reference">
             <Input
               value={ref}
               onChange={(e) => setRef(e.target.value)}
@@ -253,8 +253,10 @@ function CredentialSection({
             />
           </Field>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Bedrock signs with the AWS credential chain mounted into the gateway — no key is
-            stored here, this only names the profile.
+            For static IAM keys, save this name as a secret (Secrets tab) holding JSON{' '}
+            {'{"access_key_id":"…","secret_access_key":"…"}'} — the gateway resolves it before
+            falling back to an AWS profile. Leave the secret unset to use this as a profile name
+            from the host’s ~/.aws (SSO) instead.
           </p>
         </div>
       ) : (

@@ -405,6 +405,49 @@ func TestBedrockHealthyWithoutEnvCredential(t *testing.T) {
 	}
 }
 
+// TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough
+// covers D-047 end to end at the router layer: when a bedrock row's
+// credential_ref resolves in the secret store, the resolved JSON value
+// must reach the bedrock constructor and populate StaticCredentials —
+// the same lookup plumbing every other driver's APIKey field uses.
+func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.T) {
+	t.Parallel()
+	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		BaseURL: "us-east-1", DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "bedrock-static", Enabled: true,
+		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
+	}}
+	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string {
+		if ref == "bedrock-static" {
+			return secretJSON
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("chat", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(attempts) != 1 || attempts[0].ProviderName != "bedrock" {
+		t.Fatalf("attempts = %v, want bedrock", attempts)
+	}
+	b, ok := attempts[0].Provider.(*provider.Bedrock)
+	if !ok {
+		t.Fatalf("provider type = %T, want *provider.Bedrock", attempts[0].Provider)
+	}
+	if !b.HasStaticCredentials() {
+		t.Fatal("resolved secret JSON must reach the bedrock constructor as StaticCredentials")
+	}
+}
+
 // A price-strategy route reorders its chain: the cheaper declared
 // model jumps ahead of the written first entry, and dead entries sink.
 func TestScoredStrategyReordersChain(t *testing.T) {

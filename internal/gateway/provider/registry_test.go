@@ -96,17 +96,94 @@ func TestBuildErrors(t *testing.T) {
 			cfgs:    []Config{{Driver: "anthropic"}},
 			wantErr: "empty name",
 		},
+		{
+			name: "bedrock credential_ref resolves to malformed secret JSON",
+			cfgs: []Config{
+				{Name: "bedrock", Driver: "bedrock", BaseURL: "us-east-1", CredentialRef: "bedrock-static"},
+			},
+			wantErr: "parse static credentials",
+		},
+		{
+			name: "bedrock credential_ref resolves to secret missing required fields",
+			cfgs: []Config{
+				{Name: "bedrock", Driver: "bedrock", BaseURL: "us-east-1", CredentialRef: "bedrock-static"},
+			},
+			wantErr: "missing access_key_id or secret_access_key",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := Build(tt.cfgs, noLookup)
+			lookup := noLookup
+			switch tt.name {
+			case "bedrock credential_ref resolves to malformed secret JSON":
+				lookup = func(string) string { return `{not json` }
+			case "bedrock credential_ref resolves to secret missing required fields":
+				lookup = func(string) string { return `{"access_key_id":"AKIA123"}` }
+			}
+			_, err := Build(tt.cfgs, lookup)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Build() error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
 	}
+}
+
+// TestBuildBedrockCredentialResolutionOrder covers D-047: the static
+// JSON path is used when credential_ref resolves in the secret store,
+// and the existing AWS-profile fallback is used unchanged when it
+// doesn't (a ref that resolves empty, same as no secrets row).
+func TestBuildBedrockCredentialResolutionOrder(t *testing.T) {
+	t.Parallel()
+
+	t.Run("static credentials used when secret resolves", func(t *testing.T) {
+		t.Parallel()
+		secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh","region":"eu-west-1"}` // #nosec G101
+		r, err := Build([]Config{
+			{Name: "bedrock", Driver: "bedrock", BaseURL: "us-east-1", CredentialRef: "bedrock-static"},
+		}, func(ref string) string {
+			if ref == "bedrock-static" {
+				return secretJSON
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		p, ok := r.Get("bedrock")
+		if !ok {
+			t.Fatal("bedrock missing")
+		}
+		b := p.(*Bedrock)
+		if b.cfg.StaticCredentials == nil {
+			t.Fatal("StaticCredentials must be set when credential_ref resolves")
+		}
+		if b.cfg.StaticCredentials.AccessKeyID != "AKIA123" || b.cfg.StaticCredentials.Region != "eu-west-1" {
+			t.Fatalf("StaticCredentials = %#v", b.cfg.StaticCredentials)
+		}
+		if b.cfg.Profile != "" {
+			t.Fatalf("Profile must be cleared when static credentials are used, got %q", b.cfg.Profile)
+		}
+	})
+
+	t.Run("profile fallback when credential_ref does not resolve", func(t *testing.T) {
+		t.Parallel()
+		r, err := Build([]Config{
+			{Name: "bedrock", Driver: "bedrock", BaseURL: "us-east-1", CredentialRef: "sumonmselim"},
+		}, func(string) string { return "" })
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		p, _ := r.Get("bedrock")
+		b := p.(*Bedrock)
+		if b.cfg.StaticCredentials != nil {
+			t.Fatalf("StaticCredentials must be nil when credential_ref does not resolve, got %#v", b.cfg.StaticCredentials)
+		}
+		if b.cfg.Profile != "sumonmselim" {
+			t.Fatalf("Profile = %q, want sumonmselim (unchanged fallback)", b.cfg.Profile)
+		}
+	})
 }
 
 func TestNewBedrock(t *testing.T) {

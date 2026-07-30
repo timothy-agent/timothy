@@ -224,7 +224,7 @@ export function ProviderAdd() {
                 className="mt-1.5 h-10"
               />
             </Field>
-            <Field label="AWS profile (optional)">
+            <Field label="AWS profile or credential reference (optional)">
               <Input
                 value={profile}
                 onChange={(e) => {
@@ -236,8 +236,10 @@ export function ProviderAdd() {
               />
             </Field>
             <p className="text-sm text-muted-foreground sm:col-span-2">
-              Bedrock signs with the AWS credential chain mounted into the gateway — no key is
-              stored here.
+              For static IAM keys, add the provider first, then save a secret under this name
+              (Secrets tab) holding JSON {'{"access_key_id":"…","secret_access_key":"…"}'}. Leave
+              the secret unset to use this as an AWS profile name from the host’s ~/.aws (SSO)
+              instead — the gateway signs with whichever resolves.
             </p>
           </div>
         ) : (

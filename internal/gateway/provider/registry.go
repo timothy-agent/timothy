@@ -66,15 +66,30 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				ReasoningEffort: c.ReasoningEffort,
 			})
 		case "bedrock":
-			// base_url holds the AWS region; credential_ref names a local
-			// AWS profile (SSO dev) and must be EMPTY when an IAM role
-			// supplies credentials — a missing profile fails client setup.
-			p = NewBedrock(BedrockConfig{
+			// base_url holds the AWS region. D-047: if credential_ref
+			// resolves in the secret store (key is non-empty), it MUST be
+			// static-credentials JSON — parse failure fails provider
+			// construction (config honesty), never a silent profile
+			// fallback. If it does not resolve (no secrets row), the
+			// unchanged prior behavior applies: credential_ref names a
+			// local AWS profile (SSO dev), and must be EMPTY when an IAM
+			// role supplies credentials — a missing profile fails client
+			// setup.
+			bedrockCfg := BedrockConfig{
 				Name:    c.Name,
 				Region:  c.BaseURL,
 				Profile: c.CredentialRef,
 				Timeout: c.Timeout,
-			})
+			}
+			if key != "" {
+				sc, err := ParseStaticCredentials(key)
+				if err != nil {
+					return nil, fmt.Errorf("registry: provider %q: %w", c.Name, err)
+				}
+				bedrockCfg.StaticCredentials = sc
+				bedrockCfg.Profile = ""
+			}
+			p = NewBedrock(bedrockCfg)
 		default:
 			return nil, fmt.Errorf("registry: provider %q: unknown driver %q", c.Name, c.Driver)
 		}

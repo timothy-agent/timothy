@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -283,6 +285,150 @@ func TestDocumentFromJSON(t *testing.T) {
 	if documentFromJSON(json.RawMessage(`{"a":1}`)) == nil {
 		t.Fatal("valid JSON must yield a document")
 	}
+}
+
+// TestParseStaticCredentials covers the secret-store JSON contract
+// (D-047): valid input, optional fields, missing required fields, and
+// malformed JSON.
+func TestParseStaticCredentials(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr bool
+		want    *StaticCredentials
+	}{
+		{
+			name: "valid minimal",
+			raw:  `{"access_key_id":"AKIA123","secret_access_key":"secret"}`,
+			want: &StaticCredentials{AccessKeyID: "AKIA123", SecretAccessKey: "secret"},
+		},
+		{
+			name: "valid with optional fields",
+			raw:  `{"access_key_id":"AKIA123","secret_access_key":"secret","session_token":"tok","region":"us-west-2"}`,
+			want: &StaticCredentials{AccessKeyID: "AKIA123", SecretAccessKey: "secret", SessionToken: "tok", Region: "us-west-2"},
+		},
+		{
+			name: "unknown keys ignored",
+			raw:  `{"access_key_id":"AKIA123","secret_access_key":"secret","bogus":"x"}`,
+			want: &StaticCredentials{AccessKeyID: "AKIA123", SecretAccessKey: "secret"},
+		},
+		{
+			name:    "missing access_key_id",
+			raw:     `{"secret_access_key":"secret"}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing secret_access_key",
+			raw:     `{"access_key_id":"AKIA123"}`,
+			wantErr: true,
+		},
+		{
+			name:    "empty object",
+			raw:     `{}`,
+			wantErr: true,
+		},
+		{
+			name:    "malformed json",
+			raw:     `{not json`,
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseStaticCredentials(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got %#v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if *got != *tc.want {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBedrockLazyClientStaticCredentials covers D-047's region
+// precedence and construction-failure rules: secret JSON region wins
+// over the provider's base_url-derived region, the provider's region
+// is used when the secret carries none, and a static-credentials
+// config with no region anywhere fails construction with a message
+// naming the region field. LoadDefaultConfig with a static credentials
+// provider and an explicit region does no network I/O, so this stays
+// a pure unit test.
+func TestBedrockLazyClientStaticCredentials(t *testing.T) {
+	t.Parallel()
+
+	t.Run("secret region wins over provider region", func(t *testing.T) {
+		t.Parallel()
+		b := NewBedrock(BedrockConfig{
+			Name:              "b",
+			Region:            "us-east-1",
+			StaticCredentials: &StaticCredentials{AccessKeyID: "AKIA", SecretAccessKey: "secret", Region: "eu-west-1"},
+		})
+		client, err := b.lazyClient(context.Background())
+		if err != nil {
+			t.Fatalf("lazyClient: %v", err)
+		}
+		if got := client.Options().Region; got != "eu-west-1" {
+			t.Fatalf("region = %q, want eu-west-1 (secret JSON must win)", got)
+		}
+	})
+
+	t.Run("falls back to provider region when secret has none", func(t *testing.T) {
+		t.Parallel()
+		b := NewBedrock(BedrockConfig{
+			Name:              "b",
+			Region:            "us-west-2",
+			StaticCredentials: &StaticCredentials{AccessKeyID: "AKIA", SecretAccessKey: "secret"},
+		})
+		client, err := b.lazyClient(context.Background())
+		if err != nil {
+			t.Fatalf("lazyClient: %v", err)
+		}
+		if got := client.Options().Region; got != "us-west-2" {
+			t.Fatalf("region = %q, want us-west-2", got)
+		}
+	})
+
+	t.Run("no region anywhere fails construction", func(t *testing.T) {
+		t.Parallel()
+		// Bypass NewBedrock's us-east-1 default to exercise the
+		// no-region-derivable path directly.
+		b := &Bedrock{cfg: BedrockConfig{
+			Name:              "b",
+			StaticCredentials: &StaticCredentials{AccessKeyID: "AKIA", SecretAccessKey: "secret"},
+		}}
+		_, err := b.lazyClient(context.Background())
+		if err == nil {
+			t.Fatal("want error when no region is derivable")
+		}
+		if !strings.Contains(err.Error(), "region") {
+			t.Fatalf("error must name the region field, got: %v", err)
+		}
+	})
+
+	t.Run("static credentials take precedence over profile", func(t *testing.T) {
+		t.Parallel()
+		b := NewBedrock(BedrockConfig{
+			Name:              "b",
+			Region:            "us-east-1",
+			Profile:           "some-profile-that-does-not-exist",
+			StaticCredentials: &StaticCredentials{AccessKeyID: "AKIA", SecretAccessKey: "secret"},
+		})
+		// If Profile were still honored, LoadDefaultConfig would try to
+		// resolve a nonexistent shared-config profile and fail; success
+		// here proves StaticCredentials wins.
+		if _, err := b.lazyClient(context.Background()); err != nil {
+			t.Fatalf("lazyClient: %v, want static credentials to bypass the (invalid) profile", err)
+		}
+	})
 }
 
 func TestParseTitanEmbedding(t *testing.T) {
