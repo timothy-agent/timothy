@@ -322,7 +322,16 @@ function CredentialSection({
 function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
   const [saving, setSaving] = useState(false)
   const [timeout, setTimeoutValue] = useState(provider.options?.request_timeout ?? '')
+  const [timeoutSaving, setTimeoutSaving] = useState(false)
   const disabled = provider.options?.reasoning_effort === 'none'
+
+  // provider is refetched (via onChanged/refresh) whenever ANY field on
+  // this page saves, including ones outside this section — without this
+  // sync the box silently keeps showing what you typed even after a
+  // sibling edit reloads the provider out from under it.
+  useEffect(() => {
+    setTimeoutValue(provider.options?.request_timeout ?? '')
+  }, [provider.options?.request_timeout])
 
   const toggle = async (on: boolean) => {
     setSaving(true)
@@ -343,6 +352,7 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
     const trimmed = timeout.trim()
     if (trimmed === (provider.options?.request_timeout ?? '')) return
     const { request_timeout: _requestTimeout, ...rest } = provider.options ?? {}
+    setTimeoutSaving(true)
     try {
       await patchProvider(provider.id, {
         options: trimmed ? { ...rest, request_timeout: trimmed } : rest,
@@ -351,6 +361,8 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
     } catch (err) {
       setTimeoutValue(provider.options?.request_timeout ?? '')
       toast.error('Could not update request timeout', { description: errText(err) })
+    } finally {
+      setTimeoutSaving(false)
     }
   }
 
@@ -363,11 +375,24 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
           {saving ? 'Saving…' : 'Disable reasoning ("thinking") for every request to this provider.'}
         </span>
       </label>
-      <Field label="Request timeout" hint='Go duration, e.g. "20m" — empty uses the default'>
+      <Field
+        label="Request timeout"
+        hint={
+          timeoutSaving
+            ? 'Saving…'
+            : 'Go duration, e.g. "20m" — empty uses the default. Enter or click away to save.'
+        }
+      >
         <Input
           value={timeout}
           onChange={(e) => setTimeoutValue(e.target.value)}
           onBlur={() => void saveTimeout()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.currentTarget.blur()
+            }
+          }}
+          disabled={timeoutSaving}
           placeholder="5m"
           className="mt-1.5 h-10 max-w-40"
         />
