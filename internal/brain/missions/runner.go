@@ -520,7 +520,7 @@ func renderReviewContent(p ReviewPacket) string {
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error) {
-	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. artifacts lists the workspace-relative file(s) the unit must produce — the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote()
+	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. artifacts lists the workspace-relative file(s) the unit must produce — the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote()
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if researchNotes != "" {
 		user += "\n\nResearch findings:\n" + NeutralizeSlot(researchNotes)
@@ -623,6 +623,20 @@ func parseSpec(raw string) (Spec, error) {
 	}
 	if len(spec.Units) == 0 {
 		return Spec{}, fmt.Errorf("mission runner: plan has no units")
+	}
+	// verify_cmd runs through RunVerify (a plain /bin/sh -c), but a
+	// worker's own shell classifies $()/backticks as an opaque,
+	// unattended-denied command (D-039, tools/danger.go opaqueForms) —
+	// correct there, but a plan authored with command substitution in
+	// verify_cmd would only discover that after execute/review, parking
+	// the mission far from the actual mistake. Reject it here instead,
+	// at the same point the empty-plan check already rejects a bad
+	// plan, so the planner's retry loop sees the real problem
+	// immediately.
+	for _, u := range spec.Units {
+		if strings.Contains(u.VerifyCmd, "$(") || strings.Contains(u.VerifyCmd, "`") {
+			return Spec{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks) — write the direct command instead")
+		}
 	}
 	// Passes is harness-only evidence (RunVerify); a plan is never born
 	// pre-verified regardless of what the planner's JSON claims.

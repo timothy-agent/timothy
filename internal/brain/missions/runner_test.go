@@ -304,6 +304,94 @@ func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 	}
 }
 
+// TestPlanSessionRejectsCommandSubstitution guards the fix for a real
+// canary flake: a planner-authored verify_cmd containing $(...) parked
+// the mission when the worker's own shell classifier correctly denied
+// it as opaque (D-039) — the plan should be rejected here, at
+// submission, with feedback the planner can act on immediately.
+func TestPlanSessionRejectsCommandSubstitution(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err == nil {
+		t.Fatal("PlanSession accepted a verify_cmd containing command substitution")
+	}
+	if !strings.Contains(err.Error(), "command substitution") {
+		t.Fatalf("PlanSession error = %q, want it to name command substitution", err.Error())
+	}
+}
+
+// TestPlanSessionRejectsBackticks mirrors the $(...) case for the
+// other opaque-form spelling of command substitution.
+func TestPlanSessionRejectsBackticks(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, "{\"units\":[{\"title\":\"Check output\",\"verify_cmd\":\"test `cat out.md` = ok\"}]}")},
+		{toolEndEvent(planToolName, "{\"units\":[{\"title\":\"Check output\",\"verify_cmd\":\"test `cat out.md` = ok\"}]}")},
+	}}
+	r := newTestRunner(agent)
+	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err == nil {
+		t.Fatal("PlanSession accepted a verify_cmd containing backticks")
+	}
+	if !strings.Contains(err.Error(), "command substitution") {
+		t.Fatalf("PlanSession error = %q, want it to name command substitution", err.Error())
+	}
+}
+
+// TestPlanSessionRecoversFromCommandSubstitutionFeedback confirms the
+// substitution rejection feeds the same one-recovery-turn ladder as
+// the empty-plan/malformed-JSON cases: the planner gets told exactly
+// what was wrong and a corrected plan on the next turn is accepted.
+func TestPlanSessionRecoversFromCommandSubstitutionFeedback(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"grep -qi ok out.md"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 1 || spec.Units[0].VerifyCmd != "grep -qi ok out.md" {
+		t.Fatalf("PlanSession spec = %+v", spec)
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+}
+
+// TestPlanSessionAcceptsLegitimateVerifyCmd confirms the substitution
+// guard doesn't false-positive on real verification commands — a
+// content-checking verify_cmd (the existing tautology guard's whole
+// point: never a bare echo) and a legitimate input redirect (<, which
+// must stay legal — only substitution is banned) both parse cleanly
+// in a single turn, no recovery needed.
+func TestPlanSessionAcceptsLegitimateVerifyCmd(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[`+
+			`{"title":"Check content","verify_cmd":"grep -qi 'foo' out.md"},`+
+			`{"title":"Check line count","verify_cmd":"test -f x && wc -l < x"}`+
+			`]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 2 {
+		t.Fatalf("PlanSession spec = %+v", spec)
+	}
+	if spec.Units[0].VerifyCmd != "grep -qi 'foo' out.md" || spec.Units[1].VerifyCmd != "test -f x && wc -l < x" {
+		t.Fatalf("PlanSession spec units = %+v", spec.Units)
+	}
+	if agent.call != 1 {
+		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
+	}
+}
+
 func TestPlanSessionRejectsMalformedJSON(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("I think the plan should have a few steps but I won't format it as JSON")},
