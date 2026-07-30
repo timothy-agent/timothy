@@ -66,6 +66,11 @@ const (
 	// compaction pass so a slow extraction degrades to empty facts
 	// instead of starving the summarize.
 	preCompactExtractBudget = 45 * time.Second
+	// connectorReadyWait bounds how long a turn waits at entry for the
+	// first connector load (D-043) — long enough to absorb the DB pool
+	// warming at boot, short enough that a turn never meaningfully hangs
+	// on it.
+	connectorReadyWait = 15 * time.Second
 )
 
 func main() {
@@ -179,6 +184,25 @@ func main() {
 			swapAgentTools(agent, builtinSet, conns, app.Log, toolCalls)
 		})
 		go runConnectorReload(ctx, conns, app.Log)
+		app.AddCheck("connectors", func() httpserver.Check {
+			select {
+			case <-conns.Ready():
+				return httpserver.Check{Status: "ok"}
+			default:
+				return httpserver.Check{Status: "degraded", Detail: "initial connector load not yet complete"}
+			}
+		})
+		// Only the first turn after boot pays this: once conns.Ready()
+		// closes, WaitReady returns instantly on every later call. Bounded
+		// so a turn NEVER blocks indefinitely — a slow/never-ready load
+		// degrades to builtins-only instead of hanging the turn.
+		agent.SetWaitToolsReady(func(ctx context.Context) {
+			wctx, cancel := context.WithTimeout(ctx, connectorReadyWait)
+			defer cancel()
+			if err := conns.WaitReady(wctx); err != nil {
+				app.Log.Warn("connector tools not yet loaded; turn proceeds with builtin tools only")
+			}
+		})
 	}
 
 	// SANDBOXD_URL empty (MISSION_SANDBOX_IMAGE unset in compose) keeps a
@@ -609,13 +633,31 @@ func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors
 	log.Info("agent tool surface updated", "tools", len(defs))
 }
 
+// initialReloadRetry bounds the wait between initial-load retries: the
+// DB pool is often still warming right at boot (ErrDegraded), and
+// falling back to the full-minute ticker for that first success would
+// leave chat turns running builtins-only tools for up to a minute.
+const initialReloadRetry = 5 * time.Second
+
 // runConnectorReload loads connector sources at startup and keeps
 // retrying/refreshing on a slow tick, mirroring the gateway's snapshot
 // poll: a DB that wasn't ready at boot, or a row edited outside the
-// admin API, converges within a minute.
+// admin API, converges within a minute. The first load retries on the
+// short initialReloadRetry cadence until it succeeds once, THEN falls
+// into the normal minute ticker — later reloads don't need the fast
+// path since the agent already has a tool surface.
 func runConnectorReload(ctx context.Context, conns *connectors.Manager, log *slog.Logger) {
-	if err := conns.Reload(ctx); err != nil {
-		log.Warn("initial connector load failed; will retry", "error", err)
+	for {
+		if err := conns.Reload(ctx); err != nil {
+			log.Warn("initial connector load failed; will retry", "error", err)
+		} else {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialReloadRetry):
+		}
 	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()

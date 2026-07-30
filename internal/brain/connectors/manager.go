@@ -56,6 +56,13 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	sources map[string]Source // by connector name
+
+	// ready closes after the first successful Reload — including its
+	// onReload hook (D-043): a chat turn that waits on it is guaranteed
+	// the agent's tool surface already reflects connector tools, not
+	// just that Reload's DB read finished.
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 func NewManager(store *Store, resolve Resolve, log *slog.Logger) *Manager {
@@ -66,6 +73,7 @@ func NewManager(store *Store, resolve Resolve, log *slog.Logger) *Manager {
 		builders: map[string]Builder{},
 		log:      log,
 		sources:  map[string]Source{},
+		ready:    make(chan struct{}),
 	}
 	store.SetOnChange(func(ctx context.Context) {
 		if err := m.Reload(ctx); err != nil {
@@ -123,6 +131,11 @@ func (m *Manager) Reload(ctx context.Context) error {
 	if m.onReload != nil {
 		m.onReload(ctx)
 	}
+	// Closed AFTER onReload, not before: ready must mean "the agent's
+	// tool surface already includes this load's connector tools", not
+	// merely "sources swapped" — a waiter that saw ready but raced
+	// onReload would still get a stale (builtins-only) tool snapshot.
+	m.readyOnce.Do(func() { close(m.ready) })
 	return nil
 }
 
@@ -154,6 +167,25 @@ func (m *Manager) Tools() []*tools.Tool {
 // Reload — the agent's tool set rebuilds from it. Startup-time only.
 func (m *Manager) SetOnReload(fn func(context.Context)) {
 	m.onReload = fn
+}
+
+// Ready returns a channel that closes once the first successful Reload
+// (and its onReload hook) has completed. A manager with zero
+// configured connectors still becomes ready — ready means "initial
+// load ran", not "connectors exist".
+func (m *Manager) Ready() <-chan struct{} {
+	return m.ready
+}
+
+// WaitReady blocks until Ready() closes or ctx ends, whichever comes
+// first.
+func (m *Manager) WaitReady(ctx context.Context) error {
+	select {
+	case <-m.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Names returns the currently-built connector names (unordered).

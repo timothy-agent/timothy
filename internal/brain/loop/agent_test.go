@@ -1598,3 +1598,98 @@ func TestAskUserEmitsResolvedOnAnswer(t *testing.T) {
 	}
 }
 
+// TestWaitToolsReadyNilIsNoOp confirms the default (before main.go
+// wires SetWaitToolsReady) behaves exactly as before D-043 — no hook,
+// no wait.
+func TestWaitToolsReadyNilIsNoOp(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{finalStep("hi")}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+}
+
+// TestWaitToolsReadyRunsBeforeToolSnapshot proves the hook fires
+// BEFORE the turn snapshots its tool surface: swapping tools inside
+// the hook must be visible to the very first request the turn sends.
+func TestWaitToolsReadyRunsBeforeToolSnapshot(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{finalStep("hi")}}
+	a, _, _, _ := testAgent(t, gw)
+
+	reg := tools.NewRegistry()
+	swapped := &tools.Tool{
+		Name:        "swapped_in",
+		Description: "arrived via the readiness hook",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}
+	if err := reg.Register(swapped); err != nil {
+		t.Fatal(err)
+	}
+	c, err := tools.NewConstrained(reg, testToolCalls())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hookCalled bool
+	a.SetWaitToolsReady(func(context.Context) {
+		hookCalled = true
+		a.SwapTools(registryExec{c}, []provider.ToolDef{
+			{Name: swapped.Name, Description: swapped.Description, InputSchema: swapped.InputSchema},
+		})
+	})
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if !hookCalled {
+		t.Fatal("waitToolsReady hook never ran")
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) == 0 || len(gw.requests[0].Tools) != 1 || gw.requests[0].Tools[0].Name != "swapped_in" {
+		t.Fatalf("first request tools = %+v, want only swapped_in (hook must run before the snapshot)", gw.requests[0].Tools)
+	}
+}
+
+// TestWaitToolsReadyTimeoutStillProceeds confirms a hook that never
+// becomes ready (bounded by ctx, as main.go's WaitReady wiring does)
+// still lets the turn through — it must never block the turn
+// indefinitely.
+func TestWaitToolsReadyTimeoutStillProceeds(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{finalStep("hi")}}
+	a, _, _, _ := testAgent(t, gw)
+
+	neverReady := make(chan struct{})
+	a.SetWaitToolsReady(func(ctx context.Context) {
+		// Mirrors main.go's real hook: bound the wait via context
+		// rather than a real timer, so the test stays instant.
+		wctx, cancel := context.WithTimeout(ctx, time.Nanosecond)
+		defer cancel()
+		select {
+		case <-neverReady:
+		case <-wctx.Done():
+		}
+	})
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+	if len(ofType(evs, stream.EventDone)) != 1 {
+		t.Fatalf("turn did not complete after wait timeout: %+v", evs)
+	}
+}
+

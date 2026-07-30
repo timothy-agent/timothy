@@ -114,6 +114,14 @@ type Agent struct {
 	// next turn without a restart; an empty result means the feature is
 	// currently off and no flip happens.
 	forceRouteBySuffix map[string]func(context.Context) string
+
+	// waitToolsReady, if set, runs at the start of every turn before the
+	// tool snapshot (D-043): it lets main.go block briefly on the
+	// connectors.Manager's first successful load without loop importing
+	// the connectors package (layering). nil = no-op — the default until
+	// main.go wires it, and always a no-op once the manager is ready
+	// (the hook should return instantly by then).
+	waitToolsReady func(context.Context)
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
@@ -177,6 +185,12 @@ func (a *Agent) SetForceRoute(suffix string, route func(context.Context) string)
 	a.forceRouteBySuffix[suffix] = route
 }
 
+// SetWaitToolsReady registers the turn-entry readiness hook (see the
+// waitToolsReady field doc). Startup-time only.
+func (a *Agent) SetWaitToolsReady(fn func(context.Context)) {
+	a.waitToolsReady = fn
+}
+
 // Request is one turn's loop input.
 type Request struct {
 	SessionID string
@@ -223,6 +237,10 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		case out <- ev:
 		case <-ctx.Done():
 		}
+	}
+
+	if a.waitToolsReady != nil {
+		a.waitToolsReady(ctx)
 	}
 
 	exec, defs := a.toolset()
