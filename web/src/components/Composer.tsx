@@ -1,6 +1,13 @@
-import { ArrowUp01Icon, Cancel01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import {
+  ArrowUp01Icon,
+  Cancel01Icon,
+  Loading03Icon,
+  Mic01Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { transcribe } from '../api/client'
 import { skillLabels } from '../lib/skills'
 import { AgentRoutePicker } from './AgentRoutePicker'
 
@@ -37,6 +44,15 @@ export function Composer({
   placeholder?: string
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<BlobPart[]>([])
+  // The recorder's onstop closure outlives renders; read the draft
+  // through a ref so a transcript appends to what the user typed
+  // DURING the recording, not to a stale snapshot from record-start.
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const [recording, setRecording] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
 
   // Auto-grow up to a cap, then scroll inside. Runs on every draft
   // change so programmatic clears (post-send) shrink it back.
@@ -46,6 +62,63 @@ export function Composer({
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [draft])
+
+  // startRecording/stopRecording bracket one mic capture: click starts
+  // it, click again (or unmount) stops it and hands the recorded blob
+  // to /v1/transcribe. Audio never leaves the box beyond that call.
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Microphone input is not available in this browser or context')
+      return
+    }
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    } catch {
+      toast.error('Microphone permission was denied')
+      return
+    }
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : ''
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+    chunksRef.current = []
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data)
+    }
+    recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop())
+      const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+      chunksRef.current = []
+      void transcribeBlob(blob)
+    }
+    recorderRef.current = recorder
+    recorder.start()
+    setRecording(true)
+  }
+
+  function stopRecording() {
+    recorderRef.current?.stop()
+    recorderRef.current = null
+    setRecording(false)
+  }
+
+  async function transcribeBlob(blob: Blob) {
+    setTranscribing(true)
+    try {
+      const text = await transcribe(blob)
+      const cur = draftRef.current
+      if (text) onDraft(cur ? `${cur} ${text}` : text)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Transcription failed')
+    } finally {
+      setTranscribing(false)
+    }
+  }
+
+  // Stop cleanly if the composer unmounts mid-recording (e.g. route
+  // change) — the MediaRecorder and its track must not keep running.
+  useEffect(() => () => recorderRef.current?.stop(), [])
 
   return (
     <div className="rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40">
@@ -87,6 +160,23 @@ export function Composer({
           {!hidePicker && (
             <AgentRoutePicker agent={agent} onAgent={onAgent} route={route} onRoute={onRoute} />
           )}
+          <button
+            type="button"
+            onClick={recording ? stopRecording : startRecording}
+            aria-label={recording ? 'Stop recording' : 'Record voice input'}
+            aria-pressed={recording}
+            disabled={disabled || transcribing}
+            className={
+              recording
+                ? 'flex size-8 shrink-0 animate-pulse items-center justify-center rounded-full bg-red-600 text-white transition hover:bg-red-500'
+                : 'flex size-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600'
+            }
+          >
+            <HugeiconsIcon
+              icon={transcribing ? Loading03Icon : Mic01Icon}
+              className={transcribing ? 'size-4 animate-spin' : 'size-4'}
+            />
+          </button>
         </div>
         <button
           type="button"

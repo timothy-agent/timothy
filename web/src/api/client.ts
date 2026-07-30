@@ -297,6 +297,31 @@ export async function deleteSession(id: string): Promise<void> {
   await request<void>(`/v1/sessions/${id}`, { method: 'DELETE' })
 }
 
+// transcribe posts a recorded audio clip (from the mic button) to
+// brain's local speech-to-text proxy and returns the transcript.
+// Raw bytes, not JSON — the body IS the audio, so this bypasses
+// request()'s JSON content type.
+export async function transcribe(blob: Blob): Promise<string> {
+  const res = await fetch('/v1/transcribe', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: blob,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { message?: string }
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `transcribe failed (${res.status})`)
+  }
+  const { text } = (await res.json()) as { text: string }
+  return text
+}
+
 // --- Long-term memory (queue + browser) ---
 
 export async function listMemories(
