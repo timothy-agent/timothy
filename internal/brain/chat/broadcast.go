@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -78,20 +79,33 @@ func (b *turnBroadcaster) closeAll() {
 	b.subs = map[chan stream.StreamEvent]struct{}{}
 }
 
-// turnBroadcast registers a fresh broadcaster for sessionID, replacing
-// any previous entry — a session can only have one turn in flight at a
-// time in practice, but a stale entry (e.g. a prior turn whose
-// terminal free lost a race) must never wedge turn_active permanently
-// stuck true, so a new turn always wins the slot outright.
-func (s *Service) turnBroadcast(sessionID string) *turnBroadcaster {
-	b := newTurnBroadcaster()
+// ErrTurnInFlight marks a Chat or Retry call that lost the race to
+// register sessionID's turn: another turn is already live, so this
+// caller must not append anything to the session's event log (D-042,
+// see turnBegin).
+var ErrTurnInFlight = errors.New("turn already in flight")
+
+// turnBegin is the sole entry point onto a session's turn slot:
+// exclusive, atomic registration under turnsMu (D-042). A session can
+// only have one turn in flight; unlike the old turnBroadcast (which
+// always installed a fresh entry, unconditionally evicting whatever
+// was there), this returns ErrTurnInFlight when an entry already
+// exists, so a losing Chat/Retry call can bail out before appending
+// even a user_message — the append-only log must never see the loser's
+// write. Callers MUST call this before the turn's first event append;
+// see Chat and Retry.
+func (s *Service) turnBegin(sessionID string) (*turnBroadcaster, error) {
 	s.turnsMu.Lock()
+	defer s.turnsMu.Unlock()
 	if s.turns == nil {
 		s.turns = map[string]*turnBroadcaster{}
 	}
+	if _, exists := s.turns[sessionID]; exists {
+		return nil, ErrTurnInFlight
+	}
+	b := newTurnBroadcaster()
 	s.turns[sessionID] = b
-	s.turnsMu.Unlock()
-	return b
+	return b, nil
 }
 
 // turnDone frees sessionID's broadcaster entry and closes every live

@@ -9,9 +9,11 @@ import { Chat } from './Chat'
 vi.mock('../api/client', () => ({
   ChatError: class ChatError extends Error {
     status: number
-    constructor(status: number, message: string) {
+    code?: string
+    constructor(status: number, message: string, code?: string) {
       super(message)
       this.status = status
+      this.code = code
     }
   },
   chatStream: vi.fn(),
@@ -25,7 +27,7 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 import {
   answerPermission,
@@ -297,6 +299,37 @@ describe('live reattach', () => {
     fireSignal({ kind: 'session', id: 's1' })
 
     await screen.findByText('appeared via signal')
+  })
+
+  it('attaches live instead of showing an error on a 409 turn_in_flight send', async () => {
+    vi.mocked(chatStream).mockRejectedValue(new ChatError(409, 'turn already in flight', 'turn_in_flight'))
+    let feed!: (ev: ChatEvent) => void
+    let resolveStream!: () => void
+    const streamDone = new Promise<void>((r) => {
+      resolveStream = r
+    })
+    vi.mocked(streamLive).mockImplementation(async (_id, onEvent) => {
+      feed = onEvent
+      await streamDone
+    })
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(toast.info).toHaveBeenCalled())
+    await waitFor(() => expect(streamLive).toHaveBeenCalled())
+    // No generic failure state rendered — the in-flight turn's own
+    // stream (fed below) is what populates the answer.
+    expect(screen.queryByText(/turn already in flight/)).not.toBeInTheDocument()
+
+    feed({ type: 'chunk', text: 'the other turn wins' })
+    await screen.findByText('the other turn wins')
+
+    feed({ type: 'meta', session_id: 's1' })
+    resolveStream()
+    await waitFor(() => expect(screen.queryByText('▍')).not.toBeInTheDocument())
   })
 
   it('ignores a session signal for a different session', async () => {

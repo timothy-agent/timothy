@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -108,9 +109,12 @@ func TestServiceTurnLifecycleActiveThenFreed(t *testing.T) {
 		t.Fatal("TurnActive true before any turn registered")
 	}
 
-	bc := s.turnBroadcast("s1")
+	bc, err := s.turnBegin("s1")
+	if err != nil {
+		t.Fatalf("turnBegin: %v", err)
+	}
 	if !s.TurnActive("s1") {
-		t.Fatal("TurnActive false immediately after turnBroadcast — presence must mean in-flight even with zero subscribers")
+		t.Fatal("TurnActive false immediately after turnBegin — presence must mean in-flight even with zero subscribers")
 	}
 	if _, _, ok := s.Subscribe("s1"); !ok {
 		t.Fatal("Subscribe ok=false while a turn is registered")
@@ -126,19 +130,36 @@ func TestServiceTurnLifecycleActiveThenFreed(t *testing.T) {
 	}
 }
 
-// TestServiceTurnBroadcastReplacesStaleEntry confirms a fresh
-// turnBroadcast call always wins the slot: a new turn must never find
-// itself unable to register because turn_active is stuck true from an
-// entry whose free lost a race.
-func TestServiceTurnBroadcastReplacesStaleEntry(t *testing.T) {
+// TestServiceTurnBeginExclusiveThenFreedAllowsNext confirms the new
+// exclusivity contract (D-042): a second turnBegin call while an entry
+// is live must fail with ErrTurnInFlight rather than evicting it (the
+// old turnBroadcast's "always install fresh" behavior) — and once the
+// live entry is freed via turnDone, a fresh turnBegin must succeed
+// again, so a completed turn never permanently wedges the slot.
+func TestServiceTurnBeginExclusiveThenFreedAllowsNext(t *testing.T) {
 	t.Parallel()
 	s := &Service{}
-	first := s.turnBroadcast("s1")
-	second := s.turnBroadcast("s1")
-	if first == second {
-		t.Fatal("second turnBroadcast returned the same broadcaster instance")
+	first, err := s.turnBegin("s1")
+	if err != nil {
+		t.Fatalf("first turnBegin: %v", err)
+	}
+	if _, err := s.turnBegin("s1"); !errors.Is(err, ErrTurnInFlight) {
+		t.Fatalf("second turnBegin while live: err = %v, want ErrTurnInFlight", err)
 	}
 	if !s.TurnActive("s1") {
-		t.Fatal("TurnActive false after re-registering")
+		t.Fatal("TurnActive false while the first entry is still live")
+	}
+	_ = first
+
+	s.turnDone("s1")
+	second, err := s.turnBegin("s1")
+	if err != nil {
+		t.Fatalf("turnBegin after turnDone: %v", err)
+	}
+	if first == second {
+		t.Fatal("turnBegin after turnDone returned the same broadcaster instance")
+	}
+	if !s.TurnActive("s1") {
+		t.Fatal("TurnActive false after re-registering post-free")
 	}
 }

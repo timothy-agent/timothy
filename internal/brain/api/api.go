@@ -430,6 +430,10 @@ func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, run func(contex
 			jsonError(w, http.StatusConflict, "no_retryable_turn", err.Error())
 			return
 		}
+		if errors.Is(err, chat.ErrTurnInFlight) {
+			jsonError(w, http.StatusConflict, "turn_in_flight", err.Error())
+			return
+		}
 		// session_id rides the error when a row was already created so
 		// the client reuses it on retry.
 		w.Header().Set("Content-Type", "application/json")

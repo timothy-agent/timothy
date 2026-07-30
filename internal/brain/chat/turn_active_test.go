@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -224,5 +225,113 @@ func TestChatSessionHubNilIsNoop(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	drain(t, ch)
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+}
+
+// TestConcurrentChatOnSameSessionExactlyOneProceeds pins the D-042
+// exclusivity guarantee: two Chat() calls racing on the same session
+// must not both proceed — exactly one wins the slot and streams, the
+// other gets ErrTurnInFlight and appends ZERO events to the log
+// (neither its user_message nor anything else), since the loser must
+// never touch the append-only log at all.
+func TestConcurrentChatOnSameSessionExactlyOneProceeds(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	block := make(chan struct{})
+	gw := &fakeGW{events: okEvents("the answer"), blockCh: block}
+	s := newService(gw, log)
+
+	// Start the first turn and wait for it to actually register before
+	// racing the second — this pins "one winner" deterministically
+	// rather than depending on goroutine scheduling to decide it.
+	_, ch1, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "first"})
+	if err != nil {
+		t.Fatalf("Chat 1: %v", err)
+	}
+	waitFor(t, func() bool { return s.TurnActive("s1") })
+
+	_, ch2, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "second"})
+	if !errors.Is(err, ErrTurnInFlight) {
+		t.Fatalf("Chat 2 (racing): err = %v, want ErrTurnInFlight", err)
+	}
+	if ch2 != nil {
+		t.Fatal("Chat 2 (racing): channel should be nil on ErrTurnInFlight")
+	}
+	// Only session_started + the winner's user_message so far — the
+	// loser must not have appended anything, not even its own
+	// user_message.
+	if kinds := log.kinds("s1"); len(kinds) != 2 {
+		t.Fatalf("kinds after losing race = %v, want exactly 2 (session_started, winner's user_message)", kinds)
+	}
+
+	close(block)
+	drain(t, ch1)
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+	// The winner's turn completes normally: session_started,
+	// user_message, assistant_turn — still nothing from the loser.
+	if kinds := log.kinds("s1"); len(kinds) != 3 {
+		t.Fatalf("kinds after winner completes = %v, want exactly 3", kinds)
+	}
+}
+
+// TestConcurrentChatAndRetrySameGuarantee confirms the exclusivity
+// guard applies identically across Chat and Retry: a Retry racing an
+// in-flight Chat-started turn on the same session must lose and touch
+// nothing, same as two Chat calls racing each other.
+func TestConcurrentChatAndRetrySameGuarantee(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	block := make(chan struct{})
+	gw := &fakeGW{events: okEvents("the answer"), blockCh: block}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "first"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	waitFor(t, func() bool { return s.TurnActive("s1") })
+
+	if _, retryCh, err := s.Retry(t.Context(), "s1"); !errors.Is(err, ErrTurnInFlight) {
+		t.Fatalf("Retry racing an in-flight Chat turn: err = %v, want ErrTurnInFlight", err)
+	} else if retryCh != nil {
+		t.Fatal("Retry racing an in-flight Chat turn: channel should be nil on ErrTurnInFlight")
+	}
+	if kinds := log.kinds("s1"); len(kinds) != 2 {
+		t.Fatalf("kinds after Retry lost the race = %v, want exactly 2", kinds)
+	}
+
+	close(block)
+	drain(t, ch)
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+}
+
+// TestTurnBeginAfterErrorDoesNotWedgeSession confirms turnDone still
+// runs on an abnormal end (stream error, no EventDone): the cleanup-
+// on-every-exit-path guarantee that keeps a bug in one turn from
+// permanently 409-ing every later request against the same session.
+func TestTurnBeginAfterErrorDoesNotWedgeSession(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventError, Err: &stream.StreamError{Code: "boom", Message: "boom"}},
+	}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "first"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+
+	gw.mu.Lock()
+	gw.events = okEvents("second answer")
+	gw.mu.Unlock()
+
+	_, ch2, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "second"})
+	if err != nil {
+		t.Fatalf("Chat after a prior errored turn: %v, want the slot free for a new turn", err)
+	}
+	drain(t, ch2)
 	waitFor(t, func() bool { return !s.TurnActive("s1") })
 }

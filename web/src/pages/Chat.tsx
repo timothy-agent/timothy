@@ -287,6 +287,7 @@ export function Chat({
       // only re-renders — the live stream keeps its component state.
       navigate(`${basePath}/${id}`, { replace: true })
     }
+    let handedOffToLive = false
     try {
       await chatStream(
         {
@@ -312,15 +313,25 @@ export function Chat({
         // Brain may have created the session before failing: keep it.
         if (err.sessionId) adoptSession(err.sessionId)
         if (err.status === 401 || err.status === 503) onNeedToken()
-        updateLast((m) => ({ ...m, streaming: false, error: err.message }))
+        else if (err.status === 409 && err.code === 'turn_in_flight') {
+          // Lost the race to a turn already running elsewhere (another
+          // tab, a retry) — not a failure, just attach to it like a
+          // page reload mid-turn would. attachLive owns streaming/abort
+          // state from here, so the finally below must not touch it.
+          toast.info('A reply is already in progress — reattaching')
+          handedOffToLive = true
+          attachLive(sessionRef.current!)
+        } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
       } else {
         updateLast((m) => ({ ...m, streaming: false, error: String(err) }))
       }
     } finally {
-      abortRef.current = null
-      if (!controller.signal.aborted) {
-        setStreaming(false)
-        updateLast((m) => ({ ...m, streaming: false }))
+      if (!handedOffToLive) {
+        abortRef.current = null
+        if (!controller.signal.aborted) {
+          setStreaming(false)
+          updateLast((m) => ({ ...m, streaming: false }))
+        }
       }
     }
   }
@@ -350,6 +361,7 @@ export function Chat({
 
     const controller = new AbortController()
     abortRef.current = controller
+    let handedOffToLive = false
     try {
       await retryStream(
         sessionId,
@@ -361,15 +373,25 @@ export function Chat({
       if (controller.signal.aborted) return
       if (err instanceof ChatError) {
         if (err.status === 401 || err.status === 503) onNeedToken()
-        updateLast((m) => ({ ...m, streaming: false, error: err.message }))
+        else if (err.status === 409 && err.code === 'turn_in_flight') {
+          // Same handoff as sendMessage: a turn is already running
+          // (another tab's send/retry won the race) — attach to it
+          // instead of showing a failure. attachLive owns
+          // streaming/abort state from here.
+          toast.info('A reply is already in progress — reattaching')
+          handedOffToLive = true
+          attachLive(sessionId)
+        } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
       } else {
         updateLast((m) => ({ ...m, streaming: false, error: String(err) }))
       }
     } finally {
-      abortRef.current = null
-      if (!controller.signal.aborted) {
-        setStreaming(false)
-        updateLast((m) => ({ ...m, streaming: false }))
+      if (!handedOffToLive) {
+        abortRef.current = null
+        if (!controller.signal.aborted) {
+          setStreaming(false)
+          updateLast((m) => ({ ...m, streaming: false }))
+        }
       }
     }
   }

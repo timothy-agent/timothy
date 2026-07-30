@@ -420,12 +420,21 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	modelHint := req.ModelHint
 	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
 
+	// Exclusivity must be won BEFORE the first event append of the turn
+	// (D-042): a loser must never persist even the user_message, or two
+	// concurrent requests interleave writes on the same append-only log.
+	bc, err := s.turnBegin(sessionID)
+	if err != nil {
+		return sessionID, nil, err
+	}
+
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
 		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint,
 	}); err != nil {
+		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle)
+	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
 }
 
 // pinSensitiveRoute promotes the session-wide privacy floor above the
@@ -496,14 +505,27 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	}
 	modelHint := last.ModelHint
 	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
-	return s.runTurn(ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle)
+
+	// Same exclusivity acquisition as Chat (D-042): Retry appends no new
+	// user_message of its own, but it must still win the slot before
+	// runTurn can touch the log — a losing Retry racing a Chat (or
+	// another Retry) must not interleave events with the winner's turn.
+	bc, err := s.turnBegin(sessionID)
+	if err != nil {
+		return sessionID, nil, err
+	}
+	return s.runTurn(ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle, bc)
 }
 
 // runTurn is the shared tail of Chat and Retry: compact, project
 // context, assemble the system prompt, stream, and relay. The caller
 // has already ensured exactly the right user_message sits durable at
-// the end of the log — this never appends one itself.
-func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool) (string, <-chan stream.StreamEvent, error) {
+// the end of the log — this never appends one itself. bc is this
+// turn's broadcaster, already registered by the caller's turnBegin
+// (D-042) — runTurn must free it (turnDone) on every path that returns
+// before the relay goroutine takes ownership of that responsibility,
+// so a setup failure here can never wedge the session's slot.
+func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool, bc *turnBroadcaster) (string, <-chan stream.StreamEvent, error) {
 	// start marks the turn's wall-clock beginning for the stats line's
 	// duration: here, not Chat/Retry's entry, so a retried turn's
 	// duration covers only the retried run — the dead attempt's gap
@@ -524,10 +546,12 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	}
 	events, err := s.log.Events(ctx, sessionID)
 	if err != nil {
+		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
 	msgs, err := session.LLMContext(events, s.budget(ctx))
 	if err != nil {
+		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
 	// sessionSensitive reuses this same fetch: a session pinned by a
@@ -570,17 +594,15 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 		SessionID: sessionID,
 	})
 	if err != nil {
+		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
 
-	// Register the broadcaster BEFORE relay can forward a single event:
-	// turn_active and a late /live subscriber's replay both read this
-	// entry, so it must exist the instant the turn starts, not once the
-	// first event happens to land. Registered even with zero
-	// subscribers — presence means "turn in flight", not "someone is
-	// watching" (see broadcast.go).
-	bc := s.turnBroadcast(sessionID)
-
+	// bc was registered by the caller's turnBegin before the turn's
+	// first event append (D-042) — already live the instant the turn
+	// started, not just from here on. From this point, relay's own
+	// defer-equivalent (drainAndPersist, on every exit path) owns
+	// freeing it via turnDone.
 	out := make(chan stream.StreamEvent)
 	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
 	return sessionID, out, nil

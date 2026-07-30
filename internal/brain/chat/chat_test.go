@@ -393,6 +393,11 @@ func TestChatHistoryComesFromProjection(t *testing.T) {
 	}
 	drain(t, ch)
 	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	// The client-facing stream closing does not happen-after turnDone
+	// (see relay's drainAndPersist): wait for the slot to actually free
+	// before a second turn on the same session, or it races turnBegin's
+	// new exclusivity and spuriously hits ErrTurnInFlight (D-042).
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
 
 	gw.mu.Lock()
 	gw.events = okEvents("second answer")
@@ -513,6 +518,11 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 	}
 	drain(t, ch)
 	waitFor(t, func() bool { return len(log.kinds("s1")) == 2 }) // session_started, user_message only
+	// The slot only frees once persistTurn returns and turnDone runs,
+	// which is not synchronous with drain returning (D-042) — even on
+	// an errored turn, this must still happen so the session isn't
+	// permanently wedged.
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
 
 	log.mu.Lock()
 	title := log.titles["s1"]
@@ -725,8 +735,17 @@ func TestChatSendsCompactedContext(t *testing.T) {
 
 // TestFollowUpSeesCompletedTurnWhileDistillRuns pins turn durability:
 // the assistant turn must be in the log the moment the client stream
-// ends, even while distillation is still running — a fast follow-up
-// projects the completed answer, never a phantom interruption.
+// ends, even while distillation is still running. It also pins the
+// D-042 exclusivity boundary this same window now enforces: distill
+// runs inside persistTurn, BEFORE turnDone frees the slot (see
+// relay's drainAndPersist), so a follow-up landing in that window is
+// correctly rejected with ErrTurnInFlight rather than allowed to
+// interleave — turn "done" means the slot is free, not merely that the
+// client's stream closed. (Before D-042, this test allowed that
+// follow-up to proceed immediately; that was the old
+// always-install-fresh turnBroadcast semantics this design replaces.)
+// Once distill releases and the slot frees, the follow-up proceeds and
+// sees the completed answer, never a phantom interruption.
 func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -742,7 +761,6 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		}
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
-	defer close(distillRelease)
 	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
@@ -769,8 +787,20 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		}
 	}
 
-	// Follow-up inside the distill window: full answer on the wire, no
-	// phantom interruption.
+	// A follow-up inside the distill window must NOT be allowed to
+	// interleave: the slot is still held (turnDone hasn't run yet).
+	if _, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second question"}); !errors.Is(err, ErrTurnInFlight) {
+		t.Fatalf("Chat during distill window: err = %v, want ErrTurnInFlight", err)
+	}
+	if got := log.kinds("s1"); len(got) != 3 {
+		t.Fatalf("rejected follow-up appended events: kinds = %v, want no change (still 3)", got)
+	}
+
+	close(distillRelease)
+	waitFor(t, func() bool { return !svc.TurnActive("s1") })
+
+	// Now that the slot is free, the follow-up proceeds and sees the
+	// completed answer, never a phantom interruption.
 	_, ch2, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second question"})
 	if err != nil {
 		t.Fatalf("Chat 2: %v", err)
@@ -1131,6 +1161,10 @@ func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join([]string{session.KindSessionStarted, session.KindUserMessage}, ",") {
 		t.Fatalf("kinds after failed attempt = %v, want a dangling user_message", kinds)
 	}
+	// The slot only frees once turnDone runs, not synchronously with
+	// drain returning (D-042) — an errored turn must still free it so
+	// Retry below isn't spuriously rejected.
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
 
 	gw.mu.Lock()
 	gw.events = okEvents("the answer")
@@ -1522,6 +1556,9 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	drain(t, ch)
+	// See TestChatHistoryComesFromProjection: the slot only frees after
+	// drain returns, not synchronously with it (D-042).
+	waitFor(t, func() bool { return !svc.TurnActive("s1") })
 
 	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "scheduler"})
 	if err != nil {
@@ -1563,6 +1600,9 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	drain(t, ch)
+	// See TestChatHistoryComesFromProjection: the slot only frees after
+	// drain returns, not synchronously with it (D-042).
+	waitFor(t, func() bool { return !svc.TurnActive("s1") })
 
 	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "mailer"})
 	if err != nil {

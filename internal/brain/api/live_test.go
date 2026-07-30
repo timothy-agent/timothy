@@ -120,6 +120,47 @@ func TestLiveEndpointNoActiveTurn(t *testing.T) {
 	}
 }
 
+// TestMessagesEndpointTurnInFlightReturns409 confirms POST
+// /v1/sessions/{id}/messages maps chat.ErrTurnInFlight (D-042) to a
+// 409 with code "turn_in_flight" — the same error-mapping pattern as
+// the existing no_retryable_turn 409 in streamTurn — when a second
+// send races an already in-flight turn on the same session.
+func TestMessagesEndpointTurnInFlightReturns409(t *testing.T) {
+	t.Parallel()
+	block := make(chan struct{})
+	a, dir, gw := testAPI(t, "tok", okEvents())
+	gw.blockCh = block
+	id, _ := dir.Create(t.Context(), "t")
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"hello"}`)
+	}()
+	waitForTest(t, func() bool { return a.svc.TurnActive(id) })
+
+	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages", `{"message":"racing"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("racing POST /messages code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["error"] != "turn_in_flight" {
+		t.Fatalf("error = %q, want turn_in_flight", body["error"])
+	}
+
+	close(block)
+	select {
+	case w := <-done:
+		if w.Code != http.StatusOK {
+			t.Fatalf("original POST /messages code = %d body=%s", w.Code, w.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("original POST /messages never returned")
+	}
+}
+
 func TestLiveEndpointUnknownSession(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
