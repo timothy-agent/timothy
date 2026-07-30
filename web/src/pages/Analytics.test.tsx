@@ -264,7 +264,7 @@ describe('Analytics zero-cost exclusion', () => {
     // exactly the signal this chart exists to show, so it must render.
     const tokenChart = (await screen.findByText('Token consumption per model')).closest('section')
     if (!tokenChart) throw new Error('token chart section not found')
-    expect(within(tokenChart).getByText('local-llama in')).toBeInTheDocument()
+    expect(within(tokenChart).getByText('local-llama')).toBeInTheDocument()
   })
 
   it('excludes a zero-cost model from the cost-by-model chart', async () => {

@@ -245,30 +245,10 @@ export function Analytics() {
     () => (data ? pivot(data.byModel, (p) => p.cost_usd, pricedModels) : { groups: [], rows: [] }),
     [data, pricedModels],
   )
-  const modelTokens = useMemo(() => {
-    if (!data) return { groups: [], rows: [] }
-    const inputSeries = pivot(data.byModel, (p) => p.input_tokens)
-    const outputByBucket = new Map<string, Record<string, number>>()
-    for (const p of data.byModel) {
-      const row = outputByBucket.get(p.bucket) ?? {}
-      row[p.group] = (row[p.group] ?? 0) + p.output_tokens
-      outputByBucket.set(p.bucket, row)
-    }
-    // Suffix output columns so a stacked bar can show both input and
-    // output per model without one key clobbering the other.
-    const rows = inputSeries.rows.map((row) => {
-      const bucketKey = String(row.bucket)
-      const out = outputByBucket.get(bucketKey) ?? {}
-      const merged: Record<string, number | string> = { bucket: bucketKey }
-      for (const g of inputSeries.groups) {
-        merged[`${g} in`] = (row[g] as number) ?? 0
-        merged[`${g} out`] = out[g] ?? 0
-      }
-      return merged
-    })
-    const groups = inputSeries.groups.flatMap((g) => [`${g} in`, `${g} out`])
-    return { groups, rows }
-  }, [data])
+  const modelTokens = useMemo(
+    () => (data ? pivot(data.byModel, (p) => p.input_tokens + p.output_tokens) : { groups: [], rows: [] }),
+    [data],
+  )
 
   // Advisory estimates for calls the ledger recorded without a price
   // (cost_usd NULL). Computed client-side from the model catalog and
@@ -524,7 +504,7 @@ export function Analytics() {
             <h2 className="text-sm font-medium">Token consumption per model</h2>
             <div className="mt-3 h-64">
               <ResponsiveContainer>
-                <BarChart data={modelTokens.rows}>
+                <LineChart data={modelTokens.rows}>
                   <CartesianGrid strokeOpacity={0.12} vertical={false} />
                   <XAxis
                     dataKey="bucket"
@@ -543,15 +523,17 @@ export function Analytics() {
                     formatter={modelTokensLegend.legendFormatter}
                   />
                   {modelTokens.groups.map((g, i) => (
-                    <Bar
+                    <Line
                       key={g}
+                      type="monotone"
                       dataKey={g}
-                      stackId="modelTokens"
-                      fill={palette[i % palette.length]}
+                      stroke={palette[i % palette.length]}
+                      dot={false}
+                      strokeWidth={2}
                       hide={modelTokensLegend.hidden.has(g)}
                     />
                   ))}
-                </BarChart>
+                </LineChart>
               </ResponsiveContainer>
             </div>
           </section>
