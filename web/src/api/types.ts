@@ -296,7 +296,7 @@ export interface AdminProvider {
   credential_ref: string
   headers: Record<string, string>
   enabled: boolean
-  options?: { reasoning_effort?: string; request_timeout?: string }
+  options?: { reasoning_effort?: string; request_timeout?: string; region?: string }
 }
 
 export interface ChainEntry {

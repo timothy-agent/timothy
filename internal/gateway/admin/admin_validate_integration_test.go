@@ -169,10 +169,16 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	}
 
 	// Bedrock cannot enumerate models; the sentinel drives the UI's
-	// manual-entry fallback (422 at the HTTP layer).
+	// manual-entry fallback (422 at the HTTP layer). Static keys are the
+	// only supported auth (D-048), so the credential_ref must resolve
+	// for the provider to build and reach the serving snapshot at all.
+	bedrockRef := adminMarker + "models-bedrock-key" //nolint:gosec // test fixture name, not a secret
+	if err := adm.SetSecret(ctx, bedrockRef, `{"access_key_id":"AKIA123","secret_access_key":"shh"}`); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
 	bid, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "models-bedrock", Kind: "api", Driver: "bedrock",
-		BaseURL: "us-east-1",
+		CredentialRef: bedrockRef, Options: map[string]string{"region": "us-east-1"},
 	})
 	if err != nil {
 		t.Fatalf("Create bedrock: %v", err)

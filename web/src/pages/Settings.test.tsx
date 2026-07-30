@@ -245,14 +245,14 @@ describe('Providers tab', () => {
     }
   })
 
-  it('navigates to its own add page: bedrock asks for region, not a key', async () => {
+  it('navigates to its own add page: bedrock asks for a region dropdown and a key', async () => {
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: /AWS Bedrock/ }))
     expect(await screen.findByText('Add AWS Bedrock')).toBeTruthy()
     expect(screen.getByText('Region')).toBeTruthy()
-    expect(screen.getByText('AWS profile (optional)')).toBeTruthy()
-    // The card behind the list has a key editor; the bedrock page must not.
-    expect(screen.queryByText('API key')).toBeNull()
+    expect(screen.getByRole('combobox')).toBeTruthy()
+    // Static keys are the only bedrock auth now: the key field is required.
+    expect(screen.getByText('API key')).toBeTruthy()
   })
 
   it('disables Add until a test passes, then stores the key and creates enabled', async () => {

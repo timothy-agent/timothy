@@ -24,36 +24,30 @@ import (
 // (Nova and Titan families) so usage bills against AWS credits — no
 // third-party models.
 //
-// D-047: credential_ref resolves through the encrypted secret store
-// like every other provider. When it resolves to a non-empty value,
-// that value MUST be the JSON documented on StaticCredentials — a
-// parse failure fails provider construction rather than silently
-// falling back to profile/SSO (config honesty). When credential_ref
-// does not resolve (no secrets row — e.g. the 'sumonmselim' local dev
-// row), the prior behavior stands unchanged: it is an AWS profile
-// name resolved from the SDK's shared config (~/.aws, SSO). Leave
-// credential_ref empty entirely when an IAM role supplies credentials.
+// D-047/D-048: static IAM keys in the secret store are the only
+// supported auth — AWS profile/SSO mode was removed (a headless server
+// has no ~/.aws to mount). credential_ref must resolve through the
+// encrypted secret store to JSON matching StaticCredentials; a resolve
+// failure or a parse failure both fail provider construction (config
+// honesty), never a silent fallback. Region precedence: the secret
+// JSON's own "region" field, when set, wins over the provider's
+// options.region (Region below); with neither set, us-east-1 applies.
 //
-// Providers table example (secret-store static keys):
+// Providers table example:
 //
 //	driver = 'bedrock'
-//	base_url = 'us-east-1'                       -- AWS region; secret JSON region wins if set
 //	default_model = 'us.amazon.nova-pro-v1:0'    -- inference-profile ID
 //	credential_ref = 'bedrock-static'            -- secret store ref holding StaticCredentials JSON
-//
-// Providers table example (profile/SSO fallback, unchanged):
-//
-//	credential_ref = '<aws-profile>'             -- no matching secrets row; local SSO only, empty on AWS
+//	options = '{"region": "us-west-2"}'          -- optional; defaults to us-east-1
 //
 // Models must be enabled on the Bedrock console "Model access" page.
 type BedrockConfig struct {
-	Name    string
-	Region  string // e.g. "us-east-1"; defaults to us-east-1 unless StaticCredentials.Region overrides it
-	Profile string // AWS profile name (credential_ref), used when StaticCredentials is nil
-	// StaticCredentials, when non-nil, is the resolved secret-store
-	// value for credential_ref parsed as JSON — takes precedence over
-	// Profile. A non-nil pointer with an empty AccessKeyID/SecretAccessKey
-	// never happens: ParseStaticCredentials rejects that at parse time.
+	Name   string
+	Region string // from options.region; defaults to us-east-1 unless StaticCredentials.Region overrides it
+	// StaticCredentials is the resolved secret-store value for
+	// credential_ref parsed as JSON — required; a non-nil pointer with an
+	// empty AccessKeyID/SecretAccessKey never happens, since
+	// ParseStaticCredentials rejects that at parse time.
 	StaticCredentials *StaticCredentials
 	Timeout           time.Duration
 }
@@ -106,8 +100,8 @@ func (b *Bedrock) Name() string { return b.cfg.Name }
 func (b *Bedrock) Kind() Kind   { return KindAPI }
 
 // HasStaticCredentials reports whether this provider was built with a
-// resolved secret-store credential (D-047) rather than the AWS
-// profile/SSO fallback — used by router tests to verify the lookup
+// resolved secret-store credential (D-047) — always true since profile
+// mode was removed (D-048); used by router tests to verify the lookup
 // plumbing reaches the bedrock constructor.
 func (b *Bedrock) HasStaticCredentials() bool { return b.cfg.StaticCredentials != nil }
 
@@ -115,48 +109,30 @@ func (b *Bedrock) Capabilities() []Capability {
 	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings, CapVision}
 }
 
-// lazyClient builds the AWS client on first use. With StaticCredentials
-// set, region precedence is secret JSON region > BedrockConfig.Region
-// (already defaulted to us-east-1 by NewBedrock unless a driver
-// deriving path set it) — a static-keys row with no region anywhere is
-// a construction error, since there is no profile/env to derive it
-// from. Without StaticCredentials, behavior is unchanged: the SDK's
-// default chain (env vars, shared config profile, IAM role). sync.Once
+// lazyClient builds the AWS client on first use. Region precedence is
+// secret JSON region > BedrockConfig.Region (options.region, already
+// defaulted to us-east-1 by NewBedrock unless a driver deriving path set
+// it) — a static-keys row with no region anywhere is a construction
+// error, since there is no profile/env to derive it from. sync.Once
 // makes it safe under concurrent Stream/Embed calls; a load failure is
 // sticky, which is right — bad credentials or a bad region never heal
 // mid-process.
 func (b *Bedrock) lazyClient(ctx context.Context) (*bedrockruntime.Client, error) {
 	b.initOnce.Do(func() {
-		if b.cfg.StaticCredentials != nil {
-			sc := b.cfg.StaticCredentials
-			region := sc.Region
-			if region == "" {
-				region = b.cfg.Region
-			}
-			if region == "" {
-				b.clientErr = fmt.Errorf("bedrock: static credentials require a region (set the secret JSON's %q field or the provider's base_url)", "region")
-				return
-			}
-			awsCfg, err := config.LoadDefaultConfig(ctx,
-				config.WithRegion(region),
-				config.WithCredentialsProvider(
-					credentials.NewStaticCredentialsProvider(sc.AccessKeyID, sc.SecretAccessKey, sc.SessionToken)),
-			)
-			if err != nil {
-				b.clientErr = fmt.Errorf("bedrock: load aws config: %w", err)
-				return
-			}
-			b.client = bedrockruntime.NewFromConfig(awsCfg)
+		sc := b.cfg.StaticCredentials
+		region := sc.Region
+		if region == "" {
+			region = b.cfg.Region
+		}
+		if region == "" {
+			b.clientErr = fmt.Errorf("bedrock: static credentials require a region (set the secret JSON's %q field or the provider's options.region)", "region")
 			return
 		}
-
-		opts := []func(*config.LoadOptions) error{
-			config.WithRegion(b.cfg.Region),
-		}
-		if b.cfg.Profile != "" {
-			opts = append(opts, config.WithSharedConfigProfile(b.cfg.Profile))
-		}
-		awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
+		awsCfg, err := config.LoadDefaultConfig(ctx,
+			config.WithRegion(region),
+			config.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(sc.AccessKeyID, sc.SecretAccessKey, sc.SessionToken)),
+		)
 		if err != nil {
 			b.clientErr = fmt.Errorf("bedrock: load aws config: %w", err)
 			return

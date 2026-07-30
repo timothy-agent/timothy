@@ -55,6 +55,10 @@ type ProviderRow struct {
 	// hard timeout override for slow backends (e.g. a CPU-only remote
 	// Ollama). Zero leaves the driver's own default in place.
 	Timeout time.Duration
+	// Region comes from options.region (D-048) — the bedrock driver's AWS
+	// region, overridden per-key by the secret JSON's own "region" field
+	// (D-047) when set. Ignored by every other driver.
+	Region string
 }
 
 // ChainEntry is one step of a route chain.
@@ -140,12 +144,11 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 	for _, row := range provRows {
 		s.rows[row.ID] = row
 		s.byName[row.Name] = row
-		// credential_ref names an env var for API-key drivers, but the
-		// bedrock driver reuses it as an AWS profile name that the SDK
-		// resolves itself — an unresolved env lookup must not mark it
-		// unhealthy.
-		s.healthy[row.Name] = row.Driver == "bedrock" ||
-			row.CredentialRef == "" || lookup(row.CredentialRef) != ""
+		// credential_ref names an env var for API-key drivers; bedrock now
+		// requires the same ref to resolve in the secret store as static
+		// keys (D-047, profile/SSO mode removed) — so an unresolved ref
+		// marks every driver unhealthy alike.
+		s.healthy[row.Name] = row.CredentialRef == "" || lookup(row.CredentialRef) != ""
 		cfgs = append(cfgs, provider.Config{
 			Name:            row.Name,
 			Kind:            provider.Kind(row.Kind),
@@ -153,6 +156,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 			BaseURL:         row.BaseURL,
 			CredentialRef:   row.CredentialRef,
 			Headers:         row.Headers,
+			Region:          row.Region,
 			ReasoningEffort: row.ReasoningEffort,
 			Timeout:         row.Timeout,
 		})

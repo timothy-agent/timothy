@@ -11,9 +11,11 @@ export interface ProviderPreset {
   // Sprite symbol in ProviderLogo; custom endpoints render a glyph.
   logo?: string
   brandColor: string
-  // Default base_url ('' lets the driver default apply; bedrock keeps
-  // the region there instead — see the registry contract).
+  // Default base_url ('' lets the driver default apply); unused for
+  // bedrock, whose region lives in options.region instead (see `region`
+  // below and the registry contract).
   baseURL: string
+  // Default AWS region for the bedrock preset's options.region dropdown.
   region?: string
   requiresKey: boolean
   defaultRef?: string
@@ -23,6 +25,27 @@ export interface ProviderPreset {
   // the first declared model and the default on create.
   validateModel: string
 }
+
+// bedrockRegions lists AWS regions where Bedrock serves models, for the
+// provider's region dropdown (options.region). Curated to Bedrock-served
+// regions, not every AWS region — extend as AWS does.
+export const bedrockRegions: { value: string; label: string }[] = [
+  { value: 'us-east-1', label: 'us-east-1 (N. Virginia)' },
+  { value: 'us-east-2', label: 'us-east-2 (Ohio)' },
+  { value: 'us-west-2', label: 'us-west-2 (Oregon)' },
+  { value: 'ca-central-1', label: 'ca-central-1 (Canada)' },
+  { value: 'sa-east-1', label: 'sa-east-1 (São Paulo)' },
+  { value: 'eu-central-1', label: 'eu-central-1 (Frankfurt)' },
+  { value: 'eu-west-1', label: 'eu-west-1 (Ireland)' },
+  { value: 'eu-west-2', label: 'eu-west-2 (London)' },
+  { value: 'eu-west-3', label: 'eu-west-3 (Paris)' },
+  { value: 'eu-north-1', label: 'eu-north-1 (Stockholm)' },
+  { value: 'ap-northeast-1', label: 'ap-northeast-1 (Tokyo)' },
+  { value: 'ap-northeast-2', label: 'ap-northeast-2 (Seoul)' },
+  { value: 'ap-south-1', label: 'ap-south-1 (Mumbai)' },
+  { value: 'ap-southeast-1', label: 'ap-southeast-1 (Singapore)' },
+  { value: 'ap-southeast-2', label: 'ap-southeast-2 (Sydney)' },
+]
 
 export const providerPresets: ProviderPreset[] = [
   {
@@ -62,9 +85,8 @@ export const providerPresets: ProviderPreset[] = [
     brandColor: '#FF9900',
     baseURL: '',
     region: 'us-east-1',
-    requiresKey: false,
-    keyHint:
-      'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}), or leave the secret unset to use an AWS profile name from the host’s ~/.aws.',
+    requiresKey: true,
+    keyHint: 'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}).',
     validateModel: 'amazon.nova-lite-v1:0',
   },
   {

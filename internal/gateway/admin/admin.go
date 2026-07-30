@@ -797,6 +797,7 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		CredentialRef:   p.CredentialRef,
 		Headers:         p.Headers,
 		ReasoningEffort: p.Options["reasoning_effort"],
+		Region:          p.Options["region"],
 		Timeout:         timeout,
 	}}, a.credentialLookup())
 	if err != nil {

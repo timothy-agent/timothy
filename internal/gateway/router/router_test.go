@@ -377,31 +377,24 @@ func TestRoutesListing(t *testing.T) {
 	}
 }
 
-func TestBedrockHealthyWithoutEnvCredential(t *testing.T) {
+// TestBedrockUnresolvedCredentialRefFailsBuild covers D-048: AWS
+// profile/SSO mode is gone, so a bedrock row whose credential_ref does
+// not resolve in the secret store is a hard BuildSnapshot error, not a
+// degraded-but-usable provider.
+func TestBedrockUnresolvedCredentialRefFailsBuild(t *testing.T) {
 	t.Parallel()
-	// bedrock's credential_ref is an AWS profile name, not an env var:
-	// the SDK resolves it, so an unresolvable lookup must not sideline
-	// the provider.
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
-		BaseURL: "us-east-1", DefaultModel: "us.amazon.nova-pro-v1:0",
-		CredentialRef: "some-aws-profile", Enabled: true,
+		DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "missing-secret", Enabled: true,
 		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
 	routeRows := []RouteRow{{Name: "embedding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
-
-	attempts, err := snap.Resolve("embedding", "", Sticky{})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if len(attempts) != 1 || attempts[0].ProviderName != "bedrock" {
-		t.Fatalf("attempts = %v, want bedrock", attempts)
+	_, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "bedrock requires static keys in the secret store") {
+		t.Fatalf("BuildSnapshot err = %v, want a clear static-keys-required message", err)
 	}
 }
 
@@ -415,7 +408,7 @@ func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.
 	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
-		BaseURL: "us-east-1", DefaultModel: "us.amazon.nova-pro-v1:0",
+		DefaultModel: "us.amazon.nova-pro-v1:0",
 		CredentialRef: "bedrock-static", Enabled: true,
 		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
 	}}
@@ -445,6 +438,42 @@ func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.
 	}
 	if !b.HasStaticCredentials() {
 		t.Fatal("resolved secret JSON must reach the bedrock constructor as StaticCredentials")
+	}
+}
+
+// TestBedrockOptionsRegionThreadsToProvider covers D-048: a bedrock
+// row's Region (as parsed from options.region by applyProviderOptions in
+// store.go) reaches the built provider without failing resolution —
+// registry_test.go's TestBuildBedrockOptionsRegion checks the resulting
+// BedrockConfig.Region value directly at the provider.Build layer.
+func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
+	t.Parallel()
+	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "bedrock-static", Enabled: true, Region: "ap-southeast-2",
+		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
+	}}
+	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string {
+		if ref == "bedrock-static" {
+			return secretJSON
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("chat", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, ok := attempts[0].Provider.(*provider.Bedrock); !ok {
+		t.Fatalf("provider type = %T, want *provider.Bedrock", attempts[0].Provider)
 	}
 }
 

@@ -114,7 +114,7 @@ Configured as an MCP preset in **Settings → Connectors**: paste a GitHub perso
 
 ## Optional: Amazon Bedrock
 
-The `gateway` service mounts your host's `~/.aws` directory read-only. Set the Bedrock provider's credential reference to an AWS profile name, and run `aws sso login --profile <name>` on the host when the session expires.
+Create an IAM user scoped to `bedrock:InvokeModel*` only, generate an access key, and paste it as JSON (`{"access_key_id":"…","secret_access_key":"…"}`) into the Bedrock provider's key field in **Settings → Providers**. Pick a region from the dropdown — no `~/.aws`, no SSO, nothing to run on the host.
 
 ## Operating the stack
 

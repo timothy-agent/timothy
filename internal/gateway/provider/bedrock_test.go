@@ -354,10 +354,10 @@ func TestParseStaticCredentials(t *testing.T) {
 	}
 }
 
-// TestBedrockLazyClientStaticCredentials covers D-047's region
+// TestBedrockLazyClientStaticCredentials covers D-047/D-048's region
 // precedence and construction-failure rules: secret JSON region wins
-// over the provider's base_url-derived region, the provider's region
-// is used when the secret carries none, and a static-credentials
+// over the provider's options.region-derived region, the provider's
+// region is used when the secret carries none, and a static-credentials
 // config with no region anywhere fails construction with a message
 // naming the region field. LoadDefaultConfig with a static credentials
 // provider and an explicit region does no network I/O, so this stays
@@ -414,21 +414,6 @@ func TestBedrockLazyClientStaticCredentials(t *testing.T) {
 		}
 	})
 
-	t.Run("static credentials take precedence over profile", func(t *testing.T) {
-		t.Parallel()
-		b := NewBedrock(BedrockConfig{
-			Name:              "b",
-			Region:            "us-east-1",
-			Profile:           "some-profile-that-does-not-exist",
-			StaticCredentials: &StaticCredentials{AccessKeyID: "AKIA", SecretAccessKey: "secret"},
-		})
-		// If Profile were still honored, LoadDefaultConfig would try to
-		// resolve a nonexistent shared-config profile and fail; success
-		// here proves StaticCredentials wins.
-		if _, err := b.lazyClient(context.Background()); err != nil {
-			t.Fatalf("lazyClient: %v, want static credentials to bypass the (invalid) profile", err)
-		}
-	})
 }
 
 func TestParseTitanEmbedding(t *testing.T) {

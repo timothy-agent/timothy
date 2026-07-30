@@ -62,6 +62,8 @@ function renderPage(id = 'p1') {
 
 afterEach(cleanup)
 beforeEach(() => {
+  // jsdom lacks scrollIntoView; Radix Select calls it on open.
+  Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
   vi.mocked(availableModels).mockRejectedValue(new Error('driver bedrock cannot list models'))
@@ -269,5 +271,48 @@ describe('ProviderEdit reasoning section', () => {
     fireEvent.blur(input)
 
     await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
+  })
+})
+
+describe('ProviderEdit region section', () => {
+  beforeEach(() => {
+    vi.mocked(availableModels).mockRejectedValue(new Error('driver bedrock cannot list models'))
+  })
+
+  it('omits the region section for non-bedrock drivers', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    await screen.findByText('Ollama')
+    expect(screen.queryByText('Region')).toBeNull()
+  })
+
+  it('defaults the region dropdown to us-east-1 when options.region is unset', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
+    renderPage('p1')
+
+    expect(await screen.findByRole('combobox')).toHaveTextContent('us-east-1 (N. Virginia)')
+  })
+
+  it('shows the stored region when options.region is set', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...bedrockProvider, options: { region: 'eu-west-1' } },
+    ])
+    renderPage('p1')
+
+    expect(await screen.findByRole('combobox')).toHaveTextContent('eu-west-1 (Ireland)')
+  })
+
+  it('writes options.region when a new region is picked', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p1')
+
+    fireEvent.click(await screen.findByRole('combobox'))
+    fireEvent.click(await screen.findByText('ap-southeast-2 (Sydney)'))
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p1', { options: { region: 'ap-southeast-2' } }),
+    )
   })
 })

@@ -23,17 +23,18 @@ import {
   DialogTitle,
 } from '../ui/dialog'
 import { Input } from '../ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
 import { modelCatalog } from './modelCatalog'
-import { matchPreset } from './presets'
+import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { backendLabel, errText, stripPaste, secretField } from './util'
 
 // ProviderEdit is a provider's own page for the controls too heavy for
-// its summary card: rotating the stored key (or the Bedrock profile),
-// and declaring which models it serves.
+// its summary card: rotating the stored key, and declaring which
+// models it serves.
 export function ProviderEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -96,6 +97,7 @@ export function ProviderEdit() {
             defaultBackend={defaultBackend}
           />
         )}
+        {provider.driver === 'bedrock' && <RegionSection provider={provider} onChanged={refresh} />}
         {provider.driver === 'openaicompat' && (
           <ReasoningSection provider={provider} onChanged={refresh} />
         )}
@@ -241,88 +243,70 @@ function CredentialSection({
         </Button>
       </div>
 
-      {bedrock ? (
-        <div>
-          <Field label="AWS profile or credential reference">
-            <Input
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-              onBlur={saveRef}
-              placeholder="profile name"
-              className="mt-1.5 h-10"
-            />
-          </Field>
-          <p className="mt-1.5 text-sm text-muted-foreground">
-            For static IAM keys, save this name as a secret (Secrets tab) holding JSON{' '}
-            {'{"access_key_id":"…","secret_access_key":"…"}'} — the gateway resolves it before
-            falling back to an AWS profile. Leave the secret unset to use this as a profile name
-            from the host’s ~/.aws (SSO) instead.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span
-              className={`rounded px-2 py-0.5 text-xs font-semibold uppercase ${
-                configured ? 'bg-good-soft text-good' : 'bg-warning-soft text-warning'
-              }`}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded px-2 py-0.5 text-xs font-semibold uppercase ${
+              configured ? 'bg-good-soft text-good' : 'bg-warning-soft text-warning'
+            }`}
+          >
+            {configured ? `stored · ${backendLabel(storedBackend)}` : 'not set'}
+          </span>
+          {configured && (
+            <button
+              type="button"
+              disabled={savingSecret}
+              onClick={() => void clearSecretValue()}
+              className="text-sm text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
             >
-              {configured ? `stored · ${backendLabel(storedBackend)}` : 'not set'}
-            </span>
-            {configured && (
-              <button
-                type="button"
-                disabled={savingSecret}
-                onClick={() => void clearSecretValue()}
-                className="text-sm text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
-              >
-                clear
-              </button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Input
-              type={secretField(defaultBackend ?? 'db', '').type}
-              value={secretValue}
-              onChange={(e) => setSecretValue(e.target.value)}
-              placeholder={
-                secretField(defaultBackend ?? 'db', configured ? 'paste new key to rotate' : 'paste key')
-                  .placeholder
-              }
-              className="h-10"
-              autoComplete="off"
-            />
-            <Button variant="outline" disabled={savingSecret || !secretValue || !ref} onClick={() => void saveSecretValue()}>
-              Save
-            </Button>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {defaultBackend === 'vault'
+              clear
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Input
+            type={secretField(defaultBackend ?? 'db', '').type}
+            value={secretValue}
+            onChange={(e) => setSecretValue(e.target.value)}
+            placeholder={
+              secretField(defaultBackend ?? 'db', configured ? 'paste new key to rotate' : 'paste key')
+                .placeholder
+            }
+            className="h-10"
+            autoComplete="off"
+          />
+          <Button variant="outline" disabled={savingSecret || !secretValue || !ref} onClick={() => void saveSecretValue()}>
+            Save
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {bedrock
+            ? 'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}).'
+            : defaultBackend === 'vault'
               ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
               : defaultBackend === 'asm'
                 ? 'The key stays in AWS Secrets Manager; only its name is saved. The default backend is set in the Secrets tab.'
                 : defaultBackend === 'file'
                   ? 'The key stays in the mounted file; only its filename is saved. The default backend is set in the Secrets tab.'
                   : 'Encrypted with the master key and kept in Timothy’s database.'}
+        </p>
+        <details className="pt-1">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+            Advanced — reference name
+          </summary>
+          <Input
+            value={ref}
+            onChange={(e) => setRef(e.target.value)}
+            onBlur={saveRef}
+            placeholder="name (e.g. ANTHROPIC_API_KEY)"
+            className="mt-1.5 h-10"
+          />
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Storage name for this provider’s key — never the key itself. Change it only to
+            share or repoint an already-stored secret.
           </p>
-          <details className="pt-1">
-            <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-              Advanced — reference name
-            </summary>
-            <Input
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-              onBlur={saveRef}
-              placeholder="name (e.g. ANTHROPIC_API_KEY)"
-              className="mt-1.5 h-10"
-            />
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Storage name for this provider’s key — never the key itself. Change it only to
-              share or repoint an already-stored secret.
-            </p>
-          </details>
-        </div>
-      )}
+        </details>
+      </div>
     </section>
   )
 }
@@ -387,6 +371,50 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
           placeholder="5m"
           className="mt-1.5 h-10 max-w-40"
         />
+      </Field>
+    </section>
+  )
+}
+
+// RegionSection lets a bedrock provider pick its AWS region
+// (options.region, D-048) — defaults to us-east-1 when unset, same
+// default the gateway driver applies. Overridden per-key by the secret
+// JSON's own "region" field (D-047), which this dropdown never touches.
+function RegionSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
+  const [saving, setSaving] = useState(false)
+  const region = provider.options?.region ?? 'us-east-1'
+
+  const save = async (value: string) => {
+    if (value === region) return
+    setSaving(true)
+    try {
+      await patchProvider(provider.id, {
+        options: { ...provider.options, region: value },
+      })
+      onChanged()
+    } catch (err) {
+      toast.error('Could not update region', { description: errText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-sm font-semibold">Region</h2>
+      <Field label="AWS region" hint={saving ? 'Saving…' : undefined}>
+        <Select value={region} onValueChange={(v) => void save(v)}>
+          <SelectTrigger className="mt-1.5 h-10 w-full max-w-72">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {bedrockRegions.map((r) => (
+              <SelectItem key={r.value} value={r.value}>
+                {r.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
     </section>
   )
