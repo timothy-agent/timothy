@@ -21,6 +21,9 @@ export interface ProviderPreset {
   defaultRef?: string
   keyPlaceholder?: string
   keyHint?: string
+  // Provider's own key/API-key management page — rendered as a link
+  // right where the operator is about to paste one in.
+  keyURL?: string
   // Prefill for the validation model — editable in the dialog, becomes
   // the first declared model and the default on create.
   validateModel: string
@@ -60,6 +63,7 @@ export const providerPresets: ProviderPreset[] = [
     defaultRef: 'OPENAI_API_KEY',
     keyPlaceholder: 'sk-…',
     keyHint: 'Create one at platform.openai.com/api-keys.',
+    keyURL: 'https://platform.openai.com/api-keys',
     validateModel: 'gpt-4o-mini',
   },
   {
@@ -74,6 +78,7 @@ export const providerPresets: ProviderPreset[] = [
     defaultRef: 'ANTHROPIC_API_KEY',
     keyPlaceholder: 'sk-ant-…',
     keyHint: 'Create one at console.anthropic.com — keys start with sk-ant-.',
+    keyURL: 'https://console.anthropic.com/settings/keys',
     validateModel: 'claude-haiku-4-5',
   },
   {
@@ -87,6 +92,7 @@ export const providerPresets: ProviderPreset[] = [
     region: 'us-east-1',
     requiresKey: true,
     keyHint: 'Paste static IAM keys as JSON ({"access_key_id":"…","secret_access_key":"…"}).',
+    keyURL: 'https://console.aws.amazon.com/iam/home#/users',
     validateModel: 'amazon.nova-lite-v1:0',
   },
   {
@@ -101,6 +107,7 @@ export const providerPresets: ProviderPreset[] = [
     defaultRef: 'ZAI_API_KEY',
     keyPlaceholder: 'paste key',
     keyHint: 'Create one at z.ai.',
+    keyURL: 'https://z.ai/manage-apikey/apikey-list',
     validateModel: 'glm-4.7-flash',
   },
   {
@@ -115,6 +122,7 @@ export const providerPresets: ProviderPreset[] = [
     defaultRef: 'XAI_API_KEY',
     keyPlaceholder: 'xai-…',
     keyHint: 'Create one at console.x.ai — keys start with xai-.',
+    keyURL: 'https://console.x.ai',
     validateModel: 'grok-4',
   },
   {

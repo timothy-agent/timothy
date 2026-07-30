@@ -66,3 +66,17 @@ describe('ProviderAdd model suggestions', () => {
     expect(await screen.findByText('glm-4.7-flash')).toBeInTheDocument()
   })
 })
+
+describe('ProviderAdd key hint links', () => {
+  it('links to the provider\'s key-creation page', async () => {
+    renderPage('glm')
+    const link = await screen.findByRole('link', { name: 'Open GLM (Z.ai) →' })
+    expect(link).toHaveAttribute('href', 'https://z.ai/manage-apikey/apikey-list')
+    expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('renders no link for a preset without a keyURL', async () => {
+    renderPage('ollama')
+    expect(screen.queryByRole('link', { name: /Open Ollama/ })).not.toBeInTheDocument()
+  })
+})

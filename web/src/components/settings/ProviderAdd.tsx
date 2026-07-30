@@ -276,7 +276,22 @@ export function ProviderAdd() {
                   </p>
                 )}
                 {!keyError && (field.hint || preset.keyHint) && (
-                  <p className="mt-1.5 text-sm text-muted-foreground">{field.hint || preset.keyHint}</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {field.hint || preset.keyHint}
+                    {!field.hint && preset.keyURL && (
+                      <>
+                        {' '}
+                        <a
+                          href={preset.keyURL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                        >
+                          Open {preset.name} →
+                        </a>
+                      </>
+                    )}
+                  </p>
                 )}
               </div>
             )
