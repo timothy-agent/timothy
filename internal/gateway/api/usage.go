@@ -17,6 +17,7 @@ func RegisterUsage(srv *httpserver.Server, agg *ledger.Aggregator, budgets *ledg
 	u := &usageAPI{agg: agg, budgets: budgets}
 	srv.Handle("GET /internal/admin/usage/summary", http.HandlerFunc(u.handleSummary))
 	srv.Handle("GET /internal/admin/usage/series", http.HandlerFunc(u.handleSeries))
+	srv.Handle("GET /internal/admin/usage/totals", http.HandlerFunc(u.handleTotals))
 	srv.Handle("GET /internal/admin/usage/sessions", http.HandlerFunc(u.handleSessions))
 	srv.Handle("GET /internal/admin/usage/latency", http.HandlerFunc(u.handleLatency))
 	srv.Handle("GET /internal/admin/usage/cache", http.HandlerFunc(u.handleCache))
@@ -81,6 +82,24 @@ func (u *usageAPI) handleSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"points": points})
+}
+
+func (u *usageAPI) handleTotals(w http.ResponseWriter, r *http.Request) {
+	from, to, err := timeRange(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	group := r.URL.Query().Get("group")
+	if group == "" {
+		group = "provider"
+	}
+	totals, err := u.agg.Totals(r.Context(), from, to, group)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"totals": totals})
 }
 
 func (u *usageAPI) handleSessions(w http.ResponseWriter, r *http.Request) {

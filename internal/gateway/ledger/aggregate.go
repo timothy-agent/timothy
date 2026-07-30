@@ -136,6 +136,57 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 	return out, rows.Err()
 }
 
+// GroupTotal is one group's totals over a whole range — the
+// non-time-bucketed sibling of SeriesPoint, for tables/charts that
+// rank groups rather than plot them over time.
+type GroupTotal struct {
+	Group                string  `json:"group"`
+	CostUSD              float64 `json:"cost_usd"`
+	InputTokens          int64   `json:"input_tokens"`
+	OutputTokens         int64   `json:"output_tokens"`
+	Requests             int64   `json:"requests"`
+	UnpricedInputTokens  int64   `json:"unpriced_input_tokens"`
+	UnpricedOutputTokens int64   `json:"unpriced_output_tokens"`
+}
+
+// Totals returns one row per group summed over the whole range —
+// Series without the time bucket, for tables/rankings rather than
+// time-series charts.
+func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy string) ([]GroupTotal, error) {
+	col, ok := groups[groupBy]
+	if !ok {
+		return nil, fmt.Errorf("usage totals: unknown group %q", groupBy)
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("usage totals: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT `+col+`,
+			COALESCE(SUM(cost_usd), 0),
+			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+			COUNT(*),
+			COALESCE(SUM(input_tokens) FILTER (WHERE cost_usd IS NULL), 0),
+			COALESCE(SUM(output_tokens) FILTER (WHERE cost_usd IS NULL), 0)
+		FROM cost_ledger
+		WHERE ts >= $1 AND ts < $2 AND `+notTest+`
+		GROUP BY 1 ORDER BY 2 DESC`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("usage totals: %w", err)
+	}
+	defer rows.Close()
+
+	out := []GroupTotal{}
+	for rows.Next() {
+		var g GroupTotal
+		if err := rows.Scan(&g.Group, &g.CostUSD, &g.InputTokens, &g.OutputTokens,
+			&g.Requests, &g.UnpricedInputTokens, &g.UnpricedOutputTokens); err != nil {
+			return nil, fmt.Errorf("usage totals: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // MissionUsage totals one mission's ledger footprint — every turn the
 // missions engine ran for it, across all its sessions.
 type MissionUsage struct {
