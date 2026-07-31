@@ -838,6 +838,10 @@ export async function cancelMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/cancel`, { method: 'POST' })
 }
 
+export async function deleteMission(id: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}`, { method: 'DELETE' })
+}
+
 export async function answerMissionPermission(
   id: string,
   decision: 'once' | 'session' | 'deny',

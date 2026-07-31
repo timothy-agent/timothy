@@ -1,11 +1,12 @@
 import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   answerMissionPermission,
   cancelMission,
+  deleteMission,
   getMission,
   listSchedules,
   missionEvents,
@@ -21,6 +22,13 @@ import { PushBranchDialog } from '../components/missions/PushBranchDialog'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog'
 import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
@@ -36,12 +44,14 @@ const terminalPhases = new Set(['done', 'failed'])
 
 export function MissionDetail() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [mission, setMission] = useState<Mission | null>(null)
   const [events, setEvents] = useState<MissionEvent[]>([])
   const [usage, setUsage] = useState<MissionUsage | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [busy, setBusy] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const refresh = useCallback(() => {
     if (!id) return
@@ -148,6 +158,18 @@ export function MissionDetail() {
     }
   }
 
+  const remove = async () => {
+    setBusy(true)
+    try {
+      await deleteMission(id)
+      toast.success('Mission deleted')
+      navigate('/missions')
+    } catch (err) {
+      toast.error('Could not delete mission', { description: errText(err) })
+      setBusy(false)
+    }
+  }
+
   const decidePermission = async (decision: 'once' | 'session' | 'deny') => {
     try {
       await answerMissionPermission(id, decision)
@@ -220,9 +242,33 @@ export function MissionDetail() {
                 Cancel
               </Button>
             )}
+            {terminalPhases.has(mission.phase) && (
+              <Button variant="destructive" disabled={busy} onClick={() => setConfirmDelete(true)}>
+                Delete
+              </Button>
+            )}
           </div>
         </div>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this mission?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This removes the mission, its events, and its workspace. This cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {usage && usage.requests > 0 && (
         <section>
