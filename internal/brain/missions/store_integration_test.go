@@ -623,3 +623,46 @@ func TestRecoverWorking(t *testing.T) {
 		t.Fatal("RecoverWorking incorrectly returned an idle mission")
 	}
 }
+
+func TestRecoverStaleWorking(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	freshID, err := s.Create(ctx, Mission{Goal: marker + "stale-fresh", Kind: "research"})
+	if err != nil {
+		t.Fatalf("Create fresh: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, freshID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+		t.Fatalf("ApplyTransition fresh: %v", err)
+	}
+
+	staleID, err := s.Create(ctx, Mission{Goal: marker + "stale-old", Kind: "research"})
+	if err != nil {
+		t.Fatalf("Create stale: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, staleID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+		t.Fatalf("ApplyTransition stale: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("db.Get: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET updated_at = now() - interval '1 hour' WHERE id = $1`, staleID); err != nil {
+		t.Fatalf("backdate updated_at: %v", err)
+	}
+
+	stale, err := s.RecoverStaleWorking(ctx, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("RecoverStaleWorking: %v", err)
+	}
+	byID := map[string]bool{}
+	for _, m := range stale {
+		byID[m.ID] = true
+	}
+	if !byID[staleID] {
+		t.Fatal("RecoverStaleWorking did not return the stale mission")
+	}
+	if byID[freshID] {
+		t.Fatal("RecoverStaleWorking incorrectly returned a fresh working mission")
+	}
+}
