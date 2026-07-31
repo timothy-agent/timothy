@@ -28,7 +28,8 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
   'mission.unit_verified': (p) => {
     const { unit, passed } = asRecord(p)
-    return `Unit ${String(unit ?? '?')} verification: ${passed ? 'passed' : 'failed'}`
+    const label = unit != null ? `Unit ${String(unit)} verification` : 'Unit verification'
+    return `${label}: ${passed ? 'passed' : 'failed'}`
   },
   'mission.review_verdict': (p) => {
     const { decision } = asRecord(p)

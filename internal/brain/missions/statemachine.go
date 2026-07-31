@@ -309,7 +309,7 @@ func stepReviewApprove(s StepState) Transition {
 	s.Status = StatusIdle
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.unit_verified"}}}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.unit_verified", Payload: map[string]any{"passed": true, "check": "review"}}}}
 }
 
 // stepReviewRework sends the mission back to execute for another
