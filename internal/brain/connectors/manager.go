@@ -199,6 +199,27 @@ func (m *Manager) Names() []string {
 	return names
 }
 
+// SensitiveNames returns the names of every enabled connector marked
+// sensitive — the connector-level input to session.SensitiveTools'
+// suffix set (D-036): a connector named "gmail" being sensitive means
+// "gmail" joins the set, and Matches' namespace-prefix check catches
+// gmail_search/gmail_read/etc. at once. Reads rows fresh each call (no
+// restart needed for a settings toggle to take effect), same reasoning
+// as sensitiveRoute.
+func (m *Manager) SensitiveNames(ctx context.Context) ([]string, error) {
+	rows, err := m.rows.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, c := range rows {
+		if c.Enabled && c.Sensitive {
+			names = append(names, c.Name)
+		}
+	}
+	return names, nil
+}
+
 // Test builds the connector fresh — enabled or not — and runs its
 // connectivity check, so a connector can be verified before it is
 // switched on. The ephemeral source is closed either way.

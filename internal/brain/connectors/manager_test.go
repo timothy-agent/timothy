@@ -113,6 +113,36 @@ func TestReloadKeepsSetOnListError(t *testing.T) {
 	}
 }
 
+// TestSensitiveNames pins that it reads rows fresh (via rowSource.List,
+// not the built sources map) and filters to enabled AND sensitive: a
+// disabled-but-sensitive or enabled-but-not-sensitive connector must
+// not appear in the suffix set session.SensitiveTools consumes.
+func TestSensitiveNames(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: []Connector{
+		{ID: "1", Name: "gmail", Kind: "google", Enabled: true, Sensitive: true},
+		{ID: "2", Name: "calendar", Kind: "google", Enabled: true, Sensitive: false},
+		{ID: "3", Name: "slack", Kind: "mcp", Enabled: false, Sensitive: true},
+	}})
+
+	got, err := m.SensitiveNames(t.Context())
+	if err != nil {
+		t.Fatalf("SensitiveNames: %v", err)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"gmail"}) {
+		t.Fatalf("SensitiveNames = %v, want [gmail]", got)
+	}
+}
+
+func TestSensitiveNamesPropagatesListError(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{err: errors.New("db down")})
+	if _, err := m.SensitiveNames(t.Context()); err == nil {
+		t.Fatal("SensitiveNames with failing list: want error")
+	}
+}
+
 func TestTestBuildsEphemeralSource(t *testing.T) {
 	t.Parallel()
 	src := &fakeSource{testErr: errors.New("401 unauthorized")}

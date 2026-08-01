@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,15 +19,28 @@ var ErrMissionReferenced = errors.New("session referenced by a mission")
 
 // Store persists session rows and their append-only event logs.
 type Store struct {
-	db *pgpool.Pool
+	db  *pgpool.Pool
+	log *slog.Logger
 }
 
-func NewStore(db *pgpool.Pool) *Store {
-	return &Store{db: db}
+func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
+	return &Store{db: db, log: log}
 }
 
-// Create opens a session and writes its session_started event.
+// Create opens a session and writes its session_started event. Debug-
+// logs the immediate caller (file:line) and whether title was blank:
+// an untitled session with no obvious owner (chat.Chat's "no session
+// yet" path, the API's POST /v1/sessions, a mission's bookkeeping
+// session) has shown up unexplained before — this pinpoints which
+// call site created it without threading a caller-identity param
+// through every one of them.
 func (s *Store) Create(ctx context.Context, title string) (string, error) {
+	if s.log != nil {
+		_, file, line, ok := runtime.Caller(1)
+		if ok {
+			s.log.Debug("session: create", "caller", fmt.Sprintf("%s:%d", file, line), "titled", title != "")
+		}
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("session: create: %w", err)
@@ -317,4 +332,62 @@ func (s *Store) SetLastRoute(ctx context.Context, id, route, agent string) error
 	_, err = db.Exec(ctx,
 		"UPDATE sessions SET last_route = $2, agent = $3 WHERE id = $1", id, route, agent)
 	return err
+}
+
+// PendingPermission is one unresolved permission_request, joined with
+// its session's title for the global "you have a permission waiting"
+// indicator.
+type PendingPermission struct {
+	SessionID    string    `json:"session_id"`
+	SessionTitle string    `json:"session_title"`
+	Tool         string    `json:"tool"`
+	Rationale    string    `json:"rationale"`
+	RequestedAt  time.Time `json:"requested_at"`
+}
+
+// PendingPermissions returns every unresolved permission_request among
+// sessionIDs — a targeted query, not a full-table scan: the caller
+// (the API handler) passes chat.Service.ActiveSessions(), so a
+// permission_request whose turn already died (crash, abandoned) is
+// scoped out before this query even runs, rather than filtered after
+// fetching every session's full event log. "Unresolved" means no
+// later permission_resolved event with the same payload->>'id' exists
+// in that session's log. Empty sessionIDs returns nil without a query.
+func (s *Store) PendingPermissions(ctx context.Context, sessionIDs []string) ([]PendingPermission, error) {
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("session: pending permissions: %w", err)
+	}
+	rows, err := db.Query(ctx,
+		`SELECT req.session_id, COALESCE(s.title, ''), req.payload->>'tool',
+		        req.payload->>'rationale', req.created_at
+		 FROM session_events req
+		 JOIN sessions s ON s.id = req.session_id
+		 WHERE req.kind = 'permission_request'
+		   AND req.session_id = ANY($1)
+		   AND NOT EXISTS (
+		       SELECT 1 FROM session_events res
+		       WHERE res.session_id = req.session_id
+		         AND res.kind = 'permission_resolved'
+		         AND res.payload->>'id' = req.payload->>'id'
+		   )
+		 ORDER BY req.created_at`,
+		sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("session: pending permissions query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingPermission
+	for rows.Next() {
+		var p PendingPermission
+		if err := rows.Scan(&p.SessionID, &p.SessionTitle, &p.Tool, &p.Rationale, &p.RequestedAt); err != nil {
+			return nil, fmt.Errorf("session: pending permissions scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }

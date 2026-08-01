@@ -8,6 +8,7 @@ import {
   usageBudget,
 } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
+import { getNotificationSoundEnabled, setNotificationSoundEnabled } from '../../lib/sound'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -76,6 +77,35 @@ export function FeaturesTab() {
       {values && <AgentCard values={values} onError={setError} onSaved={refresh} />}
       {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
       <BudgetsCard />
+      <NotificationSoundCard />
+    </div>
+  )
+}
+
+// NotificationSoundCard toggles the synthesized beep that fires
+// alongside the global permission-pending toast — localStorage-backed
+// (lib/sound.ts), not a server setting, so it applies instantly with
+// no save button.
+function NotificationSoundCard() {
+  const [enabled, setEnabled] = useState(() => getNotificationSoundEnabled())
+
+  return (
+    <div className="flex items-center gap-4 rounded-xl border border-border p-4">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">Notification sound</div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Plays a short beep when a permission ask needs your approval, wherever you are in the
+          app.
+        </p>
+      </div>
+      <Toggle
+        on={enabled}
+        onChange={(v) => {
+          setEnabled(v)
+          setNotificationSoundEnabled(v)
+        }}
+        label="Notification sound"
+      />
     </div>
   )
 }

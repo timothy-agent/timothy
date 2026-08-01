@@ -149,6 +149,16 @@ export interface Transcript {
   turn_active: boolean
 }
 
+// One unresolved permission ask, from GET /v1/permissions/pending —
+// scoped server-side to sessions with a currently active turn.
+export interface PendingPermission {
+  session_id: string
+  session_title: string
+  tool: string
+  rationale: string
+  requested_at: string
+}
+
 // One long-term memory row as served by the management API.
 export interface MemoryItem {
   id: string
@@ -497,6 +507,10 @@ export interface AdminConnector {
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
+  // sensitive pins every tool this connector serves onto the
+  // privacy-floor route (session.SensitiveTools), same as gmail_read
+  // is pinned today — additive, connector-wide, no code change needed.
+  sensitive: boolean
 }
 
 // MissionTemplate is the frozen mission-creation payload a schedule

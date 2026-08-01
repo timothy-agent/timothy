@@ -130,6 +130,42 @@ func TestServiceTurnLifecycleActiveThenFreed(t *testing.T) {
 	}
 }
 
+// TestServiceActiveSessions confirms ActiveSessions reflects exactly
+// the sessions with a live turnBegin entry — nil when empty, every
+// live ID present, and a freed entry (turnDone) drops out.
+func TestServiceActiveSessions(t *testing.T) {
+	t.Parallel()
+	s := &Service{}
+
+	if ids := s.ActiveSessions(); ids != nil {
+		t.Fatalf("ActiveSessions = %v, want nil before any turn registered", ids)
+	}
+
+	if _, err := s.turnBegin("s1"); err != nil {
+		t.Fatalf("turnBegin s1: %v", err)
+	}
+	if _, err := s.turnBegin("s2"); err != nil {
+		t.Fatalf("turnBegin s2: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, id := range s.ActiveSessions() {
+		got[id] = true
+	}
+	if !got["s1"] || !got["s2"] || len(got) != 2 {
+		t.Fatalf("ActiveSessions = %v, want exactly [s1 s2]", s.ActiveSessions())
+	}
+
+	s.turnDone("s1")
+	got = map[string]bool{}
+	for _, id := range s.ActiveSessions() {
+		got[id] = true
+	}
+	if got["s1"] || !got["s2"] || len(got) != 1 {
+		t.Fatalf("ActiveSessions after turnDone(s1) = %v, want exactly [s2]", s.ActiveSessions())
+	}
+}
+
 // TestServiceTurnBeginExclusiveThenFreedAllowsNext confirms the new
 // exclusivity contract (D-042): a second turnBegin call while an entry
 // is live must fail with ErrTurnInFlight rather than evicting it (the

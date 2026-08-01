@@ -206,7 +206,8 @@ type Service struct {
 	turnsMu sync.Mutex
 	turns   map[string]*turnBroadcaster
 
-	publishSession func(sessionID string) // nil: no session-signal push (today's default)
+	publishSession    func(sessionID string) // nil: no session-signal push (today's default)
+	publishPermission func(sessionID string) // nil: no permission-signal push (today's default)
 }
 
 // SetSessionHub wires the "session" signal push: fires once a turn's
@@ -220,6 +221,16 @@ type Service struct {
 // and every test) makes this a no-op.
 func (s *Service) SetSessionHub(publish func(sessionID string)) {
 	s.publishSession = publish
+}
+
+// SetPermissionHub wires the "permission" signal push: fires once a
+// permission_request or permission_resolved event is durable (see
+// notePermission), same pattern and same nil-safe default as
+// SetSessionHub above — main wires both to the same missions.Hub, just
+// a different Signal.Kind, so the web's one global /v1/events stream
+// carries both without a second transport.
+func (s *Service) SetPermissionHub(publish func(sessionID string)) {
+	s.publishPermission = publish
 }
 
 // SetMemoryExtract wires the memoryd hook. Optional — nil leaves
@@ -656,7 +667,7 @@ func (s *Service) pinSensitiveRoute(ctx context.Context, events []session.Event,
 	if s.sensitive == nil || s.sensitive.Route == nil {
 		return route, modelHint
 	}
-	if !s.sensitive.SessionSensitive(events) {
+	if !s.sensitive.SessionSensitive(ctx, events) {
 		return route, modelHint
 	}
 	if forced := s.sensitive.Route(ctx); forced != "" {
@@ -778,7 +789,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	// context just projected above, even when THIS turn runs no
 	// sensitive tool itself — so persistTurn's side-calls (distill,
 	// extraction) must be pinned too, same as turnSensitive.
-	sessionSensitive := s.sensitive.SessionSensitive(events)
+	sessionSensitive := s.sensitive.SessionSensitive(turnCtx, events)
 
 	// Retrieved memory and a hinted skill both ride the system
 	// prompt's TAIL: the stable prefix stays byte-identical for
@@ -878,7 +889,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			return
 		}
 		ranTool = true
-		if s.sensitive.Matches(ev.ToolResult.Name) {
+		if s.sensitive.Matches(reqCtx, ev.ToolResult.Name) {
 			turnSensitive = true
 		}
 	}
@@ -926,6 +937,10 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 		defer cancel()
 		if _, err := s.log.Append(wctx, sessionID, kind, payload); err != nil {
 			s.logger.Warn("persist permission event", "session_id", sessionID, "kind", kind, "error", err)
+			return
+		}
+		if s.publishPermission != nil {
+			s.publishPermission(sessionID)
 		}
 	}
 

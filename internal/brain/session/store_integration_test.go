@@ -381,6 +381,76 @@ func TestListExcludesMissionSessions(t *testing.T) {
 	}
 }
 
+// TestPendingPermissions pins the SQL: an unresolved permission_request
+// in a scoped session is returned with its session's title; a request
+// with a matching permission_resolved (same id) is excluded; and a
+// session outside sessionIDs is excluded even with an unresolved
+// request of its own — the "active turns only" scoping the API handler
+// relies on chat.Service.ActiveSessions() for.
+func TestPendingPermissions(t *testing.T) {
+	s, id := integrationStore(t)
+	ctx := t.Context()
+
+	otherID, err := s.Create(ctx, "other session, not scoped in")
+	if err != nil {
+		t.Fatalf("Create other: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM session_events WHERE session_id = $1", otherID)
+		_, _ = conn.Exec(cctx, "DELETE FROM sessions WHERE id = $1", otherID)
+	})
+
+	// id: one resolved request (must be excluded) and one still
+	// unresolved (must show up).
+	if _, err := s.Append(ctx, id, KindPermissionRequest, PermissionRequest{
+		ID: "resolved-1", CallID: "call-1", Tool: "shell", Rationale: "run tests",
+	}); err != nil {
+		t.Fatalf("append resolved request: %v", err)
+	}
+	if _, err := s.Append(ctx, id, KindPermissionResolved, PermissionResolved{
+		ID: "resolved-1", Decision: "once",
+	}); err != nil {
+		t.Fatalf("append resolved: %v", err)
+	}
+	if _, err := s.Append(ctx, id, KindPermissionRequest, PermissionRequest{
+		ID: "pending-1", CallID: "call-2", Tool: "gmail_search", Rationale: "read inbox",
+	}); err != nil {
+		t.Fatalf("append pending request: %v", err)
+	}
+
+	// otherID: unresolved too, but deliberately left out of sessionIDs.
+	if _, err := s.Append(ctx, otherID, KindPermissionRequest, PermissionRequest{
+		ID: "zombie-1", CallID: "call-3", Tool: "shell", Rationale: "stranded by a crash",
+	}); err != nil {
+		t.Fatalf("append other request: %v", err)
+	}
+
+	got, err := s.PendingPermissions(ctx, []string{id})
+	if err != nil {
+		t.Fatalf("PendingPermissions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("pending = %+v, want exactly one entry", got)
+	}
+	p := got[0]
+	if p.SessionID != id || p.SessionTitle != "integration test session" ||
+		p.Tool != "gmail_search" || p.Rationale != "read inbox" {
+		t.Fatalf("pending[0] = %+v, want the still-unresolved gmail_search request", p)
+	}
+
+	// Empty scope: no query, no rows, ever.
+	if got, err := s.PendingPermissions(ctx, nil); err != nil || got != nil {
+		t.Fatalf("PendingPermissions(nil) = %v, %v; want nil, nil", got, err)
+	}
+}
+
 // TestListQueryMatchesTitleOnlySession pins the NULL guard in the
 // search SQL: a session that has never emitted a user_message (its
 // joined payload is NULL) must still be findable by title.

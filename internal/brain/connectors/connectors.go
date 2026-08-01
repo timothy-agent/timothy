@@ -35,6 +35,13 @@ type Connector struct {
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
+	// Sensitive marks the WHOLE connector as sensitive: every tool it
+	// serves is namespaced "<name>_<tool>" (see Manager.Tools), so the
+	// connector's own name is a PREFIX of every tool it serves —
+	// session.SensitiveTools.Matches checks this prefix in addition to
+	// its existing per-tool suffix rule (D-036), catching all of a
+	// sensitive connector's tools via its name alone.
+	Sensitive bool `json:"sensitive"`
 }
 
 // namePattern keeps connector names usable as tool-name prefixes
@@ -89,7 +96,7 @@ func (s *Store) List(ctx context.Context) ([]Connector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connectors list: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT id, name, kind, config, credential_ref, enabled
+	rows, err := db.Query(ctx, `SELECT id, name, kind, config, credential_ref, enabled, sensitive
 		FROM connectors ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("connectors list: %w", err)
@@ -99,7 +106,7 @@ func (s *Store) List(ctx context.Context) ([]Connector, error) {
 	out := []Connector{}
 	for rows.Next() {
 		var c Connector
-		if err := rows.Scan(&c.ID, &c.Name, &c.Kind, &c.Config, &c.CredentialRef, &c.Enabled); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Kind, &c.Config, &c.CredentialRef, &c.Enabled, &c.Sensitive); err != nil {
 			return nil, fmt.Errorf("connectors list: %w", err)
 		}
 		out = append(out, c)
@@ -130,9 +137,9 @@ func (s *Store) Create(ctx context.Context, c Connector) (string, error) {
 		cfg = json.RawMessage("{}")
 	}
 	var id string
-	err = db.QueryRow(ctx, `INSERT INTO connectors (name, kind, config, credential_ref, enabled)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		c.Name, c.Kind, cfg, c.CredentialRef, c.Enabled).Scan(&id)
+	err = db.QueryRow(ctx, `INSERT INTO connectors (name, kind, config, credential_ref, enabled, sensitive)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		c.Name, c.Kind, cfg, c.CredentialRef, c.Enabled, c.Sensitive).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("connectors create: %w", err)
 	}
@@ -148,6 +155,7 @@ type Patch struct {
 	Config        *json.RawMessage `json:"config"`
 	CredentialRef *string          `json:"credential_ref"`
 	Enabled       *bool            `json:"enabled"`
+	Sensitive     *bool            `json:"sensitive"`
 }
 
 func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
@@ -184,10 +192,13 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 	if patch.Enabled != nil {
 		after.Enabled = *patch.Enabled
 	}
+	if patch.Sensitive != nil {
+		after.Sensitive = *patch.Sensitive
+	}
 
 	if _, err := tx.Exec(ctx, `UPDATE connectors SET config = $2, credential_ref = $3,
-			enabled = $4, updated_at = now() WHERE id = $1`,
-		id, after.Config, after.CredentialRef, after.Enabled); err != nil {
+			enabled = $4, sensitive = $5, updated_at = now() WHERE id = $1`,
+		id, after.Config, after.CredentialRef, after.Enabled, after.Sensitive); err != nil {
 		return fmt.Errorf("connectors patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -223,9 +234,9 @@ type pgxQuerier interface {
 
 func scanConnector(ctx context.Context, q pgxQuerier, id, lock string) (Connector, error) {
 	var c Connector
-	err := q.QueryRow(ctx, `SELECT id, name, kind, config, credential_ref, enabled
+	err := q.QueryRow(ctx, `SELECT id, name, kind, config, credential_ref, enabled, sensitive
 		FROM connectors WHERE id = $1 `+lock, id).
-		Scan(&c.ID, &c.Name, &c.Kind, &c.Config, &c.CredentialRef, &c.Enabled)
+		Scan(&c.ID, &c.Name, &c.Kind, &c.Config, &c.CredentialRef, &c.Enabled, &c.Sensitive)
 	if err != nil {
 		return Connector{}, fmt.Errorf("connector %s: %w", id, ErrNotFound)
 	}

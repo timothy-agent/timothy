@@ -79,12 +79,16 @@ func TestConnectorCRUDAuditsAndNotifies(t *testing.T) {
 		Name: name, Kind: "mcp",
 		Config:        json.RawMessage(`{"endpoint":"https://api.example/mcp"}`),
 		CredentialRef: "GITHUB_MCP_TOKEN",
+		Sensitive:     true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if changes != 1 {
 		t.Fatalf("changes after create = %d, want 1", changes)
+	}
+	if created, err := store.Get(ctx, id); err != nil || !created.Sensitive {
+		t.Fatalf("Get after create: sensitive = %v, err = %v, want true", created.Sensitive, err)
 	}
 
 	// Duplicate name refused by the unique constraint.
@@ -93,7 +97,8 @@ func TestConnectorCRUDAuditsAndNotifies(t *testing.T) {
 	}
 
 	enabled := true
-	if err := store.Patch(ctx, id, Patch{Enabled: &enabled}); err != nil {
+	sensitive := false
+	if err := store.Patch(ctx, id, Patch{Enabled: &enabled, Sensitive: &sensitive}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
 	list, err := store.List(ctx)
@@ -106,8 +111,8 @@ func TestConnectorCRUDAuditsAndNotifies(t *testing.T) {
 			got = &list[i]
 		}
 	}
-	if got == nil || !got.Enabled || got.Kind != "mcp" {
-		t.Fatalf("patched connector = %+v, want enabled mcp", got)
+	if got == nil || !got.Enabled || got.Kind != "mcp" || got.Sensitive {
+		t.Fatalf("patched connector = %+v, want enabled mcp not-sensitive", got)
 	}
 
 	// Ref validation holds on patch too.

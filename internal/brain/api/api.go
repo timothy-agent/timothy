@@ -37,6 +37,7 @@ type Directory interface {
 	Events(ctx context.Context, id string) ([]session.Event, error)
 	Update(ctx context.Context, id string, title *string, archived *bool) error
 	Delete(ctx context.Context, id string) error
+	PendingPermissions(ctx context.Context, sessionIDs []string) ([]session.PendingPermission, error)
 }
 
 // PermissionResolver answers parked permission prompts; the loop's
@@ -106,6 +107,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
 	srv.Handle("POST /v1/sessions/{id}/stop", a.auth(http.HandlerFunc(a.handleStop)))
 	srv.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
+	srv.Handle("GET /v1/permissions/pending", a.auth(http.HandlerFunc(a.handlePendingPermissions)))
 	// Deprecated shim: same behavior, session_id in the body.
 	srv.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
 }
@@ -135,6 +137,25 @@ func (a *API) handlePermission(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+// handlePendingPermissions answers "does anything anywhere need my
+// approval right now" for the global badge/toast — read-only, no side
+// effects. Scoped to chat.Service.ActiveSessions() (the in-memory
+// live-turn registry, not a DB column) so a permission_request whose
+// turn already died without resolving it (crash, abandoned) never
+// shows as pending forever: only currently-active turns are queried.
+func (a *API) handlePendingPermissions(w http.ResponseWriter, r *http.Request) {
+	active := a.svc.ActiveSessions()
+	pending, err := a.dir.PendingPermissions(r.Context(), active)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "pending_permissions_failed", err.Error())
+		return
+	}
+	if pending == nil {
+		pending = []session.PendingPermission{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pending": pending})
 }
 
 // auth enforces the single bearer token. An unconfigured token fails

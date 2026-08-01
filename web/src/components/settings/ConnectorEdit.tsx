@@ -24,7 +24,7 @@ import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { Field } from './shared'
+import { Field, Toggle } from './shared'
 import { errText, secretField } from './util'
 
 export function ConnectorEdit() {
@@ -89,6 +89,13 @@ export function ConnectorEdit() {
     }
   }
 
+  const toggleSensitive = (sensitive: boolean) => {
+    if (!connector) return
+    patchConnector(connector.id, { sensitive })
+      .then(refresh)
+      .catch((err: unknown) => toast.error('Could not update connector', { description: errText(err) }))
+  }
+
   const reconnectGoogle = async () => {
     if (!connector) return
     setOAuthBusy(true)
@@ -128,6 +135,20 @@ export function ConnectorEdit() {
       </div>
 
       <div className="grid max-w-3xl gap-5">
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Treat as sensitive</div>
+            <p className="text-sm text-muted-foreground">
+              Pins related turns to the privacy-floor route, same as Gmail message reads.
+            </p>
+          </div>
+          <Toggle
+            on={connector.sensitive}
+            onChange={toggleSensitive}
+            label={`${connector.name} sensitive`}
+          />
+        </div>
+
         <h2 className="text-sm font-semibold">Connection</h2>
 
         <div

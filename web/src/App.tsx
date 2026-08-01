@@ -11,9 +11,9 @@ import {
   Sun03Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
-import { Toaster } from 'sonner'
+import { toast, Toaster } from 'sonner'
 import { getToken } from './api/client'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
@@ -46,6 +46,9 @@ import {
 import { TooltipProvider } from './components/ui/tooltip'
 import { useSessions } from './lib/sessions'
 import { usePendingMemories } from './lib/memory'
+import { playAlertSound } from './lib/alertSound'
+import { newlySeen, usePendingPermissions } from './lib/permissions'
+import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
 import { Analytics } from './pages/Analytics'
@@ -97,11 +100,13 @@ function breadcrumbFor(pathname: string): string[] {
 // in a real collapsible Sidebar instead of a hand-rolled drawer.
 function AppSidebar({
   pendingMemories,
+  pendingPermissions,
   theme,
   onCycleTheme,
   onToken,
 }: {
   pendingMemories: number
+  pendingPermissions: number
   theme: Theme
   onCycleTheme: () => void
   onToken: () => void
@@ -135,6 +140,9 @@ function AppSidebar({
                   </SidebarMenuButton>
                   {item.href === '/memory' && pendingMemories > 0 && (
                     <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
+                  )}
+                  {item.href === '/chat' && pendingPermissions > 0 && (
+                    <SidebarMenuBadge>{pendingPermissions}</SidebarMenuBadge>
                   )}
                 </SidebarMenuItem>
               ))}
@@ -257,10 +265,35 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [theme, setThemeState] = useState<Theme>(() => getTheme())
   const pendingMemories = usePendingMemories()
+  const pendingPermissions = usePendingPermissions()
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (getToken() === '') setTokenOpen(true)
   }, [])
+
+  // Toast + sound fire only for a NEWLY seen pending permission (a
+  // session_id not present on the previous render) — every poll/signal
+  // refetch would otherwise re-toast the same still-pending ask.
+  const seenPermissions = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const fresh = newlySeen(seenPermissions.current, pendingPermissions)
+    const current = new Set(pendingPermissions.map((p) => p.session_id))
+    if (fresh.length > 0) {
+      if (getNotificationSoundEnabled()) playAlertSound()
+      for (const p of fresh) {
+        toast(`${p.tool} needs your approval`, {
+          description: p.session_title || 'Untitled session',
+          duration: Infinity,
+          action: {
+            label: 'Review',
+            onClick: () => navigate(`/chat/${p.session_id}`),
+          },
+        })
+      }
+    }
+    seenPermissions.current = current
+  }, [pendingPermissions, navigate])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -291,6 +324,7 @@ function App() {
         <SidebarProvider className="min-h-dvh">
           <AppSidebar
             pendingMemories={pendingMemories}
+            pendingPermissions={pendingPermissions.length}
             theme={theme}
             onCycleTheme={cycleTheme}
             onToken={openToken}

@@ -107,7 +107,7 @@ func main() {
 		gatewayURL = "http://gateway:8081"
 	}
 	gwc := gwclient.New(gatewayURL)
-	store := session.NewStore(app.DB)
+	store := session.NewStore(app.DB, app.Log)
 	flags := settings.New(app.DB, app.Log)
 	// Runtime settings, editable in the UI without a restart: the
 	// projected-context budget fallback and the skill-pack allowlist.
@@ -252,6 +252,27 @@ func main() {
 		})
 	}
 
+	// sensitiveConnectorNames is the connector-level input to
+	// SensitiveTools: every enabled connector marked sensitive in
+	// settings, matched as a namespace PREFIX (Matches' ConnectorNames
+	// rule) since "<connector-name>_<tool-name>" puts the connector's own
+	// name in front of every tool it serves. Computed fresh each call,
+	// not cached, so toggling a connector's sensitive flag takes effect
+	// on the next side-call without a restart — same reasoning as
+	// sensitiveRoute above. conns is nil when the connector surface
+	// itself is disabled (no secret store).
+	sensitiveConnectorNames := func(ctx context.Context) []string {
+		if conns == nil {
+			return nil
+		}
+		names, err := conns.SensitiveNames(ctx)
+		if err != nil {
+			app.Log.Warn("sensitive connector lookup failed; connector-level sensitivity off this call", "error", err)
+			return nil
+		}
+		return names
+	}
+
 	// Single source of truth for "this turn/session executed a sensitive
 	// tool": the loop's in-turn SetForceRoute pin above and this
 	// SensitiveTools value share sensitiveToolSuffixes and the same
@@ -260,7 +281,11 @@ func main() {
 	// pinned the turn to. Wired unconditionally — sensitiveRoute
 	// resolving to "" at call time means the feature is currently off,
 	// same as before, but now editable at runtime from the settings UI.
-	sensitiveTools := &session.SensitiveTools{Suffixes: sensitiveToolSuffixes, Route: sensitiveRoute}
+	sensitiveTools := &session.SensitiveTools{
+		Suffixes:       func(context.Context) []string { return sensitiveToolSuffixes },
+		ConnectorNames: sensitiveConnectorNames,
+		Route:          sensitiveRoute,
+	}
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
@@ -274,6 +299,9 @@ func main() {
 	if missionHub != nil {
 		svc.SetSessionHub(func(sessionID string) {
 			missionHub.Publish(missions.Signal{Kind: "session", ID: sessionID})
+		})
+		svc.SetPermissionHub(func(sessionID string) {
+			missionHub.Publish(missions.Signal{Kind: "permission", ID: sessionID})
 		})
 	}
 	// Same Permissions instance (and session_grants table) the chat

@@ -136,8 +136,53 @@ func (d *memDir) Append(_ context.Context, id, kind string, payload any) (int64,
 	return seq, nil
 }
 
-func (d *memDir) SetTitleIfEmpty(context.Context, string, string) error { return nil }
+func (d *memDir) SetTitleIfEmpty(context.Context, string, string) error      { return nil }
 func (d *memDir) SetLastRoute(context.Context, string, string, string) error { return nil }
+
+// PendingPermissions mirrors session.Store's own unresolved-vs-resolved
+// logic over the in-memory event log, scoped to sessionIDs — same
+// contract the real store's SQL enforces (no matching
+// permission_resolved by id).
+func (d *memDir) PendingPermissions(_ context.Context, sessionIDs []string) ([]session.PendingPermission, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []session.PendingPermission
+	for _, id := range sessionIDs {
+		resolved := map[string]bool{}
+		var requests []struct {
+			id string
+			session.PendingPermission
+		}
+		for _, ev := range d.events[id] {
+			switch ev.Kind {
+			case session.KindPermissionResolved:
+				var r session.PermissionResolved
+				if err := json.Unmarshal(ev.Payload, &r); err != nil {
+					return nil, err
+				}
+				resolved[r.ID] = true
+			case session.KindPermissionRequest:
+				var req session.PermissionRequest
+				if err := json.Unmarshal(ev.Payload, &req); err != nil {
+					return nil, err
+				}
+				requests = append(requests, struct {
+					id string
+					session.PendingPermission
+				}{req.ID, session.PendingPermission{
+					SessionID: id, SessionTitle: d.metas[id].Title,
+					Tool: req.Tool, Rationale: req.Rationale, RequestedAt: ev.CreatedAt,
+				}})
+			}
+		}
+		for _, req := range requests {
+			if !resolved[req.id] {
+				out = append(out, req.PendingPermission)
+			}
+		}
+	}
+	return out, nil
+}
 
 // fakeGateway yields a canned event sequence, or fails when err set.
 // blockCh, when set, delays every event past the first until closed —
@@ -226,6 +271,7 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
 	m.Handle("POST /v1/sessions/{id}/stop", a.auth(http.HandlerFunc(a.handleStop)))
 	m.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
+	m.Handle("GET /v1/permissions/pending", a.auth(http.HandlerFunc(a.handlePendingPermissions)))
 	m.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
 	return m
 }

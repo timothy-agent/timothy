@@ -135,7 +135,14 @@ function ConnectorCard({
       <div className="flex items-center gap-3">
         <ConnectorLogo preset={preset} className="size-9" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{connector.name}</div>
+          <div className="flex items-center gap-1.5">
+            <div className="truncate text-sm font-semibold">{connector.name}</div>
+            {connector.sensitive && (
+              <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                Sensitive
+              </span>
+            )}
+          </div>
           <div className="text-xs text-muted-foreground uppercase">{connector.kind}</div>
         </div>
         <Toggle on={connector.enabled} onChange={toggle} label={`${connector.name} enabled`} />

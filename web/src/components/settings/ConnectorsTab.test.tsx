@@ -32,6 +32,7 @@ const calendarConnector: AdminConnector = {
   config: { scopes: ['https://www.googleapis.com/auth/calendar'] },
   credential_ref: 'GOOGLE_CALENDAR_GOOGLE_OAUTH',
   enabled: true,
+  sensitive: false,
 }
 
 const assign = vi.fn()
@@ -66,6 +67,31 @@ describe('Connectors tab', () => {
     for (const name of ['Gmail', 'Google Calendar', 'GitHub']) {
       expect(screen.getByRole('button', { name: new RegExp(name) })).toBeTruthy()
     }
+  })
+
+  it('shows a sensitive badge on the list card when the connector is marked sensitive', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([{ ...calendarConnector, sensitive: true }])
+    renderTab()
+    expect(await screen.findByText('calendar')).toBeTruthy()
+    expect(screen.getByText('Sensitive')).toBeTruthy()
+  })
+
+  it('does not show a sensitive badge for a non-sensitive connector', async () => {
+    renderTab()
+    expect(await screen.findByText('calendar')).toBeTruthy()
+    expect(screen.queryByText('Sensitive')).toBeNull()
+  })
+
+  it('toggles a connector sensitive from the manage page', async () => {
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    const toggle = await screen.findByRole('switch', { name: 'google-calendar sensitive' })
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, { sensitive: true }),
+    )
   })
 
   it('shows the OAuth outcome banners from the callback redirect', async () => {

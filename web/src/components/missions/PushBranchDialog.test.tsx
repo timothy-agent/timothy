@@ -26,6 +26,7 @@ const githubConnector: AdminConnector = {
   config: { endpoint: 'https://api.githubcopilot.com/mcp/' },
   credential_ref: 'github_pat',
   enabled: true,
+  sensitive: false,
 }
 
 describe('PushBranchDialog', () => {

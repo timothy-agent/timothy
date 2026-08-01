@@ -535,7 +535,7 @@ func TestCompactionUsesSensitiveRouteWhenSessionRanSensitiveTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
-	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
 
 	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -558,7 +558,7 @@ func TestCompactionUsesDefaultRouteWithoutSensitiveTool(t *testing.T) {
 	gw := &summarizerGW{summary: "short summary"}
 	seedConversation(t, log, "s1", 10)
 	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
-	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
 
 	if err := c.MaybeCompact(t.Context(), "s1"); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -587,7 +587,7 @@ func TestCompactionExtractUsesSensitiveRouteWhenSessionRanSensitiveTool(t *testi
 		t.Fatal(err)
 	}
 	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
-	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
 
 	var sawRoute string
 	c.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) []string {
@@ -613,7 +613,7 @@ func TestCompactionExtractUsesEmptyRouteWithoutSensitiveTool(t *testing.T) {
 	gw := &summarizerGW{summary: "short summary"}
 	seedConversation(t, log, "s1", 10)
 	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
-	c.SetSensitiveTools(&SensitiveTools{Suffixes: []string{"gmail_read"}, Route: func(context.Context) string { return "local" }})
+	c.SetSensitiveTools(&SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
 
 	sawRoute := "unset"
 	c.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) []string {

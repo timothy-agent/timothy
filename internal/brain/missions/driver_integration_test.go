@@ -143,7 +143,7 @@ func TestDriverLazilyProvisionsBareSchedulerStyleMission(t *testing.T) {
 
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, log)
-	sessions := session.NewStore(store.db)
+	sessions := session.NewStore(store.db, log)
 	perms := tools.NewPermissions(store.db, wsRoot)
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
 	d := NewDriver(store, runner, workspace, nil, sessions, perms, log)

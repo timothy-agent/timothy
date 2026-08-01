@@ -15,7 +15,32 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  go:
+  # Split from go-integration: build/vet/unit-test/vuln-scan share no
+  # state with the integration suite (only artificial ordering forced
+  # them serial before), so running them as separate jobs lets the
+  # runner schedule both in parallel instead of paying their sum on one
+  # job's critical path.
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race ./...
+      - name: Vulnerability scan
+        # Pinned, not @latest: a floating version re-resolves (and can
+        # change) every run, defeating actions/setup-go's module cache
+        # for this one step and risking a surprise break unrelated to
+        # this repo's own changes.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  go-integration:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -36,12 +61,6 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build
-        run: go build ./...
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test -race ./...
       - name: Integration test
         env:
           DATABASE_URL: postgres://timothy:ci@localhost:5432/timothy
@@ -49,8 +68,6 @@ jobs:
         # intentionally-invalid provider fixture row can fail every
         # concurrent Store.Load in other packages, so run sequentially.
         run: go test -race -count=1 -tags integration -p 1 ./internal/...
-      - name: Vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   lint:
     runs-on: ubuntu-latest
@@ -144,7 +161,7 @@ jobs:
   # old blocklist missed it, and auto-merge fired on red jobs.)
   ci-ok:
     runs-on: ubuntu-latest
-    needs: [go, lint, web, images, sandbox-image]
+    needs: [go-test, go-integration, lint, web, images, sandbox-image]
     if: always()
     steps:
       - name: All jobs succeeded

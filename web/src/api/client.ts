@@ -20,6 +20,7 @@ import type {
   MissionUsage,
   MissionTemplate,
   Notification,
+  PendingPermission,
   ProviderHealth,
   RetrievedMemory,
   Schedule,
@@ -294,6 +295,14 @@ export async function answerPermission(
     method: 'POST',
     body: JSON.stringify({ decision }),
   })
+}
+
+// listPendingPermissions returns every permission ask still awaiting a
+// decision across every session with a currently active turn — the
+// global badge/toast's data source.
+export async function listPendingPermissions(): Promise<PendingPermission[]> {
+  const { pending } = await request<{ pending: PendingPermission[] }>('/v1/permissions/pending')
+  return pending ?? []
 }
 
 export async function updateSession(
@@ -720,7 +729,7 @@ export async function createConnector(c: Partial<AdminConnector>): Promise<strin
 
 export async function patchConnector(
   id: string,
-  patch: Partial<Pick<AdminConnector, 'config' | 'credential_ref' | 'enabled'>>,
+  patch: Partial<Pick<AdminConnector, 'config' | 'credential_ref' | 'enabled' | 'sensitive'>>,
 ): Promise<void> {
   await request<void>(`/v1/admin/connectors/${id}`, {
     method: 'PATCH',

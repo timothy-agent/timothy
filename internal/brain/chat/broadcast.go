@@ -185,6 +185,25 @@ func (s *Service) TurnActive(sessionID string) bool {
 	return ok
 }
 
+// ActiveSessions returns the IDs of every session with a turn
+// currently in flight — the same Service.turns map TurnActive reads,
+// snapshotted. Used to scope the pending-permissions query to live
+// turns only: a permission_request whose turn already died (crash,
+// abandoned) must not show as pending forever, so the caller queries
+// session_events for just these IDs rather than the whole table.
+func (s *Service) ActiveSessions() []string {
+	s.turnsMu.Lock()
+	defer s.turnsMu.Unlock()
+	if len(s.turns) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(s.turns))
+	for id := range s.turns {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Subscribe attaches to sessionID's in-flight turn, if any: ok is
 // false when no turn is currently running, in which case replay and
 // live are both nil. Otherwise replay is every event buffered so far
