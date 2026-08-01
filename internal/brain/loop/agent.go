@@ -115,6 +115,20 @@ type Agent struct {
 	// currently off and no flip happens.
 	forceRouteBySuffix map[string]func(context.Context) string
 
+	// forceRouteByConnectorNames/forceRouteByConnectorRoute cover a
+	// WHOLE connector marked sensitive in settings (session.SensitiveTools'
+	// ConnectorNames), not just a single named tool: connector tools are
+	// namespaced "<connector-name>_<tool-name>", so the connector's own
+	// name is a PREFIX match, never a suffix — its own field/rule rather
+	// than folding into forceRouteBySuffix. A single dynamic name-list
+	// func rather than a map, since the caller (main.go) already
+	// resolves the live sensitive-connector list as one query; each
+	// name shares the one route resolver (same sensitiveRoute the
+	// static suffix floor uses). Both nil-safe: a turn with no
+	// connectors flagged sensitive just never flips this way.
+	forceRouteByConnectorNames func(context.Context) []string
+	forceRouteByConnectorRoute func(context.Context) string
+
 	// waitToolsReady, if set, runs at the start of every turn before the
 	// tool snapshot (D-043): it lets main.go block briefly on the
 	// connectors.Manager's first successful load without loop importing
@@ -183,6 +197,19 @@ func (a *Agent) SetOffloadThreshold(tool string, bytes int) {
 // feature is currently off and the turn's route is left alone.
 func (a *Agent) SetForceRoute(suffix string, route func(context.Context) string) {
 	a.forceRouteBySuffix[suffix] = route
+}
+
+// SetForceRouteByConnector is SetForceRoute's counterpart for a WHOLE
+// connector marked sensitive (as opposed to one hardcoded tool name):
+// once any tool whose name starts with "<name>_" for a name currently
+// in names(ctx) is called, the rest of the turn pins to route(ctx),
+// same sticky/settings-live semantics as SetForceRoute. names and
+// route are both re-resolved at flip time, so toggling a connector's
+// sensitive flag (or the configured route) takes effect on the very
+// next tool call, no restart.
+func (a *Agent) SetForceRouteByConnector(names func(context.Context) []string, route func(context.Context) string) {
+	a.forceRouteByConnectorNames = names
+	a.forceRouteByConnectorRoute = route
 }
 
 // SetWaitToolsReady registers the turn-entry readiness hook (see the
@@ -462,6 +489,17 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 					if forced := fn(ctx); forced != "" {
 						route = forced
 						hint = ""
+					}
+				}
+			}
+			if a.forceRouteByConnectorNames != nil {
+				for _, name := range a.forceRouteByConnectorNames(ctx) {
+					if strings.HasPrefix(c.Name, name+"_") {
+						if forced := a.forceRouteByConnectorRoute(ctx); forced != "" {
+							route = forced
+							hint = ""
+						}
+						break
 					}
 				}
 			}

@@ -139,7 +139,8 @@ export function ConnectorEdit() {
           <div className="min-w-0">
             <div className="text-sm font-medium">Treat as sensitive</div>
             <p className="text-sm text-muted-foreground">
-              Pins related turns to the privacy-floor route, same as Gmail message reads.
+              Pins related turns to the privacy-floor route, keeping this connector's
+              data off third-party models.
             </p>
           </div>
           <Toggle

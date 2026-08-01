@@ -46,7 +46,7 @@ import {
 import { TooltipProvider } from './components/ui/tooltip'
 import { useSessions } from './lib/sessions'
 import { usePendingMemories } from './lib/memory'
-import { playAlertSound } from './lib/alertSound'
+import { playAlertSound, unlockAudio } from './lib/alertSound'
 import { newlySeen, usePendingPermissions } from './lib/permissions'
 import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
@@ -270,6 +270,25 @@ function App() {
 
   useEffect(() => {
     if (getToken() === '') setTokenOpen(true)
+  }, [])
+
+  // Primes the shared AudioContext on the app's FIRST real user
+  // gesture: a permission toast can fire from a background SSE signal
+  // with no gesture of its own, and autoplay policy silently blocks a
+  // chime that never rode an unlocked context — one-shot, removes
+  // itself after the first fire so it's not doing work on every click.
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio()
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
   }, [])
 
   // Toast + sound fire only for a NEWLY seen pending permission (a

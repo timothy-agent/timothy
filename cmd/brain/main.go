@@ -286,6 +286,15 @@ func main() {
 		ConnectorNames: sensitiveConnectorNames,
 		Route:          sensitiveRoute,
 	}
+	// Connector-level sensitivity's in-turn counterpart: a whole
+	// connector flagged sensitive must pin the SAME turn that calls its
+	// tool, not just every turn after (chat.pinSensitiveRoute) — without
+	// this, a search/read tool's own results ride the turn's ORIGINAL
+	// route (e.g. a cloud default) until the NEXT turn notices the
+	// session is sensitive, one turn too late for whatever content that
+	// tool just pulled into context. Wired here, after conns exists,
+	// rather than inside buildAgent (which runs before conns is built).
+	agent.SetForceRouteByConnector(sensitiveConnectorNames, sensitiveRoute)
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,

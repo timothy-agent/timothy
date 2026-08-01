@@ -947,6 +947,89 @@ func TestForceRouteIgnoresNonMatchingTools(t *testing.T) {
 	}
 }
 
+// TestForceRouteByConnectorSwitchesRouteAfterMatchingTool pins the
+// connector-level sensitivity counterpart to SetForceRoute: a whole
+// connector flagged sensitive (its name is a PREFIX of every tool it
+// serves, "<connector-name>_<tool-name>") pins the SAME turn that
+// calls one of its tools, not just every turn after — the search/read
+// tool's own results must never ride the turn's original route.
+func TestForceRouteByConnectorSwitchesRouteAfterMatchingTool(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"gmail_search", `{}`}),
+		finalStep("done"),
+	}}
+	search := &tools.Tool{
+		Name:        "gmail_search",
+		Description: "searches fake email",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "search results", nil
+		},
+	}
+	a, _, _, _ := testAgent(t, gw, search)
+	a.SetForceRouteByConnector(
+		func(context.Context) []string { return []string{"gmail"} },
+		func(context.Context) string { return "local" },
+	)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "search my email"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(gw.requests))
+	}
+	if gw.requests[0].Route != "default" {
+		t.Fatalf("step 1 route = %q, want default (before the sensitive connector's tool ran)", gw.requests[0].Route)
+	}
+	if gw.requests[1].Route != "local" {
+		t.Fatalf("step 2 route = %q, want local (forced after gmail_search ran)", gw.requests[1].Route)
+	}
+}
+
+// TestForceRouteByConnectorIgnoresUnlistedConnector confirms a tool
+// from a connector NOT in the sensitive names list never triggers the
+// override, and that a bare prefix match doesn't false-positive: a
+// connector named "gmail" must not match a tool actually named
+// "gmailbox_search" (no "_" boundary).
+func TestForceRouteByConnectorIgnoresUnlistedConnector(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"gmailbox_search", `{}`}),
+		finalStep("done"),
+	}}
+	tool := &tools.Tool{
+		Name:        "gmailbox_search",
+		Description: "unrelated tool that happens to start with 'gmail'",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}
+	a, _, _, _ := testAgent(t, gw, tool)
+	a.SetForceRouteByConnector(
+		func(context.Context) []string { return []string{"gmail"} },
+		func(context.Context) string { return "local" },
+	)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	for i, req := range gw.requests {
+		if req.Route != "default" {
+			t.Fatalf("request %d route = %q, want default (gmailbox_search must not prefix-match \"gmail\")", i, req.Route)
+		}
+	}
+}
+
 // TestForceRouteDropsModelHint closes the gateway-hint privacy hole: a
 // ModelHint outranks Route in the gateway's Resolve order, so a hint
 // surviving the flip would let a turn escape the forced route entirely
