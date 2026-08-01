@@ -148,18 +148,20 @@ func TestConnectionProbePricesACostedModel(t *testing.T) {
 }
 
 func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
-	adm, _, _ := testAdmin(t)
+	adm, store, _ := testAdmin(t)
 	ctx := t.Context()
 	srv := stubOpenAI(t)
 
+	name := adminMarker + "models"
 	id, err := adm.Create(ctx, Provider{
-		Name: adminMarker + "models", Kind: "api", Driver: "openaicompat",
+		Name: name, Kind: "api", Driver: "openaicompat",
 		BaseURL: srv.URL, DefaultModel: "m-alpha",
 		Models: []router.ModelInfo{{ID: "m-alpha"}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	waitSnapshot(t, store, name)
 	models, err := adm.AvailableModels(ctx, id)
 	if err != nil {
 		t.Fatalf("AvailableModels: %v", err)
@@ -176,13 +178,15 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	if err := adm.SetSecret(ctx, bedrockRef, `{"access_key_id":"AKIA123","secret_access_key":"shh"}`); err != nil {
 		t.Fatalf("SetSecret: %v", err)
 	}
+	bedrockName := adminMarker + "models-bedrock"
 	bid, err := adm.Create(ctx, Provider{
-		Name: adminMarker + "models-bedrock", Kind: "api", Driver: "bedrock",
+		Name: bedrockName, Kind: "api", Driver: "bedrock",
 		CredentialRef: bedrockRef, Options: map[string]string{"region": "us-east-1"},
 	})
 	if err != nil {
 		t.Fatalf("Create bedrock: %v", err)
 	}
+	waitSnapshot(t, store, bedrockName)
 	if _, err := adm.AvailableModels(ctx, bid); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("bedrock AvailableModels err = %v, want ErrUnsupported", err)
 	}

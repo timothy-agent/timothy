@@ -45,7 +45,10 @@ jobs:
       - name: Integration test
         env:
           DATABASE_URL: postgres://timothy:ci@localhost:5432/timothy
-        run: go test -race -count=1 -tags integration ./internal/...
+        # -p 1: integration packages share one database; a package's
+        # intentionally-invalid provider fixture row can fail every
+        # concurrent Store.Load in other packages, so run sequentially.
+        run: go test -race -count=1 -tags integration -p 1 ./internal/...
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 

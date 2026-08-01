@@ -189,9 +189,7 @@ describe('Analytics chart legend toggling', () => {
     // The legend renders inside an SVG <li>/<span>, distinct from the
     // "By provider"-style breakdown table, which never emits a plain
     // element with an empty className — the legend text node does.
-    const legendEntry = within(chart)
-      .getAllByText('openai')
-      .find((el) => el.className === '')
+    const legendEntry = (await within(chart).findAllByText('openai')).find((el) => el.className === '')
     if (!legendEntry) throw new Error('legend entry not found')
 
     expect(legendEntry).not.toHaveStyle({ textDecoration: 'line-through' })
@@ -207,9 +205,7 @@ describe('Analytics chart legend toggling', () => {
     renderPage()
     const chart = (await screen.findByText('Tokens in / out')).closest('section')
     if (!chart) throw new Error('chart section not found')
-    const inputEntry = within(chart)
-      .getAllByText('input')
-      .find((el) => el.className === '')
+    const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
     if (!inputEntry) throw new Error('legend entry not found')
 
     fireEvent.click(inputEntry)
@@ -257,14 +253,14 @@ describe('Analytics zero-cost exclusion', () => {
 
     const providerTable = (await screen.findByText('Provider cost breakdown')).closest('section')
     if (!providerTable) throw new Error('provider cost table not found')
+    expect(await within(providerTable).findByText('openai')).toBeInTheDocument()
     expect(within(providerTable).queryByText('local-llama')).toBeNull()
-    expect(within(providerTable).getByText('openai')).toBeInTheDocument()
 
     // Same model, token-consumption chart: the free model's volume is
     // exactly the signal this chart exists to show, so it must render.
     const tokenChart = (await screen.findByText('Token consumption per model')).closest('section')
     if (!tokenChart) throw new Error('token chart section not found')
-    expect(within(tokenChart).getByText('local-llama')).toBeInTheDocument()
+    expect(await within(tokenChart).findByText('local-llama')).toBeInTheDocument()
   })
 
   it('excludes a zero-cost model from the cost-by-model chart', async () => {
@@ -278,7 +274,7 @@ describe('Analytics zero-cost exclusion', () => {
 
     const modelCostChart = (await screen.findByText('Cost by model')).closest('section')
     if (!modelCostChart) throw new Error('model cost chart section not found')
+    expect(await within(modelCostChart).findByText('gpt-5.6-sol')).toBeInTheDocument()
     expect(within(modelCostChart).queryByText('local-llama')).toBeNull()
-    expect(within(modelCostChart).getByText('gpt-5.6-sol')).toBeInTheDocument()
   })
 })
