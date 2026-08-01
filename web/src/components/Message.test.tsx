@@ -428,7 +428,7 @@ describe('UserMessage attachments', () => {
 
     expect(screen.getByText('PDF')).toBeInTheDocument()
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
-    expect(client.fetchAttachmentBlob).not.toHaveBeenCalledWith('doc-1')
+    expect(vi.mocked(client.fetchAttachmentBlob).mock.calls.flat()).not.toContain('doc-1')
   })
 
   it('renders no document chips when the message carries none', () => {

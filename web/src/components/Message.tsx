@@ -113,6 +113,7 @@ function DocumentChips({ documents }: { documents: ImageRef[] }) {
       {documents.map((doc) => (
         <div
           key={doc.id}
+          title={doc.id.slice(0, 8)}
           className="flex items-center gap-1 rounded-lg border border-zinc-950/10 bg-zinc-100 px-2 py-1 text-xs text-zinc-500 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400"
         >
           <HugeiconsIcon icon={Pdf02Icon} className="size-3.5" />

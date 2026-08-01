@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
@@ -343,7 +344,11 @@ func fakeMarkitdown(t *testing.T, markdown string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"markdown":"` + markdown + `"}`))
+		body, err := json.Marshal(map[string]string{"markdown": markdown})
+		if err != nil {
+			t.Fatalf("marshal fake markitdown response: %v", err)
+		}
+		_, _ = w.Write(body)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -405,6 +410,47 @@ func TestChatPDFAttachmentWithoutMarkitdownIsBadRequest(t *testing.T) {
 	}
 	if kinds := log.kinds("s1"); len(kinds) != 0 {
 		t.Fatalf("events appended despite missing markitdown wiring: %v", kinds)
+	}
+}
+
+// TestChatPDFAttachmentTruncatesOversizedMarkdown confirms a converted
+// document past maxDocumentMarkdownBytes is cut at the cap and marked,
+// never persisted unbounded — a huge PDF must not blow the current
+// turn's context (LLMContext can't trim it, and the compactor only
+// shrinks older turns).
+func TestChatPDFAttachmentTruncatesOversizedMarkdown(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your huge pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	huge := strings.Repeat("a", maxDocumentMarkdownBytes+1024)
+	md := fakeMarkitdown(t, huge)
+	svc.SetMarkitdown(md.URL)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 {
+		t.Fatalf("documents = %+v, want one", um.Documents)
+	}
+	got := um.Documents[0].Markdown
+	if !strings.HasSuffix(got, truncatedDocumentMarker) {
+		t.Fatalf("markdown does not end with truncation marker: %q", got[max(0, len(got)-60):])
+	}
+	if len(got) > maxDocumentMarkdownBytes+len(truncatedDocumentMarker) {
+		t.Fatalf("markdown len = %d, want <= %d", len(got), maxDocumentMarkdownBytes+len(truncatedDocumentMarker))
 	}
 }
 
