@@ -115,6 +115,26 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, log), store, pool
 }
 
+// waitSnapshot retries reload until the provider reaches the
+// serving snapshot: the shared CI database means a concurrent
+// package's intentionally-invalid fixture row can make any single
+// Store.Load fail (kept-last-good by design, see Admin.reload) —
+// retrying rides out that window instead of flaking.
+func waitSnapshot(t *testing.T, store *router.Store, name string) {
+	t.Helper()
+	ctx := t.Context()
+	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		lastErr = store.Load(ctx)
+		if _, ok := store.Snapshot().Provider(name); ok {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("provider %s not in serving snapshot after retry; last Load err: %v", name, lastErr)
+}
+
 func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 	adm, store, pool := testAdmin(t)
 	ctx := t.Context()
@@ -130,10 +150,10 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// The serving snapshot reloaded without any restart.
-	if _, ok := store.Snapshot().Provider(name); !ok {
-		t.Fatal("created provider missing from the reloaded snapshot")
-	}
+	// The serving snapshot reloaded without any restart; a concurrent
+	// package's invalid fixture row can transiently fail Store.Load
+	// (kept-last-good), so wait it out instead of a one-shot check.
+	waitSnapshot(t, store, name)
 
 	enabled := true
 	if err := adm.Patch(ctx, id, ProviderPatch{Enabled: &enabled}); err != nil {
