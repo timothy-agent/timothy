@@ -94,6 +94,35 @@ func TestLLMContextCarriesImageRefsNotBytes(t *testing.T) {
 	}
 }
 
+// TestLLMContextRendersDocumentMarkdown confirms a user_message's
+// DocumentRef renders its already-converted markdown straight into the
+// LLM content (no store round-trip, no sidecar call at projection
+// time) — the persisted markdown is the sole source, per D-045/D-046's
+// send-time-conversion design.
+func TestLLMContextRendersDocumentMarkdown(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		ev(t, 1, KindSessionStarted, SessionStarted{}),
+		ev(t, 2, KindUserMessage, UserMessage{
+			Text:      "summarize this",
+			Documents: []DocumentRef{{ID: "doc1", Mime: "application/pdf", Markdown: "# Title\n\nbody text"}},
+		}),
+	}
+
+	msgs, err := LLMContext(events, 100_000)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %+v, want 1", msgs)
+	}
+	m := msgs[0]
+	if !strings.Contains(m.Content, "summarize this") || !strings.Contains(m.Content, "# Title") ||
+		!strings.Contains(m.Content, "body text") || !strings.Contains(m.Content, "doc1") {
+		t.Fatalf("Content = %q, want text + rendered document markdown", m.Content)
+	}
+}
+
 func TestLLMContextSerializesTurnMemory(t *testing.T) {
 	t.Parallel()
 	events := []Event{
@@ -306,6 +335,39 @@ func TestUITranscriptCarriesImages(t *testing.T) {
 	}
 	if len(items[0].Images) != 1 || items[0].Images[0].ID != "img1" || items[0].Images[0].Mime != "image/jpeg" {
 		t.Fatalf("Images = %+v, want one ref to img1/image/jpeg", items[0].Images)
+	}
+}
+
+// TestUITranscriptExposesDocumentsWithoutMarkdown confirms a
+// user_message's document refs surface on TranscriptItem.Documents as
+// id+mime only — the converted markdown never rides the UI payload,
+// which can be arbitrarily large.
+func TestUITranscriptExposesDocumentsWithoutMarkdown(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		ev(t, 1, KindSessionStarted, SessionStarted{}),
+		ev(t, 2, KindUserMessage, UserMessage{
+			Text:      "look",
+			Documents: []DocumentRef{{ID: "doc1", Mime: "application/pdf", Markdown: strings.Repeat("x", 10_000)}},
+		}),
+	}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want 1", items)
+	}
+	if len(items[0].Documents) != 1 || items[0].Documents[0].ID != "doc1" || items[0].Documents[0].Mime != "application/pdf" {
+		t.Fatalf("Documents = %+v, want one ref to doc1/application/pdf", items[0].Documents)
+	}
+	data, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatalf("marshal item: %v", err)
+	}
+	if strings.Contains(string(data), "xxxx") {
+		t.Fatal("markdown leaked into the UI transcript payload")
 	}
 }
 

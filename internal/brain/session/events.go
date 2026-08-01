@@ -48,13 +48,21 @@ type SessionStarted struct {
 // UserMessage is one user turn.
 type UserMessage struct {
 	Text      string `json:"text"`
-	Route  string `json:"route,omitempty"`
-	Agent  string `json:"agent,omitempty"`
+	Route     string `json:"route,omitempty"`
+	Agent     string `json:"agent,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
 	// Images are refs to attachments (internal/brain/attachments),
 	// never bytes — base64 exists only transiently at request-build
 	// time (D-045). Additive: a message with no images omits this.
 	Images []ImageRef `json:"images,omitempty"`
+	// Documents are PDF attachments converted to markdown once, at
+	// message-send time (chat.Chat), with the markdown persisted here.
+	// Re-converting per turn would re-call the markitdown sidecar every
+	// turn, and any output drift would rewrite an earlier projected
+	// message — breaking LLMContext's prefix stability that provider
+	// prompt caches depend on. Additive: a message with no documents
+	// omits this.
+	Documents []DocumentRef `json:"documents,omitempty"`
 }
 
 // ImageRef points at a stored attachment; Mime rides alongside so
@@ -63,6 +71,16 @@ type UserMessage struct {
 type ImageRef struct {
 	ID   string `json:"id"`
 	Mime string `json:"mime"`
+}
+
+// DocumentRef points at a stored PDF attachment; Markdown is its
+// converted text, persisted so projection is deterministic and the
+// markitdown sidecar is called exactly once per attach (see
+// UserMessage.Documents).
+type DocumentRef struct {
+	ID       string `json:"id"`
+	Mime     string `json:"mime"`
+	Markdown string `json:"markdown"`
 }
 
 // UIBlock is one renderable piece of an assistant turn.

@@ -4,6 +4,7 @@ import {
   Cancel01Icon,
   Loading03Icon,
   Mic01Icon,
+  Pdf02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import type { ClipboardEvent, DragEvent } from 'react'
@@ -24,7 +25,7 @@ export interface PendingAttachment {
   uploading?: boolean
 }
 
-const allowedMimes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+const allowedMimes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf']
 const maxAttachmentBytes = 10 * 1024 * 1024
 const maxAttachments = 8
 
@@ -157,7 +158,7 @@ export function Composer({
     if (!onAttachments) return
     for (const file of files) {
       if (!allowedMimes.includes(file.type)) {
-        toast.error(`${file.name || 'file'}: unsupported image type`)
+        toast.error(`${file.name || 'file'}: unsupported file type`)
         continue
       }
       if (file.size > maxAttachmentBytes) {
@@ -165,7 +166,7 @@ export function Composer({
         continue
       }
       if (attachmentsRef.current.length >= maxAttachments) {
-        toast.error(`You can attach up to ${maxAttachments} images`)
+        toast.error(`You can attach up to ${maxAttachments} files`)
         break
       }
       const tempId = crypto.randomUUID()
@@ -229,7 +230,14 @@ export function Composer({
               className="group relative size-12 shrink-0 overflow-hidden rounded-lg border border-zinc-950/10 dark:border-white/10"
               title={a.name}
             >
-              <img src={a.previewUrl} alt={a.name ?? 'attachment'} className="size-full object-cover" />
+              {a.mime === 'application/pdf' ? (
+                <div className="flex size-full flex-col items-center justify-center gap-0.5 bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
+                  <HugeiconsIcon icon={Pdf02Icon} className="size-4" />
+                  <span className="max-w-full truncate px-1 text-[9px]">{a.name ?? 'PDF'}</span>
+                </div>
+              ) : (
+                <img src={a.previewUrl} alt={a.name ?? 'attachment'} className="size-full object-cover" />
+              )}
               {a.uploading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/40">
                   <HugeiconsIcon icon={Loading03Icon} className="size-4 animate-spin text-white" />
@@ -291,7 +299,7 @@ export function Composer({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
                 multiple
                 className="hidden"
                 onChange={(e) => {

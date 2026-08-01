@@ -127,6 +127,9 @@ export interface TranscriptItem {
   text?: string
   blocks?: UIBlock[]
   images?: ImageRef[]
+  // documents are attached PDFs, refs only (id+mime) — the converted
+  // markdown never rides this payload.
+  documents?: ImageRef[]
   tool?: ToolExecution
   permission?: PermissionRequestEvent
   provider?: string

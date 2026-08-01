@@ -5,7 +5,7 @@ import type { AssistantState, ToolRun } from './chat'
 // replayed transcript items share this shape so resume is
 // pixel-equivalent with the original stream.
 export type ChatItem = { id: string } & (
-  | { role: 'user'; text: string; images?: ImageRef[] }
+  | { role: 'user'; text: string; images?: ImageRef[]; documents?: ImageRef[] }
   | ({ role: 'assistant' } & AssistantState)
   | { role: 'compaction'; text: string }
   | { role: 'interrupted'; text: string }
@@ -75,6 +75,7 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           role: 'user',
           text: item.text ?? '',
           images: item.images && item.images.length > 0 ? item.images : undefined,
+          documents: item.documents && item.documents.length > 0 ? item.documents : undefined,
         })
         break
       case 'tool':

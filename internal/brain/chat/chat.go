@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 const (
@@ -134,23 +136,25 @@ type Granter interface {
 
 // Service orchestrates turns against the event store.
 type Service struct {
-	gw          Gateway
-	log         SessionLog
-	distill     Distill
-	compactor   Compactor
-	memory      MemoryExtract   // nil: long-term memory off
-	recall      MemoryRetrieve  // nil: no memory injection
-	agents      AgentResolver   // nil: zero-value agent (everything allowed)
-	candidates  AgentCandidates // nil: auto-dispatch falls back to default
-	classify    agents.Classify // nil: auto-dispatch falls back to default
-	budget      func(context.Context) int
-	packs       []skills.Skill
-	skillAllow  func(context.Context, string) bool // nil: all packs allowed
-	skillBodies map[string]string                  // name -> full pack body, for skill_hint
-	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
-	sensitive   *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
-	attachments AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
-	logger      *slog.Logger
+	gw             Gateway
+	log            SessionLog
+	distill        Distill
+	compactor      Compactor
+	memory         MemoryExtract   // nil: long-term memory off
+	recall         MemoryRetrieve  // nil: no memory injection
+	agents         AgentResolver   // nil: zero-value agent (everything allowed)
+	candidates     AgentCandidates // nil: auto-dispatch falls back to default
+	classify       agents.Classify // nil: auto-dispatch falls back to default
+	budget         func(context.Context) int
+	packs          []skills.Skill
+	skillAllow     func(context.Context, string) bool // nil: all packs allowed
+	skillBodies    map[string]string                  // name -> full pack body, for skill_hint
+	flushEvery     time.Duration                      // pending-state flush cadence mid-stream
+	sensitive      *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
+	attachments    AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
+	markitdownURL  string                             // "": pdf attachments disabled (MARKITDOWN_URL unset)
+	markitdownHTTP *http.Client                       // shared client for the markitdown sidecar call
+	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
 	// seeded remembers which (session, agent) pairs already had their
@@ -206,6 +210,16 @@ func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t
 // SetAttachments wires the attachment store (D-045). Optional — nil
 // (ATTACHMENTS_DIR unset) rejects any Request naming Attachments ids.
 func (s *Service) SetAttachments(store AttachmentStore) { s.attachments = store }
+
+// SetMarkitdown wires the markitdown sidecar's base URL for PDF
+// attachment conversion. Optional — empty (MARKITDOWN_URL unset)
+// rejects any PDF attachment ref with ErrBadRequest.
+func (s *Service) SetMarkitdown(url string) {
+	s.markitdownURL = url
+	if s.markitdownHTTP == nil {
+		s.markitdownHTTP = &http.Client{}
+	}
+}
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
 // request naming the autoAgentName sentinel resolves through candidates
@@ -367,12 +381,12 @@ func profileAllows(allow []string, name string) bool {
 
 // Request is one chat turn.
 type Request struct {
-	SessionID    string `json:"session_id,omitempty"`
-	Message      string `json:"message"`
+	SessionID string `json:"session_id,omitempty"`
+	Message   string `json:"message"`
 	// Agent names who serves this turn; empty = the default agent.
-	Agent string `json:"agent,omitempty"`
-	Route string `json:"route,omitempty"`
-	ModelHint    string `json:"model_hint,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Route     string `json:"route,omitempty"`
+	ModelHint string `json:"model_hint,omitempty"`
 	// SkillHint names a skill pack to force-load for this turn — set
 	// when the user picked one explicitly (a UI chip, not parsed
 	// text). Unlike load_skill, this is not a choice the model can
@@ -393,7 +407,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if strings.TrimSpace(req.Message) == "" && len(req.Attachments) == 0 {
 		return "", nil, fmt.Errorf("chat: %w: message or an attachment is required", ErrBadRequest)
 	}
-	images, err := s.validateAttachments(ctx, req.Attachments)
+	images, documents, err := s.validateAttachments(ctx, req.Attachments)
 	if err != nil {
 		return "", nil, err
 	}
@@ -422,6 +436,9 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// to the vision route, then the agent's route, then the default chain
 	// (sensitive-pin below still overrides all of this).
 	route := req.Route
+	// Only images flip to the vision route — documents are converted to
+	// plain markdown text, not something the model needs vision
+	// capability to read.
 	if route == "" && len(images) > 0 {
 		// D-046: brain has no cheap way to know whether a "vision" route
 		// exists/is enabled/has a non-empty chain (gwclient exposes no
@@ -474,7 +491,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}
 
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images,
+		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images, Documents: documents,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
@@ -530,24 +547,56 @@ func (s *Service) readAttachment(ctx context.Context, id string) (string, error)
 // BEFORE the turn's exclusivity is won or anything is appended (D-042:
 // store lookups are read-only and safe before turnBegin, but a bad ref
 // must 400 before even the user_message persists). Empty ids returns
-// nil, nil without touching the store — attachments stay off when
+// nil, nil, nil without touching the store — attachments stay off when
 // unconfigured, and a message with none never needs it wired.
-func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, error) {
+//
+// PDFs are converted to markdown here, once, at send time (not lazily
+// per turn like images): re-converting on every turn would re-call the
+// markitdown sidecar every turn, and any output drift would rewrite an
+// earlier projected message — breaking LLMContext's prefix stability
+// that provider prompt caches depend on. A conversion failure is the
+// sidecar's fault, not the client's, so it returns a plain wrapped
+// error rather than ErrBadRequest.
+func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, []session.DocumentRef, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if s.attachments == nil {
-		return nil, fmt.Errorf("chat: %w: attachments are not enabled", ErrBadRequest)
+		return nil, nil, fmt.Errorf("chat: %w: attachments are not enabled", ErrBadRequest)
 	}
-	refs := make([]session.ImageRef, 0, len(ids))
+	var images []session.ImageRef
+	var documents []session.DocumentRef
 	for _, id := range ids {
 		att, err := s.attachments.Get(ctx, id)
 		if err != nil {
-			return nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+			return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
 		}
-		refs = append(refs, session.ImageRef{ID: att.ID, Mime: att.Mime})
+		switch {
+		case strings.HasPrefix(att.Mime, "image/"):
+			images = append(images, session.ImageRef{ID: att.ID, Mime: att.Mime})
+		case att.Mime == "application/pdf":
+			if s.markitdownURL == "" {
+				return nil, nil, fmt.Errorf("chat: %w: pdf attachments require the markitdown sidecar (MARKITDOWN_URL)", ErrBadRequest)
+			}
+			r, _, err := s.attachments.Open(ctx, att.ID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+			}
+			raw, err := io.ReadAll(r)
+			_ = r.Close()
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: read attachment %q: %w", id, err)
+			}
+			md, err := markitdown.Convert(ctx, s.markitdownHTTP, s.markitdownURL, att.ID+".pdf", att.Mime, raw)
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", id, err)
+			}
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: md})
+		default:
+			return nil, nil, fmt.Errorf("chat: %w: attachment %q: unsupported mime %q", ErrBadRequest, id, att.Mime)
+		}
 	}
-	return refs, nil
+	return images, documents, nil
 }
 
 // pinSensitiveRoute promotes the session-wide privacy floor above the

@@ -80,6 +80,19 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			for _, img := range m.Images {
 				msg.ImageRefs = append(msg.ImageRefs, provider.ImageRef{ID: img.ID, Mime: img.Mime})
 			}
+			// Documents carry their markdown already converted and
+			// persisted (chat.Chat, at send time) — projection just
+			// appends it as ordinary text, no store round-trip and no
+			// sidecar call. PDFs never flip the vision route; only
+			// images do.
+			for _, doc := range m.Documents {
+				block := fmt.Sprintf("[attached document %s (%s)]\n%s", doc.ID, doc.Mime, doc.Markdown)
+				if msg.Content == "" {
+					msg.Content = block
+				} else {
+					msg.Content += "\n\n" + block
+				}
+			}
 			msgs = append(msgs, msg)
 		case KindAssistantTurn:
 			var t AssistantTurn
@@ -185,11 +198,14 @@ func renderTurnMemory(tm *TurnMemory) string {
 
 // TranscriptItem is one renderable unit of the UI replay.
 type TranscriptItem struct {
-	Seq        int64              `json:"seq"`
-	Kind       string             `json:"kind"` // user | assistant | tool | permission | compaction | interrupted | error
-	Text       string             `json:"text,omitempty"`
-	Blocks     []UIBlock          `json:"blocks,omitempty"`
-	Images     []ImageRef         `json:"images,omitempty"`
+	Seq    int64      `json:"seq"`
+	Kind   string     `json:"kind"` // user | assistant | tool | permission | compaction | interrupted | error
+	Text   string     `json:"text,omitempty"`
+	Blocks []UIBlock  `json:"blocks,omitempty"`
+	Images []ImageRef `json:"images,omitempty"`
+	// Documents are refs only (id+mime) — never the converted markdown,
+	// which can be huge and has no reason to reach the UI payload.
+	Documents  []ImageRef         `json:"documents,omitempty"`
 	Provider   string             `json:"provider,omitempty"`
 	Model      string             `json:"model,omitempty"`
 	Usage      *stream.Usage      `json:"usage,omitempty"`
@@ -219,6 +235,9 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 				return nil, err
 			}
 			item.Kind, item.Text, item.Images = "user", m.Text, m.Images
+			for _, doc := range m.Documents {
+				item.Documents = append(item.Documents, ImageRef{ID: doc.ID, Mime: doc.Mime})
+			}
 		case KindAssistantTurn:
 			var t AssistantTurn
 			if err := decode(ev, &t); err != nil {

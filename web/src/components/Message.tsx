@@ -3,6 +3,7 @@ import {
   ImageNotFound01Icon,
   Link04Icon,
   Loading03Icon,
+  Pdf02Icon,
   Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -101,6 +102,27 @@ function ImageGrid({ images, localUrls }: { images: ImageRef[]; localUrls?: Map<
   )
 }
 
+// DocumentChips renders a user message's attached PDFs as small,
+// non-clickable chips — unlike images there is no thumbnail to show
+// and no authed fetch to make (the converted markdown already rode
+// the turn server-side); this is just an acknowledgment of what was
+// attached.
+function DocumentChips({ documents }: { documents: ImageRef[] }) {
+  return (
+    <div className="flex max-w-2xl flex-wrap justify-end gap-1.5">
+      {documents.map((doc) => (
+        <div
+          key={doc.id}
+          className="flex items-center gap-1 rounded-lg border border-zinc-950/10 bg-zinc-100 px-2 py-1 text-xs text-zinc-500 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400"
+        >
+          <HugeiconsIcon icon={Pdf02Icon} className="size-3.5" />
+          PDF
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // SourcesPanel renders a research answer's citations as a distinct,
 // clickable list — separate from the prose so "these are the sources"
 // reads at a glance instead of blending into the markdown body.
@@ -178,6 +200,7 @@ export function CopyButton({
 export function UserMessage({
   text,
   images,
+  documents,
   localUrls,
   onRetry,
 }: {
@@ -185,6 +208,9 @@ export function UserMessage({
   // Attached images (transcript's Images, or the live turn's own
   // optimistic list) — thumbnails render above the text bubble.
   images?: ImageRef[]
+  // Attached PDFs (transcript's Documents, or the live turn's own
+  // optimistic list) — rendered as small chips, never fetched.
+  documents?: ImageRef[]
   // Optimistic-send local object URLs keyed by attachment id, so a
   // just-sent message's thumbnails render instantly without
   // round-tripping through AuthedImage's authed fetch.
@@ -197,6 +223,7 @@ export function UserMessage({
   return (
     <div className="flex flex-col items-end gap-1">
       {images && images.length > 0 && <ImageGrid images={images} localUrls={localUrls} />}
+      {documents && documents.length > 0 && <DocumentChips documents={documents} />}
       <div className="group/message flex items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
