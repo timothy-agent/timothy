@@ -140,6 +140,27 @@ describe('Composer mic button', () => {
   })
 })
 
+describe('Composer stop button', () => {
+  it('shows Send, not Stop, when not streaming', () => {
+    render(<Composer {...baseProps()} streaming={false} onStop={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
+  })
+
+  it('shows Stop instead of Send while streaming, and fires onStop', () => {
+    const onStop = vi.fn()
+    render(<Composer {...baseProps()} streaming={true} onStop={onStop} />)
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(onStop).toHaveBeenCalledOnce()
+  })
+
+  it('falls back to Send while streaming if onStop is not given', () => {
+    render(<Composer {...baseProps()} streaming={true} />)
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+  })
+})
+
 function makeImageFile(name = 'photo.png', type = 'image/png', size = 1024): File {
   const file = new File([new Uint8Array(size)], name, { type })
   return file

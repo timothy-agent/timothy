@@ -224,6 +224,7 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
 	m.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
+	m.Handle("POST /v1/sessions/{id}/stop", a.auth(http.HandlerFunc(a.handleStop)))
 	m.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
 	m.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
 	return m

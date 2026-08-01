@@ -7,6 +7,7 @@ import {
   chatStream,
   getTranscript,
   retryStream,
+  stopTurn,
   streamLive,
 } from '../api/client'
 import type { ChatEvent } from '../api/types'
@@ -378,6 +379,18 @@ export function Chat({
 
   const send = () => void sendMessage(draft, agent, skillHint, route, attachments)
 
+  // stop asks the server to cancel the in-flight turn (chat.Service now
+  // runs it detached from this request, so abortRef.current?.abort()
+  // alone only stops this tab's rendering, never the turn itself — see
+  // stopTurn's doc comment). Fire-and-forget: the turn's abnormal-end
+  // persistence and the local abort together already leave the UI in a
+  // sane state regardless of whether this call lands.
+  const stop = () => {
+    const sessionId = sessionRef.current
+    abortRef.current?.abort()
+    if (sessionId) stopTurn(sessionId).catch(() => toast.error('Could not stop the reply'))
+  }
+
   // retryLast re-runs the last (failed) turn: the session already
   // carries the dangling user message server-side (chat.Service.Retry),
   // so this never sends a new user message like sendMessage does. Two
@@ -570,6 +583,8 @@ export function Chat({
           skillHint={skillHint}
           onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
           disabled={streaming}
+          streaming={streaming}
+          onStop={stop}
           placeholder={placeholder}
           attachments={attachments}
           onAttachments={setAttachments}

@@ -54,6 +54,10 @@ const (
 	// just because the capability gate happens to find a vision-capable
 	// model there too.
 	visionRoute = "vision"
+	// turnTimeout ceils a detached turn's lifetime (see Chat/Retry's
+	// turnCtx): must exceed loop's permissionTimeout (10m) so a parked
+	// permission ask can't be killed by the ceiling out from under it.
+	turnTimeout = 30 * time.Minute
 	// Each persistence stage gets its OWN deadline: LLM-backed stages
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
@@ -150,6 +154,7 @@ type Service struct {
 	skillAllow     func(context.Context, string) bool // nil: all packs allowed
 	skillBodies    map[string]string                  // name -> full pack body, for skill_hint
 	flushEvery     time.Duration                      // pending-state flush cadence mid-stream
+	turnTimeout    time.Duration                      // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
 	sensitive      *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
 	attachments    AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
 	markitdownURL  string                             // "": pdf attachments disabled (MARKITDOWN_URL unset)
@@ -307,7 +312,7 @@ func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budge
 		skillAllow:  skillAllow,
 		agents:      resolver,
 		skillBodies: bodies,
-		flushEvery:  2 * time.Second, logger: logger,
+		flushEvery:  2 * time.Second, turnTimeout: turnTimeout, logger: logger,
 	}
 }
 
@@ -490,13 +495,24 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		return sessionID, nil, err
 	}
 
-	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
+	// The turn's lifetime belongs to the session, not the HTTP request
+	// that started it: a navigation/reload aborts ctx, but that must
+	// not kill the loop mid-tool-call. turnCtx drops ctx's cancellation
+	// (WithoutCancel) while keeping its values (auth, trace); StopTurn
+	// is the only thing allowed to cancel it from here on (see
+	// broadcast.go's setCancel). The user_message append below also
+	// rides turnCtx, not ctx: once the slot is won, the message must
+	// land even if the client vanishes that same instant.
+	turnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.turnTimeout)
+	bc.setCancel(cancel)
+
+	if _, err := s.log.Append(turnCtx, sessionID, session.KindUserMessage, session.UserMessage{
 		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images, Documents: documents,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
+	return s.runTurn(turnCtx, ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
 }
 
 // resolveImages fills each message's Images from its ImageRefs
@@ -676,7 +692,10 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if err != nil {
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle, bc)
+	// Detached turn context — same reasoning as Chat's (see there).
+	turnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.turnTimeout)
+	bc.setCancel(cancel)
+	return s.runTurn(turnCtx, ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle, bc)
 }
 
 // runTurn is the shared tail of Chat and Retry: compact, project
@@ -687,31 +706,38 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 // (D-042) — runTurn must free it (turnDone) on every path that returns
 // before the relay goroutine takes ownership of that responsibility,
 // so a setup failure here can never wedge the session's slot.
-func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool, bc *turnBroadcaster) (string, <-chan stream.StreamEvent, error) {
+//
+// turnCtx is the detached, session-owned context (survives the client
+// disconnecting) that everything in this function — and the whole tool
+// loop underneath gw.Stream — runs on. reqCtx is the original HTTP
+// request's context; it is only handed to relay, which uses it solely
+// to decide whether the ORIGINAL client is still there to stream to
+// (see relay's doc comment).
+func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool, bc *turnBroadcaster) (string, <-chan stream.StreamEvent, error) {
 	// start marks the turn's wall-clock beginning for the stats line's
 	// duration: here, not Chat/Retry's entry, so a retried turn's
 	// duration covers only the retried run — the dead attempt's gap
 	// never counts (runTurn is the shared tail both call fresh).
 	start := time.Now()
-	s.seedApprovalGrants(ctx, sessionID, profile)
+	s.seedApprovalGrants(turnCtx, sessionID, profile)
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
 	// this is a cheap no-op except on the crossing turn; best-effort —
 	// an oversized context beats no answer.
 	if s.compactor != nil {
-		cctx, cancel := context.WithTimeout(ctx, compactBudget)
+		cctx, cancel := context.WithTimeout(turnCtx, compactBudget)
 		if err := s.compactor.MaybeCompact(cctx, sessionID); err != nil {
 			s.logger.Warn("pre-send compaction", "session_id", sessionID, "error", err)
 		}
 		cancel()
 	}
-	events, err := s.log.Events(ctx, sessionID)
+	events, err := s.log.Events(turnCtx, sessionID)
 	if err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
-	msgs, err := session.LLMContext(events, s.budget(ctx))
+	msgs, err := session.LLMContext(events, s.budget(turnCtx))
 	if err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
@@ -720,7 +746,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// gateway call: this is the sole point in the whole turn where
 	// attachment bytes exist in memory at all (D-045). ImageRefs never
 	// crosses the wire (json:"-"); Images (the resolved payload) does.
-	if err := s.resolveImages(ctx, msgs); err != nil {
+	if err := s.resolveImages(turnCtx, msgs); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
@@ -738,7 +764,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// (D-011 poisoning defense); the skill body is instructions the
 	// user explicitly selected, deterministically loaded rather than
 	// left to the model's load_skill judgment.
-	system := assembleSystem(skills.Index(s.allowedPacks(ctx, profile)), time.Now())
+	system := assembleSystem(skills.Index(s.allowedPacks(turnCtx, profile)), time.Now())
 	// The agent overlay is stable for a given agent, so it sits ahead
 	// of the per-turn tail and stays inside the cacheable prefix.
 	if profile.PromptOverlay != "" {
@@ -748,12 +774,12 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 		system += "\n\n# Skill: " + skillHint + "\n\n" + skillBody
 	}
 	if s.recall != nil && profile.Memory {
-		if block := s.recall(ctx, sessionID, userText); block != "" {
+		if block := s.recall(turnCtx, sessionID, userText); block != "" {
 			system += "\n\n" + block
 		}
 	}
 
-	upstream, err := s.gw.Stream(ctx, gwclient.StreamRequest{
+	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
 		Route:     route,
 		Agent:     profile.Name,
 		ToolAllow: profile.Tools,
@@ -774,7 +800,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// defer-equivalent (drainAndPersist, on every exit path) owns
 	// freeing it via turnDone.
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
+	go s.relay(reqCtx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -793,7 +819,17 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 // because it already disconnected (drainAndPersist) — still reaches
 // bc, since a GET /live subscriber may be attached independently of
 // the POST that started the turn.
-func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+//
+// reqCtx is the ORIGINAL request's context, not the turn's — upstream
+// is already bound to the detached turnCtx (runTurn's gw.Stream call),
+// so it keeps producing long after reqCtx dies. reqCtx here gates only
+// whether THIS client is still around to receive forwarded events: the
+// moment it's done, the select's <-reqCtx.Done() branch stops sending
+// to out and falls through to drainAndPersist, which keeps consuming
+// the still-live upstream to completion so the turn finishes and
+// persists normally, with every event still reaching bc for any /live
+// subscriber.
+func (s *Service) relay(reqCtx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -888,9 +924,16 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	}
 
 	drainAndPersist := func() {
-		// Consume whatever the upstream still yields (it shares the
-		// request ctx, so it winds down quickly), free the client,
-		// then persist the final state.
+		// out closes FIRST, before draining upstream: upstream is bound
+		// to turnCtx (session-owned), not reqCtx, so once the client is
+		// gone it may still have minutes left to run. Closing out up
+		// front frees streamTurn's client-facing goroutine immediately
+		// instead of holding it for the remainder of the turn — any
+		// further send() calls on a dead ResponseWriter just fail
+		// silently. The drain loop below then keeps consuming upstream
+		// (publishing every event to bc for /live subscribers) until it
+		// closes on its own, however long that takes.
+		close(out)
 		for ev := range upstream {
 			switch ev.Type {
 			case stream.EventChunk:
@@ -907,7 +950,6 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		close(out)
 		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
@@ -949,14 +991,14 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			bc.publish(ev)
 			select {
 			case out <- ev:
-			case <-ctx.Done():
+			case <-reqCtx.Done():
 				flushPending()
 				drainAndPersist()
 				return
 			}
 		case <-ticker.C:
 			flushPending()
-		case <-ctx.Done():
+		case <-reqCtx.Done():
 			flushPending()
 			drainAndPersist()
 			return
