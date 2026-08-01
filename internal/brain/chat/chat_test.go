@@ -1945,3 +1945,250 @@ func TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive(t *testing.T) {
 		t.Fatal("memory extract never invoked")
 	}
 }
+
+// slowGW is a Gateway whose stream keeps producing on its own schedule,
+// gated ONLY by the context passed to Stream — unlike fakeGW, its sends
+// aren't wrapped in a second select that could race the caller's read.
+// Used to prove that once runTurn hands gw.Stream the detached turnCtx
+// (not the request's ctx), the upstream genuinely survives a request-
+// side cancel: production's real gwclient.Stream is bound to whatever
+// ctx runTurn passes it, so this models that binding faithfully instead
+// of asserting it indirectly. delay applies uniformly before every
+// event unless delays is set, giving a per-event delay instead (used
+// when the test needs the first event immediate but later ones held
+// off far past the point the test acts).
+type slowGW struct {
+	events []stream.StreamEvent
+	delay  time.Duration
+	delays []time.Duration
+}
+
+func (g *slowGW) Stream(ctx context.Context, _ gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent)
+	go func() {
+		defer close(ch)
+		for i, ev := range g.events {
+			d := g.delay
+			if i < len(g.delays) {
+				d = g.delays[i]
+			}
+			select {
+			case <-time.After(d):
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
+// TestChatSurvivesClientDisconnect is the kill-test for the fix this
+// package exists to ship: cancelling the REQUEST context (a browser
+// nav/reload) must not cancel the turn. runTurn hands gw.Stream the
+// detached turnCtx, so slowGW here is bound to that, not to the
+// request ctx passed into Chat — the disconnect must only stop
+// forwarding to the client channel, never the upstream itself.
+func TestChatSurvivesClientDisconnect(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &slowGW{delay: 20 * time.Millisecond, events: []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: "first "},
+		{Type: stream.EventChunk, Text: "second "},
+		{Type: stream.EventChunk, Text: "third"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	s := newService(gw, log)
+
+	reqCtx, cancel := context.WithCancel(t.Context())
+	_, ch, err := s.Chat(reqCtx, Request{SessionID: "s1", Message: "long question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// A /live subscriber attached independently of the request that
+	// started the turn — it must still see every event, including the
+	// ones the disconnecting client never gets.
+	replay, live, ok := s.Subscribe("s1")
+	if !ok {
+		t.Fatal("Subscribe: no turn in flight")
+	}
+	if len(replay) != 0 {
+		t.Fatalf("replay before any event = %v, want empty", replay)
+	}
+
+	<-ch     // receive the first forwarded chunk
+	cancel() // client disconnects — browser nav/reload
+
+	// out must close promptly: the client-facing channel does not wait
+	// for the whole turn to finish once reqCtx is done.
+	deadline := time.After(2 * time.Second)
+loop:
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				break loop
+			}
+		case <-deadline:
+			t.Fatal("out did not close promptly after client disconnect")
+		}
+	}
+
+	// The broadcaster (and any /live subscriber) keeps seeing events
+	// after the original client disconnected, until the turn's own
+	// terminal.
+	var got []stream.StreamEvent
+	for ev := range live {
+		got = append(got, ev)
+	}
+	var text strings.Builder
+	sawDone := false
+	for _, ev := range got {
+		if ev.Type == stream.EventChunk {
+			text.WriteString(ev.Text)
+		}
+		if ev.Type == stream.EventDone {
+			sawDone = true
+		}
+	}
+	if !sawDone {
+		t.Fatalf("broadcaster never saw the terminal done event: %+v", got)
+	}
+	if text.String() != "first second third" {
+		t.Fatalf("broadcaster text = %q, want full upstream text", text.String())
+	}
+
+	// The turn must persist as a completed assistant_turn — never
+	// turn_failed — despite the client having vanished mid-stream. A
+	// pending_state checkpoint (flushPending, on the disconnect branch
+	// itself) may also land before it; that's an existing, harmless
+	// checkpoint superseded by the real completed turn right after.
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+	kinds := log.kinds("s1")
+	if kinds[len(kinds)-1] != session.KindAssistantTurn {
+		t.Fatalf("kinds = %v, want assistant_turn last (turn must complete normally, not fail)", kinds)
+	}
+	for _, k := range kinds {
+		if k == session.KindTurnFailed {
+			t.Fatalf("kinds = %v, must not contain turn_failed", kinds)
+		}
+	}
+	events, _ := log.Events(t.Context(), "s1")
+	var turn session.AssistantTurn
+	if err := json.Unmarshal(events[len(events)-1].Payload, &turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if turn.LLM.Message != "first second third" {
+		t.Fatalf("persisted turn text = %q, want full upstream text", turn.LLM.Message)
+	}
+}
+
+// TestStopTurnCancelsMidStream: StopTurn must let a caller (a "stop"
+// button in the UI) cancel a session's in-flight turn server-side. The
+// upstream (bound to turnCtx) winds down once cancelled, and the
+// existing abnormal-end machinery in persistTurn takes over — partial
+// text becomes a pending_state (the same shape a real client disconnect
+// with no terminal produces).
+func TestStopTurnCancelsMidStream(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	// slowGW (not fakeGW): the upstream must still be live-but-idle
+	// after the first chunk, so the test can call StopTurn
+	// deterministically mid-stream rather than racing the upstream's
+	// own natural close — fakeGW's producer goroutine exits (closing
+	// the channel) right after its last canned event, which can beat
+	// StopTurn to the punch when there is no terminal event to hold it
+	// open. The second event is delayed well past StopTurn's cancel.
+	gw := &slowGW{
+		events: []stream.StreamEvent{
+			{Type: stream.EventChunk, Text: "partial answer"},
+			{Type: stream.EventChunk, Text: " that stalls here"},
+		},
+		delays: []time.Duration{0, 2 * time.Second},
+	}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "long question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if !s.TurnActive("s1") {
+		t.Fatal("TurnActive = false right after Chat, want true")
+	}
+
+	<-ch // receive the first chunk, so the turn has partial text before stopping
+
+	if !s.StopTurn("s1") {
+		t.Fatal("StopTurn = false, want true (a turn is live)")
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+
+	found := false
+	for _, k := range log.kinds("s1") {
+		if k == session.KindPendingState {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("kinds = %v, want a pending_state (partial text, abnormal end)", log.kinds("s1"))
+	}
+
+	// Stopping again finds nothing live.
+	if s.StopTurn("s1") {
+		t.Fatal("StopTurn on an already-finished session = true, want false")
+	}
+}
+
+// TestStopTurnNoActiveTurn confirms StopTurn is a plain false, not a
+// panic or error, when the session never had a turn running.
+func TestStopTurnNoActiveTurn(t *testing.T) {
+	t.Parallel()
+	s := newService(&fakeGW{}, newFakeLog())
+	if s.StopTurn("never-started") {
+		t.Fatal("StopTurn on an idle session = true, want false")
+	}
+}
+
+// TestTurnTimeoutCeilingEndsAbandonedTurn confirms the detached turn
+// context actually ceils the turn's lifetime: with turnTimeout set very
+// small, an upstream that outlives it must be cut off and the turn
+// persisted with whatever partial evidence exists, rather than running
+// forever. Production always runs the real 30-minute const; s.turnTimeout
+// exists as a settable field precisely so this deadline path can be
+// exercised without an unreasonably slow test.
+func TestTurnTimeoutCeilingEndsAbandonedTurn(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &slowGW{delay: 500 * time.Millisecond, events: []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: "partial"},
+		{Type: stream.EventChunk, Text: " more"},
+		{Type: stream.EventChunk, Text: " than the ceiling allows"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	s := newService(gw, log)
+	s.turnTimeout = 30 * time.Millisecond // far shorter than any event delay above
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "long question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
+	kinds := log.kinds("s1")
+	// The ceiling fires before any chunk (500ms delay vs 30ms ceiling),
+	// so there is no partial text worth keeping — the turn ends with no
+	// assistant_turn, same shape a real abandoned/stuck upstream leaves.
+	for _, k := range kinds {
+		if k == session.KindAssistantTurn {
+			t.Fatalf("kinds = %v, want no assistant_turn (ceiling cut the turn short)", kinds)
+		}
+	}
+}

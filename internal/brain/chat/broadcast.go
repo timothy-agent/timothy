@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -21,9 +22,10 @@ const broadcastBuf = 64
 // flight" (D-Option-B, see chat.go's turn lifecycle comment) — there
 // is no separate busy-state registry.
 type turnBroadcaster struct {
-	mu   sync.Mutex
-	buf  []stream.StreamEvent
-	subs map[chan stream.StreamEvent]struct{}
+	mu     sync.Mutex
+	buf    []stream.StreamEvent
+	subs   map[chan stream.StreamEvent]struct{}
+	cancel context.CancelFunc // set by Chat/Retry once the turn's detached ctx exists; nil until then
 }
 
 func newTurnBroadcaster() *turnBroadcaster {
@@ -63,6 +65,20 @@ func (b *turnBroadcaster) subscribe() ([]stream.StreamEvent, <-chan stream.Strea
 	ch := make(chan stream.StreamEvent, broadcastBuf)
 	b.subs[ch] = struct{}{}
 	return replay, ch
+}
+
+// setCancel stores the detached turn context's cancel func — called by
+// Chat/Retry right after turnBegin returns, before runTurn does
+// anything else, so StopTurn can never observe a nil cancel for a turn
+// that's actually in flight (turnBegin already made it visible in
+// Service.turns). Guarded by the same mutex as publish/subscribe so a
+// racing StopTurn either sees it set or sees the broadcaster before
+// registration completes at all (turnBegin's own lock covers that
+// earlier race).
+func (b *turnBroadcaster) setCancel(fn context.CancelFunc) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.cancel = fn
 }
 
 // closeAll closes and unregisters every live subscriber — called once
@@ -112,15 +128,50 @@ func (s *Service) turnBegin(sessionID string) (*turnBroadcaster, error) {
 // subscriber. Called after the turn's terminal persist is durable (see
 // persistTurn) so turn_active flips false only once a refetch is
 // guaranteed to see the completed turn — no window where the flag is
-// down but the transcript is still stale.
+// down but the transcript is still stale. Also cancels the turn's
+// detached context (if a cancel was ever stored) so it never leaks past
+// the turn's own lifetime — every path here runs after the turn is
+// truly over, so cancelling now is always safe, never premature.
 func (s *Service) turnDone(sessionID string) {
 	s.turnsMu.Lock()
 	b := s.turns[sessionID]
 	delete(s.turns, sessionID)
 	s.turnsMu.Unlock()
 	if b != nil {
+		b.mu.Lock()
+		cancel := b.cancel
+		b.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		b.closeAll()
 	}
+}
+
+// StopTurn cancels sessionID's in-flight turn, if any, and reports
+// whether one was actually live. Cancelling the detached turn context
+// makes the tool loop/gateway wind down (same path a real deadline or a
+// brain shutdown already takes); the existing abnormal-end machinery in
+// persistTurn then takes over — pending_state when partial text exists,
+// turn_failed otherwise — and drainAndPersist runs turnDone exactly as
+// on any other exit. StopTurn does NOT remove the Service.turns entry
+// itself: the relay goroutine still owns that (via turnDone), so a
+// caller polling TurnActive right after StopTurn can still see true
+// until the wind-down actually completes.
+func (s *Service) StopTurn(sessionID string) bool {
+	s.turnsMu.Lock()
+	b := s.turns[sessionID]
+	s.turnsMu.Unlock()
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	cancel := b.cancel
+	b.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return true
 }
 
 // TurnActive reports whether sessionID currently has a turn in flight

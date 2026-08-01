@@ -5,6 +5,7 @@ import {
   Loading03Icon,
   Mic01Icon,
   Pdf02Icon,
+  StopIcon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import type { ClipboardEvent, DragEvent } from 'react'
@@ -44,6 +45,8 @@ export function Composer({
   skillHint,
   onRemoveSkillHint,
   disabled = false,
+  streaming = false,
+  onStop,
   autoFocus = false,
   placeholder = 'Message Timothy…',
   attachments = [],
@@ -60,6 +63,12 @@ export function Composer({
   skillHint?: string
   onRemoveSkillHint?: () => void
   disabled?: boolean
+  // streaming/onStop swap the send button for a stop control while a
+  // turn is in flight — the turn now runs detached server-side (see
+  // chat.Service.StopTurn), so unmounting or navigating away no longer
+  // stops it; this is the explicit way to.
+  streaming?: boolean
+  onStop?: () => void
   autoFocus?: boolean
   placeholder?: string
   attachments?: PendingAttachment[]
@@ -337,15 +346,26 @@ export function Composer({
             />
           </button>
         </div>
-        <button
-          type="button"
-          onClick={onSend}
-          aria-label="Send"
-          disabled={disabled || (draft.trim() === '' && attachments.length === 0)}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-500"
-        >
-          <HugeiconsIcon icon={ArrowUp01Icon} className="size-4" />
-        </button>
+        {streaming && onStop ? (
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label="Stop"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500"
+          >
+            <HugeiconsIcon icon={StopIcon} className="size-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onSend}
+            aria-label="Send"
+            disabled={disabled || (draft.trim() === '' && attachments.length === 0)}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-500"
+          >
+            <HugeiconsIcon icon={ArrowUp01Icon} className="size-4" />
+          </button>
+        )}
       </div>
     </div>
   )
