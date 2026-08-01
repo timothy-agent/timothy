@@ -1,17 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+import { StackedBarChart } from '../components/charts/StackedBarChart'
+import { MultiLineChart } from '../components/charts/MultiLineChart'
+import { LatencyBars } from '../components/charts/LatencyBars'
+import { ChartLegend } from '../components/charts/ChartLegend'
+import { palette } from '../components/charts/palette'
 import {
   usageBudget,
   usageCache,
@@ -31,9 +24,6 @@ import type {
   UsageSummary,
 } from '../api/types'
 import { estimateUnpriced, totalEstimate } from '../lib/costEstimate'
-
-// Accessible categorical palette that reads on light and dark.
-const palette = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#f43f5e', '#06b6d4', '#a3a3a3']
 
 const ranges = [
   { key: 'today', label: 'Today', days: 0, bucket: 'hour' as const },
@@ -120,9 +110,7 @@ const bucketLabel = (iso: string, bucket: string) => {
 // in the legend itself) rather than filtering the underlying data.
 function useHiddenKeys() {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
-  const onLegendClick = (entry: { dataKey?: unknown }) => {
-    const key = String(entry.dataKey ?? '')
-    if (!key) return
+  const onToggle = (key: string) => {
     setHidden((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
@@ -130,11 +118,7 @@ function useHiddenKeys() {
       return next
     })
   }
-  const legendFormatter = (value: string, entry: { dataKey?: unknown }) => {
-    const key = String(entry.dataKey ?? value)
-    return <span style={{ textDecoration: hidden.has(key) ? 'line-through' : 'none' }}>{value}</span>
-  }
-  return { hidden, onLegendClick, legendFormatter }
+  return { hidden, onToggle }
 }
 
 export function Analytics() {
@@ -298,14 +282,7 @@ export function Analytics() {
     { label: 'Cache hit', value: data ? `${(cacheHit * 100).toFixed(0)}%` : '—' },
   ]
 
-  const axis = { stroke: 'currentColor', opacity: 0.45, fontSize: 11 }
-  const tooltipStyle = {
-    backgroundColor: 'var(--color-zinc-900, #18181b)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 8,
-    color: '#fafafa',
-    fontSize: 12,
-  }
+  const colorOf = (g: string, groups: string[]) => palette[groups.indexOf(g) % palette.length]
 
   return (
     <div className="h-full overflow-y-auto">
@@ -380,119 +357,64 @@ export function Analytics() {
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Cost by provider</h2>
-            <div className="mt-3 h-64">
-              <ResponsiveContainer>
-                <BarChart data={cost.rows}>
-                  <CartesianGrid strokeOpacity={0.12} vertical={false} />
-                  <XAxis
-                    dataKey="bucket"
-                    tickFormatter={(v: string) => bucketLabel(v, bucket)}
-                    {...axis}
-                  />
-                  <YAxis tickFormatter={(v: number) => money(v)} width={70} {...axis} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelFormatter={(v) => bucketLabel(String(v), bucket)}
-                    formatter={(v) => money(Number(v))}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 12 }}
-                    onClick={costLegend.onLegendClick}
-                    formatter={costLegend.legendFormatter}
-                  />
-                  {cost.groups.map((g, i) => (
-                    <Bar
-                      key={g}
-                      dataKey={g}
-                      stackId="cost"
-                      fill={palette[i % palette.length]}
-                      hide={costLegend.hidden.has(g)}
-                    />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="mt-3">
+              <StackedBarChart
+                rows={cost.rows}
+                groups={cost.groups}
+                colorOf={(g) => colorOf(g, cost.groups)}
+                hidden={costLegend.hidden}
+                xLabel={(v) => bucketLabel(v, bucket)}
+                valueLabel={money}
+              />
             </div>
+            <ChartLegend
+              groups={cost.groups}
+              colorOf={(g) => colorOf(g, cost.groups)}
+              hidden={costLegend.hidden}
+              onToggle={costLegend.onToggle}
+            />
           </section>
 
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Tokens in / out</h2>
-            <div className="mt-3 h-64">
-              <ResponsiveContainer>
-                <LineChart data={tokens}>
-                  <CartesianGrid strokeOpacity={0.12} vertical={false} />
-                  <XAxis
-                    dataKey="bucket"
-                    tickFormatter={(v: string) => bucketLabel(v, bucket)}
-                    {...axis}
-                  />
-                  <YAxis tickFormatter={(v: number) => compact(v)} width={55} {...axis} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelFormatter={(v) => bucketLabel(String(v), bucket)}
-                    formatter={(v) => compact(Number(v))}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 12 }}
-                    onClick={tokensLegend.onLegendClick}
-                    formatter={tokensLegend.legendFormatter}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="input"
-                    stroke={palette[0]}
-                    dot={false}
-                    strokeWidth={2}
-                    hide={tokensLegend.hidden.has('input')}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="output"
-                    stroke={palette[2]}
-                    dot={false}
-                    strokeWidth={2}
-                    hide={tokensLegend.hidden.has('output')}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+            <div className="mt-3">
+              <MultiLineChart
+                rows={tokens as unknown as Record<string, number | string>[]}
+                groups={['input', 'output']}
+                colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
+                hidden={tokensLegend.hidden}
+                xLabel={(v) => bucketLabel(v, bucket)}
+                valueLabel={compact}
+              />
             </div>
+            <ChartLegend
+              groups={['input', 'output']}
+              colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
+              hidden={tokensLegend.hidden}
+              onToggle={tokensLegend.onToggle}
+            />
           </section>
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Cost by model</h2>
-            <div className="mt-3 h-64">
-              <ResponsiveContainer>
-                <BarChart data={modelCost.rows}>
-                  <CartesianGrid strokeOpacity={0.12} vertical={false} />
-                  <XAxis
-                    dataKey="bucket"
-                    tickFormatter={(v: string) => bucketLabel(v, bucket)}
-                    {...axis}
-                  />
-                  <YAxis tickFormatter={(v: number) => money(v)} width={70} {...axis} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelFormatter={(v) => bucketLabel(String(v), bucket)}
-                    formatter={(v) => money(Number(v))}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 12 }}
-                    onClick={modelCostLegend.onLegendClick}
-                    formatter={modelCostLegend.legendFormatter}
-                  />
-                  {modelCost.groups.map((g, i) => (
-                    <Bar
-                      key={g}
-                      dataKey={g}
-                      stackId="modelCost"
-                      fill={palette[i % palette.length]}
-                      hide={modelCostLegend.hidden.has(g)}
-                    />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="mt-3">
+              <StackedBarChart
+                rows={modelCost.rows}
+                groups={modelCost.groups}
+                colorOf={(g) => colorOf(g, modelCost.groups)}
+                hidden={modelCostLegend.hidden}
+                xLabel={(v) => bucketLabel(v, bucket)}
+                valueLabel={money}
+              />
             </div>
+            <ChartLegend
+              groups={modelCost.groups}
+              colorOf={(g) => colorOf(g, modelCost.groups)}
+              hidden={modelCostLegend.hidden}
+              onToggle={modelCostLegend.onToggle}
+            />
             {modelCost.groups.length === 0 && data && (
               <p className="mt-2 text-xs text-muted-foreground">
                 No priced model usage in range (free/unpriced models are excluded from cost views).
@@ -502,40 +424,22 @@ export function Analytics() {
 
           <section className="rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Token consumption per model</h2>
-            <div className="mt-3 h-64">
-              <ResponsiveContainer>
-                <LineChart data={modelTokens.rows}>
-                  <CartesianGrid strokeOpacity={0.12} vertical={false} />
-                  <XAxis
-                    dataKey="bucket"
-                    tickFormatter={(v: string) => bucketLabel(v, bucket)}
-                    {...axis}
-                  />
-                  <YAxis tickFormatter={(v: number) => compact(v)} width={55} {...axis} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelFormatter={(v) => bucketLabel(String(v), bucket)}
-                    formatter={(v) => compact(Number(v))}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 12 }}
-                    onClick={modelTokensLegend.onLegendClick}
-                    formatter={modelTokensLegend.legendFormatter}
-                  />
-                  {modelTokens.groups.map((g, i) => (
-                    <Line
-                      key={g}
-                      type="monotone"
-                      dataKey={g}
-                      stroke={palette[i % palette.length]}
-                      dot={false}
-                      strokeWidth={2}
-                      hide={modelTokensLegend.hidden.has(g)}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
+            <div className="mt-3">
+              <MultiLineChart
+                rows={modelTokens.rows}
+                groups={modelTokens.groups}
+                colorOf={(g) => colorOf(g, modelTokens.groups)}
+                hidden={modelTokensLegend.hidden}
+                xLabel={(v) => bucketLabel(v, bucket)}
+                valueLabel={compact}
+              />
             </div>
+            <ChartLegend
+              groups={modelTokens.groups}
+              colorOf={(g) => colorOf(g, modelTokens.groups)}
+              hidden={modelTokensLegend.hidden}
+              onToggle={modelTokensLegend.onToggle}
+            />
           </section>
         </div>
 
@@ -576,8 +480,15 @@ export function Analytics() {
 
         <section className="mt-6 rounded-xl border border-border p-4">
           <h2 className="text-sm font-medium">Latency per provider</h2>
-          <div className="overflow-x-auto">
-            <table className="mt-3 w-full min-w-md text-sm">
+          {data && data.latency.length > 0 ? (
+            <div className="mt-3">
+              <LatencyBars rows={data.latency} />
+            </div>
+          ) : (
+            <p className="mt-3 py-6 text-center text-sm text-muted-foreground">No requests in range.</p>
+          )}
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-md text-sm">
               <thead>
                 <tr className="text-left text-xs text-muted-foreground">
                   <th className="pb-2 font-medium">Provider</th>
@@ -597,13 +508,6 @@ export function Analytics() {
                     <td className="py-2 text-right text-muted-foreground">{compact(l.requests)}</td>
                   </tr>
                 ))}
-                {data && data.latency.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="py-6 text-center text-muted-foreground">
-                      No requests in range.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>

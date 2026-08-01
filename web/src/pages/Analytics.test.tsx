@@ -1,5 +1,4 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { cloneElement, type ReactElement } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BudgetStatus, GroupTotal, UsagePoint, UsageSummary } from '../api/types'
@@ -14,20 +13,6 @@ vi.mock('../api/client', () => ({
   usageSummary: vi.fn(),
   usageTotals: vi.fn(),
 }))
-
-// jsdom never reports a real element size (no layout engine), so the
-// real ResponsiveContainer measures 0x0 and recharts renders nothing —
-// it clones its child with the measured width/height. Cloning with a
-// fixed size here lets BarChart/LineChart/Legend actually mount so the
-// legend-toggle tests below have something to click.
-vi.mock('recharts', async () => {
-  const actual = await vi.importActual<typeof import('recharts')>('recharts')
-  return {
-    ...actual,
-    ResponsiveContainer: ({ children }: { children: ReactElement<{ width?: number; height?: number }> }) =>
-      cloneElement(children, { width: 800, height: 300 }),
-  }
-})
 
 import {
   usageBudget,
