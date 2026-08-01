@@ -47,7 +47,7 @@ func integrationStore(t *testing.T) (*Store, string) {
 	_, _ = db.Exec(ctx,
 		"DELETE FROM sessions WHERE title IN ('integration test session', 'cursor-tie-test')")
 
-	s := NewStore(pool)
+	s := NewStore(pool, log)
 	id, err := s.Create(ctx, "integration test session")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -239,7 +239,7 @@ func TestListCursorStableOnTiedTimestamps(t *testing.T) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	s := NewStore(pool)
+	s := NewStore(pool, log)
 
 	const marker = "cursor-tie-test"
 	var ids []string
@@ -325,7 +325,7 @@ func TestListExcludesMissionSessions(t *testing.T) {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	s := NewStore(pool)
+	s := NewStore(pool, log)
 
 	const marker = "mission-session-list-test"
 	chatID, err := s.Create(ctx, marker)
