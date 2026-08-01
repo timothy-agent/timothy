@@ -22,6 +22,12 @@ jobs:
   # logic must run its full suite against itself.
   changes:
     runs-on: ubuntu-latest
+    # paths-filter needs this to list a PR's changed files via the API
+    # when the local checkout doesn't have enough history for a git
+    # diff — scoped to this job only, not the workflow-wide grant.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       go: ${{ steps.filter.outputs.go }}
       web: ${{ steps.filter.outputs.web }}
