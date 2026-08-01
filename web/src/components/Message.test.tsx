@@ -1,8 +1,12 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, emptyAssistant, type AssistantState } from '../lib/chat'
 import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from './Message'
+
+vi.mock('../api/client', () => ({
+  fetchAttachmentBlob: vi.fn(),
+}))
 
 afterEach(cleanup)
 
@@ -358,5 +362,57 @@ describe('duration badge', () => {
     ])
     render(<AssistantMessage msg={msg} />)
     expect(screen.queryByTestId('duration-badge')).not.toBeInTheDocument()
+  })
+})
+
+describe('UserMessage attachments', () => {
+  beforeEach(() => {
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:mock-fetched'),
+      revokeObjectURL: vi.fn(),
+    })
+  })
+
+  it('renders an AuthedImage per attached image, fetched through the authed client', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.fetchAttachmentBlob).mockResolvedValue(new Blob(['x'], { type: 'image/png' }))
+
+    render(
+      <UserMessage
+        text="check this out"
+        images={[
+          { id: 'att-1', mime: 'image/png' },
+          { id: 'att-2', mime: 'image/jpeg' },
+        ]}
+      />,
+    )
+
+    await waitFor(() => expect(client.fetchAttachmentBlob).toHaveBeenCalledWith('att-1'))
+    expect(client.fetchAttachmentBlob).toHaveBeenCalledWith('att-2')
+    await waitFor(() => expect(screen.getAllByRole('img')).toHaveLength(2))
+  })
+
+  it('uses the optimistic local object URL directly, skipping the fetch', () => {
+    const localUrls = new Map([['att-1', 'blob:local-preview']])
+    render(
+      <UserMessage text="sending…" images={[{ id: 'att-1', mime: 'image/png' }]} localUrls={localUrls} />,
+    )
+    const img = screen.getByRole('img') as HTMLImageElement
+    expect(img.src).toBe('blob:local-preview')
+  })
+
+  it('shows a broken-image fallback when the fetch fails', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.fetchAttachmentBlob).mockRejectedValue(new Error('404'))
+
+    render(<UserMessage text="oops" images={[{ id: 'att-missing', mime: 'image/png' }]} />)
+
+    await waitFor(() => expect(screen.getByTestId('attachment-error')).toBeInTheDocument())
+  })
+
+  it('renders no image grid when the message carries no images', () => {
+    render(<UserMessage text="plain text" />)
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 })

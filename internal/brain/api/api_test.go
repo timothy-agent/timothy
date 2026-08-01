@@ -606,8 +606,11 @@ func TestRetryEndpoint(t *testing.T) {
 
 	// persistTurn runs after the SSE body closes (close(out) unblocks
 	// the client write, persistence follows), so the assistant_turn
-	// isn't guaranteed durable the instant doMux returns.
-	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindAssistantTurn}
+	// isn't guaranteed durable the instant doMux returns. The failed
+	// initial send leaves turn_failed (D-044) between the dangling
+	// user_message and the retried assistant_turn — it doesn't block
+	// retry (lastUserMessage only stops at a completed assistant_turn).
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindTurnFailed, session.KindAssistantTurn}
 	deadline := time.Now().Add(5 * time.Second)
 	var kinds []string
 	for {

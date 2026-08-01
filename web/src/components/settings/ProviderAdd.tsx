@@ -7,9 +7,10 @@ import { createProvider, listProviders, setSecret, validateProvider } from '../.
 import type { AdminProvider, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
 import { modelCatalog } from './modelCatalog'
-import { providerPresets, type ProviderPreset } from './presets'
+import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
@@ -37,9 +38,11 @@ export function ProviderAdd() {
 
   const [name, setName] = useState('')
   const [baseURL, setBaseURL] = useState('')
-  const [region, setRegion] = useState('')
-  const [profile, setProfile] = useState('')
+  const [region, setRegion] = useState('us-east-1')
   const [key, setKey] = useState('')
+  const [accessKeyId, setAccessKeyId] = useState('')
+  const [secretAccessKey, setSecretAccessKey] = useState('')
+  const [sessionToken, setSessionToken] = useState('')
   const [ref, setRef] = useState('')
   const [refEdited, setRefEdited] = useState(false)
   const [model, setModel] = useState('')
@@ -57,9 +60,11 @@ export function ProviderAdd() {
     if (!preset) return
     setName(preset.id === 'custom' ? '' : preset.name)
     setBaseURL(preset.baseURL)
-    setRegion(preset.region ?? '')
-    setProfile('')
+    setRegion(preset.region ?? 'us-east-1')
     setKey('')
+    setAccessKeyId('')
+    setSecretAccessKey('')
+    setSessionToken('')
     setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
@@ -73,17 +78,20 @@ export function ProviderAdd() {
   // Model suggestions: real ids declared on other providers that share
   // BOTH this driver and this base_url — same driver alone isn't
   // enough (openaicompat covers OpenAI, GLM, Ollama, Grok, and more,
-  // none of whose models work against each other's endpoint) — plus
-  // the preset's own validated default, and the static catalog for
-  // this preset. Advisory only, never blocks a free-typed id.
+  // none of whose models work against each other's endpoint). Bedrock
+  // has no base_url to key on (region lives in options.region instead),
+  // and its inference-profile model ids aren't region-specific, so any
+  // other bedrock provider's declared models qualify. Plus the preset's
+  // own validated default, and the static catalog for this preset.
+  // Advisory only, never blocks a free-typed id.
   const modelSuggestions: ModelSuggestion[] = useMemo(() => {
     if (!preset) return []
     const seen = new Map<string, ModelSuggestion>()
     const catalog = modelCatalog[preset.id] ?? []
     const nameFor = (id: string) => catalog.find((m) => m.id === id)?.name
-    const targetBaseURL = (preset.driver === 'bedrock' ? region : baseURL).trim()
     for (const p of existing) {
-      if (p.driver !== preset.driver || p.base_url.trim() !== targetBaseURL) continue
+      if (p.driver !== preset.driver) continue
+      if (preset.driver !== 'bedrock' && p.base_url.trim() !== baseURL.trim()) continue
       for (const m of p.models) {
         if (!seen.has(m.id)) seen.set(m.id, { id: m.id, name: nameFor(m.id), hint: `on ${p.name}` })
       }
@@ -99,13 +107,27 @@ export function ProviderAdd() {
       if (!seen.has(m.id)) seen.set(m.id, { ...m, hint: 'catalog' })
     }
     return [...seen.values()]
-  }, [existing, preset, baseURL, region])
+  }, [existing, preset, baseURL])
 
   if (!preset) return <Navigate to="/settings/providers" replace />
 
   const isBedrock = preset.driver === 'bedrock'
-  const wantsKey = !isBedrock && preset.requiresKey
-  const effectiveRef = isBedrock ? profile : ref
+  const wantsKey = preset.requiresKey
+
+  // Bedrock's two-input split (access key id / secret access key) only
+  // applies when the store writes the raw secret value itself (the
+  // "db" backend, secretField's 'password' mode). vault/asm/file take
+  // a reference to a secret already stored externally — the operator
+  // must have pre-populated that external secret with the JSON blob,
+  // so the generic single reference input stays for those backends.
+  const bedrockSplit = isBedrock && secretField(defaultBackend, '').type === 'password'
+  const bedrockKeyJSON = () =>
+    JSON.stringify({
+      access_key_id: stripPaste(accessKeyId.trim()),
+      secret_access_key: stripPaste(secretAccessKey.trim()),
+      ...(sessionToken.trim() ? { session_token: stripPaste(sessionToken.trim()) } : {}),
+    })
+  const hasKey = bedrockSplit ? !!(accessKeyId.trim() && secretAccessKey.trim()) : !!key.trim()
 
   // Any edit invalidates a previous test — the config it validated no
   // longer matches what's on screen.
@@ -118,8 +140,12 @@ export function ProviderAdd() {
   }
 
   const runTest = async () => {
-    if (wantsKey && !key.trim()) {
-      setKeyError('An API key is required to test this provider.')
+    if (wantsKey && !hasKey) {
+      setKeyError(
+        bedrockSplit
+          ? 'An access key ID and secret access key are required to test this provider.'
+          : 'An API key is required to test this provider.',
+      )
       return
     }
     if (!name.trim()) {
@@ -130,17 +156,18 @@ export function ProviderAdd() {
     setBusy(true)
     setTest(null)
     try {
-      if (wantsKey && key) {
+      if (wantsKey && hasKey) {
         if (!ref.trim()) throw new Error('a credential reference name is required to store the key')
-        await setSecret(ref.trim(), stripPaste(key))
+        await setSecret(ref.trim(), bedrockSplit ? bedrockKeyJSON() : stripPaste(key))
       }
       const config = {
         name: name.trim(),
         kind: 'api',
         driver: preset.driver,
-        base_url: isBedrock ? region.trim() : baseURL.trim(),
-        credential_ref: effectiveRef.trim(),
+        base_url: baseURL.trim(),
+        credential_ref: ref.trim(),
         headers: {},
+        ...(isBedrock ? { options: { region } } : {}),
       }
       const res = await validateProvider(config, model.trim())
       setTest(res)
@@ -163,12 +190,13 @@ export function ProviderAdd() {
         name: name.trim(),
         kind: 'api',
         driver: preset.driver,
-        base_url: isBedrock ? region.trim() : baseURL.trim(),
-        credential_ref: effectiveRef.trim(),
+        base_url: baseURL.trim(),
+        credential_ref: ref.trim(),
         headers: {},
         default_model: trimmedModel,
         models: [{ id: trimmedModel, ...(prices ? { prices } : {}) }],
         enabled: true,
+        ...(isBedrock ? { options: { region } } : {}),
       })
       toast.success('Provider added', { description: `${name.trim()} is connected and ready to route to.` })
       navigate('/settings/providers')
@@ -211,85 +239,165 @@ export function ProviderAdd() {
           />
         </Field>
 
-        {isBedrock ? (
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field label="Region">
-              <Input
-                value={region}
-                onChange={(e) => {
-                  setRegion(e.target.value)
-                  invalidate()
-                }}
-                placeholder="us-east-1"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <Field label="AWS profile (optional)">
-              <Input
-                value={profile}
-                onChange={(e) => {
-                  setProfile(e.target.value)
-                  invalidate()
-                }}
-                placeholder="empty = credential chain"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <p className="text-sm text-muted-foreground sm:col-span-2">
-              Bedrock signs with the AWS credential chain mounted into the gateway — no key is
-              stored here.
-            </p>
-          </div>
-        ) : (
-          <>
-            {preset.id === 'custom' && (
-              <Field label="Base URL">
+        {isBedrock && (
+          <Field label="Region">
+            <Select
+              value={region}
+              onValueChange={(v) => {
+                setRegion(v)
+                invalidate()
+              }}
+            >
+              <SelectTrigger className="mt-1.5 h-10 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {bedrockRegions.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>
+                    {r.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
+
+        {preset.id === 'custom' && (
+          <Field label="Base URL">
+            <Input
+              value={baseURL}
+              onChange={(e) => {
+                setBaseURL(e.target.value)
+                invalidate()
+              }}
+              placeholder="https://…/v1"
+              className="mt-1.5 h-10"
+            />
+          </Field>
+        )}
+        {wantsKey && bedrockSplit && (
+          <div>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Access Key ID">
                 <Input
-                  value={baseURL}
+                  type="password"
+                  value={accessKeyId}
                   onChange={(e) => {
-                    setBaseURL(e.target.value)
+                    setAccessKeyId(e.target.value)
                     invalidate()
                   }}
-                  placeholder="https://…/v1"
+                  placeholder="AKIA…"
                   className="mt-1.5 h-10"
+                  autoComplete="off"
+                  aria-invalid={keyError != null}
                 />
               </Field>
+              <Field label="Secret Access Key">
+                <Input
+                  type="password"
+                  value={secretAccessKey}
+                  onChange={(e) => {
+                    setSecretAccessKey(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder="wJalrXUtnFEMI/K7MDEN..."
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                  aria-invalid={keyError != null}
+                />
+              </Field>
+            </div>
+            {keyError && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                {keyError}
+              </p>
             )}
-            {wantsKey &&
-              (() => {
-                const field = secretField(defaultBackend, preset.keyPlaceholder ?? 'paste key')
-                return (
-                  <div>
-                    <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
-                      <Input
-                        type={field.type}
-                        value={key}
-                        onChange={(e) => {
-                          setKey(e.target.value)
-                          invalidate()
-                        }}
-                        placeholder={field.placeholder}
-                        className="mt-1.5 h-10"
-                        autoComplete="off"
-                        aria-invalid={keyError != null}
-                      />
-                    </Field>
-                    {keyError && (
-                      <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
-                        <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
-                        {keyError}
-                      </p>
-                    )}
-                    {!keyError && (field.hint || preset.keyHint) && (
-                      <p className="mt-1.5 text-sm text-muted-foreground">
-                        {field.hint || preset.keyHint}
-                      </p>
-                    )}
-                  </div>
-                )
-              })()}
-          </>
+            {!keyError && preset.keyHint && (
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {preset.keyHint}
+                {preset.keyURL && (
+                  <>
+                    {' '}
+                    <a
+                      href={preset.keyURL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                    >
+                      Open {preset.name} →
+                    </a>
+                  </>
+                )}
+              </p>
+            )}
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+                Advanced — session token
+              </summary>
+              <Field label="Session Token (optional)" hint="only needed for temporary STS credentials">
+                <Input
+                  type="password"
+                  value={sessionToken}
+                  onChange={(e) => {
+                    setSessionToken(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder="paste session token"
+                  className="mt-1.5 h-10"
+                  autoComplete="off"
+                />
+              </Field>
+            </details>
+          </div>
         )}
+        {wantsKey &&
+          !bedrockSplit &&
+          (() => {
+            const field = secretField(defaultBackend, preset.keyPlaceholder ?? 'paste key')
+            return (
+              <div>
+                <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
+                  <Input
+                    type={field.type}
+                    value={key}
+                    onChange={(e) => {
+                      setKey(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder={field.placeholder}
+                    className="mt-1.5 h-10"
+                    autoComplete="off"
+                    aria-invalid={keyError != null}
+                  />
+                </Field>
+                {keyError && (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                    <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                    {keyError}
+                  </p>
+                )}
+                {!keyError && (field.hint || preset.keyHint) && (
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {field.hint || preset.keyHint}
+                    {!field.hint && preset.keyURL && (
+                      <>
+                        {' '}
+                        <a
+                          href={preset.keyURL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                        >
+                          Open {preset.name} →
+                        </a>
+                      </>
+                    )}
+                  </p>
+                )}
+              </div>
+            )
+          })()}
 
         <Field label="Model" hint="validated with a one-token completion, becomes the default">
           <ModelInput
@@ -304,12 +412,12 @@ export function ProviderAdd() {
           />
         </Field>
 
-        {!isBedrock && (
-          <details className="group">
-            <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-              Advanced — base URL &amp; credential reference
-            </summary>
-            <div className="mt-3 grid gap-5 sm:grid-cols-2">
+        <details className="group">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+            Advanced — {isBedrock ? 'credential reference' : 'base URL & credential reference'}
+          </summary>
+          <div className="mt-3 grid gap-5 sm:grid-cols-2">
+            {!isBedrock && (
               <Field label="Base URL">
                 <Input
                   value={baseURL}
@@ -321,21 +429,21 @@ export function ProviderAdd() {
                   className="mt-1.5 h-10"
                 />
               </Field>
-              <Field label="Credential reference">
-                <Input
-                  value={ref}
-                  onChange={(e) => {
-                    setRef(e.target.value)
-                    setRefEdited(true)
-                    invalidate()
-                  }}
-                  placeholder="name (e.g. OPENAI_API_KEY)"
-                  className="mt-1.5 h-10"
-                />
-              </Field>
-            </div>
-          </details>
-        )}
+            )}
+            <Field label="Credential reference">
+              <Input
+                value={ref}
+                onChange={(e) => {
+                  setRef(e.target.value)
+                  setRefEdited(true)
+                  invalidate()
+                }}
+                placeholder="name (e.g. OPENAI_API_KEY)"
+                className="mt-1.5 h-10"
+              />
+            </Field>
+          </div>
+        </details>
 
         <div
           className={

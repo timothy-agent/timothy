@@ -7,15 +7,18 @@ package chat
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -43,6 +46,12 @@ const (
 	// defaultRoute serves plain chat turns when the caller picks
 	// nothing; the web UI exposes a per-message picker.
 	defaultRoute = "default"
+	// visionRoute serves turns whose message carries an image attachment
+	// (D-046) — a cheapest-first vision chain, so an image message never
+	// rides an agent's or the default route's (usually pricier) chain
+	// just because the capability gate happens to find a vision-capable
+	// model there too.
+	visionRoute = "vision"
 	// Each persistence stage gets its OWN deadline: LLM-backed stages
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
@@ -104,6 +113,15 @@ type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text s
 // beats no turn.
 type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
 
+// AttachmentStore is the slice of *attachments.Store chat needs: Get
+// validates a ref exists (400 before any event append), Open resolves
+// its bytes to base64 at request-build time. Nil disables attachments
+// — a Request naming any Attachments id gets ErrBadRequest.
+type AttachmentStore interface {
+	Get(ctx context.Context, id string) (attachments.Attachment, error)
+	Open(ctx context.Context, id string) (io.ReadCloser, attachments.Attachment, error)
+}
+
 // Granter is the narrow slice of *tools.Permissions chat needs to seed
 // standing grants for a serving agent's ApprovalAllowlist — the same
 // shape missions/driver.go's sessionGranter uses against the same
@@ -131,6 +149,7 @@ type Service struct {
 	skillBodies map[string]string                  // name -> full pack body, for skill_hint
 	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
 	sensitive   *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
+	attachments AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
 	logger      *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -183,6 +202,10 @@ func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 // extraction on t.Route instead of memoryd's own default. Optional —
 // nil leaves every turn's side-calls on today's behavior.
 func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t }
+
+// SetAttachments wires the attachment store (D-045). Optional — nil
+// (ATTACHMENTS_DIR unset) rejects any Request naming Attachments ids.
+func (s *Service) SetAttachments(store AttachmentStore) { s.attachments = store }
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
 // request naming the autoAgentName sentinel resolves through candidates
@@ -356,6 +379,10 @@ type Request struct {
 	// skip: the pack's body is in the system prompt before the first
 	// token streams.
 	SkillHint string `json:"skill_hint,omitempty"`
+	// Attachments are attachment ids (internal/brain/attachments)
+	// the user attached to this message — refs only, resolved into
+	// base64 at request-build time (D-045).
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 // Chat streams one turn. The user message is durably appended before
@@ -363,8 +390,12 @@ type Request struct {
 // abnormal end) is appended when the stream finishes. The returned
 // channel follows the stream package's terminal contract.
 func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.StreamEvent, error) {
-	if strings.TrimSpace(req.Message) == "" {
-		return "", nil, fmt.Errorf("chat: %w: message is required", ErrBadRequest)
+	if strings.TrimSpace(req.Message) == "" && len(req.Attachments) == 0 {
+		return "", nil, fmt.Errorf("chat: %w: message or an attachment is required", ErrBadRequest)
+	}
+	images, err := s.validateAttachments(ctx, req.Attachments)
+	if err != nil {
+		return "", nil, err
 	}
 	agentName := req.Agent
 	if agentName == autoAgentName {
@@ -387,9 +418,23 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		}
 		skillBody = body
 	}
-	// Routing precedence: explicit request override, then the agent's
-	// route, then the default chain.
+	// Routing precedence: explicit request override, then images auto-flip
+	// to the vision route, then the agent's route, then the default chain
+	// (sensitive-pin below still overrides all of this).
 	route := req.Route
+	if route == "" && len(images) > 0 {
+		// D-046: brain has no cheap way to know whether a "vision" route
+		// exists/is enabled/has a non-empty chain (gwclient exposes no
+		// routes-listing, and adding one just for this check is exactly
+		// the kind of new polling machinery we want to avoid) — so the
+		// flip is unconditional here. The gateway-side safety net
+		// (internal/gateway/api/api.go's handleStream) falls back to
+		// "default" when "vision" resolves to a missing/disabled/empty
+		// chain, so installs that never created the route still work;
+		// an existing vision route wins outright since its cheapest-first
+		// chain is exactly the point of this feature.
+		route = visionRoute
+	}
 	if route == "" {
 		route = profile.Route
 	}
@@ -429,12 +474,80 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}
 
 	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint,
+		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
 	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
+}
+
+// resolveImages fills each message's Images from its ImageRefs
+// in-place, reading each attachment's bytes and base64-encoding them.
+// The only call site (runTurn, immediately before the gateway request
+// is built) — nothing else in the turn's lifecycle ever needs bytes
+// (D-045). A no-op when nothing carries refs (the common case). Once
+// resolved, ImageRefs is cleared: it never crosses the gwclient wire
+// anyway (json:"-"), but clearing avoids holding two views of the same
+// data past the point either is needed.
+func (s *Service) resolveImages(ctx context.Context, msgs []provider.Message) error {
+	for i := range msgs {
+		if len(msgs[i].ImageRefs) == 0 {
+			continue
+		}
+		if s.attachments == nil {
+			return fmt.Errorf("chat: resolve images: attachments are not enabled")
+		}
+		images := make([]provider.ImageData, 0, len(msgs[i].ImageRefs))
+		for _, ref := range msgs[i].ImageRefs {
+			data, err := s.readAttachment(ctx, ref.ID)
+			if err != nil {
+				return fmt.Errorf("chat: resolve image %q: %w", ref.ID, err)
+			}
+			images = append(images, provider.ImageData{MediaType: ref.Mime, Data: data})
+		}
+		msgs[i].Images = images
+		msgs[i].ImageRefs = nil
+	}
+	return nil
+}
+
+// readAttachment opens and base64-encodes one attachment's bytes.
+func (s *Service) readAttachment(ctx context.Context, id string) (string, error) {
+	r, _, err := s.attachments.Open(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = r.Close() }()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// validateAttachments checks every id exists in the attachment store
+// BEFORE the turn's exclusivity is won or anything is appended (D-042:
+// store lookups are read-only and safe before turnBegin, but a bad ref
+// must 400 before even the user_message persists). Empty ids returns
+// nil, nil without touching the store — attachments stay off when
+// unconfigured, and a message with none never needs it wired.
+func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if s.attachments == nil {
+		return nil, fmt.Errorf("chat: %w: attachments are not enabled", ErrBadRequest)
+	}
+	refs := make([]session.ImageRef, 0, len(ids))
+	for _, id := range ids {
+		att, err := s.attachments.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+		}
+		refs = append(refs, session.ImageRef{ID: att.ID, Mime: att.Mime})
+	}
+	return refs, nil
 }
 
 // pinSensitiveRoute promotes the session-wide privacy floor above the
@@ -554,6 +667,14 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
+	// Resolve image refs into base64 ONLY here, right before the
+	// gateway call: this is the sole point in the whole turn where
+	// attachment bytes exist in memory at all (D-045). ImageRefs never
+	// crosses the wire (json:"-"); Images (the resolved payload) does.
+	if err := s.resolveImages(ctx, msgs); err != nil {
+		s.turnDone(sessionID)
+		return sessionID, nil, err
+	}
 	// sessionSensitive reuses this same fetch: a session pinned by a
 	// PRIOR turn still carries that turn's sensitive content in the
 	// context just projected above, even when THIS turn runs no
@@ -633,9 +754,34 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	// s.sensitive — memory extraction then rides the sensitive route
 	// pin instead of its own default (see persistTurn).
 	turnSensitive := false
+	// ranTool records whether ANY tool executed this turn (regardless of
+	// sensitivity) — persistTurn's empty-response guard (D-044) must not
+	// flag a turn whose answer is entirely tool/reasoning traffic with
+	// no text.
+	ranTool := false
+	// failure captures a terminal EventError/EventIncomplete's code and
+	// message (D-044): the relay used to just drop these on the floor
+	// after streaming them to the client, leaving a turn with nothing
+	// persisted. persistTurn appends it as KindTurnFailed when there is
+	// no partial text worth keeping instead.
+	var failure *session.TurnFailed
 	noteToolResult := func(ev stream.StreamEvent) {
-		if ev.Type == stream.EventToolResult && ev.ToolResult != nil && s.sensitive.Matches(ev.ToolResult.Name) {
+		if ev.Type != stream.EventToolResult || ev.ToolResult == nil {
+			return
+		}
+		ranTool = true
+		if s.sensitive.Matches(ev.ToolResult.Name) {
 			turnSensitive = true
+		}
+	}
+	noteFailure := func(ev stream.StreamEvent) {
+		switch ev.Type {
+		case stream.EventError:
+			if ev.Err != nil {
+				failure = &session.TurnFailed{Code: ev.Err.Code, Message: ev.Err.Message}
+			}
+		case stream.EventIncomplete:
+			failure = &session.TurnFailed{Code: "incomplete", Message: ev.Text}
 		}
 	}
 
@@ -708,11 +854,12 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				ev.Meta = meta
 			}
 			noteToolResult(ev)
+			noteFailure(ev)
 			notePermission(ev)
 			bc.publish(ev)
 		}
 		close(out)
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order — mirrors missions.Store's own "publish only after
@@ -748,6 +895,7 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 				ev.Meta = meta
 			}
 			noteToolResult(ev)
+			noteFailure(ev)
 			notePermission(ev)
 			bc.publish(ev)
 			select {
@@ -780,7 +928,7 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -791,6 +939,34 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 			if _, err := s.log.Append(ctx, sessionID, session.KindPendingState, session.PendingState{Partial: text}); err != nil {
 				s.logger.Error("persist pending state", "session_id", sessionID, "error", err)
 			}
+			return
+		}
+		// No partial worth keeping: a captured terminal error/incomplete
+		// (D-044) becomes durable evidence instead of the turn silently
+		// vanishing — same detached-context, best-effort append as the
+		// pending-state write above.
+		if failure != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+			defer cancel()
+			if _, err := s.log.Append(ctx, sessionID, session.KindTurnFailed, *failure); err != nil {
+				s.logger.Error("persist turn failed", "session_id", sessionID, "error", err)
+			}
+		}
+		return
+	}
+
+	// A completed turn with no text, no reasoning, and no tool
+	// executions is not a success (D-044) — persist evidence instead of
+	// a blank assistant_turn. Keyed on all three being empty so a
+	// tool/reasoning-only turn (a real, valid shape some providers use)
+	// stays untouched.
+	if text == "" && reasoning == "" && !ranTool {
+		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		defer cancel()
+		if _, err := s.log.Append(ctx, sessionID, session.KindTurnFailed, session.TurnFailed{
+			Code: "empty_response", Message: "the turn completed with no text, reasoning, or tool calls",
+		}); err != nil {
+			s.logger.Error("persist turn failed", "session_id", sessionID, "error", err)
 		}
 		return
 	}

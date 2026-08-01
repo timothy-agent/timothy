@@ -51,7 +51,7 @@ func (a *Anthropic) Name() string { return a.cfg.Name }
 func (a *Anthropic) Kind() Kind   { return KindAPI }
 
 func (a *Anthropic) Capabilities() []Capability {
-	return []Capability{CapChat, CapStreaming, CapTools}
+	return []Capability{CapChat, CapStreaming, CapTools, CapVision}
 }
 
 // anthropic wire types (request)
@@ -85,14 +85,22 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     json.RawMessage       `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   string                `json:"content,omitempty"`
+	IsError   bool                  `json:"is_error,omitempty"`
+	Source    *anthropicImageSource `json:"source,omitempty"`
+}
+
+// anthropicImageSource is a base64 image block's source (D-045).
+type anthropicImageSource struct {
+	Type      string `json:"type"` // "base64"
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 // anthropicMessages translates normalized messages to the wire shape:
@@ -133,6 +141,23 @@ func anthropicMessages(msgs []Message) []anthropicMessage {
 				})
 			}
 			out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
+		case len(m.Images) > 0:
+			// Text-only messages keep the plain-string shape (unchanged);
+			// only a message actually carrying images pays for the block
+			// array (D-045).
+			blocks := make([]anthropicContentBlock, 0, len(m.Images)+1)
+			if m.Content != "" {
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+			}
+			for _, img := range m.Images {
+				blocks = append(blocks, anthropicContentBlock{
+					Type: "image",
+					Source: &anthropicImageSource{
+						Type: "base64", MediaType: img.MediaType, Data: img.Data,
+					},
+				})
+			}
+			out = append(out, anthropicMessage{Role: m.Role, Content: blocks})
 		default:
 			out = append(out, anthropicMessage{Role: m.Role, Content: m.Content})
 		}

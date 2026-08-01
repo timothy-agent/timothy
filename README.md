@@ -9,7 +9,7 @@
 
 Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents — running on your own hardware, talking to whichever LLM providers you configure.
 
-**Status: early development.** The core works — chat, tools, memory, dashboard — but the agent harness and deployment story are still being built. Not ready for anyone else's use.
+**Status: early, personal project.** This is run by its author, in active development, with no versioned releases yet. Expect rough edges and breaking changes between commits.
 
 ## What works today
 
@@ -23,7 +23,7 @@ Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents — ru
 
 ## Architecture
 
-Go microservices behind a single public API, one PostgreSQL database, React web UI.
+Go microservices behind a single public API, one PostgreSQL database, React web UI. All run via Docker Compose.
 
 | Service      | Role                                                                    |
 |--------------|-------------------------------------------------------------------------|
@@ -35,26 +35,138 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `searxng`    | Internal metasearch backend for the web_search tool                     |
 | `markitdown` | Internal Python sidecar — file→markdown conversion                      |
 
+Plus Postgres (18 + pgvector), internal only — no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`.
+
 Sessions are an append-only event log: every turn, tool run, and compaction is an immutable event, so conversations survive crashes mid-stream and replay exactly as they happened.
 
-## Running
+**Published ports** — everything else is compose-internal:
+
+| Port   | What                          |
+|--------|-------------------------------|
+| `3300` | Web UI                        |
+| `8300` | Brain (public API)             |
+| `3301` | Vite dev server (`make dev`)   |
+
+## Prerequisites
+
+- Docker (Desktop, or engine + compose plugin).
+- A [hugeicons.com](https://hugeicons.com) account with an active token. The web UI's icons are HugeIcons Pro (a paid icon set) and the token is required to build the `web` image — without it, `make up` fails on the web build step.
+
+## First run
+
+1. Copy the env file and fill in the required values:
+
+   ```sh
+   cp deploy/env.example deploy/.env
+   ```
+
+   Open `deploy/.env` and set:
+
+   - `POSTGRES_PASSWORD` — compose refuses to start without it.
+   - `TIMOTHY_MASTER_KEY` — generate with `openssl rand -base64 32`. This is the root of trust for the encrypted secret store (provider API keys, OAuth tokens all live behind it). Compose hard-fails if it's blank. **Back this up** — losing it makes every stored secret unrecoverable.
+   - `TIMOTHY_API_TOKEN` — generate with `openssl rand -hex 32`. Bearer token for the API; if it's blank, every request 401s.
+   - `HUGEICONS_TOKEN` — your HugeIcons Pro token, needed to build the `web` image.
+
+2. (Optional) Missions sandbox. `deploy/env.example` prefills `MISSION_SANDBOX_IMAGE=timothy-sandbox:latest`, but that image doesn't exist until you build it:
+
+   ```sh
+   make sandbox-image
+   ```
+
+   Skip this and leave `MISSION_SANDBOX_IMAGE` empty in `.env` if you don't need missions isolated in their own container — mission shell commands then run in-process instead.
+
+3. (Linux only) Set `DOCKER_SOCK_GID` so `sandboxd` can use the Docker socket:
+
+   ```sh
+   stat -c '%g' /var/run/docker.sock
+   ```
+
+   Put that number in `.env`. On Docker Desktop the default of `0` works as-is. Note: mounting `docker.sock` gives `sandboxd` root-equivalent access to the host. It's isolated on its own compose network, read-only, and runs with all capabilities dropped — but the socket itself is the trust boundary, so only run this on a host you control.
+
+4. Start the stack:
+
+   ```sh
+   make up
+   ```
+
+   Web UI: `http://localhost:3300`. API: `http://localhost:8300`.
+
+5. First login. There's no login page — the web UI auto-opens a settings dialog asking for an API token the first time it can't find one. Paste the `TIMOTHY_API_TOKEN` value from `deploy/.env`. It's stored in your browser's `localStorage`.
+
+6. Add a provider. A fresh install has zero LLM providers and no routing configured — Timothy can't answer anything until you do this. Go to **Settings → Providers → Add**. Presets: OpenAI, Anthropic, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`) — the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the system routes (`default`, `summarize`, `embedding`).
+
+## Optional: local models
+
+Run Ollama natively on the host, not in a container — a containerized Ollama only gets CPU, while a host install can use Metal or CUDA. Then add a provider with the **Ollama** preset; it prefills the base URL `http://host.docker.internal:11434/v1`. On Linux, `host.docker.internal` may need a `host-gateway` entry in your Docker config to resolve.
+
+## Optional: Google connectors (Gmail, Calendar)
+
+1. Create an OAuth client in Google Cloud Console, type **Web application**.
+2. Set `TIMOTHY_PUBLIC_URL` in `.env` to the URL your *browser* uses to reach Timothy (e.g. `http://localhost:3300`). This must match what you register with Google, or the OAuth callback fails.
+3. Add `<TIMOTHY_PUBLIC_URL>/v1/connectors/oauth/callback` to the OAuth client's authorized redirect URIs.
+4. In the UI: **Settings → Connectors**, pick the Gmail or Calendar tile, paste the client ID and client secret, and complete the consent flow. Scopes requested: `gmail.modify`, `calendar`.
+
+While the Google OAuth app is in "Testing" mode (the default for a new Cloud project), refresh tokens expire roughly every 7 days — when a connector stops working, reconnect it from Settings, or publish the OAuth app to avoid the expiry.
+
+## Optional: GitHub connector
+
+Configured as an MCP preset in **Settings → Connectors**: paste a GitHub personal access token.
+
+## Optional: Amazon Bedrock
+
+Create an IAM user scoped to `bedrock:InvokeModel*` only, generate an access key, and paste it as JSON (`{"access_key_id":"…","secret_access_key":"…"}`) into the Bedrock provider's key field in **Settings → Providers**. Pick a region from the dropdown — no `~/.aws`, no SSO, nothing to run on the host.
+
+## Operating the stack
 
 ```sh
-cp deploy/env.example deploy/.env   # fill in provider keys
+make up      # start (builds images as needed)
+make down    # stop
+make logs    # follow logs for all services
+```
+
+Rebuild and restart a single service after a code change:
+
+```sh
+make brain      # or gateway, memoryd, web, markitdown, sandboxd
+```
+
+Frontend development with hot reload:
+
+```sh
+make dev   # Vite dev server on :3301, proxies /v1 to brain
+```
+
+### Backups
+
+Postgres has no host port, so back it up through the container:
+
+```sh
+docker compose -f deploy/docker-compose.yml exec postgres pg_dump -U timothy timothy > backup.sql
+```
+
+A full backup is the `pgdata` volume plus `deploy/.env` — without `TIMOTHY_MASTER_KEY`, the encrypted secrets in that dump are unrecoverable.
+
+### Upgrading
+
+```sh
+git pull
 make up
 ```
 
-Web UI on `:3300`, API on `:8300`. For frontend work, `docker compose -f deploy/docker-compose.yml --profile dev up web-dev` serves a hot-reloading Vite dev server on `:3301`.
+Migrations are additive-only, never edited once applied, and run automatically at service startup — no separate migrate step.
 
 ## Development
 
-The Go toolchain runs containerized — no host Go install required.
+The Go toolchain runs fully containerized — no host Go install required.
 
 ```sh
-make test               # unit tests
-make test-integration   # against the running compose stack
-make lint               # golangci-lint
+make build   # compile everything
+make test    # unit tests
+make vet     # go vet
+make lint    # golangci-lint
 ```
+
+`make test-integration` and `make canary` need the compose stack up (`make up` first).
 
 Design decisions are documented as `D-0XX` markers in code comments next to the code they explain.
 

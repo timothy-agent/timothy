@@ -137,6 +137,34 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 	}
 }
 
+func TestAggregateTotalsGroupsWholeRangeExcludingTest(t *testing.T) {
+	agg, led := testAggregator(t)
+	from, to := seedAgg(t, led)
+
+	totals, err := agg.Totals(t.Context(), from, to, "provider")
+	if err != nil {
+		t.Fatalf("Totals: %v", err)
+	}
+	byGroup := map[string]GroupTotal{}
+	for _, g := range totals {
+		byGroup[g.Group] = g
+	}
+	a, b := byGroup[aggMarker+"a"], byGroup[aggMarker+"b"]
+	// Same fixture as the Series-based summary test: 2 real rows for
+	// provider a ($0.30, 300 in / 150 out), 2 for b ($0.01) — the $99
+	// test probe must be absent from both the row count and the sum.
+	if a.Requests != 2 || a.CostUSD != 0.30 || a.InputTokens != 300 || a.OutputTokens != 150 {
+		t.Fatalf("totals[a] = %+v, want 2 req / $0.30 / 300 in / 150 out", a)
+	}
+	if b.Requests != 2 || b.CostUSD != 0.01 {
+		t.Fatalf("totals[b] = %+v, want 2 req / $0.01", b)
+	}
+
+	if _, err := agg.Totals(t.Context(), from, to, "purpose; DROP TABLE"); err == nil {
+		t.Fatal("unknown group must error")
+	}
+}
+
 func TestAggregateMissionUsage(t *testing.T) {
 	agg, led := testAggregator(t)
 	ctx := t.Context()

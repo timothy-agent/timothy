@@ -23,6 +23,12 @@ const (
 	KindTurnMemory         = "turn_memory"
 	KindPermissionRequest  = "permission_request"
 	KindPermissionResolved = "permission_resolved"
+	// KindTurnFailed records a turn that ended without a usable answer —
+	// a terminal error/incomplete with nothing worth keeping as partial
+	// text, or a completed turn with no text, reasoning, or tool
+	// executions (D-044) — so the event log carries evidence instead of
+	// silence.
+	KindTurnFailed = "turn_failed"
 )
 
 // Event is one row of a session's log.
@@ -45,6 +51,18 @@ type UserMessage struct {
 	Route  string `json:"route,omitempty"`
 	Agent  string `json:"agent,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
+	// Images are refs to attachments (internal/brain/attachments),
+	// never bytes — base64 exists only transiently at request-build
+	// time (D-045). Additive: a message with no images omits this.
+	Images []ImageRef `json:"images,omitempty"`
+}
+
+// ImageRef points at a stored attachment; Mime rides alongside so
+// projections and drivers can build a data: URL without a store
+// round-trip.
+type ImageRef struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
 }
 
 // UIBlock is one renderable piece of an assistant turn.
@@ -121,6 +139,15 @@ type CompactionApplied struct {
 // abnormally; the next request splices it in, then it is superseded.
 type PendingState struct {
 	Partial string `json:"partial"`
+}
+
+// TurnFailed records a turn that produced no usable answer: Code is a
+// short machine-readable reason (e.g. a terminal error/incomplete's
+// code, or "empty_response" for a completed turn with nothing to
+// show), Message is the human-readable detail.
+type TurnFailed struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // PermissionRequest records a parked tool call awaiting approval

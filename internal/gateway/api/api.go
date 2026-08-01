@@ -74,6 +74,21 @@ type streamRequest struct {
 	MissionID string             `json:"mission_id,omitempty"`
 }
 
+// requiredVisionCapability derives whether this request needs a
+// vision-capable chain entry from the message content itself — no
+// explicit flag on streamRequest (D-045). A sensitive-pinned session
+// routed to a local non-vision model correctly gets NoRouteError's
+// "lacks vision capability" here; that's the intended v1 behavior, not
+// a bug to route around.
+func requiredVisionCapability(msgs []provider.Message) []provider.Capability {
+	for _, m := range msgs {
+		if len(m.Images) > 0 {
+			return []provider.Capability{provider.CapVision}
+		}
+	}
+	return nil
+}
+
 func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -110,15 +125,36 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	attempts, err := snap.Resolve(req.Route, req.ModelHint, sticky)
+	attempts, err := snap.Resolve(req.Route, req.ModelHint, sticky, requiredVisionCapability(req.Messages)...)
 	if err != nil {
 		var nre *router.NoRouteError
 		if errors.As(err, &nre) {
-			jsonError(w, http.StatusBadGateway, "no_route", nre.Error())
+			// D-046 safety net: brain flips an image message to "vision"
+			// unconditionally (it has no cheap way to know whether the
+			// route exists on this install). When "vision" is missing,
+			// disabled, or has an empty chain, Resolve returns a
+			// NoRouteError with no Skipped entries — nothing was even
+			// tried. That's distinct from the chain existing but every
+			// entry lacking the vision capability (Skipped is non-empty
+			// there): THAT case must still error, since falling back
+			// would silently serve an image turn on a model that can't
+			// see it. Any other unknown/misconfigured route keeps
+			// erroring — this fallback is vision-only, not generic
+			// route-aliasing.
+			if req.Route == "vision" && len(nre.Skipped) == 0 {
+				a.log.Warn("vision route unresolvable, falling back to default", "reason", nre.Error())
+				req.Route = "default"
+				attempts, err = snap.Resolve(req.Route, req.ModelHint, sticky, requiredVisionCapability(req.Messages)...)
+			}
+		}
+		if err != nil {
+			if errors.As(err, &nre) {
+				jsonError(w, http.StatusBadGateway, "no_route", nre.Error())
+				return
+			}
+			jsonError(w, http.StatusInternalServerError, "resolve_failed", err.Error())
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "resolve_failed", err.Error())
-		return
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -261,6 +297,13 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			res.streamed = true
 			send(ev)
 		case stream.EventDone:
+			// A stream that closes clean but produced no content (e.g.
+			// [DONE] with zero deltas) is not a success (D-044): tell the
+			// client before the terminal done, the same incomplete-then-
+			// done shape a cut-off stream already uses (see httpx.go).
+			if !res.streamed {
+				send(stream.StreamEvent{Type: stream.EventIncomplete, Text: "provider produced no output"})
+			}
 			// Attribute the serving provider on the terminal event so
 			// callers need no second lookup.
 			ev.Meta = &stream.Meta{
@@ -285,6 +328,14 @@ func finalStatus(res attemptResult) string {
 		return res.entry.Status
 	case res.failed, res.entry.ErrorCode != "":
 		return "error"
+	// A drained stream that produced no content is not a success (D-044):
+	// booking it "ok" would also poison LastSuccess stickiness (ledger.go
+	// filters status='ok'), sticking a session onto a provider that just
+	// returned nothing. res.streamed is set only by content events
+	// (chunk/reasoning/tool); EventUsage deliberately does not set it, so
+	// a usage-only stream still lands here.
+	case !res.streamed:
+		return "incomplete"
 	default:
 		return "ok"
 	}

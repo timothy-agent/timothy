@@ -673,3 +673,34 @@ func (s *Store) RecoverWorking(ctx context.Context) ([]Mission, error) {
 	}
 	return out, rows.Err()
 }
+
+// RecoverStaleWorking returns status='working' missions whose updated_at
+// is older than staleAfter — the periodic sweep's input. A mission stays
+// 'working' across every retry-eligible turn (stepWorkerFailed leaves
+// status untouched below the backoff threshold), so Drive's own
+// in-process loop is normally what keeps it moving; this is the backstop
+// for the rare case that loop stops advancing without a crash (no
+// process restart, so RecoverWorking's boot-only pass never sees it) —
+// same re-Drive path, just periodic and staleness-gated so it never
+// interferes with a mission genuinely mid-turn.
+func (s *Store) RecoverStaleWorking(ctx context.Context, staleAfter time.Duration) ([]Mission, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("missions recover stale working: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT `+missionColumns+` FROM missions
+		WHERE status = 'working' AND updated_at < now() - $1::interval`, staleAfter)
+	if err != nil {
+		return nil, fmt.Errorf("missions recover stale working: %w", err)
+	}
+	defer rows.Close()
+	out := []Mission{}
+	for rows.Next() {
+		m, err := scanMission(rows)
+		if err != nil {
+			return nil, fmt.Errorf("missions recover stale working: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

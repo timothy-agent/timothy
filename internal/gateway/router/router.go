@@ -55,6 +55,10 @@ type ProviderRow struct {
 	// hard timeout override for slow backends (e.g. a CPU-only remote
 	// Ollama). Zero leaves the driver's own default in place.
 	Timeout time.Duration
+	// Region comes from options.region (D-048) — the bedrock driver's AWS
+	// region, overridden per-key by the secret JSON's own "region" field
+	// (D-047) when set. Ignored by every other driver.
+	Region string
 }
 
 // ChainEntry is one step of a route chain.
@@ -140,12 +144,11 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 	for _, row := range provRows {
 		s.rows[row.ID] = row
 		s.byName[row.Name] = row
-		// credential_ref names an env var for API-key drivers, but the
-		// bedrock driver reuses it as an AWS profile name that the SDK
-		// resolves itself — an unresolved env lookup must not mark it
-		// unhealthy.
-		s.healthy[row.Name] = row.Driver == "bedrock" ||
-			row.CredentialRef == "" || lookup(row.CredentialRef) != ""
+		// credential_ref names an env var for API-key drivers; bedrock now
+		// requires the same ref to resolve in the secret store as static
+		// keys (D-047, profile/SSO mode removed) — so an unresolved ref
+		// marks every driver unhealthy alike.
+		s.healthy[row.Name] = row.CredentialRef == "" || lookup(row.CredentialRef) != ""
 		cfgs = append(cfgs, provider.Config{
 			Name:            row.Name,
 			Kind:            provider.Kind(row.Kind),
@@ -153,6 +156,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 			BaseURL:         row.BaseURL,
 			CredentialRef:   row.CredentialRef,
 			Headers:         row.Headers,
+			Region:          row.Region,
 			ReasoningEffort: row.ReasoningEffort,
 			Timeout:         row.Timeout,
 		})
@@ -201,9 +205,12 @@ type Sticky struct {
 // "ordered" routes, score order for "auto"/"price"/"latency" (recent
 // ledger stats + declared prices). Disabled, unhealthy, and
 // capability-lacking providers are skipped; each candidate is tried at
-// most once.
-func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error) {
-	required := requiredCapability(route)
+// most once. extra names additional capabilities every candidate must
+// also declare beyond the route's own requiredCapability — e.g.
+// CapVision when the request carries images (D-045); most callers pass
+// none.
+func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.Capability) ([]Attempt, error) {
+	required := append([]provider.Capability{requiredCapability(route)}, extra...)
 	var attempts []Attempt
 	var skipped []string
 	seen := map[string]bool{} // "name/model" dedupe across hint + sticky + chain
@@ -267,7 +274,7 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky) ([]Attempt, error)
 // candidate. It returns the built driver plus empty subject/reason when
 // usable, or a skip subject ("name", or "name/model" for capability
 // misses) and reason matching the NoRouteError wording.
-func (s *Snapshot) entryGate(row ProviderRow, model string, required provider.Capability) (provider.Provider, string, string) {
+func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.Capability) (provider.Provider, string, string) {
 	p, inRegistry := s.registry.Get(row.Name)
 	switch {
 	case !row.Enabled:
@@ -276,8 +283,11 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required provider.Ca
 		return nil, row.Name, fmt.Sprintf("unhealthy: credential %s unresolved", row.CredentialRef)
 	case !inRegistry:
 		return nil, row.Name, "not in registry"
-	case !attemptCapable(p, row, model, required):
-		return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", required)
+	}
+	for _, want := range required {
+		if !attemptCapable(p, row, model, want) {
+			return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", want)
+		}
 	}
 	return p, "", ""
 }
@@ -326,7 +336,7 @@ type ResolvedEntry struct {
 func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 	chain := s.routes[route]
 	w, scoredStrategy := strategyWeights[s.strategy[route]]
-	required := requiredCapability(route)
+	required := []provider.Capability{requiredCapability(route)}
 
 	// Gather each entry's raw factors first: normalization needs the
 	// best value across the candidate set.

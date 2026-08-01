@@ -182,6 +182,15 @@ describe('fromTranscript', () => {
     expect(fromTranscript([])).toEqual([])
   })
 
+  it('renders a turn_failed event as its own error item', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'user', text: 'do the thing', created_at: at },
+      { seq: 2, kind: 'error', text: 'every provider failed', created_at: at },
+    ])
+    expect(items.map((i) => i.role)).toEqual(['user', 'error'])
+    expect(items[1]).toMatchObject({ role: 'error', text: 'every provider failed' })
+  })
+
   it('exposes a still-unresolved replayed ask in permissions[]', () => {
     const items = fromTranscript([
       { seq: 1, kind: 'user', text: 'q', created_at: at },
@@ -296,6 +305,36 @@ describe('fromTranscript', () => {
     ])
     if (items[1].role === 'assistant') {
       expect(items[1].permissions).toEqual([])
+    }
+  })
+
+  it('maps a user item\'s Images into the chat item', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'user',
+        text: 'look at this',
+        images: [
+          { id: 'att-1', mime: 'image/png' },
+          { id: 'att-2', mime: 'image/jpeg' },
+        ],
+        created_at: at,
+      },
+    ])
+    expect(items[0]).toMatchObject({
+      role: 'user',
+      text: 'look at this',
+      images: [
+        { id: 'att-1', mime: 'image/png' },
+        { id: 'att-2', mime: 'image/jpeg' },
+      ],
+    })
+  })
+
+  it('omits images on a user item that carries none', () => {
+    const items = fromTranscript([{ seq: 1, kind: 'user', text: 'hello', created_at: at }])
+    if (items[0].role === 'user') {
+      expect(items[0].images).toBeUndefined()
     }
   })
 })

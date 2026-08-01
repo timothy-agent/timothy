@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, MissionEvent } from '../api/types'
@@ -14,6 +14,7 @@ vi.mock('../api/client', () => ({
   missionUsage: vi.fn(),
   resumeMission: vi.fn(),
   cancelMission: vi.fn(),
+  deleteMission: vi.fn(),
   answerMissionPermission: vi.fn(),
   listMissionFiles: vi.fn(),
   listSchedules: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../api/client', () => ({
 import {
   answerMissionPermission,
   cancelMission,
+  deleteMission,
   getMission,
   listConnectors,
   listMissionFiles,
@@ -114,6 +116,7 @@ function renderPage(id = 'm1') {
     <MemoryRouter initialEntries={[`/missions/${id}`]}>
       <Routes>
         <Route path="/missions/:id" element={<MissionDetail />} />
+        <Route path="/missions" element={<div>Missions list</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -308,6 +311,23 @@ describe('MissionDetail', () => {
     await screen.findByText('Fix the login bug')
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(cancelMission).toHaveBeenCalledWith('m1'))
+  })
+
+  it('hides delete for a non-terminal mission', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+  })
+
+  it('shows delete for a done mission and deletes on confirm', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(deleteMission).toHaveBeenCalledWith('m1'))
+    await screen.findByText('Missions list')
   })
 
   it('shows the push branch button for a coding mission with a branch', async () => {

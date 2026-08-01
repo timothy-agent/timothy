@@ -517,7 +517,7 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 		t.Fatalf("Chat 1: %v", err)
 	}
 	drain(t, ch)
-	waitFor(t, func() bool { return len(log.kinds("s1")) == 2 }) // session_started, user_message only
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 }) // session_started, user_message, turn_failed
 	// The slot only frees once persistTurn returns and turnDone runs,
 	// which is not synchronous with drain returning (D-042) — even on
 	// an errored turn, this must still happen so the session isn't
@@ -550,6 +550,76 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 	log.mu.Unlock()
 	if title != "second answer" {
 		t.Fatalf("title = %q, want the second (first-completed) exchange's text", title)
+	}
+}
+
+// TestTerminalErrorPersistsTurnFailed pins D-044: a turn that ends on
+// a terminal EventError with no partial text must not vanish silently
+// — relay used to drop the error after streaming it to the client,
+// leaving nothing durable. persistTurn now appends a KindTurnFailed
+// event carrying the error's code and message.
+func TestTerminalErrorPersistsTurnFailed(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventError, Err: &stream.StreamError{Code: "chain_exhausted", Message: "every provider failed"}},
+	}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindTurnFailed}
+	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
+	}
+
+	events, _ := log.Events(t.Context(), "s1")
+	var failed session.TurnFailed
+	if err := json.Unmarshal(events[2].Payload, &failed); err != nil {
+		t.Fatalf("decode turn_failed: %v", err)
+	}
+	if failed.Code != "chain_exhausted" || failed.Message != "every provider failed" {
+		t.Fatalf("turn_failed = %+v", failed)
+	}
+}
+
+// TestEmptyResponsePersistsTurnFailed pins D-044's other half: a turn
+// that reaches a clean EventDone with no text, no reasoning, and no
+// tool executions is not a success either — persistTurn must not write
+// a blank assistant_turn, and must instead persist evidence the model
+// answered with nothing at all.
+func TestEmptyResponsePersistsTurnFailed(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
+	}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindTurnFailed}
+	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds = %v, want %v (no blank assistant_turn)", kinds, want)
+	}
+
+	events, _ := log.Events(t.Context(), "s1")
+	var failed session.TurnFailed
+	if err := json.Unmarshal(events[2].Payload, &failed); err != nil {
+		t.Fatalf("decode turn_failed: %v", err)
+	}
+	if failed.Code != "empty_response" {
+		t.Fatalf("turn_failed.Code = %q, want empty_response", failed.Code)
 	}
 }
 
@@ -955,8 +1025,11 @@ func TestMemoryExtractFiresOnTextlessTurn(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
 	// Provider quirk: turn completes with reasoning/tool traffic but
-	// no text. The user's words still carry facts.
+	// no text. The user's words still carry facts. A tool execution
+	// keeps this a valid non-empty turn (D-044's empty-response guard
+	// keys on text+reasoning+tools all being empty).
 	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "c1", Name: "time", Status: "ok"}},
 		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
 	}}
 	svc := newService(gw, log)
@@ -1144,8 +1217,10 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 }
 
 // A failed attempt (no EventDone) leaves the user_message durable with
-// nothing after it — persistTurn only appends assistant_turn on
-// sawDone. Retry must reuse that message, not append a second one.
+// a turn_failed event after it (D-044) — persistTurn only appends
+// assistant_turn on sawDone. Retry must reuse that message, not append
+// a second one; turn_failed doesn't block retry (lastUserMessage only
+// stops at a completed assistant_turn).
 func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -1157,9 +1232,10 @@ func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	drain(t, ch)
-	waitFor(t, func() bool { return len(log.kinds("s1")) == 2 })
-	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join([]string{session.KindSessionStarted, session.KindUserMessage}, ",") {
-		t.Fatalf("kinds after failed attempt = %v, want a dangling user_message", kinds)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindTurnFailed}
+	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds after failed attempt = %v, want a dangling user_message plus turn_failed", kinds)
 	}
 	// The slot only frees once turnDone runs, not synchronously with
 	// drain returning (D-042) — an errored turn must still free it so
@@ -1175,10 +1251,10 @@ func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 		t.Fatalf("Retry: %v", err)
 	}
 	drain(t, ch)
-	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 4 })
 
 	kinds := log.kinds("s1")
-	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindAssistantTurn}
+	want = []string{session.KindSessionStarted, session.KindUserMessage, session.KindTurnFailed, session.KindAssistantTurn}
 	if strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("kinds after retry = %v, want %v (no duplicated user_message)", kinds, want)
 	}
@@ -1190,7 +1266,7 @@ func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 
 	events, _ := log.Events(t.Context(), "s1")
 	var turn session.AssistantTurn
-	if err := json.Unmarshal(events[2].Payload, &turn); err != nil {
+	if err := json.Unmarshal(events[3].Payload, &turn); err != nil {
 		t.Fatalf("decode turn: %v", err)
 	}
 	if turn.LLM.Message != "the answer" {

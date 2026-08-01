@@ -7,12 +7,15 @@ import (
 
 func TestBuildRegistry(t *testing.T) {
 	t.Parallel()
-	lookups := map[string]string{"ANTHROPIC_API_KEY": "sk-a", "XAI_API_KEY": "sk-x"}
+	lookups := map[string]string{
+		"ANTHROPIC_API_KEY": "sk-a", "XAI_API_KEY": "sk-x", // #nosec G101
+		"bedrock-static": `{"access_key_id":"AKIA123","secret_access_key":"shh"}`, // #nosec G101
+	}
 	r, err := Build([]Config{
 		// CredentialRef values are env var *names*, not secrets.
 		{Name: "anthropic", Kind: KindAPI, Driver: "anthropic", CredentialRef: "ANTHROPIC_API_KEY"},                             // #nosec G101
 		{Name: "xai-grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1", CredentialRef: "XAI_API_KEY"}, // #nosec G101
-		{Name: "bedrock", Kind: KindAPI, Driver: "bedrock", BaseURL: "us-east-1", CredentialRef: "sumonmselim"},
+		{Name: "bedrock", Kind: KindAPI, Driver: "bedrock", CredentialRef: "bedrock-static"},
 	}, func(ref string) string { return lookups[ref] })
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -96,12 +99,47 @@ func TestBuildErrors(t *testing.T) {
 			cfgs:    []Config{{Driver: "anthropic"}},
 			wantErr: "empty name",
 		},
+		{
+			name: "bedrock credential_ref resolves to malformed secret JSON",
+			cfgs: []Config{
+				{Name: "bedrock", Driver: "bedrock", CredentialRef: "bedrock-static"},
+			},
+			wantErr: "parse static credentials",
+		},
+		{
+			name: "bedrock credential_ref resolves to secret missing required fields",
+			cfgs: []Config{
+				{Name: "bedrock", Driver: "bedrock", CredentialRef: "bedrock-static"},
+			},
+			wantErr: "missing access_key_id or secret_access_key",
+		},
+		{
+			name: "bedrock credential_ref does not resolve",
+			cfgs: []Config{
+				{Name: "bedrock", Driver: "bedrock", CredentialRef: "bedrock-static"},
+			},
+			wantErr: "bedrock requires static keys in the secret store; AWS profile mode was removed",
+		},
+		{
+			name: "bedrock with empty credential_ref",
+			cfgs: []Config{
+				{Name: "bedrock", Driver: "bedrock"},
+			},
+			wantErr: "bedrock requires static keys in the secret store; AWS profile mode was removed",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := Build(tt.cfgs, noLookup)
+			lookup := noLookup
+			switch tt.name {
+			case "bedrock credential_ref resolves to malformed secret JSON":
+				lookup = func(string) string { return `{not json` }
+			case "bedrock credential_ref resolves to secret missing required fields":
+				lookup = func(string) string { return `{"access_key_id":"AKIA123"}` }
+			}
+			_, err := Build(tt.cfgs, lookup)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Build() error = %v, want containing %q", err, tt.wantErr)
 			}
@@ -109,9 +147,61 @@ func TestBuildErrors(t *testing.T) {
 	}
 }
 
+// TestBuildBedrockOptionsRegion covers D-048: options.region (Config.Region)
+// threads through to the built provider, and the secret JSON's own
+// region field still takes precedence per D-047.
+func TestBuildBedrockOptionsRegion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("options.region used when secret carries none", func(t *testing.T) {
+		t.Parallel()
+		secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
+		r, err := Build([]Config{
+			{Name: "bedrock", Driver: "bedrock", CredentialRef: "bedrock-static", Region: "eu-west-1"},
+		}, func(ref string) string {
+			if ref == "bedrock-static" {
+				return secretJSON
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		p, ok := r.Get("bedrock")
+		if !ok {
+			t.Fatal("bedrock missing")
+		}
+		b := p.(*Bedrock)
+		if b.cfg.Region != "eu-west-1" {
+			t.Fatalf("Region = %q, want eu-west-1", b.cfg.Region)
+		}
+	})
+
+	t.Run("secret region wins over options.region", func(t *testing.T) {
+		t.Parallel()
+		secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh","region":"ap-south-1"}` // #nosec G101
+		r, err := Build([]Config{
+			{Name: "bedrock", Driver: "bedrock", CredentialRef: "bedrock-static", Region: "eu-west-1"},
+		}, func(ref string) string {
+			if ref == "bedrock-static" {
+				return secretJSON
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		p, _ := r.Get("bedrock")
+		b := p.(*Bedrock)
+		if b.cfg.StaticCredentials.Region != "ap-south-1" {
+			t.Fatalf("StaticCredentials.Region = %q, want ap-south-1", b.cfg.StaticCredentials.Region)
+		}
+	})
+}
+
 func TestNewBedrock(t *testing.T) {
 	t.Parallel()
-	p := NewBedrock(BedrockConfig{Name: "bedrock-test", Region: "us-west-2", Profile: "sumonmselim"})
+	p := NewBedrock(BedrockConfig{Name: "bedrock-test", Region: "us-west-2"})
 	if p.Name() != "bedrock-test" {
 		t.Fatalf("name = %q", p.Name())
 	}
@@ -119,7 +209,7 @@ func TestNewBedrock(t *testing.T) {
 		t.Fatalf("kind = %v", p.Kind())
 	}
 	caps := p.Capabilities()
-	if len(caps) != 4 || caps[0] != CapChat || caps[2] != CapTools {
+	if len(caps) != 5 || caps[0] != CapChat || caps[2] != CapTools || caps[4] != CapVision {
 		t.Fatalf("caps = %v", caps)
 	}
 }

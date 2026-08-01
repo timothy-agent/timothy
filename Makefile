@@ -19,13 +19,16 @@ test:
 
 # Needs the compose stack up; reads POSTGRES_PASSWORD from deploy/.env
 # via --env-file (values never enter the make output). -count=1: test
-# caching must never mask a database-state change.
+# caching must never mask a database-state change. -p 1: packages share
+# one database; a package's intentionally-invalid provider fixture row
+# can fail every concurrent Store.Load in other packages, so run
+# sequentially.
 test-integration:
 	docker run --rm -v $(CURDIR):/src -w /src \
 		-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 		-e GOFLAGS=-buildvcs=false --network timothy_timothy \
 		--env-file deploy/.env \
-		$(GO_IMAGE) sh -c 'DATABASE_URL="postgres://timothy:$${POSTGRES_PASSWORD}@postgres:5432/timothy" go test -race -count=1 -tags integration ./internal/...'
+		$(GO_IMAGE) sh -c 'DATABASE_URL="postgres://timothy:$${POSTGRES_PASSWORD}@postgres:5432/timothy" go test -race -count=1 -tags integration -p 1 ./internal/...'
 
 # Streams one real completion per provider whose credentials are in
 # the calling environment; absent providers skip.

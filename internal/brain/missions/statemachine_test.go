@@ -230,6 +230,26 @@ func TestStep(t *testing.T) {
 	}
 }
 
+// TestStepReviewApproveEmitsPassedTrue guards against the web
+// timeline rendering an approved unit as "failed": stepReviewApprove
+// only ever fires on approval, so its mission.unit_verified event must
+// carry passed=true rather than an empty payload (which the renderer
+// treats as false).
+func TestStepReviewApproveEmitsPassedTrue(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseReview, Status: StatusWorking, LastUnit: false},
+		StepInput{Input: InputReviewApprove},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.unit_verified" {
+		t.Fatalf("Events = %+v, want exactly one mission.unit_verified event", got.Events)
+	}
+	passed, ok := got.Events[0].Payload["passed"].(bool)
+	if !ok || !passed {
+		t.Fatalf("Events[0].Payload = %+v, want passed=true", got.Events[0].Payload)
+	}
+}
+
 func TestParsePhase(t *testing.T) {
 	valid := []Phase{PhaseResearch, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed}
 	for _, p := range valid {

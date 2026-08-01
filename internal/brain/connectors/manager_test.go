@@ -45,6 +45,7 @@ func testManager(rows rowSource) *Manager {
 		builders: map[string]Builder{},
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sources:  map[string]Source{},
+		ready:    make(chan struct{}),
 	}
 }
 
@@ -172,5 +173,96 @@ func TestValidateRejectsBadInput(t *testing.T) {
 	ok.CredentialRef = "GITHUB_MCP_TOKEN"
 	if err := validate(ok); err != nil {
 		t.Fatalf("valid connector rejected: %v", err)
+	}
+}
+
+func isReady(m *Manager) bool {
+	select {
+	case <-m.Ready():
+		return true
+	default:
+		return false
+	}
+}
+
+func TestReadyNotClosedBeforeFirstReload(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: []Connector{
+		{ID: "1", Name: "github", Kind: "mcp", Enabled: true},
+	}})
+	if isReady(m) {
+		t.Fatal("Ready closed before any Reload ran")
+	}
+}
+
+func TestReadyClosesAfterSuccessfulReloadAndOnReloadHook(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: []Connector{
+		{ID: "1", Name: "github", Kind: "mcp", Enabled: true},
+	}})
+	m.RegisterBuilder("mcp", func(context.Context, Connector, Resolve) (Source, error) {
+		return &fakeSource{}, nil
+	})
+	var onReloadRanBeforeReady bool
+	m.SetOnReload(func(context.Context) {
+		onReloadRanBeforeReady = !isReady(m)
+	})
+
+	if err := m.Reload(t.Context()); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if !isReady(m) {
+		t.Fatal("Ready not closed after successful Reload")
+	}
+	if !onReloadRanBeforeReady {
+		t.Fatal("onReload hook must observe Ready still open — ready closes AFTER onReload")
+	}
+}
+
+func TestReadyClosesWithZeroConnectorsConfigured(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: nil})
+
+	if err := m.Reload(t.Context()); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if !isReady(m) {
+		t.Fatal("Ready must close even with zero connectors — ready means the load ran, not that connectors exist")
+	}
+}
+
+func TestFailedReloadDoesNotMarkReady(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{err: errors.New("db down")})
+
+	if err := m.Reload(t.Context()); err == nil {
+		t.Fatal("Reload with failing list: want error")
+	}
+	if isReady(m) {
+		t.Fatal("Ready closed after a failed Reload")
+	}
+}
+
+func TestWaitReadyRespectsContextCancel(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: []Connector{
+		{ID: "1", Name: "github", Kind: "mcp", Enabled: true},
+	}})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := m.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitReady after cancel = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitReadyReturnsAfterReload(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: nil})
+	if err := m.Reload(t.Context()); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if err := m.WaitReady(t.Context()); err != nil {
+		t.Fatalf("WaitReady after Reload = %v, want nil", err)
 	}
 }

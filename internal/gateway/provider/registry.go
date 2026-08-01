@@ -20,6 +20,9 @@ type Config struct {
 	// ReasoningEffort overrides per-request reasoning effort for the
 	// openaicompat driver only (D-040); anthropic and bedrock ignore it.
 	ReasoningEffort string
+	// Region comes from options.region (D-048) — the bedrock driver's AWS
+	// region; ignored by every other driver.
+	Region string
 }
 
 // Registry holds the built providers by name. It is immutable after
@@ -66,14 +69,26 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				ReasoningEffort: c.ReasoningEffort,
 			})
 		case "bedrock":
-			// base_url holds the AWS region; credential_ref names a local
-			// AWS profile (SSO dev) and must be EMPTY when an IAM role
-			// supplies credentials — a missing profile fails client setup.
+			// D-047/D-048: static keys in the secret store are the only
+			// supported auth — AWS profile/SSO mode was removed (a
+			// headless server has no ~/.aws). credential_ref MUST resolve
+			// and parse as static-credentials JSON; either failure is a
+			// Build error, never a silent fallback. Region comes from
+			// options.region (c.Region), with the secret JSON's own
+			// "region" field taking precedence when set (BedrockConfig
+			// handles that precedence).
+			if key == "" {
+				return nil, fmt.Errorf("registry: provider %q: bedrock requires static keys in the secret store; AWS profile mode was removed", c.Name)
+			}
+			sc, err := ParseStaticCredentials(key)
+			if err != nil {
+				return nil, fmt.Errorf("registry: provider %q: %w", c.Name, err)
+			}
 			p = NewBedrock(BedrockConfig{
-				Name:    c.Name,
-				Region:  c.BaseURL,
-				Profile: c.CredentialRef,
-				Timeout: c.Timeout,
+				Name:              c.Name,
+				Region:            c.Region,
+				StaticCredentials: sc,
+				Timeout:           c.Timeout,
 			})
 		default:
 			return nil, fmt.Errorf("registry: provider %q: unknown driver %q", c.Name, c.Driver)

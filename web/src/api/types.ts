@@ -80,6 +80,7 @@ export interface ChatRequest {
   route?: string
   model_hint?: string
   skill_hint?: string
+  attachments?: string[]
 }
 
 // --- session management (mirrors brain's /v1/sessions surface) ---
@@ -99,6 +100,13 @@ export interface UIBlock {
   text: string
 }
 
+// ImageRef is one attachment carried by a user transcript item — the
+// attachment's id (content hash) and MIME type, never the bytes.
+export interface ImageRef {
+  id: string
+  mime: string
+}
+
 // One executed tool call in the replay projection (digest only).
 export interface ToolExecution {
   call_id: string
@@ -115,9 +123,10 @@ export interface ToolExecution {
 // dropped by the server projection, same as the live client drops it).
 export interface TranscriptItem {
   seq: number
-  kind: 'user' | 'assistant' | 'tool' | 'permission' | 'compaction' | 'interrupted'
+  kind: 'user' | 'assistant' | 'tool' | 'permission' | 'compaction' | 'interrupted' | 'error'
   text?: string
   blocks?: UIBlock[]
+  images?: ImageRef[]
   tool?: ToolExecution
   permission?: PermissionRequestEvent
   provider?: string
@@ -206,6 +215,19 @@ export interface UsagePoint {
   unpriced_output_tokens: number
 }
 
+// GroupTotal is one group's totals over a whole range — the
+// non-time-bucketed sibling of UsagePoint, for tables/charts that rank
+// groups rather than plot them over time.
+export interface GroupTotal {
+  group: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
+}
+
 // One mission's total ledger footprint. unpriced_requests counts turns
 // whose cost is unknown (NULL in the ledger) — cost_usd is then a
 // floor, not the whole bill.
@@ -287,7 +309,7 @@ export interface AdminProvider {
   credential_ref: string
   headers: Record<string, string>
   enabled: boolean
-  options?: { reasoning_effort?: string; request_timeout?: string }
+  options?: { reasoning_effort?: string; request_timeout?: string; region?: string }
 }
 
 export interface ChainEntry {

@@ -8,8 +8,17 @@ import (
 
 // workSlotSweepInterval is how often the idle-over-cap sweep retries
 // claiming a work slot for missions parked idle because the
-// concurrency cap was full when they last tried.
+// concurrency cap was full when they last tried, and how often the
+// stale-working sweep below checks for a mission whose Drive loop
+// stopped advancing without a crash.
 const workSlotSweepInterval = 30 * time.Second
+
+// staleWorkingAfter bounds how long a 'working' mission may go without a
+// turn before the periodic sweep re-Drives it — well above any observed
+// legit single-turn duration (the slowest logged this project: ~9.4min,
+// a remote-model turn), so this never fires on a mission genuinely
+// mid-turn, only one whose Drive loop has actually stopped.
+const staleWorkingAfter = 15 * time.Minute
 
 // recoverWorkingRetries and recoverWorkingRetryDelay bound the boot
 // recovery pass's tolerance for Postgres not yet accepting connections
@@ -106,7 +115,8 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 
 // runWorkSlotSweep retries missions parked idle over the work-slot cap
 // every workSlotSweepInterval via ClaimWorkSlot, kicking off a Drive
-// for whichever gets claimed, and sweeps orphaned sandbox containers on
+// for whichever gets claimed, sweeps orphaned sandbox containers, and
+// re-Drives any 'working' mission stale past staleWorkingAfter — all on
 // the same tick. Runs until ctx is done — this call blocks, so
 // RecoverAndSweep's caller runs it in its own goroutine.
 func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, log *slog.Logger) {
@@ -118,6 +128,7 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 			return
 		case <-ticker.C:
 			sweepOrphanSandboxes(ctx, store, sandbox, log)
+			reDriveStaleWorking(ctx, d, store, log)
 			id, ok, err := store.ClaimWorkSlot(ctx, maxConcurrent)
 			if err != nil {
 				log.Error("work slot sweep: claim failed", "error", err)
@@ -132,5 +143,26 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 				}
 			}(id)
 		}
+	}
+}
+
+// reDriveStaleWorking re-Drives any mission RecoverStaleWorking reports.
+// Safe to call on a mission that is, in fact, still being actively
+// Driven: Driver.claimDriving makes a second concurrent Drive for the
+// same id a no-op, so this can never race or duplicate a live turn — it
+// only ever rescues a genuinely stopped loop.
+func reDriveStaleWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logger) {
+	missions, err := store.RecoverStaleWorking(ctx, staleWorkingAfter)
+	if err != nil {
+		log.Error("stale working sweep: list failed", "error", err)
+		return
+	}
+	for _, m := range missions {
+		log.Warn("stale working sweep: re-driving a mission whose Drive loop stopped advancing", "mission_id", m.ID)
+		go func(id string) {
+			if err := d.Drive(ctx, id); err != nil {
+				log.Error("stale working sweep: drive failed", "mission_id", id, "error", err)
+			}
+		}(m.ID)
 	}
 }

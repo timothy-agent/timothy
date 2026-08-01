@@ -73,7 +73,14 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			if err := decode(ev, &m); err != nil {
 				return nil, err
 			}
-			msgs = append(msgs, provider.Message{Role: "user", Content: m.Text})
+			msg := provider.Message{Role: "user", Content: m.Text}
+			// Refs only, no bytes (D-045): chat.runTurn resolves these
+			// into Images just before the gateway call. Projection stays
+			// store-free.
+			for _, img := range m.Images {
+				msg.ImageRefs = append(msg.ImageRefs, provider.ImageRef{ID: img.ID, Mime: img.Mime})
+			}
+			msgs = append(msgs, msg)
 		case KindAssistantTurn:
 			var t AssistantTurn
 			if err := decode(ev, &t); err != nil {
@@ -103,6 +110,15 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			if block := renderTurnMemory(&tm.TurnMemory); block != "" {
 				msgs = append(msgs, provider.Message{Role: "user", Content: block})
 			}
+		case KindTurnFailed:
+			var f TurnFailed
+			if err := decode(ev, &f); err != nil {
+				return nil, err
+			}
+			// A bracketed note, same register as the compaction/turn-memory
+			// asides above — the model sees that the prior turn failed
+			// without the failure reading as its own answer.
+			msgs = append(msgs, provider.Message{Role: "user", Content: fmt.Sprintf("[previous turn failed: %s]", f.Message)})
 		}
 	}
 	return msgs, nil
@@ -170,9 +186,10 @@ func renderTurnMemory(tm *TurnMemory) string {
 // TranscriptItem is one renderable unit of the UI replay.
 type TranscriptItem struct {
 	Seq        int64              `json:"seq"`
-	Kind       string             `json:"kind"` // user | assistant | tool | permission | compaction | interrupted
+	Kind       string             `json:"kind"` // user | assistant | tool | permission | compaction | interrupted | error
 	Text       string             `json:"text,omitempty"`
 	Blocks     []UIBlock          `json:"blocks,omitempty"`
+	Images     []ImageRef         `json:"images,omitempty"`
 	Provider   string             `json:"provider,omitempty"`
 	Model      string             `json:"model,omitempty"`
 	Usage      *stream.Usage      `json:"usage,omitempty"`
@@ -201,7 +218,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			if err := decode(ev, &m); err != nil {
 				return nil, err
 			}
-			item.Kind, item.Text = "user", m.Text
+			item.Kind, item.Text, item.Images = "user", m.Text, m.Images
 		case KindAssistantTurn:
 			var t AssistantTurn
 			if err := decode(ev, &t); err != nil {
@@ -245,6 +262,12 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 				return nil, err
 			}
 			item.Kind, item.Text = "interrupted", p.Partial
+		case KindTurnFailed:
+			var f TurnFailed
+			if err := decode(ev, &f); err != nil {
+				return nil, err
+			}
+			item.Kind, item.Text = "error", f.Message
 		default:
 			continue // session_started renders nothing
 		}

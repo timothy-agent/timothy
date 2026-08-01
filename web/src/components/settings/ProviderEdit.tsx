@@ -23,17 +23,18 @@ import {
   DialogTitle,
 } from '../ui/dialog'
 import { Input } from '../ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
 import { modelCatalog } from './modelCatalog'
-import { matchPreset } from './presets'
+import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { backendLabel, errText, stripPaste, secretField } from './util'
 
 // ProviderEdit is a provider's own page for the controls too heavy for
-// its summary card: rotating the stored key (or the Bedrock profile),
-// and declaring which models it serves.
+// its summary card: rotating the stored key, and declaring which
+// models it serves.
 export function ProviderEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -96,6 +97,7 @@ export function ProviderEdit() {
             defaultBackend={defaultBackend}
           />
         )}
+        {provider.driver === 'bedrock' && <RegionSection provider={provider} onChanged={refresh} />}
         {provider.driver === 'openaicompat' && (
           <ReasoningSection provider={provider} onChanged={refresh} />
         )}
@@ -140,6 +142,9 @@ function CredentialSection({
   const [configured, setConfigured] = useState(false)
   const [storedBackend, setStoredBackend] = useState('')
   const [secretValue, setSecretValue] = useState('')
+  const [accessKeyId, setAccessKeyId] = useState('')
+  const [secretAccessKey, setSecretAccessKey] = useState('')
+  const [sessionToken, setSessionToken] = useState('')
   const [savingSecret, setSavingSecret] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -171,12 +176,27 @@ function CredentialSection({
     })
   }
 
+  const bedrockKeyJSON = () =>
+    JSON.stringify({
+      access_key_id: stripPaste(accessKeyId.trim()),
+      secret_access_key: stripPaste(secretAccessKey.trim()),
+      ...(sessionToken.trim() ? { session_token: stripPaste(sessionToken.trim()) } : {}),
+    })
+
   const saveSecretValue = async () => {
-    if (!ref || !secretValue) return
+    if (!ref) return
+    if (bedrock) {
+      if (!accessKeyId.trim() || !secretAccessKey.trim()) return
+    } else if (!secretValue) {
+      return
+    }
     setSavingSecret(true)
     try {
-      await setSecret(ref, stripPaste(secretValue))
+      await setSecret(ref, bedrock ? bedrockKeyJSON() : stripPaste(secretValue))
       setSecretValue('')
+      setAccessKeyId('')
+      setSecretAccessKey('')
+      setSessionToken('')
       refreshSecretStatus()
       onChanged()
       toast.success('Key saved')
@@ -241,43 +261,74 @@ function CredentialSection({
         </Button>
       </div>
 
-      {bedrock ? (
-        <div>
-          <Field label="AWS profile">
-            <Input
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-              onBlur={saveRef}
-              placeholder="profile name"
-              className="mt-1.5 h-10"
-            />
-          </Field>
-          <p className="mt-1.5 text-sm text-muted-foreground">
-            Bedrock signs with the AWS credential chain mounted into the gateway — no key is
-            stored here, this only names the profile.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span
-              className={`rounded px-2 py-0.5 text-xs font-semibold uppercase ${
-                configured ? 'bg-good-soft text-good' : 'bg-warning-soft text-warning'
-              }`}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded px-2 py-0.5 text-xs font-semibold uppercase ${
+              configured ? 'bg-good-soft text-good' : 'bg-warning-soft text-warning'
+            }`}
+          >
+            {configured ? `stored · ${backendLabel(storedBackend)}` : 'not set'}
+          </span>
+          {configured && (
+            <button
+              type="button"
+              disabled={savingSecret}
+              onClick={() => void clearSecretValue()}
+              className="text-sm text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
             >
-              {configured ? `stored · ${backendLabel(storedBackend)}` : 'not set'}
-            </span>
-            {configured && (
-              <button
-                type="button"
-                disabled={savingSecret}
-                onClick={() => void clearSecretValue()}
-                className="text-sm text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
-              >
-                clear
-              </button>
-            )}
-          </div>
+              clear
+            </button>
+          )}
+        </div>
+        {bedrock ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                type="password"
+                value={accessKeyId}
+                onChange={(e) => setAccessKeyId(e.target.value)}
+                placeholder="AKIA…"
+                className="h-10"
+                autoComplete="off"
+                aria-label="Access Key ID"
+              />
+              <Input
+                type="password"
+                value={secretAccessKey}
+                onChange={(e) => setSecretAccessKey(e.target.value)}
+                placeholder={configured ? 'paste new secret key to rotate' : 'wJalrXUtnFEMI/K7MDEN...'}
+                className="h-10"
+                autoComplete="off"
+                aria-label="Secret Access Key"
+              />
+            </div>
+            <Button
+              variant="outline"
+              disabled={savingSecret || !accessKeyId.trim() || !secretAccessKey.trim() || !ref}
+              onClick={() => void saveSecretValue()}
+            >
+              Save
+            </Button>
+            <details className="pt-1">
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+                Advanced — session token
+              </summary>
+              <Input
+                type="password"
+                value={sessionToken}
+                onChange={(e) => setSessionToken(e.target.value)}
+                placeholder="paste session token"
+                className="mt-1.5 h-10"
+                autoComplete="off"
+                aria-label="Session Token"
+              />
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                Only needed for temporary STS credentials.
+              </p>
+            </details>
+          </>
+        ) : (
           <div className="flex gap-2">
             <Input
               type={secretField(defaultBackend ?? 'db', '').type}
@@ -294,33 +345,35 @@ function CredentialSection({
               Save
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">
-            {defaultBackend === 'vault'
+        )}
+        <p className="text-sm text-muted-foreground">
+          {bedrock
+            ? 'Create an IAM user with Bedrock access and generate an access key pair.'
+            : defaultBackend === 'vault'
               ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
               : defaultBackend === 'asm'
                 ? 'The key stays in AWS Secrets Manager; only its name is saved. The default backend is set in the Secrets tab.'
                 : defaultBackend === 'file'
                   ? 'The key stays in the mounted file; only its filename is saved. The default backend is set in the Secrets tab.'
                   : 'Encrypted with the master key and kept in Timothy’s database.'}
+        </p>
+        <details className="pt-1">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+            Advanced — reference name
+          </summary>
+          <Input
+            value={ref}
+            onChange={(e) => setRef(e.target.value)}
+            onBlur={saveRef}
+            placeholder="name (e.g. ANTHROPIC_API_KEY)"
+            className="mt-1.5 h-10"
+          />
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Storage name for this provider’s key — never the key itself. Change it only to
+            share or repoint an already-stored secret.
           </p>
-          <details className="pt-1">
-            <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-              Advanced — reference name
-            </summary>
-            <Input
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-              onBlur={saveRef}
-              placeholder="name (e.g. ANTHROPIC_API_KEY)"
-              className="mt-1.5 h-10"
-            />
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Storage name for this provider’s key — never the key itself. Change it only to
-              share or repoint an already-stored secret.
-            </p>
-          </details>
-        </div>
-      )}
+        </details>
+      </div>
     </section>
   )
 }
@@ -336,7 +389,16 @@ function CredentialSection({
 function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
   const [saving, setSaving] = useState(false)
   const [timeout, setTimeoutValue] = useState(provider.options?.request_timeout ?? '')
+  const [timeoutSaving, setTimeoutSaving] = useState(false)
   const disabled = provider.options?.reasoning_effort === 'none'
+
+  // provider is refetched (via onChanged/refresh) whenever ANY field on
+  // this page saves, including ones outside this section — without this
+  // sync the box silently keeps showing what you typed even after a
+  // sibling edit reloads the provider out from under it.
+  useEffect(() => {
+    setTimeoutValue(provider.options?.request_timeout ?? '')
+  }, [provider.options?.request_timeout])
 
   const toggle = async (on: boolean) => {
     setSaving(true)
@@ -357,6 +419,7 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
     const trimmed = timeout.trim()
     if (trimmed === (provider.options?.request_timeout ?? '')) return
     const { request_timeout: _requestTimeout, ...rest } = provider.options ?? {}
+    setTimeoutSaving(true)
     try {
       await patchProvider(provider.id, {
         options: trimmed ? { ...rest, request_timeout: trimmed } : rest,
@@ -365,6 +428,8 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
     } catch (err) {
       setTimeoutValue(provider.options?.request_timeout ?? '')
       toast.error('Could not update request timeout', { description: errText(err) })
+    } finally {
+      setTimeoutSaving(false)
     }
   }
 
@@ -377,14 +442,71 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
           {saving ? 'Saving…' : 'Disable reasoning ("thinking") for every request to this provider.'}
         </span>
       </label>
-      <Field label="Request timeout" hint='Go duration, e.g. "20m" — empty uses the default'>
+      <Field
+        label="Request timeout"
+        hint={
+          timeoutSaving
+            ? 'Saving…'
+            : 'Go duration, e.g. "20m" — empty uses the default. Enter or click away to save.'
+        }
+      >
         <Input
           value={timeout}
           onChange={(e) => setTimeoutValue(e.target.value)}
           onBlur={() => void saveTimeout()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.currentTarget.blur()
+            }
+          }}
+          disabled={timeoutSaving}
           placeholder="5m"
           className="mt-1.5 h-10 max-w-40"
         />
+      </Field>
+    </section>
+  )
+}
+
+// RegionSection lets a bedrock provider pick its AWS region
+// (options.region, D-048) — defaults to us-east-1 when unset, same
+// default the gateway driver applies. Overridden per-key by the secret
+// JSON's own "region" field (D-047), which this dropdown never touches.
+function RegionSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
+  const [saving, setSaving] = useState(false)
+  const region = provider.options?.region ?? 'us-east-1'
+
+  const save = async (value: string) => {
+    if (value === region) return
+    setSaving(true)
+    try {
+      await patchProvider(provider.id, {
+        options: { ...provider.options, region: value },
+      })
+      onChanged()
+    } catch (err) {
+      toast.error('Could not update region', { description: errText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-sm font-semibold">Region</h2>
+      <Field label="AWS region" hint={saving ? 'Saving…' : undefined}>
+        <Select value={region} onValueChange={(v) => void save(v)}>
+          <SelectTrigger className="mt-1.5 h-10 w-full max-w-72">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {bedrockRegions.map((r) => (
+              <SelectItem key={r.value} value={r.value}>
+                {r.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
     </section>
   )
@@ -398,6 +520,7 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
   const [fetched, setFetched] = useState<string[]>([])
   const [entry, setEntry] = useState('')
   const [embeddings, setEmbeddings] = useState(false)
+  const [vision, setVision] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const declared = useMemo(() => new Set(provider.models.map((m) => m.id)), [provider.models])
@@ -440,15 +563,17 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
     const trimmed = entry.trim()
     if (!trimmed || declared.has(trimmed)) return
     const prices = (modelCatalog[preset.id] ?? []).find((m) => m.id === trimmed)?.prices
+    const capabilities = [...(embeddings ? ['embeddings'] : []), ...(vision ? ['vision'] : [])]
     const model: AdminModel = {
       id: trimmed,
-      ...(embeddings ? { capabilities: ['embeddings'] } : {}),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
       ...(prices ? { prices } : {}),
     }
     const models = [...provider.models, model]
     await patchModels(models, embeddings ? undefined : provider.default_model || trimmed)
     setEntry('')
     setEmbeddings(false)
+    setVision(false)
   }
 
   const remove = async (id: string) => {
@@ -471,6 +596,11 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
             {m.capabilities?.includes('embeddings') && (
               <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
                 embeddings
+              </span>
+            )}
+            {m.capabilities?.includes('vision') && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
+                vision
               </span>
             )}
             {provider.default_model === m.id ? (
@@ -528,6 +658,15 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
           className="size-4 rounded border-border"
         />
         Embeddings model — routes the embedding route to this instead of chat
+      </label>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={vision}
+          onChange={(e) => setVision(e.target.checked)}
+          className="size-4 rounded border-border"
+        />
+        Vision — this model can accept image attachments
       </label>
     </section>
   )

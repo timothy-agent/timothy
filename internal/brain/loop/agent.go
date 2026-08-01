@@ -114,6 +114,14 @@ type Agent struct {
 	// next turn without a restart; an empty result means the feature is
 	// currently off and no flip happens.
 	forceRouteBySuffix map[string]func(context.Context) string
+
+	// waitToolsReady, if set, runs at the start of every turn before the
+	// tool snapshot (D-043): it lets main.go block briefly on the
+	// connectors.Manager's first successful load without loop importing
+	// the connectors package (layering). nil = no-op — the default until
+	// main.go wires it, and always a no-op once the manager is ready
+	// (the hook should return instantly by then).
+	waitToolsReady func(context.Context)
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
@@ -177,6 +185,12 @@ func (a *Agent) SetForceRoute(suffix string, route func(context.Context) string)
 	a.forceRouteBySuffix[suffix] = route
 }
 
+// SetWaitToolsReady registers the turn-entry readiness hook (see the
+// waitToolsReady field doc). Startup-time only.
+func (a *Agent) SetWaitToolsReady(fn func(context.Context)) {
+	a.waitToolsReady = fn
+}
+
 // Request is one turn's loop input.
 type Request struct {
 	SessionID string
@@ -223,6 +237,10 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		case out <- ev:
 		case <-ctx.Done():
 		}
+	}
+
+	if a.waitToolsReady != nil {
+		a.waitToolsReady(ctx)
 	}
 
 	exec, defs := a.toolset()
@@ -313,6 +331,12 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		var calls []provider.ToolCall
 		terminal := stream.StreamEvent{}
 		emittedThisAttempt := false
+		// incompleteEv is sticky across this attempt: the gateway sends
+		// incomplete THEN done for a cut-off or zero-output stream
+		// (D-044), and terminal is last-write-wins — done would
+		// otherwise clobber incomplete and the abnormal-end guard below
+		// would never fire. done cannot clear this.
+		var incompleteEv *stream.StreamEvent
 
 		for attempt := 0; ; attempt++ {
 			upstream, err := a.gw.Stream(ctx, sreq)
@@ -334,6 +358,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			calls = nil
 			terminal = stream.StreamEvent{}
 			emittedThisAttempt = false
+			incompleteEv = nil
 			for ev := range upstream {
 				switch ev.Type {
 				case stream.EventChunk:
@@ -365,7 +390,11 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 					if ev.Meta != nil {
 						lastMeta = ev.Meta
 					}
-				case stream.EventIncomplete, stream.EventError:
+				case stream.EventIncomplete:
+					terminal = ev
+					evCopy := ev
+					incompleteEv = &evCopy
+				case stream.EventError:
 					terminal = ev
 				}
 			}
@@ -383,10 +412,16 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		}
 
 		// Abnormal step end: surface it and stop — the relay persists
-		// the partial exactly as before.
-		if terminal.Type != stream.EventDone {
+		// the partial exactly as before. incompleteEv keeps a cut-off or
+		// zero-output stream on this path even though done arrived after
+		// incomplete and would otherwise look like a clean finish; it
+		// carries the incomplete event's own text instead of the terminal
+		// done event's (near-empty) content.
+		if terminal.Type != stream.EventDone || incompleteEv != nil {
 			if terminal.Type == "" {
 				terminal = stream.StreamEvent{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"}
+			} else if incompleteEv != nil {
+				terminal = *incompleteEv
 			}
 			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
 			emit(terminal)

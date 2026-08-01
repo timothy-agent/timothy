@@ -19,6 +19,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/api"
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -66,6 +67,11 @@ const (
 	// compaction pass so a slow extraction degrades to empty facts
 	// instead of starving the summarize.
 	preCompactExtractBudget = 45 * time.Second
+	// connectorReadyWait bounds how long a turn waits at entry for the
+	// first connector load (D-043) — long enough to absorb the DB pool
+	// warming at boot, short enough that a turn never meaningfully hangs
+	// on it.
+	connectorReadyWait = 15 * time.Second
 )
 
 func main() {
@@ -142,6 +148,10 @@ func main() {
 
 	searxngURL := os.Getenv("SEARXNG_URL")
 	markitdownURL := os.Getenv("MARKITDOWN_URL")
+	whisperURL := os.Getenv("WHISPER_URL")
+	if whisperURL == "" {
+		app.Log.Warn("WHISPER_URL not set; the web mic button's /v1/transcribe endpoint is unavailable")
+	}
 
 	toolCalls := app.Metrics.NewCounterVec("tool_calls_total",
 		"Tool executions by tool name and outcome.", "tool", "outcome")
@@ -179,6 +189,25 @@ func main() {
 			swapAgentTools(agent, builtinSet, conns, app.Log, toolCalls)
 		})
 		go runConnectorReload(ctx, conns, app.Log)
+		app.AddCheck("connectors", func() httpserver.Check {
+			select {
+			case <-conns.Ready():
+				return httpserver.Check{Status: "ok"}
+			default:
+				return httpserver.Check{Status: "degraded", Detail: "initial connector load not yet complete"}
+			}
+		})
+		// Only the first turn after boot pays this: once conns.Ready()
+		// closes, WaitReady returns instantly on every later call. Bounded
+		// so a turn NEVER blocks indefinitely — a slow/never-ready load
+		// degrades to builtins-only instead of hanging the turn.
+		agent.SetWaitToolsReady(func(ctx context.Context) {
+			wctx, cancel := context.WithTimeout(ctx, connectorReadyWait)
+			defer cancel()
+			if err := conns.WaitReady(wctx); err != nil {
+				app.Log.Warn("connector tools not yet loaded; turn proceeds with builtin tools only")
+			}
+		})
 	}
 
 	// SANDBOXD_URL empty (MISSION_SANDBOX_IMAGE unset in compose) keeps a
@@ -285,10 +314,19 @@ func main() {
 		return memclient.RenderBlock(memories)
 	})
 
+	attachmentStore := buildAttachments(app.DB, app.Log)
+	// Nil-safe: a nil *attachments.Store boxed into the AttachmentStore
+	// interface would be a non-nil interface value, breaking chat.go's
+	// `s.attachments == nil` gate — so this only wires when non-nil,
+	// same guard shape as the missionHub check above.
+	if attachmentStore != nil {
+		svc.SetAttachments(attachmentStore)
+	}
+
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, missionHub, token, app.Log)
+		missionWorkspace, resolveSecret, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -311,6 +349,18 @@ func buildSecretStore(db *pgpool.Pool, log *slog.Logger) (*secretstore.Store, er
 		return nil, fmt.Errorf("secret store init failed: %w", err)
 	}
 	return secrets, nil
+}
+
+// buildAttachments wires the image-attachment store (D-045).
+// ATTACHMENTS_DIR unset means the feature is off: no store, chat
+// rejects attachment refs, and the API surface stays unmounted.
+func buildAttachments(db *pgpool.Pool, log *slog.Logger) *attachments.Store {
+	dir := os.Getenv("ATTACHMENTS_DIR")
+	if dir == "" {
+		log.Info("ATTACHMENTS_DIR not set; image attachments disabled")
+		return nil
+	}
+	return attachments.New(dir, db)
 }
 
 // buildConnectors wires the integration control plane. secrets is
@@ -609,13 +659,31 @@ func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors
 	log.Info("agent tool surface updated", "tools", len(defs))
 }
 
+// initialReloadRetry bounds the wait between initial-load retries: the
+// DB pool is often still warming right at boot (ErrDegraded), and
+// falling back to the full-minute ticker for that first success would
+// leave chat turns running builtins-only tools for up to a minute.
+const initialReloadRetry = 5 * time.Second
+
 // runConnectorReload loads connector sources at startup and keeps
 // retrying/refreshing on a slow tick, mirroring the gateway's snapshot
 // poll: a DB that wasn't ready at boot, or a row edited outside the
-// admin API, converges within a minute.
+// admin API, converges within a minute. The first load retries on the
+// short initialReloadRetry cadence until it succeeds once, THEN falls
+// into the normal minute ticker — later reloads don't need the fast
+// path since the agent already has a tool surface.
 func runConnectorReload(ctx context.Context, conns *connectors.Manager, log *slog.Logger) {
-	if err := conns.Reload(ctx); err != nil {
-		log.Warn("initial connector load failed; will retry", "error", err)
+	for {
+		if err := conns.Reload(ctx); err != nil {
+			log.Warn("initial connector load failed; will retry", "error", err)
+		} else {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialReloadRetry):
+		}
 	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
 func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
@@ -256,6 +258,84 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	}
 }
 
+// TestResolveVisionRejectsModelDeclaringOnlyChat confirms a model row
+// that lists capabilities WITHOUT "vision" is skipped when the caller
+// asks for CapVision as an extra requirement (D-045) — the model's own
+// declaration wins over the driver's Capabilities() honesty.
+func TestResolveVisionRejectsModelDeclaringOnlyChat(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+		DefaultModel: "haiku", CredentialRef: "A_KEY", Enabled: true,
+		Models: []ModelInfo{
+			{ID: "haiku", Capabilities: []string{"chat", "streaming", "tools"}}, // no vision
+			{ID: "sonnet"}, // undeclared: driver decides
+		},
+	}}
+	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "haiku"},
+		{ProviderID: "p1", Model: "sonnet"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// haiku's explicit capability list omits vision: skipped. sonnet is
+	// undeclared, so the anthropic driver's own CapVision decides: kept.
+	if got := attemptNames(attempts); got != "anthropic/sonnet" {
+		t.Fatalf("attempts = %s, want anthropic/sonnet only", got)
+	}
+}
+
+// TestResolveVisionFallsToDriverWhenModelUndeclared confirms a model
+// with NO capability list at all is judged by the driver alone, same
+// rule attemptCapable already applies to every other capability.
+func TestResolveVisionFallsToDriverWhenModelUndeclared(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys()) // "sonnet" and "grok-4" both undeclared
+
+	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// Both the anthropic and openaicompat drivers declare CapVision;
+	// neither model row restricts it, so both survive same as Resolve
+	// without the extra requirement.
+	if got := attemptNames(attempts); got != "anthropic/sonnet,grok/grok-4" {
+		t.Fatalf("attempts = %s", got)
+	}
+}
+
+// TestResolveVisionExhaustionMentionsVision confirms a chain with no
+// vision-capable entry surfaces NoRouteError text naming "vision" —
+// the sensitive-pinned-session-to-local-non-vision-model case reads
+// clearly rather than a generic "no usable provider".
+func TestResolveVisionExhaustionMentionsVision(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "local", Kind: "api", Driver: "anthropic",
+		DefaultModel: "haiku", CredentialRef: "A_KEY", Enabled: true,
+		Models: []ModelInfo{{ID: "haiku", Capabilities: []string{"chat", "streaming"}}}, // no vision
+	}}
+	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "haiku"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	_, err = snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	if err == nil || !strings.Contains(err.Error(), "lacks vision capability") {
+		t.Fatalf("err = %v, want a reason mentioning vision", err)
+	}
+}
+
 func TestProvidersSortedByName(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())
@@ -297,31 +377,103 @@ func TestRoutesListing(t *testing.T) {
 	}
 }
 
-func TestBedrockHealthyWithoutEnvCredential(t *testing.T) {
+// TestBedrockUnresolvedCredentialRefFailsBuild covers D-048: AWS
+// profile/SSO mode is gone, so a bedrock row whose credential_ref does
+// not resolve in the secret store is a hard BuildSnapshot error, not a
+// degraded-but-usable provider.
+func TestBedrockUnresolvedCredentialRefFailsBuild(t *testing.T) {
 	t.Parallel()
-	// bedrock's credential_ref is an AWS profile name, not an env var:
-	// the SDK resolves it, so an unresolvable lookup must not sideline
-	// the provider.
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
-		BaseURL: "us-east-1", DefaultModel: "us.amazon.nova-pro-v1:0",
-		CredentialRef: "some-aws-profile", Enabled: true,
+		DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "missing-secret", Enabled: true,
 		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
 	routeRows := []RouteRow{{Name: "embedding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	_, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "bedrock requires static keys in the secret store") {
+		t.Fatalf("BuildSnapshot err = %v, want a clear static-keys-required message", err)
+	}
+}
+
+// TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough
+// covers D-047 end to end at the router layer: when a bedrock row's
+// credential_ref resolves in the secret store, the resolved JSON value
+// must reach the bedrock constructor and populate StaticCredentials —
+// the same lookup plumbing every other driver's APIKey field uses.
+func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.T) {
+	t.Parallel()
+	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "bedrock-static", Enabled: true,
+		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
+	}}
+	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string {
+		if ref == "bedrock-static" {
+			return secretJSON
+		}
+		return ""
+	})
 	if err != nil {
 		t.Fatalf("BuildSnapshot: %v", err)
 	}
 
-	attempts, err := snap.Resolve("embedding", "", Sticky{})
+	attempts, err := snap.Resolve("chat", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if len(attempts) != 1 || attempts[0].ProviderName != "bedrock" {
 		t.Fatalf("attempts = %v, want bedrock", attempts)
+	}
+	b, ok := attempts[0].Provider.(*provider.Bedrock)
+	if !ok {
+		t.Fatalf("provider type = %T, want *provider.Bedrock", attempts[0].Provider)
+	}
+	if !b.HasStaticCredentials() {
+		t.Fatal("resolved secret JSON must reach the bedrock constructor as StaticCredentials")
+	}
+}
+
+// TestBedrockOptionsRegionThreadsToProvider covers D-048: a bedrock
+// row's Region (as parsed from options.region by applyProviderOptions in
+// store.go) reaches the built provider without failing resolution —
+// registry_test.go's TestBuildBedrockOptionsRegion checks the resulting
+// BedrockConfig.Region value directly at the provider.Build layer.
+func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
+	t.Parallel()
+	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		DefaultModel: "us.amazon.nova-pro-v1:0",
+		CredentialRef: "bedrock-static", Enabled: true, Region: "ap-southeast-2",
+		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
+	}}
+	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
+	}, Enabled: true}}
+	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string {
+		if ref == "bedrock-static" {
+			return secretJSON
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	attempts, err := snap.Resolve("chat", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, ok := attempts[0].Provider.(*provider.Bedrock); !ok {
+		t.Fatalf("provider type = %T, want *provider.Bedrock", attempts[0].Provider)
 	}
 }
 

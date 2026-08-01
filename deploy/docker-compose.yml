@@ -56,6 +56,19 @@ services:
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng.
 
+  whisper:
+    <<: *service
+    build:
+      context: ../whisper-svc
+      args:
+        WHISPER_MODEL: ${WHISPER_MODEL:-small}
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+    # internal-only: no published ports, no auth; brain is the sole
+    # caller, same trust boundary as searxng/markitdown. No user-facing
+    # knob in deploy/env.example — WHISPER_MODEL defaults to "small"
+    # here and is only worth changing per-deployment, not per-user.
+
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and
   # register http://host.docker.internal:11434/v1 in Settings as a
@@ -98,13 +111,20 @@ services:
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to
       # markdown/text; compose-internal only.
       MARKITDOWN_URL: http://markitdown:8000
+      # Local speech-to-text for the web mic button; compose-internal
+      # only, audio never leaves the box.
+      WHISPER_URL: http://whisper:8001
       # sandboxd's internal address — set only when MISSION_SANDBOX_IMAGE
       # is configured (sandboxd itself always runs; without an image it
       # just idles degraded). Empty keeps the original in-process exec
       # behavior; brain never touches the Docker socket directly.
       SANDBOXD_URL: ${MISSION_SANDBOX_IMAGE:+http://sandboxd:8083}
+      # Content-addressed image attachment bytes (metadata only in
+      # Postgres); compose-internal path, not user-facing.
+      ATTACHMENTS_DIR: /attachments
     volumes:
       - workspace:/workspace
+      - attachments:/attachments
     ports:
       - "${BRAIN_PORT:-8300}:8080"
     depends_on:
@@ -113,6 +133,8 @@ services:
       searxng:
         condition: service_started
       markitdown:
+        condition: service_started
+      whisper:
         condition: service_started
       sandboxd:
         condition: service_started
@@ -190,15 +212,6 @@ services:
       # credentials are configured in Settings, not env — this key is
       # what decrypts them.
       TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in deploy/.env}
-    # Bedrock (driver 'bedrock') reads the AWS default credential
-    # chain. Local dev: run `aws sso login --profile <name>` on the
-    # host and set the bedrock provider's credential_ref to that
-    # profile. Config and credentials mount read-only; the SDK rotates
-    # SSO access tokens itself and must write them back, so the token
-    # cache alone is writable.
-    volumes:
-      - ${HOME}/.aws:/home/nonroot/.aws:ro
-      - ${HOME}/.aws/sso/cache:/home/nonroot/.aws/sso/cache
     # internal-only: no published ports
 
   memoryd:
@@ -270,6 +283,7 @@ volumes:
   pgdata:
   web_node_modules:
   workspace:
+  attachments:
 
 networks:
   timothy:

@@ -14,6 +14,19 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
+// renderForSummary flattens one message to plain text for extraction/
+// summarization prompts: image content never rides as bytes here (only
+// runTurn resolves ImageRefs into base64, and only just before the
+// gateway call for the real turn) — a ref becomes a short textual note
+// instead (D-045).
+func renderForSummary(m provider.Message) string {
+	text := m.Content
+	for range m.ImageRefs {
+		text += " [image attached]"
+	}
+	return m.Role + ": " + text + "\n\n"
+}
+
 // Gateway is the slice of the gateway client the compactor needs.
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
@@ -167,7 +180,7 @@ func (c *Compactor) MaybeCompact(ctx context.Context, sessionID string) error {
 	if c.extract != nil {
 		var b strings.Builder
 		for _, m := range toSummarize {
-			b.WriteString(m.Role + ": " + m.Content + "\n\n")
+			b.WriteString(renderForSummary(m))
 		}
 		extractRoute := ""
 		if sensitive && c.sensitive != nil && c.sensitive.Route != nil {
@@ -295,7 +308,7 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 	}
 	var b strings.Builder
 	for _, m := range msgs {
-		b.WriteString(m.Role + ": " + m.Content + "\n\n")
+		b.WriteString(renderForSummary(m))
 	}
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
 		Route: route,

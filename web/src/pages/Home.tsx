@@ -7,7 +7,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useAgents } from '../components/AgentPicker'
-import { Composer } from '../components/Composer'
+import { Composer, type PendingAttachment } from '../components/Composer'
 import { usePendingMemories } from '../lib/memory'
 
 const agentKey = 'timothy.agent'
@@ -16,12 +16,15 @@ const routeKey = 'timothy.route'
 // ChatIntent carries a home-screen action into the chat page: `send`
 // fires immediately, `draft` only prefills the composer, `skillHint`
 // pins a skill chip (deterministic — never text the user can mangle).
+// `attachments` rides alongside `send` only — images uploaded from the
+// home composer before Chat.tsx even mounts.
 export interface ChatIntent {
   send?: string
   draft?: string
   agent?: string
   route?: string
   skillHint?: string
+  attachments?: PendingAttachment[]
 }
 
 // Home is the workspace launcher: a hero composer that starts a chat,
@@ -35,6 +38,7 @@ export function Home() {
   const [draft, setDraft] = useState('')
   const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
   const [route, setRoute] = useState(() => localStorage.getItem(routeKey) ?? '')
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
 
   const pickAgent = (a: string) => {
     setAgent(a)
@@ -48,8 +52,16 @@ export function Home() {
 
   const send = () => {
     const message = draft.trim()
-    if (!message) return
-    navigate('/chat', { state: { send: message, agent, route: route || undefined } satisfies ChatIntent })
+    const ready = attachments.filter((a) => !a.uploading)
+    if (!message && ready.length === 0) return
+    navigate('/chat', {
+      state: {
+        send: message,
+        agent,
+        route: route || undefined,
+        attachments: ready.length > 0 ? ready : undefined,
+      } satisfies ChatIntent,
+    })
   }
 
   const openAgent = (name: string) => {
@@ -75,6 +87,8 @@ export function Home() {
             onRoute={pickRoute}
             autoFocus
             placeholder="Ask anything…"
+            attachments={attachments}
+            onAttachments={setAttachments}
           />
         </div>
       </div>

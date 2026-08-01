@@ -60,6 +60,40 @@ func TestLLMContextBasicConversation(t *testing.T) {
 	}
 }
 
+// TestLLMContextCarriesImageRefsNotBytes confirms a user_message event
+// with attached images projects into ImageRefs (id+mime only) on the
+// provider.Message — never into Content, and never into Images (which
+// only chat.runTurn fills, from the store, at request-build time).
+// Projection has no store dependency; this pins that it stays that way.
+func TestLLMContextCarriesImageRefsNotBytes(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		ev(t, 1, KindSessionStarted, SessionStarted{}),
+		ev(t, 2, KindUserMessage, UserMessage{
+			Text:   "what is this?",
+			Images: []ImageRef{{ID: "abc123", Mime: "image/png"}},
+		}),
+	}
+
+	msgs, err := LLMContext(events, 100_000)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %+v, want 1", msgs)
+	}
+	m := msgs[0]
+	if m.Content != "what is this?" {
+		t.Fatalf("Content = %q, want the text only (no image data)", m.Content)
+	}
+	if len(m.Images) != 0 {
+		t.Fatalf("Images = %+v, want empty (projection never resolves bytes)", m.Images)
+	}
+	if len(m.ImageRefs) != 1 || m.ImageRefs[0].ID != "abc123" || m.ImageRefs[0].Mime != "image/png" {
+		t.Fatalf("ImageRefs = %+v, want one ref to abc123/image/png", m.ImageRefs)
+	}
+}
+
 func TestLLMContextSerializesTurnMemory(t *testing.T) {
 	t.Parallel()
 	events := []Event{
@@ -193,6 +227,30 @@ func TestLLMContextIgnoresToolExecutions(t *testing.T) {
 	}
 }
 
+// TestLLMContextRendersTurnFailed pins D-044: a persisted turn_failed
+// event rides the LLM context as a bracketed user-role note (same
+// register as compaction/turn-memory asides), never as an assistant
+// message the model might imitate.
+func TestLLMContextRendersTurnFailed(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		user(t, 1, "do the thing"),
+		ev(t, 2, KindTurnFailed, TurnFailed{Code: "chain_exhausted", Message: "every provider failed"}),
+		user(t, 3, "try again"),
+	}
+
+	msgs, err := LLMContext(events, 0)
+	if err != nil {
+		t.Fatalf("LLMContext: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %+v, want 3 (user, failed note, user)", msgs)
+	}
+	if msgs[1].Role != "user" || !strings.Contains(msgs[1].Content, "every provider failed") {
+		t.Fatalf("turn_failed note = %+v", msgs[1])
+	}
+}
+
 func TestUITranscript(t *testing.T) {
 	t.Parallel()
 	events := []Event{
@@ -223,6 +281,54 @@ func TestUITranscript(t *testing.T) {
 	}
 	if items[2].Provider != "prov" || len(items[2].Blocks) != 1 {
 		t.Fatalf("assistant item = %+v", items[2])
+	}
+}
+
+// TestUITranscriptCarriesImages confirms a user_message's image refs
+// surface on TranscriptItem.Images for UI replay (additive field; the
+// web PR renders thumbnails from it later).
+func TestUITranscriptCarriesImages(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		ev(t, 1, KindSessionStarted, SessionStarted{}),
+		ev(t, 2, KindUserMessage, UserMessage{
+			Text:   "look",
+			Images: []ImageRef{{ID: "img1", Mime: "image/jpeg"}},
+		}),
+	}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want 1", items)
+	}
+	if len(items[0].Images) != 1 || items[0].Images[0].ID != "img1" || items[0].Images[0].Mime != "image/jpeg" {
+		t.Fatalf("Images = %+v, want one ref to img1/image/jpeg", items[0].Images)
+	}
+}
+
+// TestUITranscriptRendersTurnFailed pins D-044's UI side: a persisted
+// turn_failed event surfaces as its own "error" replay item carrying
+// the human-readable message — the whole point is that a failed turn
+// is visible on reload, not silently dropped like session_started.
+func TestUITranscriptRendersTurnFailed(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		user(t, 1, "do the thing"),
+		ev(t, 2, KindTurnFailed, TurnFailed{Code: "empty_response", Message: "the turn completed with no text, reasoning, or tool calls"}),
+	}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %+v, want 2", items)
+	}
+	if items[1].Kind != "error" || items[1].Text != "the turn completed with no text, reasoning, or tool calls" {
+		t.Fatalf("turn_failed item = %+v", items[1])
 	}
 }
 

@@ -11,6 +11,7 @@ import type {
   ChatEvent,
   ChatRequest,
   EntityGraphData,
+  GroupTotal,
   LatencyRow,
   MemoryItem,
   Mission,
@@ -297,6 +298,78 @@ export async function deleteSession(id: string): Promise<void> {
   await request<void>(`/v1/sessions/${id}`, { method: 'DELETE' })
 }
 
+// transcribe posts a recorded audio clip (from the mic button) to
+// brain's local speech-to-text proxy and returns the transcript.
+// Raw bytes, not JSON — the body IS the audio, so this bypasses
+// request()'s JSON content type.
+export async function transcribe(blob: Blob): Promise<string> {
+  const res = await fetch('/v1/transcribe', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: blob,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { message?: string }
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `transcribe failed (${res.status})`)
+  }
+  const { text } = (await res.json()) as { text: string }
+  return text
+}
+
+// AttachmentUpload is the store's view of a saved attachment (PR
+// #120): id is the content hash, used as both the transcript
+// reference and the /v1/attachments/{id} download path.
+export interface AttachmentUpload {
+  id: string
+  mime: string
+  size_bytes: number
+}
+
+// uploadAttachment posts one file to /v1/attachments (multipart field
+// "file") and returns its stored id/mime/size. Raw multipart, not
+// JSON — same bypass of request()'s JSON content type as transcribe.
+export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/v1/attachments', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { message?: string }
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `upload failed (${res.status})`)
+  }
+  return (await res.json()) as AttachmentUpload
+}
+
+// fetchAttachmentBlob reads an uploaded attachment's bytes for inline
+// rendering (AuthedImage) — GET /v1/attachments/{id} requires the
+// bearer header, so a bare <img src> cannot fetch it directly.
+export async function fetchAttachmentBlob(id: string): Promise<Blob> {
+  const res = await fetch(`/v1/attachments/${id}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) {
+    throw new ChatError(res.status, `request failed (${res.status})`)
+  }
+  return res.blob()
+}
+
 // --- Long-term memory (queue + browser) ---
 
 export async function listMemories(
@@ -377,6 +450,17 @@ export async function usageSeries(
     `/v1/admin/usage/series?${rangeParams(from, to, { bucket, group })}`,
   )
   return points ?? []
+}
+
+export async function usageTotals(
+  from: Date,
+  to: Date,
+  group: 'provider' | 'model' | 'route',
+): Promise<GroupTotal[]> {
+  const { totals } = await request<{ totals: GroupTotal[] }>(
+    `/v1/admin/usage/totals?${rangeParams(from, to, { group })}`,
+  )
+  return totals ?? []
 }
 
 export async function usageSessions(from: Date, to: Date, limit = 10): Promise<SessionUsage[]> {
@@ -752,6 +836,10 @@ export async function resumeMission(id: string): Promise<void> {
 
 export async function cancelMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/cancel`, { method: 'POST' })
+}
+
+export async function deleteMission(id: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}`, { method: 'DELETE' })
 }
 
 export async function answerMissionPermission(

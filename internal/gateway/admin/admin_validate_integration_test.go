@@ -148,18 +148,20 @@ func TestConnectionProbePricesACostedModel(t *testing.T) {
 }
 
 func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
-	adm, _, _ := testAdmin(t)
+	adm, store, _ := testAdmin(t)
 	ctx := t.Context()
 	srv := stubOpenAI(t)
 
+	name := adminMarker + "models"
 	id, err := adm.Create(ctx, Provider{
-		Name: adminMarker + "models", Kind: "api", Driver: "openaicompat",
+		Name: name, Kind: "api", Driver: "openaicompat",
 		BaseURL: srv.URL, DefaultModel: "m-alpha",
 		Models: []router.ModelInfo{{ID: "m-alpha"}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	waitSnapshot(t, store, name)
 	models, err := adm.AvailableModels(ctx, id)
 	if err != nil {
 		t.Fatalf("AvailableModels: %v", err)
@@ -169,14 +171,22 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	}
 
 	// Bedrock cannot enumerate models; the sentinel drives the UI's
-	// manual-entry fallback (422 at the HTTP layer).
+	// manual-entry fallback (422 at the HTTP layer). Static keys are the
+	// only supported auth (D-048), so the credential_ref must resolve
+	// for the provider to build and reach the serving snapshot at all.
+	bedrockRef := adminMarker + "models-bedrock-key" //nolint:gosec // test fixture name, not a secret
+	if err := adm.SetSecret(ctx, bedrockRef, `{"access_key_id":"AKIA123","secret_access_key":"shh"}`); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	bedrockName := adminMarker + "models-bedrock"
 	bid, err := adm.Create(ctx, Provider{
-		Name: adminMarker + "models-bedrock", Kind: "api", Driver: "bedrock",
-		BaseURL: "us-east-1",
+		Name: bedrockName, Kind: "api", Driver: "bedrock",
+		CredentialRef: bedrockRef, Options: map[string]string{"region": "us-east-1"},
 	})
 	if err != nil {
 		t.Fatalf("Create bedrock: %v", err)
 	}
+	waitSnapshot(t, store, bedrockName)
 	if _, err := adm.AvailableModels(ctx, bid); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("bedrock AvailableModels err = %v, want ErrUnsupported", err)
 	}

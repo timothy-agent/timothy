@@ -370,6 +370,44 @@ func TestSummarizeInputPreservesFacts(t *testing.T) {
 	}
 }
 
+// TestSummarizeInputRendersImageNoteNotBytes confirms a user_message
+// carrying image refs reaches the summarizer as a short textual note
+// ("[image attached]"), never as base64 or any image identifier — the
+// summarizer must never see attachment bytes (D-045), and refs alone
+// (ids, mime types) are not useful summary content either.
+func TestSummarizeInputRendersImageNoteNotBytes(t *testing.T) {
+	t.Parallel()
+	log, gw := newMemLog(), &summarizerGW{summary: "s"}
+	ctx := context.Background()
+	pad := strings.Repeat("lorem ipsum dolor sit amet ", 30)
+	if _, err := log.Append(ctx, "s1", KindUserMessage, UserMessage{
+		Text:   "what is in this photo? " + pad,
+		Images: []ImageRef{{ID: "abc123", Mime: "image/png"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var turn AssistantTurn
+	turn.LLM.Message = "a cat " + pad
+	if _, err := log.Append(ctx, "s1", KindAssistantTurn, turn); err != nil {
+		t.Fatal(err)
+	}
+	seedConversation(t, log, "s1", 6) // push the image message into the oldest half
+
+	c := NewCompactor(log, gw, nil, staticBudget(500), discardLogger(), nil)
+	if err := c.MaybeCompact(ctx, "s1"); err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if gw.calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1", gw.calls)
+	}
+	if !strings.Contains(gw.sawText, "[image attached]") {
+		t.Fatalf("summarizer input missing the image note:\n%s", gw.sawText)
+	}
+	if strings.Contains(gw.sawText, "abc123") {
+		t.Fatalf("summarizer input leaked the attachment id:\n%s", gw.sawText)
+	}
+}
+
 // TestHundredTurnSessionPreservesReference is the acceptance harness
 // in miniature: a 100-turn session compacts (possibly repeatedly)
 // under a tight budget, and afterwards a commitment stated in turn 3

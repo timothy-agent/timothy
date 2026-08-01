@@ -27,6 +27,11 @@ const (
 	CapStreaming  Capability = "streaming"
 	CapTools      Capability = "tools"
 	CapEmbeddings Capability = "embeddings"
+	// CapVision marks a driver that can carry image content parts to
+	// its provider; whether a specific MODEL can see images is the
+	// model row's own capability declaration (router.attemptCapable
+	// double-checks both — D-045).
+	CapVision Capability = "vision"
 )
 
 // Message is one conversation turn. The tool fields ride only on
@@ -37,6 +42,29 @@ type Message struct {
 	Content    string      `json:"content"`
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
+	// Images are transient content parts filled in at request-build
+	// time (brain's chat.runTurn, resolving attachment refs into
+	// base64) and never persisted anywhere — session_events and logs
+	// carry refs only, never bytes (D-045).
+	Images []ImageData `json:"images,omitempty"`
+	// ImageRefs carries attachment refs (no bytes) from brain's
+	// session projection through to chat.runTurn, which resolves them
+	// into Images just before the gateway call and clears this field.
+	// json:"-": brain-internal only, never crosses the gateway wire
+	// (D-045).
+	ImageRefs []ImageRef `json:"-"`
+}
+
+// ImageData is one base64-encoded image content part.
+type ImageData struct {
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"` // base64, no data: URL prefix
+}
+
+// ImageRef points at a brain-side stored attachment, never bytes.
+type ImageRef struct {
+	ID   string
+	Mime string
 }
 
 // ToolCall is one tool invocation the model made.

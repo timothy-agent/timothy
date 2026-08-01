@@ -1,14 +1,15 @@
-import type { TranscriptItem } from '../api/types'
+import type { ImageRef, TranscriptItem } from '../api/types'
 import type { AssistantState, ToolRun } from './chat'
 
 // ChatItem is one renderable unit of the chat page: live turns and
 // replayed transcript items share this shape so resume is
 // pixel-equivalent with the original stream.
 export type ChatItem = { id: string } & (
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; images?: ImageRef[] }
   | ({ role: 'assistant' } & AssistantState)
   | { role: 'compaction'; text: string }
   | { role: 'interrupted'; text: string }
+  | { role: 'error'; text: string }
 )
 
 function toToolRun(tool: NonNullable<TranscriptItem['tool']>): ToolRun {
@@ -69,7 +70,12 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
     switch (item.kind) {
       case 'user':
         flush()
-        out.push({ id, role: 'user', text: item.text ?? '' })
+        out.push({
+          id,
+          role: 'user',
+          text: item.text ?? '',
+          images: item.images && item.images.length > 0 ? item.images : undefined,
+        })
         break
       case 'tool':
         if (item.tool) pendingTools.push({ seq: item.seq, tool: item.tool })
@@ -112,6 +118,10 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
       case 'interrupted':
         flush()
         out.push({ id, role: 'interrupted', text: item.text ?? '' })
+        break
+      case 'error':
+        flush()
+        out.push({ id, role: 'error', text: item.text ?? '' })
         break
     }
   }

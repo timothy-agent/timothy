@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -77,7 +78,8 @@ var memoryRoutePatterns = []string{
 // is the reverse proxy to memoryd's management routes, admin the
 // proxy to the gateway's internal control plane, conns the local
 // connector control plane (nil leaves any of them unmounted).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, toolset Toolset, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), hub *missions.Hub, token string, log *slog.Logger) {
+// whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, toolset Toolset, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, token string, log *slog.Logger) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
@@ -92,6 +94,8 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret)
 	a.registerSchedules(srv.Handle, missionStore)
 	a.registerEvents(srv.Handle, hub)
+	a.registerTranscribe(srv.Handle, whisperClient, whisperURL)
+	a.registerAttachments(srv.Handle, attachmentStore)
 	srv.Handle("GET /v1/sessions", a.auth(http.HandlerFunc(a.handleList)))
 	srv.Handle("POST /v1/sessions", a.auth(http.HandlerFunc(a.handleCreate)))
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))

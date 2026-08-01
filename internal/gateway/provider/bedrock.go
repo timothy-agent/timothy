@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -22,26 +24,57 @@ import (
 // (Nova and Titan families) so usage bills against AWS credits — no
 // third-party models.
 //
-// Credentials come from the AWS SDK default chain (env vars, shared
-// config, IAM role) — never from code or the providers table. For
-// local development with SSO, set credential_ref to the profile name
-// and run `aws sso login --profile <name>` first. When running on AWS
-// with an IAM role, leave credential_ref empty: a profile name that
-// has no matching shared config makes client construction fail.
+// D-047/D-048: static IAM keys in the secret store are the only
+// supported auth — AWS profile/SSO mode was removed (a headless server
+// has no ~/.aws to mount). credential_ref must resolve through the
+// encrypted secret store to JSON matching StaticCredentials; a resolve
+// failure or a parse failure both fail provider construction (config
+// honesty), never a silent fallback. Region precedence: the secret
+// JSON's own "region" field, when set, wins over the provider's
+// options.region (Region below); with neither set, us-east-1 applies.
 //
 // Providers table example:
 //
 //	driver = 'bedrock'
-//	base_url = 'us-east-1'                       -- AWS region
 //	default_model = 'us.amazon.nova-pro-v1:0'    -- inference-profile ID
-//	credential_ref = '<aws-profile>'             -- local SSO only; empty on AWS
+//	credential_ref = 'bedrock-static'            -- secret store ref holding StaticCredentials JSON
+//	options = '{"region": "us-west-2"}'          -- optional; defaults to us-east-1
 //
 // Models must be enabled on the Bedrock console "Model access" page.
 type BedrockConfig struct {
-	Name    string
-	Region  string // e.g. "us-east-1"; defaults to us-east-1
-	Profile string // optional AWS profile name (from credential_ref)
-	Timeout time.Duration
+	Name   string
+	Region string // from options.region; defaults to us-east-1 unless StaticCredentials.Region overrides it
+	// StaticCredentials is the resolved secret-store value for
+	// credential_ref parsed as JSON — required; a non-nil pointer with an
+	// empty AccessKeyID/SecretAccessKey never happens, since
+	// ParseStaticCredentials rejects that at parse time.
+	StaticCredentials *StaticCredentials
+	Timeout           time.Duration
+}
+
+// StaticCredentials is the secret-store JSON shape for Bedrock static
+// IAM keys: {"access_key_id":"...","secret_access_key":"...","session_token":"(optional)","region":"(optional)"}.
+// Unknown keys are ignored; AccessKeyID/SecretAccessKey are required.
+type StaticCredentials struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	SessionToken    string `json:"session_token,omitempty"`
+	Region          string `json:"region,omitempty"`
+}
+
+// ParseStaticCredentials parses a secret-store value as Bedrock static
+// credentials JSON. A missing access_key_id or secret_access_key is a
+// parse error — a resolved secret that isn't usable credentials must
+// fail loudly, never fall back to profile/SSO silently.
+func ParseStaticCredentials(raw string) (*StaticCredentials, error) {
+	var c StaticCredentials
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return nil, fmt.Errorf("bedrock: parse static credentials: %w", err)
+	}
+	if c.AccessKeyID == "" || c.SecretAccessKey == "" {
+		return nil, fmt.Errorf("bedrock: static credentials missing access_key_id or secret_access_key")
+	}
+	return &c, nil
 }
 
 // Bedrock is a Provider implementation backed by Amazon Bedrock.
@@ -66,23 +99,40 @@ func NewBedrock(cfg BedrockConfig) *Bedrock {
 func (b *Bedrock) Name() string { return b.cfg.Name }
 func (b *Bedrock) Kind() Kind   { return KindAPI }
 
+// HasStaticCredentials reports whether this provider was built with a
+// resolved secret-store credential (D-047) — always true since profile
+// mode was removed (D-048); used by router tests to verify the lookup
+// plumbing reaches the bedrock constructor.
+func (b *Bedrock) HasStaticCredentials() bool { return b.cfg.StaticCredentials != nil }
+
 func (b *Bedrock) Capabilities() []Capability {
-	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings}
+	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings, CapVision}
 }
 
-// lazyClient builds the AWS client on first use (default credential
-// chain: env vars, shared config, IAM role). sync.Once makes it safe
-// under concurrent Stream/Embed calls; a load failure is sticky, which
-// is right — a bad profile or region never heals mid-process.
+// lazyClient builds the AWS client on first use. Region precedence is
+// secret JSON region > BedrockConfig.Region (options.region, already
+// defaulted to us-east-1 by NewBedrock unless a driver deriving path set
+// it) — a static-keys row with no region anywhere is a construction
+// error, since there is no profile/env to derive it from. sync.Once
+// makes it safe under concurrent Stream/Embed calls; a load failure is
+// sticky, which is right — bad credentials or a bad region never heal
+// mid-process.
 func (b *Bedrock) lazyClient(ctx context.Context) (*bedrockruntime.Client, error) {
 	b.initOnce.Do(func() {
-		opts := []func(*config.LoadOptions) error{
-			config.WithRegion(b.cfg.Region),
+		sc := b.cfg.StaticCredentials
+		region := sc.Region
+		if region == "" {
+			region = b.cfg.Region
 		}
-		if b.cfg.Profile != "" {
-			opts = append(opts, config.WithSharedConfigProfile(b.cfg.Profile))
+		if region == "" {
+			b.clientErr = fmt.Errorf("bedrock: static credentials require a region (set the secret JSON's %q field or the provider's options.region)", "region")
+			return
 		}
-		awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
+		awsCfg, err := config.LoadDefaultConfig(ctx,
+			config.WithRegion(region),
+			config.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(sc.AccessKeyID, sc.SecretAccessKey, sc.SessionToken)),
+		)
 		if err != nil {
 			b.clientErr = fmt.Errorf("bedrock: load aws config: %w", err)
 			return
@@ -280,9 +330,24 @@ func converseMessages(msgs []Message) []types.Message {
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
+			blocks := []types.ContentBlock{&types.ContentBlockMemberText{Value: m.Content}}
+			// Text-only messages keep the single text block (unchanged);
+			// only a message actually carrying images pays for decoding
+			// them (D-045). Bytes only exist here transiently, decoded
+			// straight from the base64 chat.runTurn filled in.
+			for _, img := range m.Images {
+				raw, err := base64.StdEncoding.DecodeString(img.Data)
+				if err != nil {
+					continue // malformed image data must not abort the whole turn
+				}
+				blocks = append(blocks, &types.ContentBlockMemberImage{Value: types.ImageBlock{
+					Format: bedrockImageFormat(img.MediaType),
+					Source: &types.ImageSourceMemberBytes{Value: raw},
+				}})
+			}
 			out = append(out, types.Message{
 				Role:    types.ConversationRoleUser,
-				Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: m.Content}},
+				Content: blocks,
 			})
 		case "assistant":
 			blocks := []types.ContentBlock{}
@@ -333,6 +398,24 @@ func converseMessages(msgs []Message) []types.Message {
 		}
 	}
 	return out
+}
+
+// bedrockImageFormat maps an attachment MIME type to Converse's
+// ImageFormat enum. Callers only ever pass one of the four MIME types
+// the attachments store allows (image/png, image/jpeg, image/webp,
+// image/gif); anything else falls back to png rather than sending an
+// empty Format Converse would reject outright.
+func bedrockImageFormat(mime string) types.ImageFormat {
+	switch mime {
+	case "image/jpeg":
+		return types.ImageFormatJpeg
+	case "image/webp":
+		return types.ImageFormatWebp
+	case "image/gif":
+		return types.ImageFormatGif
+	default:
+		return types.ImageFormatPng
+	}
 }
 
 func toolResultStatus(isError bool) types.ToolResultStatus {

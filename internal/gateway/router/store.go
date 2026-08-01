@@ -165,19 +165,24 @@ func (s *Store) Load(ctx context.Context) error {
 }
 
 // applyProviderOptions decodes a providers row's options jsonb into row.
-// Only reasoning_effort and request_timeout are recognized today (D-040,
-// D-041); unknown keys are ignored silently. An unparseable
-// request_timeout fails the load outright — config honesty, never a
-// silent fallback to the driver default.
+// Only reasoning_effort, request_timeout, and region are recognized
+// today (D-040, D-041, D-048); unknown keys are ignored silently. An
+// unparseable request_timeout fails the load outright — config honesty,
+// never a silent fallback to the driver default. region gets no such
+// validation beyond being present: AWS region ids change over time, so
+// the gateway never hardcodes a valid set — an unknown region simply
+// fails at the AWS SDK when used.
 func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	var opts struct {
 		ReasoningEffort string `json:"reasoning_effort"`
 		RequestTimeout  string `json:"request_timeout"`
+		Region          string `json:"region"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
 	}
 	row.ReasoningEffort = opts.ReasoningEffort
+	row.Region = opts.Region
 	if opts.RequestTimeout != "" {
 		d, err := time.ParseDuration(opts.RequestTimeout)
 		if err != nil {

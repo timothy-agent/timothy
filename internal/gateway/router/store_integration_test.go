@@ -37,7 +37,22 @@ func integrationStore(t *testing.T) *Store {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return NewStore(pool, os.Getenv, log)
+	return NewStore(pool, resolveCredential, log)
+}
+
+// resolveCredential is the store's credential resolver for integration
+// tests: os.Getenv for this file's own fixtures (set via t.Setenv), and
+// a valid bedrock static-keys JSON stub for anything else. A real "AWS
+// Bedrock" provider row can exist in the shared dev/CI database with a
+// credential_ref (e.g. "bedrock-static-keys") this package never sets
+// as an env var; the bedrock driver JSON-parses the resolved credential
+// at registry build time (D-048), so an empty/non-JSON fallback would
+// fail Store.Load for every test in this file whenever that row exists.
+func resolveCredential(ref string) string {
+	if v := os.Getenv(ref); v != "" {
+		return v
+	}
+	return `{"access_key_id":"itest","secret_access_key":"itest"}`
 }
 
 func TestStoreLoadsSeededConfig(t *testing.T) {
