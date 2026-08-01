@@ -148,6 +148,9 @@ func main() {
 
 	searxngURL := os.Getenv("SEARXNG_URL")
 	markitdownURL := os.Getenv("MARKITDOWN_URL")
+	if markitdownURL == "" {
+		app.Log.Warn("MARKITDOWN_URL not set; PDF attachments in chat are unavailable")
+	}
 	whisperURL := os.Getenv("WHISPER_URL")
 	if whisperURL == "" {
 		app.Log.Warn("WHISPER_URL not set; the web mic button's /v1/transcribe endpoint is unavailable")
@@ -321,6 +324,9 @@ func main() {
 	// same guard shape as the missionHub check above.
 	if attachmentStore != nil {
 		svc.SetAttachments(attachmentStore)
+	}
+	if markitdownURL != "" {
+		svc.SetMarkitdown(markitdownURL)
 	}
 
 	api.Register(app.Server, svc, store, broker,

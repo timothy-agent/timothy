@@ -19,6 +19,7 @@ vi.mock('../api/client', () => ({
   chatStream: vi.fn(),
   retryStream: vi.fn(),
   streamLive: vi.fn(),
+  stopTurn: vi.fn(),
   getTranscript: vi.fn(),
   answerPermission: vi.fn(),
   listRoutes: vi.fn(),
@@ -36,6 +37,7 @@ import {
   getTranscript,
   listAgents,
   listRoutes,
+  stopTurn,
   streamLive,
 } from '../api/client'
 import { subscribeEvents } from '../lib/events'
@@ -94,6 +96,7 @@ beforeEach(() => {
       onEvent({ type: 'meta', session_id: 's1' })
     },
   )
+  vi.mocked(stopTurn).mockResolvedValue(undefined)
 })
 
 describe('Chat route picker', () => {
@@ -353,5 +356,58 @@ describe('live reattach', () => {
     fireSignal({ kind: 'session', id: 'some-other-session' })
     await new Promise((r) => setTimeout(r, 10))
     expect(getTranscript).not.toHaveBeenCalled()
+  })
+})
+
+describe('stop turn', () => {
+  it('calls stopTurn when the Stop button is clicked mid-stream', async () => {
+    // A chatStream that never resolves on its own — the turn is still
+    // "streaming" from the page's point of view until the test clicks
+    // Stop, mirroring a real in-flight turn.
+    let released!: () => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        await new Promise<void>((r) => {
+          released = r
+        })
+        onEvent({ type: 'meta', session_id: 's1' })
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    const stopButton = await screen.findByRole('button', { name: 'Stop' })
+    fireEvent.click(stopButton)
+
+    expect(stopTurn).toHaveBeenCalledWith('s1')
+    released() // let the pending chatStream settle so the test can end cleanly
+  })
+
+  it('does NOT call stopTurn on unmount — only the local fetch is aborted', async () => {
+    let released!: () => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        await new Promise<void>((r) => {
+          released = r
+        })
+        onEvent({ type: 'meta', session_id: 's1' })
+      },
+    )
+
+    const { unmount } = renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await screen.findByRole('button', { name: 'Stop' })
+    unmount()
+
+    expect(stopTurn).not.toHaveBeenCalled()
+    released()
   })
 })

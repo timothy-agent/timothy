@@ -7,6 +7,7 @@ import {
   chatStream,
   getTranscript,
   retryStream,
+  stopTurn,
   streamLive,
 } from '../api/client'
 import type { ChatEvent } from '../api/types'
@@ -301,13 +302,17 @@ export function Chat({
     if (ready.length > 0) {
       localUrlsRef.current.set(userItemId, new Map(ready.map((a) => [a.id, a.previewUrl])))
     }
+    const readyImages = ready.filter((a) => a.mime.startsWith('image/'))
+    const readyDocuments = ready.filter((a) => a.mime === 'application/pdf')
     setItems((prev) => [
       ...prev,
       {
         id: userItemId,
         role: 'user',
         text: message,
-        images: ready.length > 0 ? ready.map((a) => ({ id: a.id, mime: a.mime })) : undefined,
+        images: readyImages.length > 0 ? readyImages.map((a) => ({ id: a.id, mime: a.mime })) : undefined,
+        documents:
+          readyDocuments.length > 0 ? readyDocuments.map((a) => ({ id: a.id, mime: a.mime })) : undefined,
       },
       { id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() },
     ])
@@ -373,6 +378,18 @@ export function Chat({
   }
 
   const send = () => void sendMessage(draft, agent, skillHint, route, attachments)
+
+  // stop asks the server to cancel the in-flight turn (chat.Service now
+  // runs it detached from this request, so abortRef.current?.abort()
+  // alone only stops this tab's rendering, never the turn itself — see
+  // stopTurn's doc comment). Fire-and-forget: the turn's abnormal-end
+  // persistence and the local abort together already leave the UI in a
+  // sane state regardless of whether this call lands.
+  const stop = () => {
+    const sessionId = sessionRef.current
+    abortRef.current?.abort()
+    if (sessionId) stopTurn(sessionId).catch(() => toast.error('Could not stop the reply'))
+  }
 
   // retryLast re-runs the last (failed) turn: the session already
   // carries the dangling user message server-side (chat.Service.Retry),
@@ -516,6 +533,7 @@ export function Chat({
                   key={item.id}
                   text={item.text}
                   images={item.images}
+                  documents={item.documents}
                   localUrls={localUrlsRef.current.get(item.id)}
                   // A trailing user message means the turn died before any
                   // assistant event reached the transcript — retry re-runs
@@ -565,6 +583,8 @@ export function Chat({
           skillHint={skillHint}
           onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
           disabled={streaming}
+          streaming={streaming}
+          onStop={stop}
           placeholder={placeholder}
           attachments={attachments}
           onAttachments={setAttachments}

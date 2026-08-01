@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 const (
@@ -52,6 +54,10 @@ const (
 	// just because the capability gate happens to find a vision-capable
 	// model there too.
 	visionRoute = "vision"
+	// turnTimeout ceils a detached turn's lifetime (see Chat/Retry's
+	// turnCtx): must exceed loop's permissionTimeout (10m) so a parked
+	// permission ask can't be killed by the ceiling out from under it.
+	turnTimeout = 30 * time.Minute
 	// Each persistence stage gets its OWN deadline: LLM-backed stages
 	// (distill, compaction) must never eat the database writes' clock.
 	persistTimeout = 10 * time.Second
@@ -67,7 +73,30 @@ const (
 	// that just re-seeds the grant on its next turn, same degrade as a
 	// mission outliving its grant.
 	approvalGrantTTL = 12 * time.Hour
+	// maxDocumentMarkdownBytes caps a converted PDF's persisted markdown
+	// (128KB ≈ ~32k tokens): the markdown lands unbounded in the current
+	// turn's message, and LLMContext never trims it — the compactor only
+	// summarizes OLDER turns, so a huge PDF would blow the model's
+	// context on the very turn that attached it.
+	maxDocumentMarkdownBytes = 128 << 10
 )
+
+// truncatedDocumentMarker is appended when a converted document's
+// markdown is cut at maxDocumentMarkdownBytes, so the model (and the
+// user re-reading the transcript) knows the document wasn't fully
+// captured rather than silently ending mid-sentence.
+const truncatedDocumentMarker = "\n\n[document truncated: markdown exceeded 128KB]"
+
+// truncateDocumentMarkdown caps md at maxDocumentMarkdownBytes, cutting
+// at a valid rune boundary (strings.ToValidUTF8 drops any partial rune
+// left dangling by the byte-level slice) and appending
+// truncatedDocumentMarker. A no-op when md is already within budget.
+func truncateDocumentMarkdown(md string) string {
+	if len(md) <= maxDocumentMarkdownBytes {
+		return md
+	}
+	return strings.ToValidUTF8(md[:maxDocumentMarkdownBytes], "") + truncatedDocumentMarker
+}
 
 // ErrBadRequest marks caller mistakes (empty message) so the API can
 // answer 400 instead of blaming the gateway.
@@ -134,23 +163,26 @@ type Granter interface {
 
 // Service orchestrates turns against the event store.
 type Service struct {
-	gw          Gateway
-	log         SessionLog
-	distill     Distill
-	compactor   Compactor
-	memory      MemoryExtract   // nil: long-term memory off
-	recall      MemoryRetrieve  // nil: no memory injection
-	agents      AgentResolver   // nil: zero-value agent (everything allowed)
-	candidates  AgentCandidates // nil: auto-dispatch falls back to default
-	classify    agents.Classify // nil: auto-dispatch falls back to default
-	budget      func(context.Context) int
-	packs       []skills.Skill
-	skillAllow  func(context.Context, string) bool // nil: all packs allowed
-	skillBodies map[string]string                  // name -> full pack body, for skill_hint
-	flushEvery  time.Duration                      // pending-state flush cadence mid-stream
-	sensitive   *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
-	attachments AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
-	logger      *slog.Logger
+	gw             Gateway
+	log            SessionLog
+	distill        Distill
+	compactor      Compactor
+	memory         MemoryExtract   // nil: long-term memory off
+	recall         MemoryRetrieve  // nil: no memory injection
+	agents         AgentResolver   // nil: zero-value agent (everything allowed)
+	candidates     AgentCandidates // nil: auto-dispatch falls back to default
+	classify       agents.Classify // nil: auto-dispatch falls back to default
+	budget         func(context.Context) int
+	packs          []skills.Skill
+	skillAllow     func(context.Context, string) bool // nil: all packs allowed
+	skillBodies    map[string]string                  // name -> full pack body, for skill_hint
+	flushEvery     time.Duration                      // pending-state flush cadence mid-stream
+	turnTimeout    time.Duration                      // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
+	sensitive      *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
+	attachments    AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
+	markitdownURL  string                             // "": pdf attachments disabled (MARKITDOWN_URL unset)
+	markitdownHTTP *http.Client                       // shared client for the markitdown sidecar call
+	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
 	// seeded remembers which (session, agent) pairs already had their
@@ -206,6 +238,16 @@ func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t
 // SetAttachments wires the attachment store (D-045). Optional — nil
 // (ATTACHMENTS_DIR unset) rejects any Request naming Attachments ids.
 func (s *Service) SetAttachments(store AttachmentStore) { s.attachments = store }
+
+// SetMarkitdown wires the markitdown sidecar's base URL for PDF
+// attachment conversion. Optional — empty (MARKITDOWN_URL unset)
+// rejects any PDF attachment ref with ErrBadRequest.
+func (s *Service) SetMarkitdown(url string) {
+	s.markitdownURL = url
+	if s.markitdownHTTP == nil {
+		s.markitdownHTTP = &http.Client{}
+	}
+}
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
 // request naming the autoAgentName sentinel resolves through candidates
@@ -293,7 +335,7 @@ func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budge
 		skillAllow:  skillAllow,
 		agents:      resolver,
 		skillBodies: bodies,
-		flushEvery:  2 * time.Second, logger: logger,
+		flushEvery:  2 * time.Second, turnTimeout: turnTimeout, logger: logger,
 	}
 }
 
@@ -367,12 +409,12 @@ func profileAllows(allow []string, name string) bool {
 
 // Request is one chat turn.
 type Request struct {
-	SessionID    string `json:"session_id,omitempty"`
-	Message      string `json:"message"`
+	SessionID string `json:"session_id,omitempty"`
+	Message   string `json:"message"`
 	// Agent names who serves this turn; empty = the default agent.
-	Agent string `json:"agent,omitempty"`
-	Route string `json:"route,omitempty"`
-	ModelHint    string `json:"model_hint,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Route     string `json:"route,omitempty"`
+	ModelHint string `json:"model_hint,omitempty"`
 	// SkillHint names a skill pack to force-load for this turn — set
 	// when the user picked one explicitly (a UI chip, not parsed
 	// text). Unlike load_skill, this is not a choice the model can
@@ -393,7 +435,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if strings.TrimSpace(req.Message) == "" && len(req.Attachments) == 0 {
 		return "", nil, fmt.Errorf("chat: %w: message or an attachment is required", ErrBadRequest)
 	}
-	images, err := s.validateAttachments(ctx, req.Attachments)
+	images, documents, err := s.validateAttachments(ctx, req.Attachments)
 	if err != nil {
 		return "", nil, err
 	}
@@ -422,6 +464,9 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// to the vision route, then the agent's route, then the default chain
 	// (sensitive-pin below still overrides all of this).
 	route := req.Route
+	// Only images flip to the vision route — documents are converted to
+	// plain markdown text, not something the model needs vision
+	// capability to read.
 	if route == "" && len(images) > 0 {
 		// D-046: brain has no cheap way to know whether a "vision" route
 		// exists/is enabled/has a non-empty chain (gwclient exposes no
@@ -473,13 +518,24 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		return sessionID, nil, err
 	}
 
-	if _, err := s.log.Append(ctx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images,
+	// The turn's lifetime belongs to the session, not the HTTP request
+	// that started it: a navigation/reload aborts ctx, but that must
+	// not kill the loop mid-tool-call. turnCtx drops ctx's cancellation
+	// (WithoutCancel) while keeping its values (auth, trace); StopTurn
+	// is the only thing allowed to cancel it from here on (see
+	// broadcast.go's setCancel). The user_message append below also
+	// rides turnCtx, not ctx: once the slot is won, the message must
+	// land even if the client vanishes that same instant.
+	turnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.turnTimeout)
+	bc.setCancel(cancel)
+
+	if _, err := s.log.Append(turnCtx, sessionID, session.KindUserMessage, session.UserMessage{
+		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images, Documents: documents,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
+	return s.runTurn(turnCtx, ctx, sessionID, req.Message, modelHint, req.SkillHint, skillBody, route, profile, needsTitle, bc)
 }
 
 // resolveImages fills each message's Images from its ImageRefs
@@ -530,24 +586,56 @@ func (s *Service) readAttachment(ctx context.Context, id string) (string, error)
 // BEFORE the turn's exclusivity is won or anything is appended (D-042:
 // store lookups are read-only and safe before turnBegin, but a bad ref
 // must 400 before even the user_message persists). Empty ids returns
-// nil, nil without touching the store — attachments stay off when
+// nil, nil, nil without touching the store — attachments stay off when
 // unconfigured, and a message with none never needs it wired.
-func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, error) {
+//
+// PDFs are converted to markdown here, once, at send time (not lazily
+// per turn like images): re-converting on every turn would re-call the
+// markitdown sidecar every turn, and any output drift would rewrite an
+// earlier projected message — breaking LLMContext's prefix stability
+// that provider prompt caches depend on. A conversion failure is the
+// sidecar's fault, not the client's, so it returns a plain wrapped
+// error rather than ErrBadRequest.
+func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, []session.DocumentRef, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if s.attachments == nil {
-		return nil, fmt.Errorf("chat: %w: attachments are not enabled", ErrBadRequest)
+		return nil, nil, fmt.Errorf("chat: %w: attachments are not enabled", ErrBadRequest)
 	}
-	refs := make([]session.ImageRef, 0, len(ids))
+	var images []session.ImageRef
+	var documents []session.DocumentRef
 	for _, id := range ids {
 		att, err := s.attachments.Get(ctx, id)
 		if err != nil {
-			return nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+			return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
 		}
-		refs = append(refs, session.ImageRef{ID: att.ID, Mime: att.Mime})
+		switch {
+		case strings.HasPrefix(att.Mime, "image/"):
+			images = append(images, session.ImageRef{ID: att.ID, Mime: att.Mime})
+		case att.Mime == "application/pdf":
+			if s.markitdownURL == "" {
+				return nil, nil, fmt.Errorf("chat: %w: pdf attachments require the markitdown sidecar (MARKITDOWN_URL)", ErrBadRequest)
+			}
+			r, _, err := s.attachments.Open(ctx, att.ID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+			}
+			raw, err := io.ReadAll(r)
+			_ = r.Close()
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: read attachment %q: %w", id, err)
+			}
+			md, err := markitdown.Convert(ctx, s.markitdownHTTP, s.markitdownURL, att.ID+".pdf", att.Mime, raw)
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", id, err)
+			}
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: truncateDocumentMarkdown(md)})
+		default:
+			return nil, nil, fmt.Errorf("chat: %w: attachment %q: unsupported mime %q", ErrBadRequest, id, att.Mime)
+		}
 	}
-	return refs, nil
+	return images, documents, nil
 }
 
 // pinSensitiveRoute promotes the session-wide privacy floor above the
@@ -627,7 +715,10 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if err != nil {
 		return sessionID, nil, err
 	}
-	return s.runTurn(ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle, bc)
+	// Detached turn context — same reasoning as Chat's (see there).
+	turnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.turnTimeout)
+	bc.setCancel(cancel)
+	return s.runTurn(turnCtx, ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle, bc)
 }
 
 // runTurn is the shared tail of Chat and Retry: compact, project
@@ -638,31 +729,38 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 // (D-042) — runTurn must free it (turnDone) on every path that returns
 // before the relay goroutine takes ownership of that responsibility,
 // so a setup failure here can never wedge the session's slot.
-func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool, bc *turnBroadcaster) (string, <-chan stream.StreamEvent, error) {
+//
+// turnCtx is the detached, session-owned context (survives the client
+// disconnecting) that everything in this function — and the whole tool
+// loop underneath gw.Stream — runs on. reqCtx is the original HTTP
+// request's context; it is only handed to relay, which uses it solely
+// to decide whether the ORIGINAL client is still there to stream to
+// (see relay's doc comment).
+func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool, bc *turnBroadcaster) (string, <-chan stream.StreamEvent, error) {
 	// start marks the turn's wall-clock beginning for the stats line's
 	// duration: here, not Chat/Retry's entry, so a retried turn's
 	// duration covers only the retried run — the dead attempt's gap
 	// never counts (runTurn is the shared tail both call fresh).
 	start := time.Now()
-	s.seedApprovalGrants(ctx, sessionID, profile)
+	s.seedApprovalGrants(turnCtx, sessionID, profile)
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
 	// this is a cheap no-op except on the crossing turn; best-effort —
 	// an oversized context beats no answer.
 	if s.compactor != nil {
-		cctx, cancel := context.WithTimeout(ctx, compactBudget)
+		cctx, cancel := context.WithTimeout(turnCtx, compactBudget)
 		if err := s.compactor.MaybeCompact(cctx, sessionID); err != nil {
 			s.logger.Warn("pre-send compaction", "session_id", sessionID, "error", err)
 		}
 		cancel()
 	}
-	events, err := s.log.Events(ctx, sessionID)
+	events, err := s.log.Events(turnCtx, sessionID)
 	if err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
-	msgs, err := session.LLMContext(events, s.budget(ctx))
+	msgs, err := session.LLMContext(events, s.budget(turnCtx))
 	if err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
@@ -671,7 +769,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// gateway call: this is the sole point in the whole turn where
 	// attachment bytes exist in memory at all (D-045). ImageRefs never
 	// crosses the wire (json:"-"); Images (the resolved payload) does.
-	if err := s.resolveImages(ctx, msgs); err != nil {
+	if err := s.resolveImages(turnCtx, msgs); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
 	}
@@ -689,7 +787,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// (D-011 poisoning defense); the skill body is instructions the
 	// user explicitly selected, deterministically loaded rather than
 	// left to the model's load_skill judgment.
-	system := assembleSystem(skills.Index(s.allowedPacks(ctx, profile)), time.Now())
+	system := assembleSystem(skills.Index(s.allowedPacks(turnCtx, profile)), time.Now())
 	// The agent overlay is stable for a given agent, so it sits ahead
 	// of the per-turn tail and stays inside the cacheable prefix.
 	if profile.PromptOverlay != "" {
@@ -699,12 +797,12 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 		system += "\n\n# Skill: " + skillHint + "\n\n" + skillBody
 	}
 	if s.recall != nil && profile.Memory {
-		if block := s.recall(ctx, sessionID, userText); block != "" {
+		if block := s.recall(turnCtx, sessionID, userText); block != "" {
 			system += "\n\n" + block
 		}
 	}
 
-	upstream, err := s.gw.Stream(ctx, gwclient.StreamRequest{
+	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
 		Route:     route,
 		Agent:     profile.Name,
 		ToolAllow: profile.Tools,
@@ -725,7 +823,7 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 	// defer-equivalent (drainAndPersist, on every exit path) owns
 	// freeing it via turnDone.
 	out := make(chan stream.StreamEvent)
-	go s.relay(ctx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
+	go s.relay(reqCtx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -744,7 +842,17 @@ func (s *Service) runTurn(ctx context.Context, sessionID, userText, modelHint, s
 // because it already disconnected (drainAndPersist) — still reaches
 // bc, since a GET /live subscriber may be attached independently of
 // the POST that started the turn.
-func (s *Service) relay(ctx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+//
+// reqCtx is the ORIGINAL request's context, not the turn's — upstream
+// is already bound to the detached turnCtx (runTurn's gw.Stream call),
+// so it keeps producing long after reqCtx dies. reqCtx here gates only
+// whether THIS client is still around to receive forwarded events: the
+// moment it's done, the select's <-reqCtx.Done() branch stops sending
+// to out and falls through to drainAndPersist, which keeps consuming
+// the still-live upstream to completion so the turn finishes and
+// persists normally, with every event still reaching bc for any /live
+// subscriber.
+func (s *Service) relay(reqCtx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -839,9 +947,16 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 	}
 
 	drainAndPersist := func() {
-		// Consume whatever the upstream still yields (it shares the
-		// request ctx, so it winds down quickly), free the client,
-		// then persist the final state.
+		// out closes FIRST, before draining upstream: upstream is bound
+		// to turnCtx (session-owned), not reqCtx, so once the client is
+		// gone it may still have minutes left to run. Closing out up
+		// front frees streamTurn's client-facing goroutine immediately
+		// instead of holding it for the remainder of the turn — any
+		// further send() calls on a dead ResponseWriter just fail
+		// silently. The drain loop below then keeps consuming upstream
+		// (publishing every event to bc for /live subscribers) until it
+		// closes on its own, however long that takes.
+		close(out)
 		for ev := range upstream {
 			switch ev.Type {
 			case stream.EventChunk:
@@ -858,7 +973,6 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		close(out)
 		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
@@ -900,14 +1014,14 @@ func (s *Service) relay(ctx context.Context, sessionID, userText, route string, 
 			bc.publish(ev)
 			select {
 			case out <- ev:
-			case <-ctx.Done():
+			case <-reqCtx.Done():
 				flushPending()
 				drainAndPersist()
 				return
 			}
 		case <-ticker.C:
 			flushPending()
-		case <-ctx.Done():
+		case <-reqCtx.Done():
 			flushPending()
 			drainAndPersist()
 			return

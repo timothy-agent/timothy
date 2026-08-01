@@ -415,4 +415,24 @@ describe('UserMessage attachments', () => {
     render(<UserMessage text="plain text" />)
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
+
+  it('renders a non-clickable chip per attached document, never fetching it', async () => {
+    const client = await import('../api/client')
+
+    render(
+      <UserMessage
+        text="summarize this"
+        documents={[{ id: 'doc-1', mime: 'application/pdf' }]}
+      />,
+    )
+
+    expect(screen.getByText('PDF')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(vi.mocked(client.fetchAttachmentBlob).mock.calls.flat()).not.toContain('doc-1')
+  })
+
+  it('renders no document chips when the message carries none', () => {
+    render(<UserMessage text="plain text" />)
+    expect(screen.queryByText('PDF')).not.toBeInTheDocument()
+  })
 })

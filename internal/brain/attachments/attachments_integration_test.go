@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -49,6 +50,25 @@ func integrationStore(t *testing.T) *Store {
 		t.Fatalf("migrate: %v", err)
 	}
 	return New(t.TempDir(), pool)
+}
+
+// pdfBytes is a minimal PDF header — enough for http.DetectContentType
+// to sniff "application/pdf" (it only inspects the leading bytes).
+var pdfBytes = []byte("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog >>\nendobj\n")
+
+func TestStoreSavePDF(t *testing.T) {
+	s := integrationStore(t)
+
+	att, err := s.Save(t.Context(), bytes.NewReader(pdfBytes))
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if att.Mime != "application/pdf" {
+		t.Fatalf("Mime = %q, want application/pdf", att.Mime)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, att.ID+".pdf")); err != nil {
+		t.Fatalf("expected %s.pdf on disk: %v", att.ID, err)
+	}
 }
 
 func TestStoreSaveDedup(t *testing.T) {

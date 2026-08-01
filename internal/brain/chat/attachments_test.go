@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
@@ -331,5 +334,149 @@ func TestRetryOfImageTurnStaysOnVisionRoute(t *testing.T) {
 	sent := gw.lastChatRequest()
 	if sent.Route != "vision" {
 		t.Fatalf("retried route = %q, want vision (persisted route replayed)", sent.Route)
+	}
+}
+
+// fakeMarkitdown returns an httptest server standing in for the
+// markitdown sidecar: /convert replies with a fixed markdown body,
+// same wire shape internal/platform/markitdown.Convert expects.
+func fakeMarkitdown(t *testing.T, markdown string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, err := json.Marshal(map[string]string{"markdown": markdown})
+		if err != nil {
+			t.Fatalf("marshal fake markitdown response: %v", err)
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestChatPDFAttachmentConvertsToDocument confirms a PDF attachment
+// ref is split away from images, converted through the markitdown
+// sidecar exactly once at send time, and lands as a DocumentRef on
+// the persisted user_message — the markdown persisted, not re-fetched.
+func TestChatPDFAttachmentConvertsToDocument(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	md := fakeMarkitdown(t, "# Converted Title")
+	svc.SetMarkitdown(md.URL)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Images) != 0 {
+		t.Fatalf("images = %+v, want none (pdf only)", um.Images)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].ID != "doc1" || um.Documents[0].Mime != "application/pdf" {
+		t.Fatalf("documents = %+v, want one ref to doc1/application/pdf", um.Documents)
+	}
+	if um.Documents[0].Markdown != "# Converted Title" {
+		t.Fatalf("markdown = %q, want converted markdown persisted", um.Documents[0].Markdown)
+	}
+}
+
+// TestChatPDFAttachmentWithoutMarkitdownIsBadRequest confirms a PDF
+// ref 400s when the sidecar isn't wired (MARKITDOWN_URL unset) —
+// SetMarkitdown never called, so s.markitdownURL stays "".
+func TestChatPDFAttachmentWithoutMarkitdownIsBadRequest(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	svc := newService(&fakeGW{}, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	// SetMarkitdown intentionally not called.
+
+	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	if !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("err = %v, want ErrBadRequest", err)
+	}
+	if kinds := log.kinds("s1"); len(kinds) != 0 {
+		t.Fatalf("events appended despite missing markitdown wiring: %v", kinds)
+	}
+}
+
+// TestChatPDFAttachmentTruncatesOversizedMarkdown confirms a converted
+// document past maxDocumentMarkdownBytes is cut at the cap and marked,
+// never persisted unbounded — a huge PDF must not blow the current
+// turn's context (LLMContext can't trim it, and the compactor only
+// shrinks older turns).
+func TestChatPDFAttachmentTruncatesOversizedMarkdown(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your huge pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	huge := strings.Repeat("a", maxDocumentMarkdownBytes+1024)
+	md := fakeMarkitdown(t, huge)
+	svc.SetMarkitdown(md.URL)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 {
+		t.Fatalf("documents = %+v, want one", um.Documents)
+	}
+	got := um.Documents[0].Markdown
+	if !strings.HasSuffix(got, truncatedDocumentMarker) {
+		t.Fatalf("markdown does not end with truncation marker: %q", got[max(0, len(got)-60):])
+	}
+	if len(got) > maxDocumentMarkdownBytes+len(truncatedDocumentMarker) {
+		t.Fatalf("markdown len = %d, want <= %d", len(got), maxDocumentMarkdownBytes+len(truncatedDocumentMarker))
+	}
+}
+
+// TestChatDocumentsOnlyMessageDoesNotFlipToVisionRoute confirms the
+// D-046 vision auto-flip stays keyed on images alone: a message
+// carrying only a PDF (converted to plain text) never rides the
+// vision chain.
+func TestChatDocumentsOnlyMessageDoesNotFlipToVisionRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	md := fakeMarkitdown(t, "converted text")
+	svc.SetMarkitdown(md.URL)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != defaultRoute {
+		t.Fatalf("route = %q, want %q (documents-only message, no vision flip)", sent.Route, defaultRoute)
 	}
 }

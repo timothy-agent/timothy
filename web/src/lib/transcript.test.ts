@@ -337,4 +337,28 @@ describe('fromTranscript', () => {
       expect(items[0].images).toBeUndefined()
     }
   })
+
+  it("maps a user item's Documents into the chat item", () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'user',
+        text: 'summarize this',
+        documents: [{ id: 'doc-1', mime: 'application/pdf' }],
+        created_at: at,
+      },
+    ])
+    expect(items[0]).toMatchObject({
+      role: 'user',
+      text: 'summarize this',
+      documents: [{ id: 'doc-1', mime: 'application/pdf' }],
+    })
+  })
+
+  it('omits documents on a user item that carries none', () => {
+    const items = fromTranscript([{ seq: 1, kind: 'user', text: 'hello', created_at: at }])
+    if (items[0].role === 'user') {
+      expect(items[0].documents).toBeUndefined()
+    }
+  })
 })

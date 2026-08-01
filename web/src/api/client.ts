@@ -132,6 +132,15 @@ export async function retryStream(
   return postSSE(`/v1/sessions/${sessionId}/messages/retry`, undefined, onEvent, opts)
 }
 
+// stopTurn cancels a session's in-flight turn server-side: the turn now
+// runs detached from the request that started it, so aborting the
+// local fetch (AbortController) no longer stops it — this is the only
+// thing that does. A 404 (no turn running, or it already finished) is
+// a benign race from the caller's point of view, same as streamLive's.
+export async function stopTurn(sessionId: string): Promise<void> {
+  await request<void>(`/v1/sessions/${sessionId}/stop`, { method: 'POST' })
+}
+
 // streamLive reattaches to a session's in-flight turn (Tier 2 of live
 // reattach): GET .../live replays whatever the turn already emitted
 // then follows it live until the terminal, wire-identical to

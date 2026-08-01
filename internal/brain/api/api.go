@@ -104,6 +104,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	srv.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
 	srv.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
+	srv.Handle("POST /v1/sessions/{id}/stop", a.auth(http.HandlerFunc(a.handleStop)))
 	srv.Handle("POST /v1/permissions/{id}", a.auth(http.HandlerFunc(a.handlePermission)))
 	// Deprecated shim: same behavior, session_id in the body.
 	srv.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
@@ -399,6 +400,25 @@ func (a *API) handleRetry(w http.ResponseWriter, r *http.Request) {
 	a.streamTurn(w, r, func(ctx context.Context) (string, <-chan stream.StreamEvent, error) {
 		return a.svc.Retry(ctx, sessionID)
 	})
+}
+
+// handleStop cancels sessionID's in-flight turn server-side (the turn
+// now runs detached from any one request, so a client-side abort alone
+// no longer stops it — see chat.Service.StopTurn). 404 "no_active_turn"
+// mirrors handleLive's framing for the identical "nothing here" case:
+// no turn running, whether because none was ever started or because it
+// already finished by the time this request lands.
+func (a *API) handleStop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !validSessionID(id) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
+	if !a.svc.StopTurn(id) {
+		jsonError(w, http.StatusNotFound, "no_active_turn", "no turn is currently running for this session")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // meta is brain's terminal SSE event: session identity plus whatever

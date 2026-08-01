@@ -140,6 +140,27 @@ describe('Composer mic button', () => {
   })
 })
 
+describe('Composer stop button', () => {
+  it('shows Send, not Stop, when not streaming', () => {
+    render(<Composer {...baseProps()} streaming={false} onStop={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
+  })
+
+  it('shows Stop instead of Send while streaming, and fires onStop', () => {
+    const onStop = vi.fn()
+    render(<Composer {...baseProps()} streaming={true} onStop={onStop} />)
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(onStop).toHaveBeenCalledOnce()
+  })
+
+  it('falls back to Send while streaming if onStop is not given', () => {
+    render(<Composer {...baseProps()} streaming={true} />)
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+  })
+})
+
 function makeImageFile(name = 'photo.png', type = 'image/png', size = 1024): File {
   const file = new File([new Uint8Array(size)], name, { type })
   return file
@@ -216,14 +237,43 @@ describe('Composer attachments', () => {
     render(<Composer {...baseProps()} onAttachments={onAttachments} />)
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    const pdf = makeImageFile('doc.pdf', 'application/pdf')
-    fireEvent.change(input, { target: { files: [pdf] } })
+    const bogus = makeImageFile('notes.txt', 'text/plain')
+    fireEvent.change(input, { target: { files: [bogus] } })
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('doc.pdf: unsupported image type'),
+      expect(toast.error).toHaveBeenCalledWith('notes.txt: unsupported file type'),
     )
     expect(client.uploadAttachment).not.toHaveBeenCalled()
     expect(onAttachments).not.toHaveBeenCalled()
+  })
+
+  it('uploads a selected PDF and adds a file chip on success', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-pdf',
+      mime: 'application/pdf',
+      size_bytes: 2048,
+    })
+    const onAttachments = vi.fn()
+    const { rerender } = render(
+      <Composer {...baseProps()} attachments={[]} onAttachments={onAttachments} />,
+    )
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const pdf = makeImageFile('doc.pdf', 'application/pdf')
+    fireEvent.change(input, { target: { files: [pdf] } })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(pdf))
+    await waitFor(() =>
+      expect(onAttachments).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: 'att-pdf', mime: 'application/pdf', uploading: false }),
+      ]),
+    )
+
+    const [[chips]] = onAttachments.mock.calls.slice(-1)
+    rerender(<Composer {...baseProps()} attachments={chips} onAttachments={onAttachments} />)
+    expect(screen.getByText('doc.pdf')).toBeTruthy()
+    expect(screen.queryByAltText('doc.pdf')).toBeNull()
   })
 
   it('removes a chip and revokes its object URL', () => {

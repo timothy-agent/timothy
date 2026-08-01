@@ -1,7 +1,7 @@
-// Package attachments stores user-uploaded images content-addressed on
-// a local volume, with metadata only in Postgres — binaries never
-// enter the database (D-045). ATTACHMENTS_DIR unset means the feature
-// is off: callers nil-gate on a nil *Store.
+// Package attachments stores user-uploaded images and PDFs
+// content-addressed on a local volume, with metadata only in Postgres
+// — binaries never enter the database (D-045). ATTACHMENTS_DIR unset
+// means the feature is off: callers nil-gate on a nil *Store.
 package attachments
 
 import (
@@ -33,12 +33,13 @@ var ErrUnsupportedMIME = errors.New("attachments: unsupported mime type")
 var ErrNotFound = errors.New("attachments: not found")
 
 // allowedExt maps the sniffed MIME type to its stored file extension.
-// Only these four are accepted; anything else is ErrUnsupportedMIME.
+// Only these five are accepted; anything else is ErrUnsupportedMIME.
 var allowedExt = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/webp": ".webp",
-	"image/gif":  ".gif",
+	"image/png":       ".png",
+	"image/jpeg":      ".jpg",
+	"image/webp":      ".webp",
+	"image/gif":       ".gif",
+	"application/pdf": ".pdf",
 }
 
 // Attachment is one stored image's metadata.
