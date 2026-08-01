@@ -103,7 +103,13 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 		sweep(ctx, conn)
 	})
 
-	store := router.NewStore(pool, func(string) string { return "resolved" }, log)
+	// The bedrock driver JSON-parses the resolved credential at registry
+	// build time (D-048), so a non-JSON stub fails every Store.Load
+	// whenever any bedrock provider row exists — this package's own
+	// bedrock fixture, or a real "AWS Bedrock" row in a shared dev DB.
+	store := router.NewStore(pool, func(string) string {
+		return `{"access_key_id":"itest","secret_access_key":"itest"}`
+	}, log)
 	if err := store.Load(ctx); err != nil {
 		t.Fatalf("store load: %v", err)
 	}
