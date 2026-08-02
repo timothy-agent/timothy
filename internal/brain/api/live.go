@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
@@ -79,6 +80,8 @@ func (a *API) handleLive(w http.ResponseWriter, r *http.Request) {
 		send(ev)
 	}
 	ctx := r.Context()
+	ticker := time.NewTicker(streamHeartbeat)
+	defer ticker.Stop()
 	for {
 		select {
 		case ev, chOk := <-live:
@@ -96,6 +99,9 @@ func (a *API) handleLive(w http.ResponseWriter, r *http.Request) {
 			}
 			fold(ev)
 			send(ev)
+		case <-ticker.C:
+			_, _ = fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		case <-ctx.Done():
 			return
 		}

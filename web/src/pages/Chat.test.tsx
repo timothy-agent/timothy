@@ -335,6 +335,47 @@ describe('live reattach', () => {
     await waitFor(() => expect(screen.queryByText('▍')).not.toBeInTheDocument())
   })
 
+  it('reattaches via streamLive instead of showing an error on a dropped connection', async () => {
+    // A plain TypeError (network cut, proxy timeout) — not a ChatError,
+    // so there's no definite server response to treat as a real failure.
+    // Needs an already-adopted session (sessionRef populated from the
+    // route param), since a transport failure carries no session_id to
+    // adopt the way a ChatError with err.sessionId would.
+    vi.mocked(chatStream).mockRejectedValue(new TypeError('Failed to fetch'))
+    let feed!: (ev: ChatEvent) => void
+    let resolveStream!: () => void
+    const streamDone = new Promise<void>((r) => {
+      resolveStream = r
+    })
+    vi.mocked(streamLive).mockImplementation(async (_id, onEvent) => {
+      feed = onEvent
+      await streamDone
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const input = await screen.findByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Connection dropped — reattaching'))
+    await waitFor(() => expect(streamLive).toHaveBeenCalledWith('s1', expect.any(Function), expect.anything()))
+    expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument()
+
+    feed({ type: 'chunk', text: 'reattached and still going' })
+    await screen.findByText('reattached and still going')
+
+    feed({ type: 'meta', session_id: 's1' })
+    resolveStream()
+    await waitFor(() => expect(screen.queryByText('▍')).not.toBeInTheDocument())
+  })
+
   it('ignores a session signal for a different session', async () => {
     vi.mocked(getTranscript).mockResolvedValue({
       session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },

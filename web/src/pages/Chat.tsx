@@ -222,17 +222,24 @@ export function Chat({
   // permission modal all just work. The replay buffer already contains
   // every chunk that built up the interrupted partial, so the new item
   // starts empty rather than double-seeding with the persisted text.
-  const attachLive = (sessionId: string) => {
+  // maxLiveReconnects caps how many times a single dropped connection
+  // retries attachLive before giving up — a turn genuinely gone (not
+  // just this subscriber's connection) would otherwise loop forever.
+  const maxLiveReconnects = 5
+
+  const attachLive = (sessionId: string, reconnectAttempt = 0) => {
     setStreaming(true)
     pinnedRef.current = true
-    setItems((prev) => {
-      const next = [...prev]
-      const last = next[next.length - 1]
-      if (last && (last.role === 'interrupted' || last.role === 'assistant'))
-        next[next.length - 1] = { id: last.id, role: 'assistant', ...emptyAssistant() }
-      else next.push({ id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() })
-      return next
-    })
+    if (reconnectAttempt === 0) {
+      setItems((prev) => {
+        const next = [...prev]
+        const last = next[next.length - 1]
+        if (last && (last.role === 'interrupted' || last.role === 'assistant'))
+          next[next.length - 1] = { id: last.id, role: 'assistant', ...emptyAssistant() }
+        else next.push({ id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() })
+        return next
+      })
+    }
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -262,17 +269,32 @@ export function Chat({
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return
-        // A 404 (no_active_turn) means the turn finished in the gap
-        // between getTranscript and this attach — refetch once to pick
-        // up the now-completed transcript rather than leaving the
-        // freshly-blanked item stuck empty. Any other error just falls
-        // back the same way.
+        if (err instanceof ChatError) {
+          // A 404 (no_active_turn) means the turn finished in the gap
+          // between getTranscript and this attach — refetch once to pick
+          // up the now-completed transcript rather than leaving the
+          // freshly-blanked item stuck empty.
+          getTranscript(sessionId)
+            .then(({ items }) => setItems(fromTranscript(items)))
+            .catch(() => undefined)
+          if (err.status === 401 || err.status === 503) onNeedToken()
+          return
+        }
+        // A transport-level failure (dropped connection, proxy timeout)
+        // rather than a definite server response — the turn is very
+        // likely still running server-side (D-042), so reattach instead
+        // of treating this as final. abortRef must point at the retry's
+        // own controller, not get cleared by this attempt's finally.
+        if (reconnectAttempt < maxLiveReconnects) {
+          attachLive(sessionId, reconnectAttempt + 1)
+          return
+        }
         getTranscript(sessionId)
           .then(({ items }) => setItems(fromTranscript(items)))
           .catch(() => undefined)
-        if (err instanceof ChatError && (err.status === 401 || err.status === 503)) onNeedToken()
       })
       .finally(() => {
+        if (abortRef.current !== controller) return
         abortRef.current = null
         if (!controller.signal.aborted) {
           setStreaming(false)
@@ -363,6 +385,16 @@ export function Chat({
           handedOffToLive = true
           attachLive(sessionRef.current!)
         } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
+      } else if (sessionRef.current) {
+        // A transport-level failure (dropped connection, proxy timeout,
+        // laptop sleep) throws a plain error, not ChatError — the turn
+        // itself runs detached from this request (D-042), so it's very
+        // likely still alive server-side. Reattach via /live instead of
+        // surfacing a false "failed" state; attachLive's own error path
+        // falls back to a transcript refetch if the turn is in fact gone.
+        toast.info('Connection dropped — reattaching')
+        handedOffToLive = true
+        attachLive(sessionRef.current)
       } else {
         updateLast((m) => ({ ...m, streaming: false, error: String(err) }))
       }
@@ -436,7 +468,14 @@ export function Chat({
           attachLive(sessionId)
         } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
       } else {
-        updateLast((m) => ({ ...m, streaming: false, error: String(err) }))
+        // A transport-level failure (dropped connection, proxy timeout,
+        // laptop sleep) throws a plain error, not ChatError — the turn
+        // itself runs detached from this request (D-042), so it's very
+        // likely still alive server-side. Reattach via /live instead of
+        // surfacing a false "failed" state.
+        toast.info('Connection dropped — reattaching')
+        handedOffToLive = true
+        attachLive(sessionId)
       }
     } finally {
       if (!handedOffToLive) {

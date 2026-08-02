@@ -461,6 +461,13 @@ type meta struct {
 	DurationMs int64         `json:"duration_ms,omitempty"`
 }
 
+// streamHeartbeat keeps a chat SSE connection alive through proxies
+// that kill an idle one (Cloudflare's ~100s 524 fires on a gap with no
+// bytes flowing, not on total duration) — a slow model can go well
+// past that between tokens. A comment line carries no event, so it
+// never reaches the client's SSE parser or reducer.
+const streamHeartbeat = 20 * time.Second
+
 // streamTurn runs run (chat.Service.Chat or Retry) and relays its
 // terminal-contract channel to the client as SSE; both callers only
 // differ in how the turn starts, not in how it streams or ends.
@@ -511,15 +518,26 @@ func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, run func(contex
 	}
 
 	m := meta{Type: "meta", SessionID: sessionID}
-	for ev := range events {
-		if ev.Type == stream.EventUsage {
-			m.Usage = ev.Usage
+	ticker := time.NewTicker(streamHeartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				send(m)
+				return
+			}
+			if ev.Type == stream.EventUsage {
+				m.Usage = ev.Usage
+			}
+			if ev.Meta != nil {
+				m.Provider, m.Model, m.LedgerID = ev.Meta.Provider, ev.Meta.Model, ev.Meta.LedgerID
+				m.DurationMs = ev.Meta.DurationMs
+			}
+			send(ev)
+		case <-ticker.C:
+			_, _ = fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		}
-		if ev.Meta != nil {
-			m.Provider, m.Model, m.LedgerID = ev.Meta.Provider, ev.Meta.Model, ev.Meta.LedgerID
-			m.DurationMs = ev.Meta.DurationMs
-		}
-		send(ev)
 	}
-	send(m)
 }
