@@ -121,7 +121,7 @@ Prerequisites:
 
 5. First login. There's no login page: the web UI auto-opens a settings dialog asking for an API token the first time it can't find one. Paste the `TIMOTHY_API_TOKEN` value from `deploy/.env`. It's stored in your browser's `localStorage`.
 
-6. Add a provider. A fresh install has zero LLM providers and no routing configured, so Timothy can't answer anything until you do this. Go to **Settings → Providers → Add**. Presets: OpenAI, Anthropic, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`); the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the 4 routes Timothy needs to work (`default`, `summarize`, `embedding`, `vision`); routes are otherwise fully user-managed (create, edit chain/strategy, delete) from **Settings → Routing**.
+6. Add a provider. A fresh install has zero LLM providers and no routing configured, so Timothy can't answer anything until you do this. Go to **Settings → Providers**, pick a preset tile (OpenAI, Anthropic, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint), fill in the form, and run the connection test before adding it. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`); the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the 4 routes Timothy needs to work (`default`, `summarize`, `embedding`, `vision`); routes are otherwise fully user-managed (create, edit chain/strategy, delete) from **Settings → Routing**.
 
 ## Optional: local models
 
@@ -138,11 +138,11 @@ While the Google OAuth app is in "Testing" mode (the default for a new Cloud pro
 
 ## Optional: GitHub connector
 
-Configured as an MCP preset in **Settings → Connectors**: paste a GitHub personal access token.
+Configured as an MCP preset in **Settings → Connectors**: paste a GitHub personal access token into the Bearer token field.
 
 ## Optional: Amazon Bedrock
 
-Create an IAM user scoped to `bedrock:InvokeModel*` only, generate an access key, and paste it as JSON (`{"access_key_id":"…","secret_access_key":"…"}`) into the Bedrock provider's key field in **Settings → Providers**. Pick a region from the dropdown; no `~/.aws`, no SSO, nothing to run on the host.
+Create an IAM user scoped to `bedrock:InvokeModel*` only, generate an access key, and enter the access key ID and secret access key into their own fields on the Bedrock provider in **Settings → Providers**. Pick a region from the dropdown; no `~/.aws`, no SSO, nothing to run on the host.
 
 ## Operating the stack
 
