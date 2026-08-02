@@ -1,0 +1,232 @@
+name: timothy
+
+x-service: &service
+  restart: unless-stopped
+  networks: [timothy]
+  logging: &logging
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-go-service: &go-service
+  <<: *service
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/app", "-healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+x-db-env: &db-env
+  DATABASE_URL: postgres://timothy:${POSTGRES_PASSWORD}@postgres:5432/timothy
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  postgres:
+    <<: *service
+    image: pgvector/pgvector:0.8.4-pg18-trixie
+    environment:
+      POSTGRES_USER: timothy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: timothy
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timothy -d timothy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  searxng:
+    <<: *service
+    image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    # internal-only: no published ports; brain is the sole caller
+
+  markitdown:
+    <<: *service
+    image: ghcr.io/timothy-agent/timothy-markitdown:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    # internal-only: no published ports, no auth; brain is the sole
+    # caller, same trust boundary as searxng.
+
+  whisper:
+    <<: *service
+    image: ghcr.io/timothy-agent/timothy-whisper:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    environment:
+      # The published image bakes model "small" at build time;
+      # overriding this requires rebuilding the image, not just
+      # changing the value here.
+      WHISPER_MODEL: small
+    # internal-only: no published ports, no auth; brain is the sole
+    # caller, same trust boundary as searxng/markitdown.
+
+  # Local models: run Ollama natively on the host (Metal/CUDA — a
+  # containerized runner gets CPU only and can't serve big models) and
+  # register http://host.docker.internal:11434/v1 in Settings as a
+  # regular "openaicompat" provider — no gateway code needed.
+
+  brain:
+    <<: *go-service
+    image: ghcr.io/timothy-agent/timothy-brain:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    environment:
+      <<: *db-env
+      PORT: "8080"
+      GATEWAY_URL: http://gateway:8081
+      MEMORYD_URL: http://memoryd:8082
+      # Brain-only secret: the public API bearer token.
+      TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
+      # Connector credentials resolve through brain's own secret-store
+      # handle — same key the gateway uses.
+      TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in .env}
+      # Public base URL (as the browser sees it) for OAuth redirects;
+      # empty disables google connector OAuth.
+      TIMOTHY_PUBLIC_URL: ${TIMOTHY_PUBLIC_URL:-}
+      # Where the shell tool runs; the only tree tools may touch.
+      WORKSPACE_ROOT: /workspace
+      # Root for mission workspaces/worktrees; unset disables the
+      # missions feature entirely (API surface stays unmounted).
+      WORKSPACES: /workspace/missions
+      # Models too weak to drive tool-using mission work (substring
+      # match on the served model id). A turn served by one pauses the
+      # mission as infra instead of burning iterations on a model that
+      # cannot do the job — the small local fallback exists for chat
+      # resilience, not for missions.
+      MISSION_MODEL_FLOOR: ${MISSION_MODEL_FLOOR:-qwen2.5:7b}
+      # Compose-internal only: the model never sees this address.
+      SEARXNG_URL: http://searxng:8080
+      # Converts Gmail attachments (PDFs) and HTML-only email bodies to
+      # markdown/text; compose-internal only.
+      MARKITDOWN_URL: http://markitdown:8000
+      # Local speech-to-text for the web mic button; compose-internal
+      # only, audio never leaves the box.
+      WHISPER_URL: http://whisper:8001
+      # sandboxd's internal address — set only when MISSION_SANDBOX_IMAGE
+      # is configured (sandboxd itself always runs; without an image it
+      # just idles degraded). Empty keeps the original in-process exec
+      # behavior; brain never touches the Docker socket directly.
+      SANDBOXD_URL: ${MISSION_SANDBOX_IMAGE:+http://sandboxd:8083}
+      # Content-addressed image attachment bytes (metadata only in
+      # Postgres); compose-internal path, not user-facing.
+      ATTACHMENTS_DIR: /attachments
+    volumes:
+      - workspace:/workspace
+      - attachments:/attachments
+    ports:
+      - "${BRAIN_PORT:-8300}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+      markitdown:
+        condition: service_started
+      whisper:
+        condition: service_started
+      sandboxd:
+        condition: service_started
+    networks: [timothy, timothy-sandbox]
+
+  # Holds the Docker socket on brain's behalf: the only service that
+  # talks to the Docker daemon, exposing a narrow mission-scoped API
+  # (missionID in — never container names, images, mounts, env) that
+  # brain's sandboxclient calls instead. Not a *go-service: no postgres
+  # dependency, no database at all.
+  sandboxd:
+    <<: *service
+    image: ghcr.io/timothy-agent/timothy-sandboxd:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    environment:
+      PORT: "8083"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The one operator knob: empty keeps sandboxd up but degraded
+      # (nothing to Ping/CheckImage), same parity as brain's old
+      # in-process behavior when this was unset.
+      MISSION_SANDBOX_IMAGE: ${MISSION_SANDBOX_IMAGE:-}
+    volumes:
+      # Metadata-only read: resolveWorkspaceMount inspects this mount to
+      # learn the exact volume/bind spec, then replicates it (rw) into
+      # each sandbox container it creates — sandboxd itself never reads
+      # or writes mission files through this mount. A container's own
+      # replicated mount is unaffected by the ro flag here.
+      - workspace:/workspace:ro
+      # The socket this service exists to hold instead of brain.
+      # group_add grants its group inside the container; Docker
+      # Desktop's socket is group 0 (root), Linux hosts typically use a
+      # "docker" group with an arbitrary gid — override via
+      # DOCKER_SOCK_GID in .env if 0 doesn't work on your host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_SOCK_GID:-0}"
+    # Hardening against non-socket bugs in this service — it cannot stop
+    # the socket itself being root-equivalent, but everything else about
+    # the container is locked down.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "/app", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # internal-only: no published ports; brain is the sole caller.
+    # Second network (not just `timothy`): sandboxd is strictly more
+    # privileged than any other internal service (it holds the socket),
+    # so it reaches only brain, not searxng/markitdown/web. No
+    # auth header on the API — a shared secret would have to live in
+    # brain's own env, the exact thing this split assumes may be
+    # compromised (same reasoning as memoryd's unauthenticated internal
+    # API).
+    networks: [timothy-sandbox]
+
+  gateway:
+    <<: *go-service
+    image: ghcr.io/timothy-agent/timothy-gateway:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    environment:
+      <<: *db-env
+      PORT: "8081"
+      # Root of trust for the encrypted secret store (base64, 32
+      # bytes). Generate with: openssl rand -base64 32. Provider
+      # credentials are configured in Settings, not env — this key is
+      # what decrypts them.
+      TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in .env}
+    # internal-only: no published ports
+
+  memoryd:
+    <<: *go-service
+    image: ghcr.io/timothy-agent/timothy-memoryd:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    environment:
+      <<: *db-env
+      PORT: "8082"
+      GATEWAY_URL: http://gateway:8081
+    # internal-only: no published ports
+
+  web:
+    <<: *service
+    image: ghcr.io/timothy-agent/timothy-web:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    environment:
+      # nginx proxy target for /v1 (browser stays same-origin)
+      BRAIN_URL: http://brain:8080
+    ports:
+      - "${WEB_PORT:-3300}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pgdata:
+  workspace:
+  attachments:
+
+networks:
+  timothy:
+  # brain + sandboxd only — see the sandboxd service comment.
+  timothy-sandbox:

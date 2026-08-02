@@ -1,0 +1,129 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+# One release run per tag, no cancellation: a half-published set of
+# multi-arch images or a half-assembled GitHub release is worse than a
+# slow one, and tags are immutable so there's never a newer run to
+# prefer over an in-flight one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # No test jobs here on purpose: releases are cut by tagging a commit
+  # on main that already went green through ci-ok. Re-running build/
+  # vet/test/lint against the same commit here would only slow the
+  # release down for no new signal.
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: brain
+            context: .
+            dockerfile: deploy/Dockerfile
+            build-args: |
+              SERVICE=brain
+            target: runtime-shell
+          - name: gateway
+            context: .
+            dockerfile: deploy/Dockerfile
+            build-args: |
+              SERVICE=gateway
+          - name: memoryd
+            context: .
+            dockerfile: deploy/Dockerfile
+            build-args: |
+              SERVICE=memoryd
+          - name: sandboxd
+            context: .
+            dockerfile: deploy/Dockerfile
+            build-args: |
+              SERVICE=sandboxd
+          - name: web
+            context: web
+            dockerfile: web/Dockerfile
+            secret: "true"
+          - name: markitdown
+            context: markitdown-svc
+            dockerfile: markitdown-svc/Dockerfile
+          - name: whisper
+            context: whisper-svc
+            dockerfile: whisper-svc/Dockerfile
+            build-args: |
+              WHISPER_MODEL=small
+          - name: sandbox
+            context: .
+            dockerfile: deploy/sandbox.Dockerfile
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          build-args: ${{ matrix.build-args }}
+          # web only: HugeIcons Pro registry auth, passed as a BuildKit
+          # secret so it never lands in an image layer (not as a
+          # build-arg or env, both of which persist into layer history).
+          secrets: ${{ matrix.secret == 'true' && format('hugeicons_token={0}', secrets.HUGEICONS_TOKEN) || '' }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # repository_owner, not a literal: survives org renames and
+          # keeps images under whatever org the repo lives in.
+          tags: ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  release:
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Assemble release assets
+        run: |
+          mkdir -p /tmp/release-assets
+          cp deploy/release/docker-compose.yml /tmp/release-assets/docker-compose.yml
+          cp deploy/release/env.example /tmp/release-assets/env.example
+          cp deploy/release/install.sh /tmp/release-assets/install.sh
+          cp deploy/searxng/settings.yml /tmp/release-assets/searxng-settings.yml
+          sed -i "s/__TIMOTHY_TAG__/${{ steps.version.outputs.value }}/g" \
+            /tmp/release-assets/env.example /tmp/release-assets/install.sh
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Prerelease only for pre-release tags (-alpha/-beta/-rc etc.):
+        # a hyphen in the version marks it as such per semver, a bare
+        # vX.Y.Z does not.
+        run: |
+          args=(--generate-notes --title "$GITHUB_REF_NAME")
+          case "${{ steps.version.outputs.value }}" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" \
+            /tmp/release-assets/docker-compose.yml \
+            /tmp/release-assets/env.example \
+            /tmp/release-assets/install.sh \
+            /tmp/release-assets/searxng-settings.yml

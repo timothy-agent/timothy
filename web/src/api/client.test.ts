@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ChatError,
   chatStream,
+  consumeTokenFragment,
   createSSEParser,
   downloadMissionFile,
+  getToken,
   listMissionFiles,
   listProviders,
   listSessions,
@@ -14,6 +16,49 @@ import {
 import type { ChatEvent } from './types'
 
 afterEach(() => vi.unstubAllGlobals())
+
+describe('consumeTokenFragment', () => {
+  afterEach(() => {
+    localStorage.clear()
+    history.replaceState(null, '', '/')
+  })
+
+  it('stores the token from the fragment and strips it from the URL', () => {
+    history.replaceState(null, '', '/#token=abc123')
+
+    consumeTokenFragment()
+
+    expect(getToken()).toBe('abc123')
+    expect(window.location.hash).toBe('')
+    expect(window.location.href).not.toContain('token=')
+  })
+
+  it('parses a token alongside other fragment params', () => {
+    history.replaceState(null, '', '/#token=abc123&other=y')
+
+    consumeTokenFragment()
+
+    expect(getToken()).toBe('abc123')
+    expect(window.location.hash).toBe('')
+  })
+
+  it('leaves localStorage untouched when there is no fragment', () => {
+    history.replaceState(null, '', '/')
+
+    consumeTokenFragment()
+
+    expect(getToken()).toBe('')
+  })
+
+  it('ignores an empty token value', () => {
+    history.replaceState(null, '', '/#token=')
+
+    consumeTokenFragment()
+
+    expect(getToken()).toBe('')
+    expect(window.location.hash).toBe('#token=')
+  })
+})
 
 describe('createSSEParser', () => {
   it('parses complete events', () => {

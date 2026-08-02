@@ -1,6 +1,6 @@
 # Timothy
 
-[![CI](https://github.com/SumonMSelim/timothy/actions/workflows/ci.yml/badge.svg)](https://github.com/SumonMSelim/timothy/actions/workflows/ci.yml)
+[![CI](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml/badge.svg)](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -9,7 +9,7 @@
 
 Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents — running on your own hardware, talking to whichever LLM providers you configure.
 
-**Status: early, personal project.** This is run by its author, in active development, with no versioned releases yet. Expect rough edges and breaking changes between commits.
+**Status: early, personal project.** This is run by its author, in active development. Alpha releases with prebuilt images are available on the [Releases page](https://github.com/timothy-agent/timothy/releases); expect rough edges and breaking changes between releases.
 
 ## What works today
 
@@ -47,10 +47,35 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 | `8300` | Brain (public API)             |
 | `3301` | Vite dev server (`make dev`)   |
 
+## Quick start (prebuilt images)
+
+The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker and the released images.
+
+1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases/latest):
+
+   ```sh
+   mkdir timothy && cd timothy
+   curl -fsSLo install.sh https://github.com/timothy-agent/timothy/releases/latest/download/install.sh
+   ```
+
+2. Read `install.sh` before running it. Then run it:
+
+   ```sh
+   sh install.sh
+   ```
+
+   It downloads `docker-compose.yml` and `env.example`, generates a `.env` with fresh secrets (`POSTGRES_PASSWORD`, `TIMOTHY_MASTER_KEY`, `TIMOTHY_API_TOKEN`), pulls the images, starts the stack, and prints a magic sign-in link once the web UI is up.
+
+3. Open the printed link — the web UI signs in automatically from the token in the URL.
+
+To upgrade later: bump `TIMOTHY_VERSION` in `.env` and run `docker compose pull && docker compose up -d`, or just re-run `install.sh` (it leaves an existing `.env` untouched and only refreshes `docker-compose.yml` and the searxng config).
+
+The rest of this README covers building and running from source instead.
+
 ## Prerequisites
 
 - Docker (Desktop, or engine + compose plugin).
-- A [hugeicons.com](https://hugeicons.com) account with an active token. The web UI's icons are HugeIcons Pro (a paid icon set) and the token is required to build the `web` image — without it, `make up` fails on the web build step.
+- Building from source only: a [hugeicons.com](https://hugeicons.com) account with an active token. The web UI's icons are HugeIcons Pro (a paid icon set) and the token is required to build the `web` image — without it, `make up` fails on the web build step. Not needed for the prebuilt-image quick start above.
 
 ## First run
 

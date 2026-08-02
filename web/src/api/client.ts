@@ -42,6 +42,18 @@ export function setToken(token: string) {
   localStorage.setItem(tokenKey, token.trim())
 }
 
+// consumeTokenFragment reads a `#token=...` value from the URL fragment
+// (as printed by the installer), stores it, and strips the fragment so
+// it doesn't linger in the address bar or history. No-op if absent.
+export function consumeTokenFragment() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const token = params.get('token')
+  if (!token) return
+
+  setToken(token)
+  history.replaceState(null, '', window.location.pathname + window.location.search)
+}
+
 // createSSEParser incrementally parses an SSE byte stream that may be
 // chunked at arbitrary boundaries. Each complete "data:" block is
 // JSON-decoded and passed to onEvent; malformed blocks are skipped.
