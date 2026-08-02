@@ -98,13 +98,13 @@
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
 
-    /* Brand accent — single purple hue, both themes. Separate from
+    /* Brand accent — single orange hue, both themes. Separate from
        shadcn's --accent (a neutral hover surface, used all over ui/*)
        so re-theming this doesn't repaint every hover state. */
-    --brand: oklch(0.48 0.19 300);
+    --brand: oklch(0.66 0.19 46);
     --brand-foreground: oklch(0.99 0 0);
-    --brand-soft: oklch(0.94 0.035 300);
-    --brand-soft-foreground: oklch(0.4 0.18 300);
+    --brand-soft: oklch(0.95 0.04 55);
+    --brand-soft-foreground: oklch(0.5 0.16 46);
 
     /* Semantic status colors — independent of --brand; never used for
        plain UI accents. --info is the "test/verify" action color. */
@@ -150,10 +150,10 @@
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
 
-    --brand: oklch(0.72 0.17 300);
-    --brand-foreground: oklch(0.16 0.02 300);
-    --brand-soft: oklch(0.3 0.09 300);
-    --brand-soft-foreground: oklch(0.85 0.09 300);
+    --brand: oklch(0.72 0.17 46);
+    --brand-foreground: oklch(0.16 0.02 46);
+    --brand-soft: oklch(0.3 0.09 46);
+    --brand-soft-foreground: oklch(0.85 0.09 46);
 
     --good: oklch(0.72 0.14 155);
     --good-soft: oklch(0.28 0.06 155);

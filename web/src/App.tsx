@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
 import { getToken } from './api/client'
+import { BrandMark } from './components/BrandMark'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -118,7 +119,7 @@ function AppSidebar({
       <SidebarHeader>
         <div className="flex items-center gap-2 px-1 py-1">
           <Link to="/" aria-label="Timothy home" className="flex size-7 shrink-0 items-center justify-center">
-            <span className="block size-3.5 rounded-full bg-gradient-to-br from-blue-500 to-violet-600" />
+            <BrandMark className="size-5" />
           </Link>
           <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
             Timothy
