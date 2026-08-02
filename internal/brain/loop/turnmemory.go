@@ -20,6 +20,7 @@ import (
 // Gateway is the slice of the gateway client distillation needs.
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
+	RouteForRole(ctx context.Context, role string) (string, bool, error)
 }
 
 const (
@@ -30,11 +31,6 @@ const (
 	distillTimeout     = 90 * time.Second
 	maxKeyFindings     = 5
 	distillMaxAttempts = 2
-
-	// sideRoute is the default for non-sensitive turns: cheap and fast
-	// enough to run after every turn without burning local GPU time.
-	// Mirrors extract.sideRoute (internal/memory/extract/extract.go).
-	sideRoute = "summarize"
 )
 
 // distillSystem demands strict JSON. The schema mirrors
@@ -52,7 +48,9 @@ Rules: key_findings has at most 5 items, one sentence each, only durable facts w
 // internal/memory/extract/extract.go), "" otherwise.
 func DistillTurn(ctx context.Context, gw Gateway, sessionID, turnText, route string) *session.TurnMemory {
 	if route == "" {
-		route = sideRoute
+		if name, ok, err := gw.RouteForRole(ctx, "summarize"); err == nil && ok {
+			route = name
+		}
 	}
 	for attempt := 0; attempt < distillMaxAttempts; attempt++ {
 		tm, err := distillOnce(ctx, gw, sessionID, turnText, route)

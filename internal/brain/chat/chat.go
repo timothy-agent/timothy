@@ -45,15 +45,6 @@ const (
 	// isn't sensitive — a session's name deserves the same model quality
 	// as the conversation it's naming, not the cheapest available one.
 	classifyRoute = "local"
-	// defaultRoute serves plain chat turns when the caller picks
-	// nothing; the web UI exposes a per-message picker.
-	defaultRoute = "default"
-	// visionRoute serves turns whose message carries an image attachment
-	// (D-046) — a cheapest-first vision chain, so an image message never
-	// rides an agent's or the default route's (usually pricier) chain
-	// just because the capability gate happens to find a vision-capable
-	// model there too.
-	visionRoute = "vision"
 	// turnTimeout ceils a detached turn's lifetime (see Chat/Retry's
 	// turnCtx): must exceed loop's permissionTimeout (10m) so a parked
 	// permission ask can't be killed by the ceiling out from under it.
@@ -102,9 +93,13 @@ func truncateDocumentMarkdown(md string) string {
 // answer 400 instead of blaming the gateway.
 var ErrBadRequest = errors.New("bad request")
 
-// Gateway is the slice of the gateway client chat needs.
+// Gateway is the slice of the gateway client chat needs. RouteForRole
+// resolves which route currently serves one of the 4 roles Timothy
+// requires to work (D-049) — chat/turnmemory/compactor call it instead
+// of hardcoding a route name.
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
+	RouteForRole(ctx context.Context, role string) (string, bool, error)
 }
 
 // SessionLog is the slice of the session store chat needs; tests fake
@@ -208,6 +203,20 @@ type Service struct {
 
 	publishSession    func(sessionID string) // nil: no session-signal push (today's default)
 	publishPermission func(sessionID string) // nil: no permission-signal push (today's default)
+}
+
+// roleRoute resolves the route currently bound to one of the 4 roles
+// Timothy requires to work (D-049): "default" or "vision". Returns ""
+// on any failure (role unbound, gateway unreachable) — callers must
+// never hard-fail a turn over this; an empty route falls through to
+// the gateway's own no_route error same as an unconfigured route
+// always has.
+func (s *Service) roleRoute(ctx context.Context, role string) string {
+	name, ok, err := s.gw.RouteForRole(ctx, role)
+	if err != nil || !ok {
+		return ""
+	}
+	return name
 }
 
 // SetSessionHub wires the "session" signal push: fires once a turn's
@@ -479,23 +488,19 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// plain markdown text, not something the model needs vision
 	// capability to read.
 	if route == "" && len(images) > 0 {
-		// D-046: brain has no cheap way to know whether a "vision" route
-		// exists/is enabled/has a non-empty chain (gwclient exposes no
-		// routes-listing, and adding one just for this check is exactly
-		// the kind of new polling machinery we want to avoid) — so the
-		// flip is unconditional here. The gateway-side safety net
-		// (internal/gateway/api/api.go's handleStream) falls back to
-		// "default" when "vision" resolves to a missing/disabled/empty
-		// chain, so installs that never created the route still work;
-		// an existing vision route wins outright since its cheapest-first
+		// D-046: the gateway-side safety net (internal/gateway/api/api.go's
+		// handleStream) falls back to the default role's route when the
+		// vision role resolves to a missing/disabled/empty chain, so
+		// installs that never bound the vision role still work; an
+		// existing vision route wins outright since its cheapest-first
 		// chain is exactly the point of this feature.
-		route = visionRoute
+		route = s.roleRoute(ctx, "vision")
 	}
 	if route == "" {
 		route = profile.Route
 	}
 	if route == "" {
-		route = defaultRoute
+		route = s.roleRoute(ctx, "default")
 	}
 
 	sessionID := req.SessionID
@@ -713,7 +718,7 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	}
 	route := last.Route
 	if route == "" {
-		route = defaultRoute
+		route = s.roleRoute(ctx, "default")
 	}
 	modelHint := last.ModelHint
 	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
@@ -1205,9 +1210,10 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 // text, truncated), which is exactly the channel a sensitive tool's
 // output can be quoted through — the same reasoning distill/extract
 // already pin on — so titling rides the identical route pin rather than
-// staying on defaultRoute whenever this turn (or an earlier one this
-// session) is sensitive. An empty sensitiveRoute (the common case) falls
-// through to defaultRoute exactly as before.
+// staying on the default role's route whenever this turn (or an
+// earlier one this session) is sensitive. An empty sensitiveRoute (the
+// common case) falls through to the default role's route exactly as
+// before.
 func (s *Service) autoTitle(sessionID, userText, reply, sensitiveRoute string) {
 	ctx, cancel := context.WithTimeout(context.Background(), titleTimeout)
 	defer cancel()
@@ -1215,7 +1221,7 @@ func (s *Service) autoTitle(sessionID, userText, reply, sensitiveRoute string) {
 	const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
 	input := userText + "\n\n" + truncateRunes(reply, 200)
 
-	route := defaultRoute
+	route := s.roleRoute(ctx, "default")
 	if sensitiveRoute != "" {
 		route = sensitiveRoute
 	}

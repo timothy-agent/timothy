@@ -110,6 +110,10 @@ type fakeGW struct {
 	blockCh  chan struct{}
 }
 
+func (g *fakeGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
 func (g *fakeGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	g.mu.Lock()
 	g.requests = append(g.requests, req)
@@ -1442,8 +1446,8 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 	defer gw.mu.Unlock()
 	for _, r := range gw.requests {
 		if r.Purpose == "title" {
-			if r.Route != defaultRoute {
-				t.Fatalf("auto-title route = %q, want %q", r.Route, defaultRoute)
+			if r.Route != "default" {
+				t.Fatalf("auto-title route = %q, want %q", r.Route, "default")
 			}
 			return
 		}
@@ -1961,6 +1965,10 @@ type slowGW struct {
 	events []stream.StreamEvent
 	delay  time.Duration
 	delays []time.Duration
+}
+
+func (g *slowGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
 }
 
 func (g *slowGW) Stream(ctx context.Context, _ gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {

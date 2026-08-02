@@ -233,7 +233,14 @@ func main() {
 	// over the same registry.
 	agentReg := agents.NewStore(app.DB, app.Log)
 
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, app.Log)
+	routeForRole := func(ctx context.Context, role string) string {
+		name, ok, err := gwc.RouteForRole(ctx, role)
+		if err != nil || !ok {
+			return ""
+		}
+		return name
+	}
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, app.Log)
 	if missionDriver != nil {
 		var sandboxSweeper interface {
 			Sweep(ctx context.Context, isTerminal func(missionID string) bool) error
@@ -369,7 +376,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
+		missionWorkspace, resolveSecret, routeForRole, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -470,7 +477,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -520,7 +527,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetAgentResolver(resolveAgent)
 
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
-	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, log)
+	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, log)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace, hub
 }
@@ -610,6 +617,10 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 		System:    req.System,
 		Messages:  req.Messages,
 	})
+}
+
+func (r turnRouter) RouteForRole(ctx context.Context, role string) (string, bool, error) {
+	return r.gw.RouteForRole(ctx, role)
 }
 
 // buildAgent assembles the compiled-in tool registry and its guard

@@ -100,20 +100,20 @@ func TestResolveTemplateDefaults(t *testing.T) {
 		wantOverlay string
 	}{
 		{
-			name:       "nil resolver falls back to defaultMissionRoute",
+			name:       "nil resolver falls back to the default role's route",
 			template:   MissionTemplate{Goal: "g", AgentID: "a1"},
 			resolve:    nil,
-			wantRoute:  defaultMissionRoute,
-			wantReview: defaultMissionRoute,
+			wantRoute:  "default",
+			wantReview: "default",
 		},
 		{
-			name:     "unresolved agent id falls back to defaultMissionRoute",
+			name:     "unresolved agent id falls back to the default role's route",
 			template: MissionTemplate{Goal: "g", AgentID: "missing"},
 			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 				return AgentDefaults{}, false
 			},
-			wantRoute:  defaultMissionRoute,
-			wantReview: defaultMissionRoute,
+			wantRoute:  "default",
+			wantReview: "default",
 		},
 		{
 			name:     "empty template fields fill from resolved agent",
@@ -140,7 +140,8 @@ func TestResolveTemplateDefaults(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve)
+			routeForRole := func(context.Context, string) string { return "default" }
+			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole)
 			if got.Route != tc.wantRoute {
 				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
 			}

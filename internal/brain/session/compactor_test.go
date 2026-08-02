@@ -45,6 +45,10 @@ type summarizerGW struct {
 	calls     int
 }
 
+func (g *summarizerGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
 func (g *summarizerGW) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	g.calls++
 	g.sawText = req.Messages[0].Content

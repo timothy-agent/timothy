@@ -30,6 +30,7 @@ func renderForSummary(m provider.Message) string {
 // Gateway is the slice of the gateway client the compactor needs.
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
+	RouteForRole(ctx context.Context, role string) (string, bool, error)
 }
 
 // Log is the slice of the event store the compactor needs; *Store
@@ -300,7 +301,10 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 	ctx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
 
-	route := "summarize"
+	route := ""
+	if name, ok, err := c.gw.RouteForRole(ctx, "summarize"); err == nil && ok {
+		route = name
+	}
 	if sensitive && c.sensitive != nil && c.sensitive.Route != nil {
 		if forced := c.sensitive.Route(ctx); forced != "" {
 			route = forced

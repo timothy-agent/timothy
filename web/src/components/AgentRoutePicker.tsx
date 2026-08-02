@@ -147,7 +147,7 @@ export function AgentRoutePicker({
               </div>
               {isRouteAuto && <HugeiconsIcon icon={Tick02Icon} className="mt-1 size-4 shrink-0" />}
             </DropdownMenuItem>
-            {routes?.map((r) => {
+            {routes?.filter((r) => r.enabled).map((r) => {
               const selected = r.name === route
               const chainLabel =
                 r.chain.length > 0 ? r.chain.map((c) => c.model).join(' → ') : 'No models configured'

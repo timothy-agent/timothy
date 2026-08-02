@@ -44,7 +44,7 @@ func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
 		{Name: "ghost", Chain: []ChainEntry{
 			{ProviderID: "nope", Model: "m"},
 		}, Enabled: true},
-		{Name: "embedding", Chain: []ChainEntry{
+		{Name: "embedding", Capability: "embeddings", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "embed-a"}, // anthropic driver: no embeddings
 			{ProviderID: "p2", Model: "embed-b"},
 		}, Enabled: true},
@@ -209,7 +209,7 @@ func TestResolveModelLevelCapabilities(t *testing.T) {
 			{ProviderID: "p1", Model: "nova"},
 			{ProviderID: "p1", Model: "undeclared"}, // driver decides: keep
 		}, Enabled: true},
-		{Name: "embedding", Chain: []ChainEntry{
+		{Name: "embedding", Capability: "embeddings", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "nova"}, // chat-only model: skip
 			{ProviderID: "p1", Model: "titan-embed"},
 		}, Enabled: true},

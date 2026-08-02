@@ -7,6 +7,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -338,12 +339,15 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 	return id, nil
 }
 
-// bootstrapRoutes fills the fixed system routes' chains from a newly
-// connected provider's model metadata (D-033 follow-up): cheapest
-// capable model seeds an empty chain, appends as last fallback
-// otherwise, existing order untouched. Best-effort — a failure here
-// must never fail provider creation; the user can always wire routes
-// by hand from the Routing tab.
+// bootstrapRoutes fills the system roles' bound routes' chains from a
+// newly connected provider's model metadata (D-033 follow-up, D-049):
+// cheapest capable model seeds an empty chain, appends as last
+// fallback otherwise, existing order untouched. A role with no route
+// yet (fresh install) gets one created, named after the role itself —
+// a one-time seed value only; the row's role column is the source of
+// truth from then on, and the name is freely renamable. Best-effort —
+// a failure here must never fail provider creation; the user can
+// always wire routes by hand from the Routing tab.
 func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 	db, err := a.db.Get()
 	if err != nil {
@@ -351,21 +355,37 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 		return
 	}
 	existing := map[string][]router.ChainEntry{}
-	for _, name := range []string{"default", "summarize", "embedding", "vision"} {
-		var chainJSON []byte
-		if err := db.QueryRow(ctx, `SELECT chain FROM routes WHERE name = $1`, name).Scan(&chainJSON); err != nil {
-			a.log.Warn("route bootstrap: read route", "route", name, "error", err)
+	routeName := map[string]string{}
+	for _, sr := range router.SystemRoles {
+		var (
+			name      string
+			chainJSON []byte
+		)
+		err := db.QueryRow(ctx, `SELECT name, chain FROM routes WHERE role = $1`, sr.Role).Scan(&name, &chainJSON)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			name = sr.Role
+			if _, err := db.Exec(ctx, `INSERT INTO routes (name, capability, role) VALUES ($1, $2, $1)`,
+				name, sr.Capability); err != nil {
+				a.log.Warn("route bootstrap: create role route", "role", sr.Role, "error", err)
+				continue
+			}
+			chainJSON = []byte("[]")
+		case err != nil:
+			a.log.Warn("route bootstrap: read role route", "role", sr.Role, "error", err)
 			continue
 		}
 		var chain []router.ChainEntry
 		if err := json.Unmarshal(chainJSON, &chain); err != nil {
-			a.log.Warn("route bootstrap: decode chain", "route", name, "error", err)
+			a.log.Warn("route bootstrap: decode chain", "role", sr.Role, "error", err)
 			continue
 		}
-		existing[name] = chain
+		routeName[sr.Role] = name
+		existing[sr.Role] = chain
 	}
 	updates := router.BootstrapChain(p, existing)
-	for name, chain := range updates {
+	for role, chain := range updates {
+		name := routeName[role]
 		// A route seeded from empty was unusable before (disabled by
 		// default, D-033) — bootstrap must flip it on, or the whole
 		// point of auto-fill (a freshly connected provider "just
@@ -373,7 +393,7 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 		// Appending a fallback to an already-configured route leaves
 		// enabled untouched: that route's on/off state is an
 		// operator decision bootstrap has no business overriding.
-		seeded := len(existing[name]) == 0
+		seeded := len(existing[role]) == 0
 		var err error
 		if seeded {
 			_, err = db.Exec(ctx, `UPDATE routes SET chain = $2, enabled = true, updated_at = now() WHERE name = $1`,
@@ -386,7 +406,7 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 			a.log.Warn("route bootstrap: write chain", "route", name, "error", err)
 			continue
 		}
-		a.audit(ctx, "bootstrap", "route", name, nil, map[string]any{"chain": chain, "provider": p.ID, "enabled": seeded})
+		a.audit(ctx, "bootstrap", "route", name, nil, map[string]any{"chain": chain, "provider": p.ID, "enabled": seeded, "role": role})
 	}
 }
 
@@ -526,12 +546,14 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 // scores behind it. Both are empty for disabled routes (the snapshot
 // holds enabled routes only) or when no snapshot is loaded yet.
 type Route struct {
-	Name     string              `json:"name"`
-	Chain    []router.ChainEntry `json:"chain"`
-	Strategy string              `json:"strategy"`
-	Enabled  bool                `json:"enabled"`
-	Resolved []RouteEntryStatus  `json:"resolved,omitempty"`
-	Serving  *router.ChainEntry  `json:"serving,omitempty"`
+	Name       string              `json:"name"`
+	Chain      []router.ChainEntry `json:"chain"`
+	Strategy   string              `json:"strategy"`
+	Enabled    bool                `json:"enabled"`
+	Capability string              `json:"capability"`
+	Role       string              `json:"role,omitempty"`
+	Resolved   []RouteEntryStatus  `json:"resolved,omitempty"`
+	Serving    *router.ChainEntry  `json:"serving,omitempty"`
 }
 
 // RouteEntryStatus is one resolved chain entry with the router's gate
@@ -599,7 +621,7 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin routes: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT name, chain, strategy, enabled FROM routes ORDER BY name`)
+	rows, err := db.Query(ctx, `SELECT name, chain, strategy, enabled, capability, role FROM routes ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("admin routes: %w", err)
 	}
@@ -610,12 +632,16 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 		var (
 			r     Route
 			chain []byte
+			role  *string
 		)
-		if err := rows.Scan(&r.Name, &chain, &r.Strategy, &r.Enabled); err != nil {
+		if err := rows.Scan(&r.Name, &chain, &r.Strategy, &r.Enabled, &r.Capability, &role); err != nil {
 			return nil, fmt.Errorf("admin routes: %w", err)
 		}
 		if err := json.Unmarshal(chain, &r.Chain); err != nil {
 			return nil, fmt.Errorf("admin routes: chain: %w", err)
+		}
+		if role != nil {
+			r.Role = *role
 		}
 		out = append(out, r)
 	}
@@ -697,6 +723,102 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 		return fmt.Errorf("admin route patch: %w", err)
 	}
 	a.audit(ctx, "update", "route", name, before, after)
+	a.reload(ctx)
+	return nil
+}
+
+var validCapabilities = map[string]bool{"chat": true, "embeddings": true, "vision": true}
+
+// CreateRoute makes a new, plain user-owned route: no role, empty
+// chain, disabled until chained (D-049 — routing has no hardcoded
+// names; any route beyond the 4 required system roles is entirely
+// user-managed).
+func (a *Admin) CreateRoute(ctx context.Context, name, capability string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("route name is required")
+	}
+	if !validCapabilities[capability] {
+		return "", fmt.Errorf("unknown capability %q", capability)
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("admin create route: %w", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `INSERT INTO routes (name, capability) VALUES ($1, $2) RETURNING id`,
+		name, capability).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("admin create route: %w", err)
+	}
+	a.audit(ctx, "create", "route", name, nil, map[string]any{"capability": capability})
+	a.reload(ctx)
+	return id, nil
+}
+
+// DeleteRoute removes a route unless it's bound to one of the 4
+// required system roles — Timothy would stop working the moment its
+// only chat, embedding, vision, or summarize route disappeared, so
+// that must be an explicit role reassignment first, never an
+// incidental delete.
+func (a *Admin) DeleteRoute(ctx context.Context, name string) error {
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin delete route: %w", err)
+	}
+	var role *string
+	err = db.QueryRow(ctx, `SELECT role FROM routes WHERE name = $1`, name).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("route %s: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("admin delete route: %w", err)
+	}
+	if role != nil {
+		return fmt.Errorf("route %s serves required role %q: %w", name, *role, ErrInUse)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM routes WHERE name = $1`, name); err != nil {
+		return fmt.Errorf("admin delete route: %w", err)
+	}
+	a.audit(ctx, "delete", "route", name, nil, nil)
+	a.reload(ctx)
+	return nil
+}
+
+var validRoles = map[string]bool{"default": true, "embedding": true, "vision": true, "summarize": true}
+
+// SetRouteRole moves role to be served by the route named name,
+// unbinding whichever route currently holds it (if any) in the same
+// transaction — the partial unique index on routes.role would reject
+// a bad double-write anyway, but doing it explicitly keeps the audit
+// trail clean.
+func (a *Admin) SetRouteRole(ctx context.Context, name, role string) error {
+	if !validRoles[role] {
+		return fmt.Errorf("unknown role %q", role)
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin set route role: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin set route role: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var target string
+	if err := tx.QueryRow(ctx, `SELECT name FROM routes WHERE name = $1 FOR UPDATE`, name).Scan(&target); err != nil {
+		return fmt.Errorf("route %s: %w", name, ErrNotFound)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE routes SET role = NULL, updated_at = now() WHERE role = $1 AND name != $2`, role, name); err != nil {
+		return fmt.Errorf("admin set route role: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE routes SET role = $2, updated_at = now() WHERE name = $1`, name, role); err != nil {
+		return fmt.Errorf("admin set route role: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin set route role: %w", err)
+	}
+	a.audit(ctx, "update", "route_role", name, nil, map[string]any{"role": role})
 	a.reload(ctx)
 	return nil
 }

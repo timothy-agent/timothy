@@ -27,11 +27,6 @@ const schedulerLockKey = 0x4D495353
 // anyway — at most one backfilled run after downtime, never a burst.
 const misfireGrace = 1 * time.Hour
 
-// defaultMissionRoute mirrors api.defaultMissionRoute: an agent's empty
-// route means "the default chain," but the gateway's /v1/stream
-// requires a real, non-empty route name.
-const defaultMissionRoute = "default"
-
 // Schedule is one schedules row.
 type Schedule struct {
 	ID              string          `json:"id"`
@@ -88,23 +83,27 @@ type AgentResolver func(ctx context.Context, agentID string) (AgentDefaults, boo
 // platform/migrate.go idiom rather than introducing a second
 // scheduling paradigm).
 type Scheduler struct {
-	db       *pgpool.Pool
-	missions *Store
-	resolve  AgentResolver
-	enabled  func(ctx context.Context) bool
-	log      *slog.Logger
+	db           *pgpool.Pool
+	missions     *Store
+	resolve      AgentResolver
+	enabled      func(ctx context.Context) bool
+	routeForRole func(context.Context, string) string
+	log          *slog.Logger
 }
 
 // NewScheduler wires the scheduler with the agent resolver
 // createFromTemplate uses to fill in missing route/review_route/
-// budget/prompt_overlay at fire time, and the scheduler_enabled
-// feature switch (D-032) that tick checks first — nil-safe on both:
-// a nil resolve leaves an unresolved AgentID's fields at whatever the
-// template already specified, and a nil enabled defaults every tick to
-// enabled (degrade open, since a config-read hiccup pausing every
-// schedule silently would be worse than one that keeps firing).
-func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, log *slog.Logger) *Scheduler {
-	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, log: log}
+// budget/prompt_overlay at fire time, the scheduler_enabled feature
+// switch (D-032) that tick checks first, and routeForRole (D-049) for
+// the "default" system role's route when an agent's own route is also
+// empty — nil-safe on all three: a nil resolve leaves an unresolved
+// AgentID's fields at whatever the template already specified, a nil
+// enabled defaults every tick to enabled (degrade open, since a
+// config-read hiccup pausing every schedule silently would be worse
+// than one that keeps firing), and a nil/unbound routeForRole leaves
+// the route "".
+func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, log *slog.Logger) *Scheduler {
+	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, log: log}
 }
 
 // Run ticks forever until ctx is done. Double-fire protection across
@@ -263,13 +262,13 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 // handler): an empty route/review_route/budget/prompt_overlay is
 // filled from the agent's current defaults, and an agent's own empty
 // route (its "use the default chain" shorthand) still falls back to
-// defaultMissionRoute since the gateway requires a real route name.
-// This inserted row bypasses Driver.Create entirely — it has no
-// session, no workspace, no grants yet — so it is provisioned lazily
-// the first time Advance/Drive touches it (see driver.go's
+// the "default" system role's route since the gateway requires a real
+// route name. This inserted row bypasses Driver.Create entirely — it
+// has no session, no workspace, no grants yet — so it is provisioned
+// lazily the first time Advance/Drive touches it (see driver.go's
 // ensureProvisioned).
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve)
+	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole)
 	spec, _ := json.Marshal(Spec{})
 	_, err := tx.Exec(ctx, `INSERT INTO missions
 			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id)
@@ -284,10 +283,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 // a real pgx.Tx: an empty route/review_route/budget is filled from the
 // resolved agent's current defaults (nil-safe — a nil resolve, or one
 // that reports ok=false, leaves the template exactly as given except
-// for the final defaultMissionRoute fallback), and the resolved
-// agent's prompt overlay is returned separately since MissionTemplate
-// itself carries no such field.
-func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver) (MissionTemplate, string) {
+// for the final default-role fallback), and the resolved agent's
+// prompt overlay is returned separately since MissionTemplate itself
+// carries no such field.
+func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string) (MissionTemplate, string) {
 	promptOverlay := ""
 	if resolve != nil {
 		if defaults, ok := resolve(ctx, t.AgentID); ok {
@@ -303,11 +302,15 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			promptOverlay = defaults.PromptOverlay
 		}
 	}
+	defaultRoute := ""
+	if routeForRole != nil {
+		defaultRoute = routeForRole(ctx, "default")
+	}
 	if t.Route == "" {
-		t.Route = defaultMissionRoute
+		t.Route = defaultRoute
 	}
 	if t.ReviewRoute == "" {
-		t.ReviewRoute = defaultMissionRoute
+		t.ReviewRoute = defaultRoute
 	}
 	return t, promptOverlay
 }

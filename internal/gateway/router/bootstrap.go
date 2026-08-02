@@ -5,22 +5,28 @@ import (
 	"sort"
 )
 
-// bootstrapRoutes are the fixed system routes a connected provider can
-// auto-fill: chat-capable for default/summarize, embeddings-capable
-// for embedding, vision-capable for vision (D-046). research is
-// agent-specific and stays hand-configured.
-var bootstrapRoutes = map[string]string{
-	"default":   "chat",
-	"summarize": "chat",
-	"embedding": "embeddings",
-	"vision":    "vision",
+// SystemRoles are the roles Timothy requires to work at all — chat
+// (role "default"), the session/turn-memory summarizer (role
+// "summarize"), embeddings (role "embedding"), and vision (role
+// "vision", D-046) — each paired with the driver capability its
+// bound route must serve. A newly connected provider auto-fills
+// whichever of these roles it can. Any other route (e.g. a hand-made
+// "research" or "coding" route) is plain user configuration and is
+// never auto-filled.
+var SystemRoles = []struct{ Role, Capability string }{
+	{"default", "chat"},
+	{"summarize", "chat"},
+	{"embedding", "embeddings"},
+	{"vision", "vision"},
 }
 
-// BootstrapChain computes route-name -> new-chain-entry for a newly
-// connected (or re-saved) provider, applied to routes whose CURRENT
-// chain is passed in via existing. A route with no capable model in
-// the new provider is omitted from the result — callers apply only
-// what's returned, so unrelated routes are untouched.
+// BootstrapChain computes role -> new-chain-entry for a newly
+// connected (or re-saved) provider, applied to the role's CURRENT
+// chain passed in via existing (keyed by role, not route name — the
+// caller resolves each role to its bound route's chain before
+// calling this). A role with no capable model in the new provider is
+// omitted from the result — callers apply only what's returned, so
+// unrelated roles are untouched.
 //
 // Rule (D-033 follow-up): an empty chain is seeded with the provider's
 // cheapest capable model; a non-empty chain gets that model appended
@@ -31,19 +37,19 @@ func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry) map[string]
 		return nil
 	}
 	out := map[string][]ChainEntry{}
-	for route, needed := range bootstrapRoutes {
-		model, ok := cheapestCapable(p.Models, needed)
+	for _, sr := range SystemRoles {
+		model, ok := cheapestCapable(p.Models, sr.Capability)
 		if !ok {
 			continue
 		}
 		entry := ChainEntry{ProviderID: p.ID, Model: model}
-		chain := existing[route]
+		chain := existing[sr.Role]
 		if alreadyChained(chain, p.ID, model) {
 			continue
 		}
 		next := make([]ChainEntry, len(chain), len(chain)+1)
 		copy(next, chain)
-		out[route] = append(next, entry)
+		out[sr.Role] = append(next, entry)
 	}
 	return out
 }

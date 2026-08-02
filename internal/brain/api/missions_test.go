@@ -13,7 +13,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -51,7 +51,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -99,7 +99,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")

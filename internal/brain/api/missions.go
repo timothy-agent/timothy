@@ -17,22 +17,20 @@ import (
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
-// defaultMissionRoute mirrors chat.defaultRoute: an agent's empty
-// route means "the default chain," but the gateway's /v1/stream
-// requires a real, non-empty route name.
-const defaultMissionRoute = "default"
-
 // registerMissions mounts the mission surface: served locally,
 // missions are brain's domain like agents and connectors. nil store
 // leaves the surface unmounted (404s), matching the memories/admin/
 // agents gating pattern. agentReg resolves a mission's route/
 // review_route/budget/approval_allowlist defaults from the chosen
-// agent when the create request omits them.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error)) {
+// agent when the create request omits them. routeForRole resolves the
+// route bound to the "default" system role (D-049) — an agent's empty
+// route means "the default chain," but the gateway's /v1/stream
+// requires a real, non-empty route name.
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
@@ -60,6 +58,10 @@ type missionAPI struct {
 	// resolveSecret resolves a credential_ref to its plaintext value for
 	// push; nil means no secret store is configured.
 	resolveSecret func(context.Context, string) (string, error)
+	// routeForRole resolves the route bound to a system role ("default"
+	// for missions); nil or an unbound role fall back to "" and the
+	// gateway's own no_route error, same as an unconfigured route.
+	routeForRole func(context.Context, string) string
 	// perms answers a mission's pending_permission — the same
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
@@ -184,13 +186,18 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	// An agent's route (and this handler's own fallback) can still be
 	// "" — that's each agent's shorthand for "the default chain," same
-	// as chat.defaultRoute — but the gateway requires a real route
-	// name, so the substitution has to happen somewhere concrete.
+	// as chat's own default-role fallback — but the gateway requires a
+	// real route name, so the substitution has to happen somewhere
+	// concrete.
+	defaultRoute := ""
+	if h.routeForRole != nil {
+		defaultRoute = h.routeForRole(r.Context(), "default")
+	}
 	if req.Route == "" {
-		req.Route = defaultMissionRoute
+		req.Route = defaultRoute
 	}
 	if req.ReviewRoute == "" {
-		req.ReviewRoute = defaultMissionRoute
+		req.ReviewRoute = defaultRoute
 	}
 
 	autoApproveSafe := true

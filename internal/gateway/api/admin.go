@@ -22,7 +22,10 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("POST /internal/admin/providers/validate", http.HandlerFunc(h.validate))
 	srv.Handle("GET /internal/admin/providers/health", http.HandlerFunc(h.health))
 	srv.Handle("GET /internal/admin/routes", http.HandlerFunc(h.routes))
+	srv.Handle("POST /internal/admin/routes", http.HandlerFunc(h.createRoute))
 	srv.Handle("PATCH /internal/admin/routes/{name}", http.HandlerFunc(h.patchRoute))
+	srv.Handle("DELETE /internal/admin/routes/{name}", http.HandlerFunc(h.deleteRoute))
+	srv.Handle("PUT /internal/admin/routes/{name}/role", http.HandlerFunc(h.setRouteRole))
 	srv.Handle("PATCH /internal/admin/usage/budget", http.HandlerFunc(h.patchBudget))
 	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
 	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
@@ -167,6 +170,46 @@ func (h *adminAPI) patchRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.adm.PatchRoute(r.Context(), r.PathValue("name"), patch); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) createRoute(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string `json:"name"`
+		Capability string `json:"capability"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	id, err := h.adm.CreateRoute(r.Context(), body.Name, body.Capability)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": id})
+}
+
+func (h *adminAPI) deleteRoute(w http.ResponseWriter, r *http.Request) {
+	if err := h.adm.DeleteRoute(r.Context(), r.PathValue("name")); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *adminAPI) setRouteRole(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := h.adm.SetRouteRole(r.Context(), r.PathValue("name"), body.Role); err != nil {
 		fail(w, err)
 		return
 	}

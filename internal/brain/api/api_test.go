@@ -196,6 +196,10 @@ type fakeGateway struct {
 	blockCh chan struct{}
 }
 
+func (f *fakeGateway) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
 func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	f.calls++
 	if f.calls == 1 { // record the chat call, not the title call

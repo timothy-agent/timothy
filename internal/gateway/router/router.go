@@ -76,18 +76,28 @@ type RouteRow struct {
 	Chain    []ChainEntry
 	Strategy string
 	Enabled  bool
+	// Capability is what this route can serve: "chat", "embeddings", or
+	// "vision" — replaces matching on the route's name to infer this.
+	Capability string
+	// Role marks this route as the one serving a function Timothy
+	// requires to work (D-049): "default", "embedding", "vision", or
+	// "summarize". Empty for a plain, user-owned route. At most one
+	// route holds a given role (enforced by a partial unique index).
+	Role string
 }
 
 // Snapshot is an immutable view of the routing configuration plus the
 // providers built from it. Store swaps whole snapshots atomically.
 type Snapshot struct {
-	rows     map[string]ProviderRow // by id
-	byName   map[string]ProviderRow
-	routes   map[string][]ChainEntry // enabled routes only
-	strategy map[string]string       // route name -> chain strategy
-	stats    map[string]ModelStats   // "provider/model" -> recent ledger stats
-	registry *provider.Registry
-	healthy  map[string]bool // by name: credential ref resolved
+	rows       map[string]ProviderRow // by id
+	byName     map[string]ProviderRow
+	routes     map[string][]ChainEntry // enabled routes only
+	strategy   map[string]string       // route name -> chain strategy
+	capability map[string]string       // route name -> capability (all routes, not just enabled)
+	roleRoute  map[string]string       // role -> route name (all routes, not just enabled)
+	stats      map[string]ModelStats   // "provider/model" -> recent ledger stats
+	registry   *provider.Registry
+	healthy    map[string]bool // by name: credential ref resolved
 }
 
 // ModelStats are time-decayed aggregates from the recent cost ledger,
@@ -133,11 +143,13 @@ func (e *NoRouteError) Error() string {
 // unhealthy (skipped by routing) without failing the build.
 func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string) (*Snapshot, error) {
 	s := &Snapshot{
-		rows:     make(map[string]ProviderRow, len(provRows)),
-		byName:   make(map[string]ProviderRow, len(provRows)),
-		routes:   map[string][]ChainEntry{},
-		strategy: map[string]string{},
-		healthy:  make(map[string]bool, len(provRows)),
+		rows:       make(map[string]ProviderRow, len(provRows)),
+		byName:     make(map[string]ProviderRow, len(provRows)),
+		routes:     map[string][]ChainEntry{},
+		strategy:   map[string]string{},
+		capability: map[string]string{},
+		roleRoute:  map[string]string{},
+		healthy:    make(map[string]bool, len(provRows)),
 	}
 
 	cfgs := make([]provider.Config, 0, len(provRows))
@@ -169,6 +181,10 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 	s.registry = reg
 
 	for _, r := range routeRows {
+		s.capability[r.Name] = r.Capability
+		if r.Role != "" {
+			s.roleRoute[r.Role] = r.Name
+		}
 		if r.Enabled {
 			s.routes[r.Name] = r.Chain
 			s.strategy[r.Name] = r.Strategy
@@ -177,14 +193,28 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 	return s, nil
 }
 
+// RouteForRole returns the name of the route currently bound to role
+// ("default", "embedding", "vision", or "summarize"), or false if no
+// route holds that role yet (e.g. not bootstrapped on a fresh
+// install).
+func (s *Snapshot) RouteForRole(role string) (string, bool) {
+	name, ok := s.roleRoute[role]
+	return name, ok
+}
+
 // requiredCapability maps a route to the driver capability its
 // attempts must declare (D-005: routing never assumes an undeclared
-// capability).
-func requiredCapability(route string) provider.Capability {
-	if route == "embedding" {
+// capability), from the route's own declared capability rather than
+// matching its name.
+func (s *Snapshot) requiredCapability(route string) provider.Capability {
+	switch s.capability[route] {
+	case "embeddings":
 		return provider.CapEmbeddings
+	case "vision":
+		return provider.CapVision
+	default:
+		return provider.CapChat
 	}
-	return provider.CapChat
 }
 
 // Sticky names the provider+model that served a session's last
@@ -210,7 +240,7 @@ type Sticky struct {
 // CapVision when the request carries images (D-045); most callers pass
 // none.
 func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.Capability) ([]Attempt, error) {
-	required := append([]provider.Capability{requiredCapability(route)}, extra...)
+	required := append([]provider.Capability{s.requiredCapability(route)}, extra...)
 	var attempts []Attempt
 	var skipped []string
 	seen := map[string]bool{} // "name/model" dedupe across hint + sticky + chain
@@ -336,7 +366,7 @@ type ResolvedEntry struct {
 func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 	chain := s.routes[route]
 	w, scoredStrategy := strategyWeights[s.strategy[route]]
-	required := []provider.Capability{requiredCapability(route)}
+	required := []provider.Capability{s.requiredCapability(route)}
 
 	// Gather each entry's raw factors first: normalization needs the
 	// best value across the candidate set.

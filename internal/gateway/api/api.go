@@ -50,6 +50,7 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 	srv.Handle("POST /v1/stream", http.HandlerFunc(a.handleStream))
 	srv.Handle("POST /v1/embed", http.HandlerFunc(a.handleEmbed))
 	srv.Handle("GET /v1/providers", http.HandlerFunc(a.handleProviders))
+	srv.Handle("GET /v1/routes/roles", http.HandlerFunc(a.handleRoleRoutes))
 	srv.Handle("POST /internal/reload", http.HandlerFunc(a.handleReload))
 }
 
@@ -129,22 +130,26 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var nre *router.NoRouteError
 		if errors.As(err, &nre) {
-			// D-046 safety net: brain flips an image message to "vision"
-			// unconditionally (it has no cheap way to know whether the
-			// route exists on this install). When "vision" is missing,
-			// disabled, or has an empty chain, Resolve returns a
-			// NoRouteError with no Skipped entries — nothing was even
-			// tried. That's distinct from the chain existing but every
-			// entry lacking the vision capability (Skipped is non-empty
-			// there): THAT case must still error, since falling back
-			// would silently serve an image turn on a model that can't
-			// see it. Any other unknown/misconfigured route keeps
-			// erroring — this fallback is vision-only, not generic
-			// route-aliasing.
-			if req.Route == "vision" && len(nre.Skipped) == 0 {
-				a.log.Warn("vision route unresolvable, falling back to default", "reason", nre.Error())
-				req.Route = "default"
-				attempts, err = snap.Resolve(req.Route, req.ModelHint, sticky, requiredVisionCapability(req.Messages)...)
+			// D-046 safety net: brain flips an image message to the
+			// vision role's route unconditionally (it has no cheap way
+			// to know whether that route exists on this install). When
+			// the requested route is missing, disabled, or has an empty
+			// chain, Resolve returns a NoRouteError with no Skipped
+			// entries — nothing was even tried. That's distinct from the
+			// chain existing but every entry lacking the vision
+			// capability (Skipped is non-empty there): THAT case must
+			// still error, since falling back would silently serve an
+			// image turn on a model that can't see it. Keyed on the
+			// message needing vision at all (not on the requested route's
+			// name — routes have no hardcoded names, D-049) so this stays
+			// vision-only, not generic route-aliasing.
+			needsVision := len(requiredVisionCapability(req.Messages)) > 0
+			if needsVision && len(nre.Skipped) == 0 {
+				if defaultRoute, ok := snap.RouteForRole("default"); ok {
+					a.log.Warn("vision route unresolvable, falling back to default", "reason", nre.Error())
+					req.Route = defaultRoute
+					attempts, err = snap.Resolve(req.Route, req.ModelHint, sticky, requiredVisionCapability(req.Messages)...)
+				}
 			}
 		}
 		if err != nil {
@@ -364,7 +369,12 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
 		return
 	}
-	attempts, err := snap.Resolve("embedding", req.ModelHint, router.Sticky{})
+	embeddingRoute, ok := snap.RouteForRole("embedding")
+	if !ok {
+		jsonError(w, http.StatusBadGateway, "no_route", "no route is bound to the embedding role")
+		return
+	}
+	attempts, err := snap.Resolve(embeddingRoute, req.ModelHint, router.Sticky{})
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, "no_route", err.Error())
 		return
@@ -383,7 +393,7 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		entry := ledger.Entry{
 			Provider: att.ProviderName, Model: att.Model,
-			Route: "embedding", Purpose: req.Purpose, SessionID: req.SessionID,
+			Route: embeddingRoute, Purpose: req.Purpose, SessionID: req.SessionID,
 		}
 
 		vecs, usage, err := emb.Embed(r.Context(), att.Model, req.Texts)
@@ -444,6 +454,26 @@ func (a *API) handleProviders(w http.ResponseWriter, r *http.Request) {
 		"providers": list,
 		"routes":    snap.Routes(),
 	})
+}
+
+// handleRoleRoutes reports which route currently serves each of the 4
+// roles Timothy requires to work (D-049) — brain resolves the routes
+// for chat/embedding/vision/summarize through this instead of a
+// hardcoded name, so a route rename or reassignment never needs a
+// brain-side code change.
+func (a *API) handleRoleRoutes(w http.ResponseWriter, r *http.Request) {
+	snap := a.store.Snapshot()
+	if snap == nil {
+		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
+		return
+	}
+	roles := map[string]string{}
+	for _, role := range []string{"default", "embedding", "vision", "summarize"} {
+		if name, ok := snap.RouteForRole(role); ok {
+			roles[role] = name
+		}
+	}
+	writeJSON(w, map[string]any{"roles": roles})
 }
 
 func (a *API) handleReload(w http.ResponseWriter, r *http.Request) {

@@ -783,6 +783,25 @@ export async function patchRoute(
   })
 }
 
+export async function createRoute(name: string, capability: string): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/admin/routes', {
+    method: 'POST',
+    body: JSON.stringify({ name, capability }),
+  })
+  return id
+}
+
+export async function deleteRoute(name: string): Promise<void> {
+  await request<void>(`/v1/admin/routes/${name}`, { method: 'DELETE' })
+}
+
+export async function setRouteRole(name: string, role: string): Promise<void> {
+  await request<void>(`/v1/admin/routes/${name}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  })
+}
+
 export interface AdminSettings {
   settings: Record<string, boolean>
   // Typed runtime settings; empty string means the built-in default.

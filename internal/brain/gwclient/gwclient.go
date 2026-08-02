@@ -50,6 +50,8 @@ type Client struct {
 	mu         sync.Mutex
 	windows    map[string]int
 	windowsExp time.Time
+	roles      map[string]string
+	rolesExp   time.Time
 }
 
 func New(baseURL string) *Client {
@@ -114,6 +116,46 @@ func (c *Client) ModelWindows(ctx context.Context) (map[string]int, error) {
 	c.windows, c.windowsExp = windows, time.Now().Add(windowsTTL)
 	c.mu.Unlock()
 	return windows, nil
+}
+
+// RouteForRole returns the name of the route currently serving role
+// ("default", "embedding", "vision", or "summarize"), or false if no
+// route is bound to it yet. Results are memoized for the gateway's
+// reload cadence, same as ModelWindows.
+func (c *Client) RouteForRole(ctx context.Context, role string) (string, bool, error) {
+	c.mu.Lock()
+	if c.roles != nil && time.Now().Before(c.rolesExp) {
+		roles := c.roles
+		c.mu.Unlock()
+		name, ok := roles[role]
+		return name, ok, nil
+	}
+	c.mu.Unlock()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/routes/roles", nil)
+	if err != nil {
+		return "", false, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return "", false, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", false, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		Roles map[string]string `json:"roles"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", false, fmt.Errorf("gwclient: decode roles: %w", err)
+	}
+	c.mu.Lock()
+	c.roles, c.rolesExp = out.Roles, time.Now().Add(windowsTTL)
+	c.mu.Unlock()
+	name, ok := out.Roles[role]
+	return name, ok, nil
 }
 
 // Embed returns one vector per input text via the gateway's

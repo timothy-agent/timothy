@@ -124,7 +124,7 @@ func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
 		{Name: "coding", Chain: []router.ChainEntry{
 			{ProviderID: "p1", Model: "m1"}, {ProviderID: "p2", Model: "m2"},
 		}, Enabled: true},
-		{Name: "embedding", Chain: []router.ChainEntry{
+		{Name: "embedding", Capability: "embeddings", Role: "embedding", Chain: []router.ChainEntry{
 			{ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}
@@ -387,7 +387,7 @@ func TestStreamVisionRouteMissingFallsBackToDefault(t *testing.T) {
 			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat", "vision"}}}},
 	}
 	routes := []router.RouteRow{
-		{Name: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 		// no "vision" route row at all.
 	}
 	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
@@ -433,8 +433,8 @@ func TestStreamVisionRouteDisabledFallsBackToDefault(t *testing.T) {
 			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat", "vision"}}}},
 	}
 	routes := []router.RouteRow{
-		{Name: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
-		{Name: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: false},
+		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: false},
 	}
 	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	if err != nil {
@@ -468,8 +468,8 @@ func TestStreamVisionRoutePresentNoFallback(t *testing.T) {
 			Models: []router.ModelInfo{{ID: "dm", Capabilities: []string{"chat", "vision"}}}},
 	}
 	routes := []router.RouteRow{
-		{Name: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "vm"}}, Enabled: true},
-		{Name: "default", Chain: []router.ChainEntry{{ProviderID: "p2", Model: "dm"}}, Enabled: true},
+		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "vm"}}, Enabled: true},
+		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p2", Model: "dm"}}, Enabled: true},
 	}
 	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	if err != nil {
@@ -511,7 +511,7 @@ func TestStreamVisionCapabilityExhaustedNoFallback(t *testing.T) {
 			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat"}}}}, // no vision
 	}
 	routes := []router.RouteRow{
-		{Name: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 	}
 	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	if err != nil {
@@ -583,7 +583,7 @@ func TestEmbedSkipsIncapableDriverAtResolve(t *testing.T) {
 			Models: []router.ModelInfo{{ID: "m1"}}},
 	}
 	routes := []router.RouteRow{
-		{Name: "embedding", Chain: []router.ChainEntry{
+		{Name: "embedding", Capability: "embeddings", Role: "embedding", Chain: []router.ChainEntry{
 			{ProviderID: "p0", Model: "m0"}, {ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}

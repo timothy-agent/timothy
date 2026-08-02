@@ -296,8 +296,8 @@ func TestChatNoImagesLeavesRouteUnchanged(t *testing.T) {
 	drain(t, ch)
 
 	sent := gw.lastChatRequest()
-	if sent.Route != defaultRoute {
-		t.Fatalf("route = %q, want %q (no images, no flip)", sent.Route, defaultRoute)
+	if sent.Route != "default" {
+		t.Fatalf("route = %q, want %q (no images, no flip)", sent.Route, "default")
 	}
 }
 
@@ -476,7 +476,7 @@ func TestChatDocumentsOnlyMessageDoesNotFlipToVisionRoute(t *testing.T) {
 	drain(t, ch)
 
 	sent := gw.lastChatRequest()
-	if sent.Route != defaultRoute {
-		t.Fatalf("route = %q, want %q (documents-only message, no vision flip)", sent.Route, defaultRoute)
+	if sent.Route != "default" {
+		t.Fatalf("route = %q, want %q (documents-only message, no vision flip)", sent.Route, "default")
 	}
 }

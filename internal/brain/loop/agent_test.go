@@ -31,6 +31,10 @@ type scriptedGateway struct {
 	requests []gwclient.StreamRequest
 }
 
+func (g *scriptedGateway) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
 func (g *scriptedGateway) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	g.mu.Lock()
 	g.requests = append(g.requests, req)

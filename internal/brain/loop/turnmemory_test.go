@@ -16,6 +16,10 @@ type scriptedGW struct {
 	lastReq gwclient.StreamRequest
 }
 
+func (g *scriptedGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
 func (g *scriptedGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	g.lastReq = req
 	i := g.calls

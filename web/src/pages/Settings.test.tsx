@@ -145,8 +145,6 @@ describe('Features tab agent settings', () => {
       expect(patchSettingValues).toHaveBeenCalledWith({
         session_token_budget: '120000',
         skills_allowlist: 'coding-task, research',
-        git_author_name: '',
-        git_author_email: '',
       }),
     )
   })
