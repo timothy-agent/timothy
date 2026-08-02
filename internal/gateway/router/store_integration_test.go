@@ -66,14 +66,16 @@ func TestStoreLoadsSeededConfig(t *testing.T) {
 		t.Fatal("nil snapshot after successful load")
 	}
 
-	// Providers are never seeded — only the route names the code
-	// references (0002), empty-chained and disabled. Disabled routes
-	// don't enter the snapshot, so assert against the table itself.
+	// Providers are never seeded — only the 4 routes Timothy needs to
+	// work, empty-chained and disabled (0036 drops the never-configured
+	// research/local/coding seed rows on a fresh install). Disabled
+	// routes don't enter the snapshot, so assert against the table
+	// itself.
 	db, err := s.db.Get()
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	for _, want := range []string{"default", "summarize", "embedding", "research"} {
+	for _, want := range []string{"default", "summarize", "embedding", "vision"} {
 		var n int
 		if err := db.QueryRow(t.Context(),
 			"SELECT count(*) FROM routes WHERE name = $1", want).Scan(&n); err != nil {
