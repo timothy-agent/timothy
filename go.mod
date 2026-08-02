@@ -11,7 +11,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/moby/moby/api v1.55.0
-	github.com/moby/moby/client v0.5.0
+	github.com/moby/moby/client v0.5.1
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/pkoukk/tiktoken-go-loader v0.0.2
 	github.com/prometheus/client_golang v1.24.1
