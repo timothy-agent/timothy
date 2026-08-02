@@ -93,6 +93,27 @@ describe('AgentRoutePicker', () => {
     await waitFor(() => expect(trigger).toHaveTextContent('general · local'))
   })
 
+  it('falls back to the agent label when the selected route is disabled', async () => {
+    const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
+    vi.mocked(listAgents).mockResolvedValue(agents)
+    vi.mocked(listRoutes).mockResolvedValue([
+      ...routes,
+      { name: 'disabled-route', strategy: 'ordered', enabled: false, chain: [] },
+    ])
+    render(
+      <AgentRoutePicker
+        agent="general"
+        onAgent={vi.fn()}
+        route="disabled-route"
+        onRoute={vi.fn()}
+      />,
+    )
+
+    const trigger = await screen.findByRole('button', { name: 'Agent and route' })
+    await waitFor(() => expect(trigger).toHaveTextContent('general'))
+    expect(trigger).not.toHaveTextContent('disabled-route')
+  })
+
   it('shows both Agent and Route sections when onRoute is given', async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)

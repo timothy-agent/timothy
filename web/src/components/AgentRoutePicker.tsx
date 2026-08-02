@@ -61,7 +61,9 @@ export function AgentRoutePicker({
     : (agents.find((a) => a.name === agent) ?? agents.find((a) => a.is_default) ?? null)
   const showRoutes = Boolean(onRoute) && routes !== null
   const isRouteAuto = !route
-  const currentRoute = isRouteAuto ? null : (routes?.find((r) => r.name === route) ?? null)
+  const currentRoute = isRouteAuto
+    ? null
+    : (routes?.find((r) => r.name === route && r.enabled) ?? null)
 
   const agentLabel = isAuto ? 'Auto' : (current?.name ?? 'Agent')
   const label = currentRoute ? `${agentLabel} · ${currentRoute.name}` : agentLabel
