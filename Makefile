@@ -64,13 +64,13 @@ up:
 	$(COMPOSE) up -d --build
 
 # Per-service rebuild+restart for when only one service changed:
-#   make brain / make gateway / make memoryd / make web / make markitdown / make sandboxd
+#   make brain / make gateway / make memoryd / make web / make markitdown / make whisper / make sandboxd
 # Rolling brain and sandboxd separately: restart sandboxd first — the
 # API between them is additive-only, so an older brain against a newer
 # sandboxd (or vice versa, briefly) stays compatible either order, but
 # sandboxd-first avoids brain's own restart racing against sandboxd's
 # health check on its way up.
-brain gateway memoryd web markitdown sandboxd:
+brain gateway memoryd web markitdown whisper sandboxd:
 	$(COMPOSE) up -d --build $@
 
 # Vite dev server with hot reload on :3301 (proxies /v1 to brain).

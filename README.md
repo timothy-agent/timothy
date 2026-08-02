@@ -25,15 +25,16 @@ Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents — ru
 
 Go microservices behind a single public API, one PostgreSQL database, React web UI. All run via Docker Compose.
 
-| Service      | Role                                                                    |
-|--------------|-------------------------------------------------------------------------|
+| Service      | Role                                                                                         |
+|--------------|----------------------------------------------------------------------------------------------|
 | `brain`      | Public API — chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming |
-| `gateway`    | Internal LLM gateway — multi-provider routing, cost ledger              |
-| `memoryd`    | Internal memory service — pgvector-backed recall                        |
-| `sandboxd`   | Internal service holding the Docker socket — per-mission sandbox containers |
-| `web`        | React + Tailwind interface — chat, missions, usage, settings            |
-| `searxng`    | Internal metasearch backend for the web_search tool                     |
-| `markitdown` | Internal Python sidecar — file→markdown conversion                      |
+| `gateway`    | Internal LLM gateway — multi-provider routing, cost ledger                                   |
+| `memoryd`    | Internal memory service — pgvector-backed recall                                             |
+| `sandboxd`   | Internal service holding the Docker socket — per-mission sandbox containers                  |
+| `web`        | React + Tailwind interface — chat, missions, usage, settings                                 |
+| `searxng`    | Internal metasearch backend for the web_search tool                                          |
+| `markitdown` | Internal Python sidecar — file→markdown conversion                                           |
+| `whisper`    | Internal Python sidecar — local speech-to-text for the web mic button                        |
 
 Plus Postgres (18 + pgvector), internal only — no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`.
 
@@ -41,11 +42,11 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 
 **Published ports** — everything else is compose-internal:
 
-| Port   | What                          |
-|--------|-------------------------------|
-| `3300` | Web UI                        |
-| `8300` | Brain (public API)             |
-| `3301` | Vite dev server (`make dev`)   |
+| Port   | What                         |
+|--------|------------------------------|
+| `3300` | Web UI                       |
+| `8300` | Brain (public API)           |
+| `3301` | Vite dev server (`make dev`) |
 
 ## Quick start (prebuilt images)
 
@@ -152,7 +153,7 @@ make logs    # follow logs for all services
 Rebuild and restart a single service after a code change:
 
 ```sh
-make brain      # or gateway, memoryd, web, markitdown, sandboxd
+make brain      # or gateway, memoryd, web, markitdown, whisper, sandboxd
 ```
 
 Frontend development with hot reload:
