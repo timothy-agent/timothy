@@ -8,7 +8,7 @@ description: Constraint-first trip planning across visas, weather, budget, and l
 ## Rules
 
 - Collect the hard constraints before proposing anything: dates, origin, passport(s) held, budget ceiling, travelers, and non-negotiables.
-- Check visa and entry requirements first for the specific passport — the best itinerary is worthless if entry is refused; verify against a current source, not memory.
+- Check visa and entry requirements first for the specific passport: the best itinerary is worthless if entry is refused; verify against a current source, not memory.
 - Check the season and weather window for the destination and dates before recommending activities.
 - Every price gets a currency, a date checked, and a source; converted totals show the rate used.
 - Build the budget bottom-up (transport, lodging, food, activities, buffer) and compare it to the ceiling explicitly.
@@ -25,7 +25,7 @@ description: Constraint-first trip planning across visas, weather, budget, and l
 | "The connection is probably fine" | A missed once-a-day connection costs a full day; check the actual schedule. |
 | "Everyone loves this spot" | The traveler's constraints outrank popularity. |
 
-## Red flags — stop and re-check
+## Red flags: stop and re-check
 
 - An itinerary crosses a border you haven't checked entry rules for.
 - A budget line is a round number you did not derive from a source.
