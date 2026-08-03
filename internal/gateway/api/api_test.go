@@ -124,6 +124,23 @@ func (p silentCutProvider) Stream(context.Context, provider.CompletionRequest) (
 	return ch, nil
 }
 
+// midStreamCutProvider streams one real chunk, then closes silently —
+// the same race as silentCutProvider, but after content already
+// reached the client, so failover is no longer an option (D-044's
+// "errors after content are relayed honestly" contract) and the
+// client must instead get an explicit terminal error frame.
+type midStreamCutProvider struct{ name string }
+
+func (p midStreamCutProvider) Name() string                       { return p.name }
+func (p midStreamCutProvider) Kind() provider.Kind                 { return provider.KindAPI }
+func (p midStreamCutProvider) Capabilities() []provider.Capability { return nil }
+func (p midStreamCutProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent, 1)
+	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: "hel"}
+	close(ch)
+	return ch, nil
+}
+
 // snapshotFor builds a two-provider snapshot with a coding route
 // chaining first→second and an embedding route on first.
 func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
@@ -395,6 +412,43 @@ func TestStreamAttemptSilentCloseIsAFailure(t *testing.T) {
 	}
 	if !res.failedOver() {
 		t.Fatalf("failedOver() = false, want true so the chain can advance")
+	}
+}
+
+// TestStreamAttemptMidStreamCutSendsErrorEvent pins the fix for the
+// same silent-close race when it happens AFTER content already
+// reached the client: failover is not an option once streamed, so the
+// only way the client (and brain's D-044 persistTurn) learns anything
+// went wrong is an explicit EventError frame. Before this fix,
+// streamAttempt only mutated its own attemptResult and returned —
+// the client saw a clean channel close with the chunk it already had
+// and nothing else, so brain persisted neither an assistant message
+// nor a failure event.
+func TestStreamAttemptMidStreamCutSendsErrorEvent(t *testing.T) {
+	t.Parallel()
+	att := router.Attempt{Provider: midStreamCutProvider{name: "one"}, ProviderName: "one", Model: "m1"}
+	var sent []stream.StreamEvent
+	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{}, func(ev stream.StreamEvent) {
+		sent = append(sent, ev)
+	})
+
+	if !res.failed {
+		t.Fatalf("res.failed = false, want true for a mid-stream cut")
+	}
+	if res.entry.ErrorCode != "stream_cut" {
+		t.Fatalf("entry.ErrorCode = %q, want stream_cut", res.entry.ErrorCode)
+	}
+	if res.failedOver() {
+		t.Fatalf("failedOver() = true, want false: content already streamed, no failover once sent")
+	}
+	if len(sent) != 2 {
+		t.Fatalf("sent = %+v, want [chunk, error]", sent)
+	}
+	if sent[0].Type != stream.EventChunk {
+		t.Fatalf("sent[0].Type = %v, want EventChunk", sent[0].Type)
+	}
+	if sent[1].Type != stream.EventError || sent[1].Err == nil || sent[1].Err.Code != "stream_cut" {
+		t.Fatalf("sent[1] = %+v, want an EventError with code stream_cut", sent[1])
 	}
 }
 

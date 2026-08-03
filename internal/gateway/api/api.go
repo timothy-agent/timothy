@@ -334,10 +334,18 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 	// response: brain sees a clean channel close with no error to show,
 	// and falls back to a generic "stream ended without a terminal
 	// event." Surface a real reason here instead, same as any other
-	// pre-content failure.
+	// pre-content failure. If content had already streamed, the client
+	// still needs an explicit terminal frame (same as the EventError
+	// case above) or the turn silently vanishes with nothing persisted.
 	if !sawTerminal && !res.failed {
 		res.failed, res.reason = true, "provider stream closed without a terminal event"
 		res.entry.ErrorCode = "stream_cut"
+		if res.streamed {
+			send(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
+				Code:    "stream_cut",
+				Message: res.reason,
+			}})
+		}
 	}
 
 	res.entry.Status = finalStatus(res)
