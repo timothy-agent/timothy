@@ -281,9 +281,11 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 		return res
 	}
 
+	sawTerminal := false
 	for ev := range ch {
 		switch ev.Type {
 		case stream.EventError:
+			sawTerminal = true
 			res.entry.ErrorCode = ev.Err.Code
 			if !res.streamed {
 				res.failed, res.reason = true, ev.Err.Message
@@ -294,6 +296,7 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			res.entry.Usage = ev.Usage
 			send(ev)
 		case stream.EventIncomplete:
+			sawTerminal = true
 			if res.entry.Status == "" {
 				res.entry.Status = "incomplete"
 			}
@@ -302,6 +305,7 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			res.streamed = true
 			send(ev)
 		case stream.EventDone:
+			sawTerminal = true
 			// A stream that closes clean but produced no content (e.g.
 			// [DONE] with zero deltas) is not a success (D-044): tell the
 			// client before the terminal done, the same incomplete-then-
@@ -320,6 +324,20 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 		default:
 			send(ev)
 		}
+	}
+
+	// A provider channel can close having delivered nothing at all — no
+	// chunk, no EventDone, no EventError — if runStream's own terminal
+	// emit lost its race against the parent context right as the
+	// upstream connection cut (httpx.go's emit silently no-ops when its
+	// ctx is done). Left alone, this is a well-formed empty SSE
+	// response: brain sees a clean channel close with no error to show,
+	// and falls back to a generic "stream ended without a terminal
+	// event." Surface a real reason here instead, same as any other
+	// pre-content failure.
+	if !sawTerminal && !res.failed {
+		res.failed, res.reason = true, "provider stream closed without a terminal event"
+		res.entry.ErrorCode = "stream_cut"
 	}
 
 	res.entry.Status = finalStatus(res)

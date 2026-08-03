@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/metrics"
@@ -105,6 +106,22 @@ func oaiEmptyDone(t *testing.T) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// silentCutProvider's Stream returns a channel that closes having
+// delivered zero events — no chunk, no done, no error — standing in
+// for the upstream-cut race where runStream's own terminal emit lost
+// against the parent context (httpx.go's emit silently no-ops when
+// its ctx is done), so the provider layer never surfaces why.
+type silentCutProvider struct{ name string }
+
+func (p silentCutProvider) Name() string                    { return p.name }
+func (p silentCutProvider) Kind() provider.Kind              { return provider.KindAPI }
+func (p silentCutProvider) Capabilities() []provider.Capability { return nil }
+func (p silentCutProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent)
+	close(ch)
+	return ch, nil
 }
 
 // snapshotFor builds a two-provider snapshot with a coding route
@@ -349,6 +366,35 @@ func TestStreamChainExhausted(t *testing.T) {
 	}
 	if len(rec.all()) != 2 {
 		t.Fatalf("ledger entries = %d, want 2 failures", len(rec.all()))
+	}
+}
+
+// TestStreamAttemptSilentCloseIsAFailure pins the fix for a provider
+// channel closing with zero events (no chunk, no done, no error)
+// instead of any well-formed terminal — previously streamAttempt's
+// range loop simply never ran its body, leaving res all zero values
+// and nothing sent to the client, indistinguishable from a legitimate
+// empty completion. It must now report a real failure so the chain
+// can fail over (or the client at least gets a reason).
+func TestStreamAttemptSilentCloseIsAFailure(t *testing.T) {
+	t.Parallel()
+	att := router.Attempt{Provider: silentCutProvider{name: "one"}, ProviderName: "one", Model: "m1"}
+	var sent []stream.StreamEvent
+	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{}, func(ev stream.StreamEvent) {
+		sent = append(sent, ev)
+	})
+
+	if !res.failed {
+		t.Fatalf("res.failed = false, want true for a silently closed channel")
+	}
+	if res.entry.ErrorCode != "stream_cut" {
+		t.Fatalf("entry.ErrorCode = %q, want stream_cut", res.entry.ErrorCode)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent = %+v, want nothing relayed to the client for a pre-content failure", sent)
+	}
+	if !res.failedOver() {
+		t.Fatalf("failedOver() = false, want true so the chain can advance")
 	}
 }
 
