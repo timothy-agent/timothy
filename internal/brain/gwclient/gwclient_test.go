@@ -1,6 +1,7 @@
 package gwclient
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -109,6 +110,49 @@ func TestStreamEmitsTerminalWhenCutBeforeDone(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Type != stream.EventError || last.Err.Code != "gateway_stream_cut" {
 		t.Fatalf("last = %+v, want gateway_stream_cut error", last)
+	}
+}
+
+// TestStreamEmitsTerminalWhenCutAfterContextDone pins the fix for a
+// race where the caller's context (brain's turnCtx, ~30min ceiling)
+// expires at almost the same instant as a genuine upstream failure:
+// previously the synthetic gateway_stream_cut error was skipped
+// entirely whenever ctx.Err() != nil at that point, so persistTurn
+// (chat.go) received neither a failure nor any text and silently
+// appended nothing — a real ~30min OCI turn vanished with zero
+// session_events despite gateway having tried to report a real error.
+func TestStreamEmitsTerminalWhenCutAfterContextDone(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"chunk\",\"text\":\"par\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+		panic(http.ErrAbortHandler)
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	ch, err := c.Stream(ctx, StreamRequest{Route: "mini"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	// Drain the chunk, then cancel ctx before the read error happens —
+	// reproducing turnCtx's deadline firing right as the upstream cuts.
+	first := <-ch
+	if first.Type != stream.EventChunk {
+		t.Fatalf("first event = %+v, want chunk", first)
+	}
+	cancel()
+	close(release)
+
+	events := collect(t, ch)
+	if n := terminals(events); n != 1 {
+		t.Fatalf("terminals = %d, want exactly 1: %+v", n, events)
+	}
+	last := events[len(events)-1]
+	if last.Type != stream.EventError || last.Err.Code != "gateway_stream_cut" {
+		t.Fatalf("last = %+v, want gateway_stream_cut error even with ctx already done", last)
 	}
 }
 

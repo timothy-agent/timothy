@@ -240,8 +240,15 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan stream.S
 		})
 		// A read error AFTER the gateway's own terminal is just the
 		// connection tearing down — emitting another terminal would
-		// break the exactly-one-terminal contract.
-		if err != nil && !sawTerminal && ctx.Err() == nil {
+		// break the exactly-one-terminal contract. Unlike the previous
+		// version of this guard, ctx already being done does NOT skip
+		// this: turnCtx's own deadline racing gateway's terminal write
+		// must still surface as a real failure (D-044) rather than
+		// silently dropping it (persistTurn has nothing else to persist
+		// once text is empty and failure is nil) — the send below still
+		// only best-effort attempts delivery, racing ctx.Done() so it
+		// never blocks forever on an abandoned consumer.
+		if err != nil && !sawTerminal {
 			select {
 			case ch <- stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code: "gateway_stream_cut", Message: err.Error(), Retryable: true,
