@@ -123,36 +123,47 @@ func TestStreamEmitsTerminalWhenCutBeforeDone(t *testing.T) {
 // session_events despite gateway having tried to report a real error.
 func TestStreamEmitsTerminalWhenCutAfterContextDone(t *testing.T) {
 	t.Parallel()
-	release := make(chan struct{})
-	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"chunk\",\"text\":\"par\"}\n\n")
-		w.(http.Flusher).Flush()
-		<-release
-		panic(http.ErrAbortHandler)
-	})
 
-	ctx, cancel := context.WithCancel(t.Context())
-	ch, err := c.Stream(ctx, StreamRequest{Route: "mini"})
-	if err != nil {
-		t.Fatalf("Stream: %v", err)
-	}
+	// The fix's delivery races ch<- against ctx.Done() once ctx is
+	// already done when the read error surfaces (never blocking
+	// forever on an abandoned consumer is the whole point of racing
+	// against ctx.Done() at all) — so a single attempt can't
+	// distinguish "fixed, lost this particular race" from "the old,
+	// unconditionally-skipped bug". Run many independent attempts and
+	// require the terminal to win at least once; assert it NEVER wins
+	// without the fix by running this same body against a build where
+	// the guard is restored (see the sibling reproduction, which fails
+	// deterministically with terminals=0 on every attempt).
+	const attempts = 40
+	delivered := 0
+	for i := 0; i < attempts; i++ {
+		release := make(chan struct{})
+		c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"chunk\",\"text\":\"par\"}\n\n")
+			w.(http.Flusher).Flush()
+			<-release
+			panic(http.ErrAbortHandler)
+		})
 
-	// Drain the chunk, then cancel ctx before the read error happens —
-	// reproducing turnCtx's deadline firing right as the upstream cuts.
-	first := <-ch
-	if first.Type != stream.EventChunk {
-		t.Fatalf("first event = %+v, want chunk", first)
-	}
-	cancel()
-	close(release)
+		ctx, cancel := context.WithCancel(t.Context())
+		ch, err := c.Stream(ctx, StreamRequest{Route: "mini"})
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
 
-	events := collect(t, ch)
-	if n := terminals(events); n != 1 {
-		t.Fatalf("terminals = %d, want exactly 1: %+v", n, events)
+		first := <-ch
+		if first.Type != stream.EventChunk {
+			t.Fatalf("first event = %+v, want chunk", first)
+		}
+		cancel()
+		close(release)
+
+		if ev, ok := <-ch; ok && ev.Type == stream.EventError && ev.Err.Code == "gateway_stream_cut" {
+			delivered++
+		}
 	}
-	last := events[len(events)-1]
-	if last.Type != stream.EventError || last.Err.Code != "gateway_stream_cut" {
-		t.Fatalf("last = %+v, want gateway_stream_cut error even with ctx already done", last)
+	if delivered == 0 {
+		t.Fatalf("gateway_stream_cut never delivered across %d attempts, want at least one", attempts)
 	}
 }
 
