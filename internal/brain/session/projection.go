@@ -286,7 +286,15 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			if err := decode(ev, &f); err != nil {
 				return nil, err
 			}
-			item.Kind, item.Text = "error", f.Message
+			item.Kind = "error"
+			if f.Code == "chain_exhausted" {
+				// Older rows persisted the raw, provider-error-laden
+				// message; always render the short form regardless of
+				// what's stored so history and new turns read the same way.
+				item.Text = "all providers failed (chain_exhausted)"
+			} else {
+				item.Text = f.Message
+			}
 		default:
 			continue // session_started renders nothing
 		}

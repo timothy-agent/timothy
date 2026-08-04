@@ -394,6 +394,33 @@ func TestUITranscriptRendersTurnFailed(t *testing.T) {
 	}
 }
 
+// TestUITranscriptShortensChainExhausted confirms chain_exhausted
+// always renders as a short, code-based message — even for rows
+// persisted before the codes-only summary shipped, whose stored
+// message carries raw per-provider wire error text with no use to a
+// user reading history.
+func TestUITranscriptShortensChainExhausted(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		user(t, 1, "do the thing"),
+		ev(t, 2, KindTurnFailed, TurnFailed{
+			Code:    "chain_exhausted",
+			Message: `every provider attempt failed: AWS Bedrock/nova-pro: operation error Bedrock Runtime: ConverseStream, context canceled; GLM (Z.ai)/glm-5.2: terminated signal received`,
+		}),
+	}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %+v, want 2", items)
+	}
+	if items[1].Kind != "error" || items[1].Text != "all providers failed (chain_exhausted)" {
+		t.Fatalf("chain_exhausted item = %+v, want short form", items[1])
+	}
+}
+
 // TestUITranscriptExposesDuration confirms UITranscript carries an
 // assistant_turn's DurationMs through to the replay item — replayed
 // sessions must show the same turn-stats duration the live SSE meta
