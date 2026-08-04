@@ -4,7 +4,9 @@
 # it never lands in an image layer or the build history.
 FROM node:24.18.0-alpine AS build
 ARG GIT_SHA
+ARG APP_VERSION
 ENV GIT_SHA=${GIT_SHA}
+ENV APP_VERSION=${APP_VERSION}
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 RUN --mount=type=secret,id=hugeicons_token \

@@ -18,14 +18,23 @@ function gitSha() {
   }
 }
 
-const pkgVersion = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')).version
+// APP_VERSION is passed as a build arg in the Docker image build (see
+// web/Dockerfile), set from the release tag so the sidebar always
+// shows what was actually deployed — package.json's own version field
+// is a source file that drifts from the tag whenever a release ships
+// without a matching bump. Falls back to package.json for `npm run
+// dev`/local `npm run build`, where no build arg is set.
+function appVersion() {
+  if (process.env.APP_VERSION) return process.env.APP_VERSION
+  return JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')).version
+}
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
     __GIT_SHA__: JSON.stringify(gitSha()),
-    __APP_VERSION__: JSON.stringify(pkgVersion),
+    __APP_VERSION__: JSON.stringify(appVersion()),
   },
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },

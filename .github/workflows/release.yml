@@ -80,7 +80,14 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
-          build-args: ${{ matrix.build-args }}
+          # GIT_SHA/APP_VERSION are appended for every image, harmlessly
+          # ignored by Dockerfiles that don't declare the ARG. Sourced
+          # from the tag, not package.json, so the web sidebar's version
+          # can never drift from what was actually released.
+          build-args: |
+            ${{ matrix.build-args }}
+            GIT_SHA=${{ github.sha }}
+            APP_VERSION=${{ steps.version.outputs.value }}
           # web only: HugeIcons Pro registry auth, passed as a BuildKit
           # secret so it never lands in an image layer (not as a
           # build-arg or env, both of which persist into layer history).
