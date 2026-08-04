@@ -1,7 +1,7 @@
 # Timothy
 
 [![CI](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml/badge.svg)](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/timothy-agent/timothy?include_prereleases&label=release)](https://github.com/timothy-agent/timothy/releases/latest)
+[![Release](https://img.shields.io/github/v/release/timothy-agent/timothy?include_prereleases&sort=semver&label=release)](https://github.com/timothy-agent/timothy/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -57,11 +57,15 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 
 The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker and the released images.
 
-1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases/latest):
+1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases). While Timothy is alpha, every release is marked prerelease, so GitHub's `/releases/latest` redirect doesn't resolve; look up the newest tag instead:
 
    ```sh
    mkdir timothy && cd timothy
-   curl -fsSLo install.sh https://github.com/timothy-agent/timothy/releases/latest/download/install.sh
+   TAG=$(curl -fsSL https://api.github.com/repos/timothy-agent/timothy/releases \
+     | grep -E '"tag_name"|"published_at"' | paste - - \
+     | sed -E 's/.*"tag_name": "([^"]+)".*"published_at": "([^"]+)".*/\2 \1/' \
+     | sort -r | head -1 | awk '{print $2}')
+   curl -fsSLo install.sh "https://github.com/timothy-agent/timothy/releases/download/$TAG/install.sh"
    ```
 
 2. Read `install.sh` before running it. Then run it:
