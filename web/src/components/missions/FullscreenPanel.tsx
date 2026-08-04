@@ -51,7 +51,14 @@ export function FullscreenDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[calc(100vh-4rem)] max-w-[calc(100vw-4rem)] flex-col p-0 sm:max-w-[calc(100vw-4rem)]">
+      {/* The panel re-renders its own header inside the dialog, and its
+          FullscreenToggle (now a minimize button) sits exactly where
+          DialogContent's built-in close X lands — suppress the X so the
+          two don't overlap; Escape and the toggle both still exit. */}
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-[calc(100vh-4rem)] max-w-[calc(100vw-4rem)] flex-col p-0 sm:max-w-[calc(100vw-4rem)]"
+      >
         {children}
       </DialogContent>
     </Dialog>
