@@ -150,16 +150,28 @@ type relayFunc func(ctx context.Context, body io.Reader, ch chan<- stream.Stream
 // lifecycle, terminal error emission, and the incomplete+done tail
 // when a stream cuts off mid-flight. Drivers own only request building
 // and delta parsing.
+//
+// timeout bounds IDLE gaps, not the call's total wall-clock: a slow
+// CPU-only backend (e.g. remote Ollama) can take longer than any fixed
+// ceiling to finish a response while still emitting chunks the whole
+// time, so a flat deadline forces an impossible choice between cutting
+// live generation short and leaving a genuinely stuck stream to hang
+// forever. The watchdog resets on every relayed event; only a gap with
+// no activity for a full `timeout` cancels the call.
 func runStream(ctx context.Context, client *http.Client, timeout time.Duration, retries int, build func(ctx context.Context) (*http.Request, error), relay relayFunc) <-chan stream.StreamEvent {
 	ch := make(chan stream.StreamEvent)
 	go func() {
 		defer close(ch)
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
+		callCtx, cancel := context.WithCancelCause(ctx)
+		defer cancel(nil)
+		idle := time.AfterFunc(timeout, func() { cancel(context.DeadlineExceeded) })
+		defer idle.Stop()
+		resetIdle := func() { idle.Reset(timeout) }
 
 		resp, err := doWithRetry(callCtx, client, retries, func() (*http.Request, error) {
 			return build(callCtx)
 		}, func(ri stream.RetryInfo) bool {
+			resetIdle()
 			return emit(callCtx, ch, stream.StreamEvent{Type: stream.EventRetry, Retry: &ri})
 		})
 		if err != nil {
@@ -171,7 +183,24 @@ func runStream(ctx context.Context, client *http.Client, timeout time.Duration, 
 		}
 		defer func() { _ = resp.Body.Close() }()
 
-		finished, readErr := relay(callCtx, resp.Body, ch)
+		// relayCh proxies every event to ch and resets the idle watchdog
+		// on each one, so any activity (chunk, tool call, usage, retry)
+		// counts — not just raw bytes off the wire.
+		relayCh := make(chan stream.StreamEvent)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for ev := range relayCh {
+				resetIdle()
+				if !emit(callCtx, ch, ev) {
+					return
+				}
+			}
+		}()
+		finished, readErr := relay(callCtx, resp.Body, relayCh)
+		close(relayCh)
+		<-done
+
 		if finished {
 			return
 		}

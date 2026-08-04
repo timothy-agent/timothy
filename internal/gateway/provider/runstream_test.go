@@ -101,6 +101,67 @@ func TestRunStreamFinishedRelayGetsNoTail(t *testing.T) {
 	}
 }
 
+// TestRunStreamSurvivesSlowButActiveRelay pins the fix for a slow
+// CPU-only backend (e.g. remote Ollama) being cut off mid-generation:
+// the timeout bounds IDLE gaps, not the call's total wall-clock, so a
+// relay that keeps emitting well past `timeout` must still finish
+// cleanly as long as no single gap exceeds it.
+func TestRunStreamSurvivesSlowButActiveRelay(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv.Close)
+
+	const idle = 40 * time.Millisecond
+	ch := runStream(t.Context(), &http.Client{}, idle, maxRetries, buildFor(srv.URL),
+		func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
+			for i := 0; i < 5; i++ {
+				time.Sleep(idle / 2)
+				if !emit(ctx, ch, stream.StreamEvent{Type: stream.EventChunk, Text: "tok"}) {
+					return false, ctx.Err()
+				}
+			}
+			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone})
+			return true, nil
+		})
+	events := collect(t, ch)
+
+	chunks := eventsOfType(events, stream.EventChunk)
+	if len(chunks) != 5 {
+		t.Fatalf("want 5 chunks despite total runtime exceeding the idle timeout, got %+v", events)
+	}
+	if lastType(t, events) != stream.EventDone {
+		t.Fatalf("last = %v, want done", lastType(t, events))
+	}
+}
+
+// TestRunStreamCutsOffOnRealIdleGap confirms a genuine stall (no
+// activity at all) still cancels the call — the watchdog must not
+// become a way to hang forever.
+func TestRunStreamCutsOffOnRealIdleGap(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv.Close)
+
+	relayReturned := make(chan struct{})
+	ch := runStream(t.Context(), &http.Client{}, 30*time.Millisecond, maxRetries, buildFor(srv.URL),
+		func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
+			defer close(relayReturned)
+			<-ctx.Done()
+			return false, ctx.Err()
+		})
+	events := collect(t, ch)
+
+	select {
+	case <-relayReturned:
+	default:
+		t.Fatal("relay never observed cancellation")
+	}
+	inc := eventsOfType(events, stream.EventIncomplete)
+	if len(inc) != 1 {
+		t.Fatalf("want one incomplete event on genuine stall, got %+v", events)
+	}
+}
+
 func TestRunStreamRetryEventsPrecedeSuccess(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

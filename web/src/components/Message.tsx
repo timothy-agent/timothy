@@ -4,6 +4,7 @@ import {
   Link04Icon,
   Loading03Icon,
   Pdf02Icon,
+  ReloadIcon,
   Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -238,11 +239,12 @@ export function UserMessage({
           <span className="text-xs">No reply — the turn failed.</span>
           <button
             type="button"
+            aria-label="Retry"
             data-testid="retry-button"
             onClick={onRetry}
-            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
           >
-            retry
+            <HugeiconsIcon icon={ReloadIcon} className="size-3.5" />
           </button>
         </div>
       )}
@@ -304,11 +306,12 @@ export function ErrorMessage({
       {onRetry && (
         <button
           type="button"
+          aria-label="Retry"
           data-testid="retry-button"
           onClick={onRetry}
-          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
         >
-          retry
+          <HugeiconsIcon icon={ReloadIcon} className="size-3.5" />
         </button>
       )}
     </div>
@@ -381,11 +384,12 @@ export function AssistantMessage({
           {onRetry && (
             <button
               type="button"
+              aria-label="Retry"
               data-testid="retry-button"
               onClick={onRetry}
-              className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
             >
-              retry
+              <HugeiconsIcon icon={ReloadIcon} className="size-3.5" />
             </button>
           )}
         </div>
