@@ -1,11 +1,12 @@
-import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Delete02Icon, Folder01Icon, LockIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   deleteSecretBackendConfig,
   getSecretBackendConfig,
   listSecretBackends,
   putSecretBackendConfig,
+  secretStatus,
   setDefaultSecretBackend,
   setSecretStorage,
   testSecretBackend,
@@ -20,8 +21,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
+import { awsRegions } from './presets'
 import { ErrorBanner, Field } from './shared'
 import { errText } from './util'
+
+// Brand colors for the official marks in ProviderLogo's sprite
+// (plogo-aws, plogo-vault), matching their real product colors.
+const AWS_BRAND_COLOR = '#232F3E'
+const VAULT_BRAND_COLOR = '#000000'
+
+const ASM_REGION_CHAIN_DEFAULT = '__chain_default__'
 
 export function SecretsTab() {
   const [error, setError] = useState<string | null>(null)
@@ -37,36 +46,105 @@ export function SecretsTab() {
     setDefaultSecretBackend(b).then(refresh, (err: unknown) => setError(errText(err)))
   }
 
+  // Cards render default-first, so the backend everything else routes
+  // through is always the top card regardless of setup order.
+  const cards = [
+    {
+      key: 'db',
+      isDefault: state('db')?.default ?? true,
+      render: () => (
+        <StorageCard isDefault={state('db')?.default ?? true} onMakeDefault={() => makeDefault('db')} />
+      ),
+    },
+    {
+      key: 'vault',
+      isDefault: state('vault')?.default ?? false,
+      render: () => (
+        <VaultCard
+          isDefault={state('vault')?.default ?? false}
+          onMakeDefault={() => makeDefault('vault')}
+          onBackendsChanged={refresh}
+          onError={setError}
+        />
+      ),
+    },
+    {
+      key: 'asm',
+      isDefault: state('asm')?.default ?? false,
+      render: () => (
+        <ASMCard
+          isDefault={state('asm')?.default ?? false}
+          onMakeDefault={() => makeDefault('asm')}
+          onBackendsChanged={refresh}
+          onError={setError}
+        />
+      ),
+    },
+    {
+      key: 'file',
+      isDefault: state('file')?.default ?? false,
+      render: () => (
+        <FileCard
+          isDefault={state('file')?.default ?? false}
+          onMakeDefault={() => makeDefault('file')}
+          onBackendsChanged={refresh}
+          onError={setError}
+        />
+      ),
+    },
+  ].sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+
   return (
     <div className="mt-6 space-y-4">
       <p className="text-sm text-muted-foreground">
         Where credentials live. Exactly one backend is the default: every key or token entered
         anywhere (providers, connectors) is stored through it. Timothy storage keeps values
         encrypted in its own database; with Vault or AWS Secrets Manager as default you enter
-        the reference of a secret already held there — Timothy only reads, never writes,
+        the reference of a secret already held there, Timothy only reads, never writes,
         external systems.
       </p>
       <ErrorBanner message={error} />
-      <StorageCard isDefault={state('db')?.default ?? true} onMakeDefault={() => makeDefault('db')} />
-      <VaultCard
-        isDefault={state('vault')?.default ?? false}
-        onMakeDefault={() => makeDefault('vault')}
-        onBackendsChanged={refresh}
-        onError={setError}
-      />
-      <ASMCard
-        isDefault={state('asm')?.default ?? false}
-        onMakeDefault={() => makeDefault('asm')}
-        onBackendsChanged={refresh}
-        onError={setError}
-      />
-      <FileCard
-        isDefault={state('file')?.default ?? false}
-        onMakeDefault={() => makeDefault('file')}
-        onBackendsChanged={refresh}
-        onError={setError}
-      />
+      {cards.map((c) => (
+        <div key={c.key}>{c.render()}</div>
+      ))}
     </div>
+  )
+}
+
+// BackendIcon tiles a backend's icon consistently across cards. A
+// generic Hugeicon renders muted (Timothy storage, file mount); a
+// `logo` name renders the official mark from ProviderLogo's sprite on
+// its brand-color tile, same treatment as a configured provider.
+function BackendIcon({
+  icon,
+  logo,
+  brandColor,
+  className = 'size-9',
+}: {
+  icon?: IconSvgElement
+  logo?: string
+  brandColor?: string
+  className?: string
+}) {
+  if (logo) {
+    return (
+      <span
+        className={`${className} grid shrink-0 place-items-center rounded-lg text-white`}
+        style={{ backgroundColor: brandColor }}
+        aria-hidden="true"
+      >
+        <svg className="size-[60%] fill-current">
+          <use href={`#plogo-${logo}`} />
+        </svg>
+      </span>
+    )
+  }
+  return (
+    <span
+      className={`flex shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground ${className}`}
+    >
+      {icon && <HugeiconsIcon icon={icon} className="size-4.5" />}
+    </span>
   )
 }
 
@@ -107,6 +185,7 @@ function StorageCard({
   return (
     <div className="rounded-xl border border-border p-4">
       <div className="flex flex-wrap items-center gap-3">
+        <BackendIcon icon={LockIcon} />
         <span className="font-medium">Timothy storage</span>
         <span className="rounded bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium uppercase text-emerald-600 dark:text-emerald-400">
           built-in
@@ -174,6 +253,9 @@ function useBackendCard(
 }
 
 function BackendCardHeader({
+  icon,
+  logo,
+  brandColor,
   title,
   subtitle,
   configured,
@@ -186,6 +268,9 @@ function BackendCardHeader({
   onTest,
   onRemove,
 }: {
+  icon?: IconSvgElement
+  logo?: string
+  brandColor?: string
   title: string
   subtitle: string
   configured: boolean
@@ -201,6 +286,7 @@ function BackendCardHeader({
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
+        <BackendIcon icon={icon} logo={logo} brandColor={brandColor} />
         <span className="font-medium">{title}</span>
         <span
           className={`rounded px-1.5 py-px text-[10px] font-medium uppercase ${
@@ -255,6 +341,35 @@ type BackendCardProps = {
   onError: (msg: string) => void
 }
 
+// useCredentialStatus reports whether refName already holds a value
+// in the (always db-backed) secret store, for the "stored · encrypted"
+// badge next to a backend's own bootstrap credential (Vault token, ASM
+// secret key) — mirrors ProviderEdit's credential badge.
+function useCredentialStatus(refName: string, dep: unknown): boolean {
+  const [configured, setConfigured] = useState(false)
+  useEffect(() => {
+    if (!refName) {
+      setConfigured(false)
+      return
+    }
+    secretStatus(refName).then(
+      (s) => setConfigured(s.configured),
+      () => setConfigured(false),
+    )
+    // dep re-runs the check after a save/remove changes the ref's status.
+  }, [refName, dep])
+  return configured
+}
+
+function StoredBadge({ configured }: { configured: boolean }) {
+  if (!configured) return null
+  return (
+    <span className="shrink-0 rounded bg-good-soft px-1.5 py-0.5 text-[10px] font-semibold uppercase text-good">
+      stored · encrypted
+    </span>
+  )
+}
+
 function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: BackendCardProps) {
   const [cfg, setCfg] = useState({
     address: '',
@@ -272,6 +387,8 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
     onError,
     onBackendsChanged,
   )
+  const tokenStored = useCredentialStatus(cfg.token_ref || 'VAULT_TOKEN', card.status)
+  const secretIDStored = useCredentialStatus(cfg.secret_id_ref || 'VAULT_SECRET_ID', card.status)
 
   const save = () =>
     card.run(async () => {
@@ -292,6 +409,8 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
   return (
     <div className="rounded-xl border border-border p-4">
       <BackendCardHeader
+        logo="vault"
+        brandColor={VAULT_BRAND_COLOR}
         title="HashiCorp Vault"
         subtitle="KV v2 mount. Credentials pasted here are kept in the encrypted store, never in this config."
         configured={card.configured}
@@ -304,7 +423,7 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
         onTest={card.test}
         onRemove={card.remove}
       />
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Address">
           <Input
             value={cfg.address}
@@ -336,19 +455,22 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
           </Select>
         </Field>
         {cfg.auth === 'token' ? (
-          <Field label="Token">
-            <Input
-              type="password"
-              value={tokenPaste}
-              onChange={(e) => setTokenPaste(e.target.value)}
-              placeholder="paste to store/rotate"
-              className="mt-1 h-8"
-              autoComplete="off"
-            />
+          <Field label="Token" className="sm:col-span-2">
+            <div className="mt-1 flex items-center gap-2">
+              <Input
+                type="password"
+                value={tokenPaste}
+                onChange={(e) => setTokenPaste(e.target.value)}
+                placeholder="paste to store/rotate"
+                className="h-8"
+                autoComplete="off"
+              />
+              <StoredBadge configured={tokenStored} />
+            </div>
           </Field>
         ) : (
           <>
-            <Field label="Role ID">
+            <Field label="Role ID" className="sm:col-span-2">
               <Input
                 value={cfg.role_id}
                 onChange={(e) => setCfg((v) => ({ ...v, role_id: e.target.value }))}
@@ -356,15 +478,18 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
                 className="mt-1 h-8"
               />
             </Field>
-            <Field label="Secret ID">
-              <Input
-                type="password"
-                value={secretIDPaste}
-                onChange={(e) => setSecretIDPaste(e.target.value)}
-                placeholder="paste to store/rotate"
-                className="mt-1 h-8"
-                autoComplete="off"
-              />
+            <Field label="Secret ID" className="sm:col-span-2">
+              <div className="mt-1 flex items-center gap-2">
+                <Input
+                  type="password"
+                  value={secretIDPaste}
+                  onChange={(e) => setSecretIDPaste(e.target.value)}
+                  placeholder="paste to store/rotate"
+                  className="h-8"
+                  autoComplete="off"
+                />
+                <StoredBadge configured={secretIDStored} />
+              </div>
             </Field>
           </>
         )}
@@ -388,6 +513,7 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
     onError,
     onBackendsChanged,
   )
+  const secretKeyStored = useCredentialStatus(cfg.secret_key_ref || 'AWS_SECRET_ACCESS_KEY', card.status)
 
   const save = () =>
     card.run(async () => {
@@ -404,6 +530,8 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
   return (
     <div className="rounded-xl border border-border p-4">
       <BackendCardHeader
+        logo="aws"
+        brandColor={AWS_BRAND_COLOR}
         title="AWS Secrets Manager"
         subtitle="Test requires secretsmanager:ListSecrets; resolving keys only needs GetSecretValue."
         configured={card.configured}
@@ -416,14 +544,26 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
         onTest={card.test}
         onRemove={card.remove}
       />
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Region">
-          <Input
-            value={cfg.region}
-            onChange={(e) => setCfg((v) => ({ ...v, region: e.target.value }))}
-            placeholder="empty = chain default"
-            className="mt-1 h-8"
-          />
+          <Select
+            value={cfg.region || ASM_REGION_CHAIN_DEFAULT}
+            onValueChange={(v) =>
+              setCfg((c) => ({ ...c, region: v === ASM_REGION_CHAIN_DEFAULT ? '' : v }))
+            }
+          >
+            <SelectTrigger className="mt-1 h-8 w-full text-xs" aria-label="aws region">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ASM_REGION_CHAIN_DEFAULT}>Chain default</SelectItem>
+              {awsRegions.map((r) => (
+                <SelectItem key={r.value} value={r.value}>
+                  {r.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <Field label="Auth method">
           <Select value={cfg.auth} onValueChange={(auth) => setCfg((v) => ({ ...v, auth }))}>
@@ -437,13 +577,8 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
             </SelectContent>
           </Select>
         </Field>
-        {cfg.auth === 'chain' && (
-          <p className="self-end pb-1.5 text-xs text-muted-foreground">
-            Uses the chain mounted into the gateway — same as Bedrock, nothing stored.
-          </p>
-        )}
         {cfg.auth === 'profile' && (
-          <Field label="Profile">
+          <Field label="Profile" className="sm:col-span-2">
             <Input
               value={cfg.profile}
               onChange={(e) => setCfg((v) => ({ ...v, profile: e.target.value }))}
@@ -454,7 +589,7 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
         )}
         {cfg.auth === 'keys' && (
           <>
-            <Field label="Access key ID">
+            <Field label="Access key ID" className="sm:col-span-2">
               <Input
                 value={cfg.access_key_id}
                 onChange={(e) => setCfg((v) => ({ ...v, access_key_id: e.target.value }))}
@@ -462,15 +597,18 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
                 className="mt-1 h-8"
               />
             </Field>
-            <Field label="Secret access key">
-              <Input
-                type="password"
-                value={secretKeyPaste}
-                onChange={(e) => setSecretKeyPaste(e.target.value)}
-                placeholder="paste to store/rotate"
-                className="mt-1 h-8"
-                autoComplete="off"
-              />
+            <Field label="Secret access key" className="sm:col-span-2">
+              <div className="mt-1 flex items-center gap-2">
+                <Input
+                  type="password"
+                  value={secretKeyPaste}
+                  onChange={(e) => setSecretKeyPaste(e.target.value)}
+                  placeholder="paste to store/rotate"
+                  className="h-8"
+                  autoComplete="off"
+                />
+                <StoredBadge configured={secretKeyStored} />
+              </div>
             </Field>
           </>
         )}
@@ -504,8 +642,9 @@ function FileCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Back
   return (
     <div className="rounded-xl border border-border p-4">
       <BackendCardHeader
+        icon={Folder01Icon}
         title="File mount"
-        subtitle="Reads one file per secret from a directory mounted into the container — no third-party service, no credentials of its own."
+        subtitle="Reads one file per secret from a directory mounted into the container, no third-party service, no credentials of its own."
         configured={card.configured}
         status={card.status}
         busy={card.busy}

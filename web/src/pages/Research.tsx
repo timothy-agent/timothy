@@ -12,7 +12,7 @@ export function Research({ onNeedToken }: { onNeedToken: () => void }) {
       basePath="/research"
       lockedSkillHint="research-brief"
       emptyHeading="What do you want to research?"
-      emptySubtext="Ask a question that needs current facts — Timothy searches, reads sources, and cites everything it claims."
+      emptySubtext="Ask a question that needs current facts, Timothy searches, reads sources, and cites everything it claims."
       placeholder="Ask a research question…"
     />
   )

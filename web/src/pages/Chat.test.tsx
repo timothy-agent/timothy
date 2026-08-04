@@ -364,7 +364,7 @@ describe('live reattach', () => {
     fireEvent.change(input, { target: { value: 'hello' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Connection dropped — reattaching'))
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Connection dropped, reattaching'))
     await waitFor(() => expect(streamLive).toHaveBeenCalledWith('s1', expect.any(Function), expect.anything()))
     expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument()
 

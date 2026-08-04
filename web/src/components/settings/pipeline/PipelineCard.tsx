@@ -9,9 +9,9 @@ import { matchPreset } from '../presets'
 import { ProviderLogo } from '../ProviderLogo'
 import { ScoreBar } from './ScoreBar'
 
-const fmtLatency = (v?: number) => (v === undefined ? '—' : `${Math.round(v)} ms`)
+const fmtLatency = (v?: number) => (v === undefined ? 'N/A' : `${Math.round(v)} ms`)
 const fmtPrice = (v?: number) => (v === undefined ? 'unpriced' : `$${v}/MTok`)
-const fmtUptime = (v?: number) => (v === undefined ? '—' : `${Math.round(v * 100)}%`)
+const fmtUptime = (v?: number) => (v === undefined ? 'N/A' : `${Math.round(v * 100)}%`)
 
 export function PipelineCard({
   provider,

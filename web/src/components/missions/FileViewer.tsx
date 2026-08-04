@@ -136,7 +136,7 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
         )}
         {state.status === 'too-large' && (
           <p className="p-3 text-sm text-muted-foreground">
-            File is larger than {humanSize(missionFilePreviewCap)} — too large to preview.
+            File is larger than {humanSize(missionFilePreviewCap)}, too large to preview.
             Download it instead.
           </p>
         )}

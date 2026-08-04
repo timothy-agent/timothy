@@ -116,7 +116,7 @@ export function RoutesList() {
       <div className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <p className="text-sm text-muted-foreground">
-            Routes are named model chains agents route through — reorder providers within a route
+            Routes are named model chains agents route through, reorder providers within a route
             or add fallbacks from its own page.
           </p>
           <div className="flex items-end gap-2">
@@ -181,7 +181,7 @@ export function RoutesList() {
                       type="button"
                       onClick={() => remove(r)}
                       disabled={!!r.role}
-                      title={r.role ? `Serves the ${r.role} role — reassign that role first` : 'Delete route'}
+                      title={r.role ? `Serves the ${r.role} role, reassign that role first` : 'Delete route'}
                       aria-label={`Delete ${r.name} route`}
                       className="rounded p-1 text-muted-foreground hover:text-red-600 disabled:opacity-30 disabled:hover:text-muted-foreground"
                     >
@@ -201,7 +201,17 @@ export function RoutesList() {
                 ) : (
                   <p className="text-xs text-muted-foreground">stats loading…</p>
                 )}
-                <p className="text-xs text-muted-foreground">{r.chain.length} provider(s) in chain</p>
+                {r.chain.length > 0 ? (
+                  <ol className="space-y-0.5 text-xs text-muted-foreground">
+                    {r.chain.map((c, i) => (
+                      <li key={`${c.provider_id}-${c.model}-${i}`} className="truncate">
+                        {i + 1}. {nameOf(c.provider_id)} / <span className="font-mono">{c.model}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="text-xs text-muted-foreground">no providers in chain</p>
+                )}
               </div>
             )
           })}

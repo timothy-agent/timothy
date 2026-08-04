@@ -35,7 +35,7 @@ import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
 
 function formatDate(v?: string): string {
-  if (!v) return '—'
+  if (!v) return 'N/A'
   return new Date(v).toLocaleString()
 }
 

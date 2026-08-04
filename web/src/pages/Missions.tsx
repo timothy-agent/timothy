@@ -85,7 +85,7 @@ export function Missions() {
         ))}
         {missions.length === 0 && (
           <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No missions yet — create one to get started.
+            No missions yet, create one to get started.
           </div>
         )}
       </div>

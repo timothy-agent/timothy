@@ -32,7 +32,7 @@ export function ProvidersList() {
         </h2>
         {providers.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No providers configured yet — add one below.
+            No providers configured yet, add one below.
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -136,7 +136,7 @@ function ProviderCard({
         <div
           className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
         >
-          {test.ok ? `OK — ${test.latency_ms} ms` : `Failed: ${test.detail}`}
+          {test.ok ? `OK, ${test.latency_ms} ms` : `Failed: ${test.detail}`}
         </div>
       )}
 

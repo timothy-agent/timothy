@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
+import { formatDuration } from '../components/Activity'
 import { StackedBarChart } from '../components/charts/StackedBarChart'
 import { MultiLineChart } from '../components/charts/MultiLineChart'
 import { LatencyBars } from '../components/charts/LatencyBars'
@@ -247,26 +248,26 @@ export function Analytics() {
     range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : 'Spend this month'
   const spendHint = range === 'today' ? budgetHint(budget?.day) : range === '30d' ? budgetHint(budget?.month) : undefined
   const tiles = [
-    { label: spendLabel, value: s ? money(s.cost_usd) : '—', hint: spendHint },
+    { label: spendLabel, value: s ? money(s.cost_usd) : 'N/A', hint: spendHint },
     {
       label: 'Requests',
-      value: s ? compact(s.requests) : '—',
+      value: s ? compact(s.requests) : 'N/A',
       hint: s ? `${s.errors} errors` : undefined,
     },
     {
       label: 'Error rate',
-      value: s && s.requests > 0 ? `${((s.errors / s.requests) * 100).toFixed(1)}%` : '—',
+      value: s && s.requests > 0 ? `${((s.errors / s.requests) * 100).toFixed(1)}%` : 'N/A',
     },
     {
       label: 'Input tokens',
-      value: s ? compact(s.input_tokens) : '—',
+      value: s ? compact(s.input_tokens) : 'N/A',
       hint: s ? `${compact(s.cache_read_tokens)} cached reads` : undefined,
     },
     {
       label: 'Output tokens',
-      value: s ? compact(s.output_tokens) : '—',
+      value: s ? compact(s.output_tokens) : 'N/A',
     },
-    { label: 'Cache hit', value: data ? `${(cacheHit * 100).toFixed(0)}%` : '—' },
+    { label: 'Cache hit', value: data ? `${(cacheHit * 100).toFixed(0)}%` : 'N/A' },
   ]
 
   const colorOf = (g: string, groups: string[]) => palette[groups.indexOf(g) % palette.length]
@@ -337,7 +338,7 @@ export function Analytics() {
           <p className="mt-3 text-xs text-muted-foreground">
             {compact(s.unpriced_requests)} call{s.unpriced_requests === 1 ? '' : 's'} in range
             {' '}had no configured price and are excluded from spend
-            {estimatedTotal > 0 && <> — roughly ≈{money(estimatedTotal)} at catalog prices</>}.
+            {estimatedTotal > 0 && <>, roughly ≈{money(estimatedTotal)} at catalog prices</>}.
           </p>
         )}
 
@@ -489,9 +490,9 @@ export function Analytics() {
                 {(data?.latency ?? []).map((l) => (
                   <tr key={l.provider} className="border-t border-border/60">
                     <td className="py-2">{l.provider}</td>
-                    <td className="py-2 text-right">{Math.round(l.p50_ms)} ms</td>
-                    <td className="py-2 text-right">{Math.round(l.p95_ms)} ms</td>
-                    <td className="py-2 text-right">{Math.round(l.p99_ms)} ms</td>
+                    <td className="py-2 text-right">{formatDuration(Math.round(l.p50_ms))}</td>
+                    <td className="py-2 text-right">{formatDuration(Math.round(l.p95_ms))}</td>
+                    <td className="py-2 text-right">{formatDuration(Math.round(l.p99_ms))}</td>
                     <td className="py-2 text-right text-muted-foreground">{compact(l.requests)}</td>
                   </tr>
                 ))}
@@ -610,7 +611,7 @@ function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
               <td className="py-2 text-right text-muted-foreground">{compact(r.requests)}</td>
               <td className="py-2 text-right font-medium">{money(r.cost_usd)}</td>
               <td className="py-2 text-right text-muted-foreground">
-                {totalCost > 0 ? `${((r.cost_usd / totalCost) * 100).toFixed(0)}%` : '—'}
+                {totalCost > 0 ? `${((r.cost_usd / totalCost) * 100).toFixed(0)}%` : 'N/A'}
               </td>
             </tr>
           ))}

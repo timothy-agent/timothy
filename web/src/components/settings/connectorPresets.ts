@@ -43,7 +43,7 @@ export const connectorPresets: ConnectorPreset[] = [
     id: 'github',
     name: 'GitHub',
     kind: 'mcp',
-    description: 'Issues, PRs, code — via MCP',
+    description: 'Issues, PRs, code, via MCP',
     logo: 'github',
     brandColor: '#24292F',
     endpoint: 'https://api.githubcopilot.com/mcp/',

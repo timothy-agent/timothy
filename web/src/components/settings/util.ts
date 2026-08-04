@@ -31,19 +31,19 @@ export function secretField(
       return {
         type: 'text',
         placeholder: 'Vault path, e.g. timothy/anthropic#api_key',
-        hint: 'Default backend is Vault — paste the path of the secret, not the secret itself.',
+        hint: 'Default backend is Vault, paste the path of the secret, not the secret itself.',
       }
     case 'asm':
       return {
         type: 'text',
         placeholder: 'ASM name or ARN, optional #json_key',
-        hint: 'Default backend is AWS Secrets Manager — paste the secret name, not the secret itself.',
+        hint: 'Default backend is AWS Secrets Manager, paste the secret name, not the secret itself.',
       }
     case 'file':
       return {
         type: 'text',
         placeholder: 'filename in the mounted secrets directory',
-        hint: 'Default backend is a file mount — enter the filename, not the secret itself.',
+        hint: 'Default backend is a file mount, enter the filename, not the secret itself.',
       }
     default:
       return { type: 'password', placeholder: dbPlaceholder, hint: '' }

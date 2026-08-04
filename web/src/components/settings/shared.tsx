@@ -38,16 +38,18 @@ export function ErrorBanner({ message }: { message: string | null }) {
 export function Field({
   label,
   hint,
+  className,
   children,
 }: {
   label: string
   hint?: string
+  className?: string
   children: ReactNode
 }) {
   return (
-    <label className="block text-sm font-medium text-foreground">
+    <label className={`block text-sm font-medium text-foreground ${className ?? ''}`}>
       {label}
-      {hint && <span className="ml-1.5 font-normal text-muted-foreground">— {hint}</span>}
+      {hint && <span className="ml-1.5 font-normal text-muted-foreground">· {hint}</span>}
       {children}
     </label>
   )

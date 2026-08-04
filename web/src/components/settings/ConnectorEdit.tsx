@@ -166,7 +166,7 @@ export function ConnectorEdit() {
             {testing
               ? 'Testing connection…'
               : test?.ok
-                ? 'Connection OK — tools are servable.'
+                ? 'Connection OK, tools are servable.'
                 : test && !test.ok
                   ? `Failed: ${test.error}`
                   : 'Not tested yet.'}

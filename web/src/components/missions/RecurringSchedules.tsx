@@ -18,7 +18,7 @@ import { Toggle } from '../settings/shared'
 import { errText } from '../settings/util'
 
 function formatDate(v?: string): string {
-  if (!v) return '—'
+  if (!v) return 'N/A'
   return new Date(v).toLocaleString()
 }
 

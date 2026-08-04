@@ -29,7 +29,7 @@ export function Settings() {
       <div className="mx-auto max-w-full px-8 py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Providers, task allocation, and feature switches — changes serve immediately, no
+          Providers, task allocation, and feature switches: changes serve immediately, no
           restarts.
         </p>
         <div className="mt-5 flex gap-1 border-b border-border">

@@ -144,7 +144,6 @@ function CredentialSection({
   const [secretValue, setSecretValue] = useState('')
   const [accessKeyId, setAccessKeyId] = useState('')
   const [secretAccessKey, setSecretAccessKey] = useState('')
-  const [sessionToken, setSessionToken] = useState('')
   const [savingSecret, setSavingSecret] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -180,7 +179,6 @@ function CredentialSection({
     JSON.stringify({
       access_key_id: stripPaste(accessKeyId.trim()),
       secret_access_key: stripPaste(secretAccessKey.trim()),
-      ...(sessionToken.trim() ? { session_token: stripPaste(sessionToken.trim()) } : {}),
     })
 
   const saveSecretValue = async () => {
@@ -196,7 +194,6 @@ function CredentialSection({
       setSecretValue('')
       setAccessKeyId('')
       setSecretAccessKey('')
-      setSessionToken('')
       refreshSecretStatus()
       onChanged()
       toast.success('Key saved')
@@ -251,7 +248,7 @@ function CredentialSection({
           {testing
             ? 'Testing connection…'
             : test?.ok
-              ? `OK — ${test.model} answered in ${test.latency_ms} ms.`
+              ? `OK, ${test.model} answered in ${test.latency_ms} ms.`
               : test && !test.ok
                 ? `Failed after ${test.latency_ms} ms: ${test.detail}`
                 : 'Not tested yet.'}
@@ -310,23 +307,6 @@ function CredentialSection({
             >
               Save
             </Button>
-            <details className="pt-1">
-              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-                Advanced — session token
-              </summary>
-              <Input
-                type="password"
-                value={sessionToken}
-                onChange={(e) => setSessionToken(e.target.value)}
-                placeholder="paste session token"
-                className="mt-1.5 h-10"
-                autoComplete="off"
-                aria-label="Session Token"
-              />
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                Only needed for temporary STS credentials.
-              </p>
-            </details>
           </>
         ) : (
           <div className="flex gap-2">
@@ -346,20 +326,20 @@ function CredentialSection({
             </Button>
           </div>
         )}
-        <p className="text-sm text-muted-foreground">
-          {bedrock
-            ? 'Create an IAM user with Bedrock access and generate an access key pair.'
-            : defaultBackend === 'vault'
+        {!bedrock && (
+          <p className="text-sm text-muted-foreground">
+            {defaultBackend === 'vault'
               ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
               : defaultBackend === 'asm'
                 ? 'The key stays in AWS Secrets Manager; only its name is saved. The default backend is set in the Secrets tab.'
                 : defaultBackend === 'file'
                   ? 'The key stays in the mounted file; only its filename is saved. The default backend is set in the Secrets tab.'
                   : 'Encrypted with the master key and kept in Timothy’s database.'}
-        </p>
+          </p>
+        )}
         <details className="pt-1">
           <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-            Advanced — reference name
+            Advanced: reference name
           </summary>
           <Input
             value={ref}
@@ -369,7 +349,7 @@ function CredentialSection({
             className="mt-1.5 h-10"
           />
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Storage name for this provider’s key — never the key itself. Change it only to
+            Storage name for this provider’s key, never the key itself. Change it only to
             share or repoint an already-stored secret.
           </p>
         </details>
@@ -447,7 +427,7 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
         hint={
           timeoutSaving
             ? 'Saving…'
-            : 'Go duration, e.g. "20m" — empty uses the default. Enter or click away to save.'
+            : 'Go duration, e.g. "20m", empty uses the default. Enter or click away to save.'
         }
       >
         <Input
@@ -657,7 +637,7 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
           onChange={(e) => setEmbeddings(e.target.checked)}
           className="size-4 rounded border-border"
         />
-        Embeddings model — routes the embedding route to this instead of chat
+        Embeddings model, routes the embedding route to this instead of chat
       </label>
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
         <input
@@ -666,7 +646,7 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
           onChange={(e) => setVision(e.target.checked)}
           className="size-4 rounded border-border"
         />
-        Vision — this model can accept image attachments
+        Vision, this model can accept image attachments
       </label>
     </section>
   )

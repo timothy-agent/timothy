@@ -236,7 +236,7 @@ export function UserMessage({
       </div>
       {onRetry && (
         <div className="flex items-center gap-2 text-muted-foreground">
-          <span className="text-xs">No reply — the turn failed.</span>
+          <span className="text-xs">No reply, the turn failed.</span>
           <button
             type="button"
             aria-label="Retry"

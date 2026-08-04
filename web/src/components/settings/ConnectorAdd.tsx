@@ -164,7 +164,7 @@ export function ConnectorAdd() {
       </div>
 
       <div className="grid max-w-3xl gap-5">
-        <Field label="Name" hint="lowercase slug — prefixes this connector's tool names">
+        <Field label="Name" hint="lowercase slug, prefixes this connector's tool names">
           <Input
             value={name}
             onChange={(e) => {
@@ -265,10 +265,10 @@ export function ConnectorAdd() {
                 {busy
                   ? 'Testing connection…'
                   : tested
-                    ? 'Connection OK — tools are servable.'
+                    ? 'Connection OK, tools are servable.'
                     : test && !test.ok
-                      ? `Connection failed: ${test.error}. The connector was saved disabled — fix and retry.`
-                      : 'Not tested yet — run a test before adding.'}
+                      ? `Connection failed: ${test.error}. The connector was saved disabled, fix and retry.`
+                      : 'Not tested yet, run a test before adding.'}
               </span>
               <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
                 {busy ? 'Testing…' : 'Test connection'}

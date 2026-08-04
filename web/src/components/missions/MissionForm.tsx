@@ -248,7 +248,7 @@ export function MissionForm({
         </div>
         {repeat && (
           <p className="text-xs text-muted-foreground">
-            Coding missions aren't supported on a recurring schedule yet — each fire has no
+            Coding missions aren't supported on a recurring schedule yet: each fire has no
             repository to work in.
           </p>
         )}
@@ -362,7 +362,7 @@ export function MissionForm({
                 onChange={(e) => setExpiresAt(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Server time — the schedule stops firing after this moment. Empty means it never
+                Server time. The schedule stops firing after this moment. Empty means it never
                 expires.
               </p>
             </div>
@@ -429,7 +429,7 @@ export function MissionForm({
                   id="mission-escalation-route"
                   value={escalationRoute}
                   onChange={(e) => setEscalationRoute(e.target.value)}
-                  placeholder="Off — set to switch route after a failed or reworked turn"
+                  placeholder="Off, set to switch route after a failed or reworked turn"
                 />
               </div>
             )}

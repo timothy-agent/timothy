@@ -50,7 +50,7 @@ describe('RoutesList serving states', () => {
       },
     ])
     renderList()
-    expect(await screen.findByText('sonnet')).toBeInTheDocument()
+    expect(await screen.findAllByText('sonnet')).toHaveLength(2)
     expect(screen.getByText(/serving/)).toBeInTheDocument()
   })
 

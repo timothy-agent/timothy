@@ -131,34 +131,10 @@ describe('ProviderAdd bedrock credential inputs', () => {
       secret_access_key: 'secretvalue123',
     })
 
-    await screen.findByText(/^OK —/)
+    await screen.findByText(/^OK,/)
     fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
 
     await waitFor(() => expect(createProvider).toHaveBeenCalled())
-  })
-
-  it('includes the session token in the JSON payload when the advanced field is filled', async () => {
-    renderPage('bedrock')
-
-    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), {
-      target: { value: 'AKIAEXAMPLE' },
-    })
-    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), {
-      target: { value: 'secretvalue123' },
-    })
-    fireEvent.click(screen.getByText('Advanced — session token'))
-    fireEvent.change(screen.getByPlaceholderText('paste session token'), {
-      target: { value: 'sts-token-abc' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
-
-    await waitFor(() => expect(setSecret).toHaveBeenCalled())
-    const [, payload] = vi.mocked(setSecret).mock.calls[0]
-    expect(JSON.parse(payload)).toEqual({
-      access_key_id: 'AKIAEXAMPLE',
-      secret_access_key: 'secretvalue123',
-      session_token: 'sts-token-abc',
-    })
   })
 
   it('mentions no JSON in the bedrock key hint copy', async () => {

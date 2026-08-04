@@ -42,7 +42,6 @@ export function ProviderAdd() {
   const [key, setKey] = useState('')
   const [accessKeyId, setAccessKeyId] = useState('')
   const [secretAccessKey, setSecretAccessKey] = useState('')
-  const [sessionToken, setSessionToken] = useState('')
   const [ref, setRef] = useState('')
   const [refEdited, setRefEdited] = useState(false)
   const [model, setModel] = useState('')
@@ -64,7 +63,6 @@ export function ProviderAdd() {
     setKey('')
     setAccessKeyId('')
     setSecretAccessKey('')
-    setSessionToken('')
     setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
@@ -125,7 +123,6 @@ export function ProviderAdd() {
     JSON.stringify({
       access_key_id: stripPaste(accessKeyId.trim()),
       secret_access_key: stripPaste(secretAccessKey.trim()),
-      ...(sessionToken.trim() ? { session_token: stripPaste(sessionToken.trim()) } : {}),
     })
   const hasKey = bedrockSplit ? !!(accessKeyId.trim() && secretAccessKey.trim()) : !!key.trim()
 
@@ -313,42 +310,6 @@ export function ProviderAdd() {
                 {keyError}
               </p>
             )}
-            {!keyError && preset.keyHint && (
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                {preset.keyHint}
-                {preset.keyURL && (
-                  <>
-                    {' '}
-                    <a
-                      href={preset.keyURL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                    >
-                      Open {preset.name} →
-                    </a>
-                  </>
-                )}
-              </p>
-            )}
-            <details className="mt-3">
-              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-                Advanced — session token
-              </summary>
-              <Field label="Session Token (optional)" hint="only needed for temporary STS credentials">
-                <Input
-                  type="password"
-                  value={sessionToken}
-                  onChange={(e) => {
-                    setSessionToken(e.target.value)
-                    invalidate()
-                  }}
-                  placeholder="paste session token"
-                  className="mt-1.5 h-10"
-                  autoComplete="off"
-                />
-              </Field>
-            </details>
           </div>
         )}
         {wantsKey &&
@@ -414,7 +375,7 @@ export function ProviderAdd() {
 
         <details className="group">
           <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-            Advanced — {isBedrock ? 'credential reference' : 'base URL & credential reference'}
+            Advanced: {isBedrock ? 'credential reference' : 'base URL & credential reference'}
           </summary>
           <div className="mt-3 grid gap-5 sm:grid-cols-2">
             {!isBedrock && (
@@ -459,10 +420,10 @@ export function ProviderAdd() {
             {busy
               ? `Sending test completion to ${model.trim() || '…'}…`
               : tested
-                ? `OK — ${test?.model} answered in ${test?.latency_ms} ms.`
+                ? `OK, ${test?.model} answered in ${test?.latency_ms} ms.`
                 : test && !test.ok
                   ? `Failed after ${test.latency_ms} ms: ${test.detail}`
-                  : 'Not tested yet — run a test before adding.'}
+                  : 'Not tested yet, run a test before adding.'}
           </span>
           <Button size="sm" variant="test" disabled={busy} onClick={() => void runTest()}>
             {busy ? 'Testing…' : 'Test connection'}

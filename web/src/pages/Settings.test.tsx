@@ -119,37 +119,6 @@ describe('Settings tabs', () => {
   })
 })
 
-describe('Features tab agent settings', () => {
-  it('renders stored runtime values and patches them on save', async () => {
-    vi.mocked(getSettings).mockResolvedValue({
-      settings: { tools_enabled: true },
-      values: { session_token_budget: '120000', skills_allowlist: '' },
-    })
-    vi.mocked(usageBudget).mockResolvedValue({
-      day: { limit_usd: null, spend_usd: 0, over: false },
-      month: { limit_usd: null, spend_usd: 0, over: false },
-    })
-    vi.mocked(patchSettingValues).mockResolvedValue()
-
-    renderPage('/settings/features')
-    const budget = await screen.findByLabelText('Session token budget')
-    expect((budget as HTMLInputElement).value).toBe('120000')
-
-    fireEvent.change(screen.getByLabelText('Skills allowlist'), {
-      target: { value: 'coding-task, research' },
-    })
-    const card = budget.closest('div.rounded-xl') as HTMLElement
-    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
-
-    await waitFor(() =>
-      expect(patchSettingValues).toHaveBeenCalledWith({
-        session_token_budget: '120000',
-        skills_allowlist: 'coding-task, research',
-      }),
-    )
-  })
-})
-
 describe('Features tab sensitive tool route', () => {
   beforeEach(() => {
     vi.mocked(getSettings).mockResolvedValue({

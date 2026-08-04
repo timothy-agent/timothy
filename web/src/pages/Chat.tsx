@@ -381,7 +381,7 @@ export function Chat({
           // tab, a retry) — not a failure, just attach to it like a
           // page reload mid-turn would. attachLive owns streaming/abort
           // state from here, so the finally below must not touch it.
-          toast.info('A reply is already in progress — reattaching')
+          toast.info('A reply is already in progress, reattaching')
           handedOffToLive = true
           attachLive(sessionRef.current!)
         } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
@@ -392,7 +392,7 @@ export function Chat({
         // likely still alive server-side. Reattach via /live instead of
         // surfacing a false "failed" state; attachLive's own error path
         // falls back to a transcript refetch if the turn is in fact gone.
-        toast.info('Connection dropped — reattaching')
+        toast.info('Connection dropped, reattaching')
         handedOffToLive = true
         attachLive(sessionRef.current)
       } else {
@@ -463,7 +463,7 @@ export function Chat({
           // (another tab's send/retry won the race) — attach to it
           // instead of showing a failure. attachLive owns
           // streaming/abort state from here.
-          toast.info('A reply is already in progress — reattaching')
+          toast.info('A reply is already in progress, reattaching')
           handedOffToLive = true
           attachLive(sessionId)
         } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
@@ -473,7 +473,7 @@ export function Chat({
         // itself runs detached from this request (D-042), so it's very
         // likely still alive server-side. Reattach via /live instead of
         // surfacing a false "failed" state.
-        toast.info('Connection dropped — reattaching')
+        toast.info('Connection dropped, reattaching')
         handedOffToLive = true
         attachLive(sessionId)
       }

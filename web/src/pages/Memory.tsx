@@ -129,7 +129,7 @@ function Queue() {
 
   if (!loaded) return <p className="text-sm text-muted-foreground">Loading…</p>
   if (pending.length === 0)
-    return <p className="text-sm text-muted-foreground">Queue is empty — nothing awaits confirmation.</p>
+    return <p className="text-sm text-muted-foreground">Queue is empty, nothing awaits confirmation.</p>
 
   return (
     <div className="space-y-3">
@@ -295,7 +295,7 @@ function Browser() {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Saved directly as an active memory — user-explicit facts skip the queue.
+          Saved directly as an active memory, user-explicit facts skip the queue.
         </p>
       </div>
 

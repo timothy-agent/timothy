@@ -50,13 +50,13 @@ export function ConnectorsList() {
           {connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Integrations the agent can use as tools — each connector&apos;s tools appear to the
+          Integrations the agent can use as tools, each connector&apos;s tools appear to the
           model as <span className="font-mono text-xs">name_tool</span> and go through the same
           permission prompts as everything else.
         </p>
         {connectors.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No connectors yet — add one below.
+            No connectors yet, add one below.
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

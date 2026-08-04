@@ -49,7 +49,7 @@ export function EntityGraph({
   if (data.entities.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No entities yet — the graph builds as Timothy extracts memories.
+        No entities yet, the graph builds as Timothy extracts memories.
       </p>
     )
   }

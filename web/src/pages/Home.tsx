@@ -121,7 +121,7 @@ export function Home() {
           ))}
           {agents.length === 0 && (
             <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-              No agents configured yet — the default agent will serve new chats.
+              No agents configured yet, the default agent will serve new chats.
             </div>
           )}
         </div>
