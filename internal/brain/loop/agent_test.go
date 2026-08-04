@@ -262,6 +262,94 @@ func TestAgentToolCallThenAnswer(t *testing.T) {
 	}
 }
 
+// cancelThenCutGateway streams one chunk, waits until the caller's
+// context is canceled, then closes the channel bare — no terminal.
+// This is the exact shape of the turn deadline racing a provider cut.
+type cancelThenCutGateway struct{ ctxDone <-chan struct{} }
+
+func (g *cancelThenCutGateway) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
+func (g *cancelThenCutGateway) Stream(_ context.Context, _ gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent)
+	go func() {
+		defer close(ch)
+		ch <- stream.StreamEvent{Type: stream.EventChunk, Text: "par"}
+		<-g.ctxDone
+	}()
+	return ch, nil
+}
+
+// TestAgentTerminalSurvivesContextCancel pins the emitFinal fix: when
+// the turn context dies at the same instant the provider stream cuts
+// with no terminal, the loop's synthesized incomplete event must still
+// reach a live consumer — the old emit raced ctx.Done() and could drop
+// it, leaving the relay with nothing to persist (a real ~30min turn
+// once vanished with zero session_events this way).
+func TestAgentTerminalSurvivesContextCancel(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	gw := &cancelThenCutGateway{ctxDone: ctx.Done()}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(ctx, Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := <-ch
+	if first.Type != stream.EventChunk {
+		t.Fatalf("first event = %+v, want chunk", first)
+	}
+	cancel()
+	evs := collect(t, ch)
+
+	inc := ofType(evs, stream.EventIncomplete)
+	if len(inc) != 1 || !strings.Contains(inc[0].Text, "without a terminal event") {
+		t.Fatalf("incomplete events = %+v, want exactly one no-terminal incomplete", inc)
+	}
+}
+
+// TestAgentToolPanicBecomesErrorResult pins the recover in executeOne:
+// a panicking tool must come back to the model as an error result
+// (D-009), not crash the process — executeOne runs inside an errgroup
+// worker, and an unrecovered panic there takes down every active turn
+// and mission with it.
+func TestAgentToolPanicBecomesErrorResult(t *testing.T) {
+	t.Parallel()
+	bomb := &tools.Tool{
+		Name:        "bomb",
+		Description: "panics",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			panic("boom")
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"bomb", `{}`}),
+		finalStep("survived"),
+	}}
+	a, _, _, _ := testAgent(t, gw, bomb)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	results := ofType(evs, stream.EventToolResult)
+	if len(results) != 1 || results[0].ToolResult.Status != "error" {
+		t.Fatalf("tool results = %+v, want one error result", results)
+	}
+	if !strings.Contains(results[0].ToolResult.Digest, "internal error") {
+		t.Fatalf("digest = %q, want panic folded into feedback", results[0].ToolResult.Digest)
+	}
+	if got := ofType(evs, stream.EventDone); len(got) != 1 {
+		t.Fatalf("done events = %d, want the turn to continue and finish", len(got))
+	}
+}
+
 func TestAgentParallelCallsRunConcurrently(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex

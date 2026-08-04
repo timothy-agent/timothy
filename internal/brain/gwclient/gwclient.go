@@ -240,20 +240,22 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan stream.S
 		})
 		// A read error AFTER the gateway's own terminal is just the
 		// connection tearing down — emitting another terminal would
-		// break the exactly-one-terminal contract. Unlike the previous
-		// version of this guard, ctx already being done does NOT skip
-		// this: turnCtx's own deadline racing gateway's terminal write
-		// must still surface as a real failure (D-044) rather than
-		// silently dropping it (persistTurn has nothing else to persist
-		// once text is empty and failure is nil) — the send below still
-		// only best-effort attempts delivery, racing ctx.Done() so it
-		// never blocks forever on an abandoned consumer.
+		// break the exactly-one-terminal contract. ctx already being
+		// done does NOT skip this: turnCtx's own deadline racing gateway's
+		// terminal write must still surface as a real failure (D-044)
+		// rather than silently dropping it. Delivery deliberately does
+		// NOT race ctx.Done(): with both select cases ready (deadline
+		// fired, consumer mid-receive) Go picks randomly, and that coin
+		// flip has eaten the only evidence of a real ~30min turn. Every
+		// consumer of this channel drains until close, so the send
+		// succeeds immediately in practice; the timeout only bounds a
+		// hypothetically abandoned consumer.
 		if err != nil && !sawTerminal {
 			select {
 			case ch <- stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code: "gateway_stream_cut", Message: err.Error(), Retryable: true,
 			}}:
-			case <-ctx.Done():
+			case <-time.After(5 * time.Second):
 			}
 		}
 	}()

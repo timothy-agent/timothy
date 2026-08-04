@@ -627,6 +627,58 @@ func TestEmptyResponsePersistsTurnFailed(t *testing.T) {
 	}
 }
 
+// TestBareStreamClosePersistsTurnAborted pins the last backstop in the
+// terminal-delivery chain: when the upstream channel closes with no
+// events at all — every producer's terminal lost to the turn deadline
+// racing a stream cut — persistTurn must synthesize a turn_failed
+// rather than append nothing (a real ~30min turn once vanished with
+// zero session_events this way).
+func TestBareStreamClosePersistsTurnAborted(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{} // no events: channel closes bare
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	want := []string{session.KindSessionStarted, session.KindUserMessage, session.KindTurnFailed}
+	if kinds := log.kinds("s1"); strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
+	}
+
+	events, _ := log.Events(t.Context(), "s1")
+	var failed session.TurnFailed
+	if err := json.Unmarshal(events[2].Payload, &failed); err != nil {
+		t.Fatalf("decode turn_failed: %v", err)
+	}
+	if failed.Code != "turn_aborted" {
+		t.Fatalf("turn_failed.Code = %q, want turn_aborted", failed.Code)
+	}
+}
+
+// TestSetTurnTimeout pins the ceiling override's floor: anything at or
+// below the loop's 10m permission park timeout is rejected (a parked
+// ask could never be answered in time), and a valid value replaces the
+// compiled default.
+func TestSetTurnTimeout(t *testing.T) {
+	t.Parallel()
+	s := newService(&fakeGW{}, newFakeLog())
+	if err := s.SetTurnTimeout(10 * time.Minute); err == nil {
+		t.Fatal("10m accepted; want rejection at or below the permission park timeout")
+	}
+	if err := s.SetTurnTimeout(60 * time.Minute); err != nil {
+		t.Fatalf("SetTurnTimeout(60m): %v", err)
+	}
+	if s.turnTimeout != 60*time.Minute {
+		t.Fatalf("turnTimeout = %s, want 60m", s.turnTimeout)
+	}
+}
+
 func TestChatValidatesMessage(t *testing.T) {
 	t.Parallel()
 	s := newService(&fakeGW{}, newFakeLog())

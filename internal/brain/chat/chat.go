@@ -359,6 +359,21 @@ func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budge
 	}
 }
 
+// SetTurnTimeout overrides the detached-turn ceiling (startup-only,
+// same discipline as the loop's SetOffloadThreshold: called from
+// main.go wiring before the service takes traffic, never after). The
+// ceiling must exceed the loop's permission park timeout (10m) or a
+// parked ask could never be answered in time; values at or below it
+// are rejected so a bad env value degrades to the default rather than
+// a broken permission flow.
+func (s *Service) SetTurnTimeout(d time.Duration) error {
+	if d <= 10*time.Minute {
+		return fmt.Errorf("chat: turn timeout %s must exceed the 10m permission park timeout", d)
+	}
+	s.turnTimeout = d
+	return nil
+}
+
 // dispatchAgent resolves the "auto" sentinel to a real agent name via
 // agents.Dispatch. classify is built here (not injected verbatim as
 // Classify) so it always drains through this service's own Gateway —
@@ -1078,7 +1093,18 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		// No partial worth keeping: a captured terminal error/incomplete
 		// (D-044) becomes durable evidence instead of the turn silently
 		// vanishing — same detached-context, best-effort append as the
-		// pending-state write above.
+		// pending-state write above. No failure AND no text at all means
+		// every upstream producer lost its terminal on the way here
+		// (deadline racing the stream cut) — synthesize one rather than
+		// append nothing: a turn that ran must never leave zero events.
+		// A flushed partial (text non-empty, already checkpointed) keeps
+		// today's behavior: the pending state is the evidence.
+		if failure == nil && text == "" {
+			failure = &session.TurnFailed{
+				Code:    "turn_aborted",
+				Message: "turn ended with no terminal event (deadline exceeded or stream cut)",
+			}
+		}
 		if failure != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 			defer cancel()

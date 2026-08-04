@@ -276,6 +276,13 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	// not be mistaken for the still-blocked destructive one resolving.
 	parked := map[string]bool{}
 	servedModel := ""
+	// sawTerminal mirrors chat's D-044 discipline: a channel that
+	// closes with no done/error/incomplete means every producer lost
+	// its terminal (deadline racing a stream cut). Without this check a
+	// silent cut returned a clean empty verdict, which the caller read
+	// as a missing sentinel and burned a recovery re-run plus a forced
+	// retry — two full model turns for one infra failure.
+	sawTerminal := false
 	for ev := range events {
 		switch ev.Type {
 		case stream.EventChunk:
@@ -308,15 +315,36 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 				r.parker.OnPermissionDenied(ctx, req.MissionID, ev.ToolResult.Name, ev.ToolResult.Digest)
 			}
 		case stream.EventDone:
+			sawTerminal = true
 			if ev.Meta != nil {
 				servedModel = ev.Meta.Model
 			}
+		case stream.EventIncomplete:
+			// A cut-off stream is an infra failure, not a short clean
+			// answer — without this case it was indistinguishable from
+			// one and flowed into sentinel parsing. Both this and the
+			// error case return directly, so only done needs to mark
+			// sawTerminal.
+			if len(parked) > 0 && r.parker != nil {
+				r.parker.OnPermissionCleared(ctx, req.MissionID)
+			}
+			return b.String(), sentinelArgs, fmt.Errorf("mission runner: incomplete stream: %s", ev.Text)
 		case stream.EventError:
 			if len(parked) > 0 && r.parker != nil {
 				r.parker.OnPermissionCleared(ctx, req.MissionID)
 			}
-			return b.String(), sentinelArgs, fmt.Errorf("mission runner: %s", ev.Err.Message)
+			msg := "provider stream error"
+			if ev.Err != nil {
+				msg = ev.Err.Message
+			}
+			return b.String(), sentinelArgs, fmt.Errorf("mission runner: %s", msg)
 		}
+	}
+	if !sawTerminal {
+		if len(parked) > 0 && r.parker != nil {
+			r.parker.OnPermissionCleared(ctx, req.MissionID)
+		}
+		return b.String(), sentinelArgs, fmt.Errorf("mission runner: stream ended without a terminal event")
 	}
 	if servedModel != "" && r.belowFloor(servedModel) {
 		return b.String(), sentinelArgs, fmt.Errorf("%w: %s", ErrModelFloor, servedModel)

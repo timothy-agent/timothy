@@ -20,9 +20,13 @@ import (
 // scriptedAgent is a fake agentStream that replays a fixed sequence of
 // event batches, one batch per call to Start — call N of Start gets
 // batch N. Lets a test script "first turn has no sentinel, recovery
-// turn does" without a real gateway.
+// turn does" without a real gateway. The real loop.Agent guarantees
+// exactly one terminal event before close, so batches that don't end
+// on one get an EventDone appended — a bare close is the abnormal
+// shape runTurn now rejects, and only rawClose tests script it.
 type scriptedAgent struct {
 	batches  [][]stream.StreamEvent
+	rawClose bool // suppress the auto-appended terminal (terminal-loss tests)
 	call     int
 	requests []loop.Request
 }
@@ -34,12 +38,27 @@ func (f *scriptedAgent) Start(ctx context.Context, req loop.Request) (<-chan str
 	if i >= len(f.batches) {
 		i = len(f.batches) - 1
 	}
-	ch := make(chan stream.StreamEvent, len(f.batches[i]))
-	for _, ev := range f.batches[i] {
+	batch := f.batches[i]
+	if !f.rawClose && !endsTerminal(batch) {
+		batch = append(append([]stream.StreamEvent(nil), batch...), stream.StreamEvent{Type: stream.EventDone})
+	}
+	ch := make(chan stream.StreamEvent, len(batch))
+	for _, ev := range batch {
 		ch <- ev
 	}
 	close(ch)
 	return ch, nil
+}
+
+func endsTerminal(batch []stream.StreamEvent) bool {
+	if len(batch) == 0 {
+		return false
+	}
+	switch batch[len(batch)-1].Type {
+	case stream.EventDone, stream.EventError, stream.EventIncomplete:
+		return true
+	}
+	return false
 }
 
 func textEvent(s string) stream.StreamEvent {
@@ -822,5 +841,52 @@ func TestRunWorkerReportsPermissionDenied(t *testing.T) {
 	}
 	if len(parker.denied) != 1 || !strings.HasPrefix(parker.denied[0], "m1:shell:") {
 		t.Fatalf("parker.denied = %v, want exactly one m1:shell:... entry", parker.denied)
+	}
+}
+
+// TestRunTurnBareCloseIsError pins the missions half of D-044: a loop
+// channel that closes with no terminal event at all (every producer
+// lost it to the turn deadline racing a stream cut) must surface as an
+// infra error — previously it returned a clean empty verdict, which
+// the caller read as a missing sentinel and burned a recovery re-run
+// plus a forced retry for one silent infra failure.
+func TestRunTurnBareCloseIsError(t *testing.T) {
+	agent := &scriptedAgent{rawClose: true, batches: [][]stream.StreamEvent{{
+		textEvent("partial work"),
+	}}}
+	r := newTestRunner(agent)
+	text, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
+		t.Fatalf("err = %v, want no-terminal error", err)
+	}
+	if text != "partial work" {
+		t.Fatalf("text = %q, want the partial preserved", text)
+	}
+}
+
+// TestRunTurnIncompleteIsError: a cut-off stream (EventIncomplete
+// terminal) is an infra failure, not a short clean answer — it must
+// not flow into sentinel parsing as if the worker finished.
+func TestRunTurnIncompleteIsError(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		textEvent("partial"),
+		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
+	}}}
+	r := newTestRunner(agent)
+	if _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+		t.Fatalf("err = %v, want incomplete-stream error", err)
+	}
+}
+
+// TestRunTurnNilErrErrorEvent: an EventError carrying a nil Err must
+// not panic the runner (chat's noteFailure guards this; the runner
+// dereferenced ev.Err.Message unconditionally).
+func TestRunTurnNilErrErrorEvent(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		{Type: stream.EventError},
+	}}}
+	r := newTestRunner(agent)
+	if _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }

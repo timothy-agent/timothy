@@ -308,6 +308,21 @@ func main() {
 		agentReg.Resolve, app.Log)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
+	// TURN_TIMEOUT raises the detached-turn ceiling above the compiled
+	// 30m default — needed when a route serves a slow CPU-only backend
+	// whose provider request_timeout (D-041) would otherwise collide
+	// with the brain ceiling and manufacture a deadline-vs-terminal
+	// race at the exact same instant. Env-gated feature, default off.
+	if v := os.Getenv("TURN_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			app.Log.Warn("invalid TURN_TIMEOUT ignored", "value", v, "error", err)
+		} else if err := svc.SetTurnTimeout(d); err != nil {
+			app.Log.Warn("TURN_TIMEOUT rejected", "value", v, "error", err)
+		} else {
+			app.Log.Info("turn timeout overridden", "timeout", d)
+		}
+	}
 	// Nil-safe: missionHub is nil when WORKSPACES is unset (see
 	// buildMissions), in which case SetSessionHub's publish func is
 	// never called (chat.go only invokes it when non-nil), leaving

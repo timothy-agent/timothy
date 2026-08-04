@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -265,6 +266,23 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		case <-ctx.Done():
 		}
 	}
+	// emitFinal delivers end-of-turn events (the usage/terminal pair)
+	// without racing ctx.Done(): when the turn deadline fires at the
+	// same instant the terminal is sent, both select cases in emit are
+	// ready and Go picks randomly — a lost flip drops the only evidence
+	// the turn ever existed (the relay persists what crosses it, and
+	// persistTurn has nothing without a terminal). Every consumer
+	// drains out until close, so this send succeeds immediately in
+	// practice; the timeout only bounds a hypothetically abandoned
+	// consumer.
+	emitFinal := func(ev stream.StreamEvent) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
+		select {
+		case out <- ev:
+		case <-time.After(5 * time.Second):
+		}
+	}
 
 	if a.waitToolsReady != nil {
 		a.waitToolsReady(ctx)
@@ -374,8 +392,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 				// Flush usage accumulated by earlier steps before the
 				// terminal error, matching the in-stream error path — a
 				// mid-loop gateway failure must not undercount the turn.
-				emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
-				emit(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
+				emitFinal(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+				emitFinal(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 					Code: "gateway_unavailable", Message: err.Error(), Retryable: true,
 				}})
 				return
@@ -450,8 +468,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			} else if incompleteEv != nil {
 				terminal = *incompleteEv
 			}
-			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
-			emit(terminal)
+			emitFinal(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emitFinal(terminal)
 			return
 		}
 
@@ -461,8 +479,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		// This is the loop's hard termination: it can never run past
 		// the ceiling no matter what the model returns.
 		if directive == tools.StepForceSynthesis {
-			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
-			emit(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
+			emitFinal(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emitFinal(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
 			return
 		}
 
@@ -476,8 +494,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 				)
 				continue
 			}
-			emit(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
-			emit(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
+			emitFinal(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emitFinal(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
 			return
 		}
 
@@ -570,7 +588,19 @@ func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string,
 
 func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
-	content, status := a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, emit)
+	// A panicking tool must become feedback the model can read (D-009),
+	// never a process crash: executeOne runs inside an errgroup worker,
+	// and an unrecovered panic there takes down the whole brain — every
+	// active turn and mission with it.
+	content, status := func() (content, status string) {
+		defer func() {
+			if p := recover(); p != nil {
+				a.logger.Error("tool panicked", "tool", call.Name, "panic", p, "stack", string(debug.Stack()))
+				content, status = fmt.Sprintf("tool %s failed with an internal error: %v", call.Name, p), "error"
+			}
+		}()
+		return a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, emit)
+	}()
 	isError := status != "ok"
 
 	if status == "ok" {
