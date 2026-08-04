@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     type              text NOT NULL CHECK (type IN ('episodic', 'semantic', 'procedural')),
     content           text NOT NULL,
-    embedding         vector(1536),
+    embedding         vector(1024),
     entity_refs       uuid[] NOT NULL DEFAULT '{}',
     source_session    uuid,
     source_seq        bigint,
@@ -20,7 +20,12 @@ CREATE TABLE IF NOT EXISTS memories (
     superseded_by     uuid REFERENCES memories (id),
     status            text NOT NULL CHECK (status IN ('pending', 'active', 'rejected', 'archived')),
     confidence        real,
-    tsv               tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
+    tsv               tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+    -- Retrieval bookkeeping for the consolidation job (archive episodic
+    -- memories unretrieved for 180d) — this is NOT last_confirmed_at,
+    -- which only explicit confirmation or re-extraction may bump
+    -- (D-011).
+    last_retrieved_at timestamptz
 );
 
 -- m/ef_construction over pgvector defaults (16/64): better recall at

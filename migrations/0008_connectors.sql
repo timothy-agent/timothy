@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS connectors (
     config         jsonb NOT NULL DEFAULT '{}',
     credential_ref text NOT NULL DEFAULT '',
     enabled        boolean NOT NULL DEFAULT false,
+    -- Marks a whole connector as sensitive: every tool it serves
+    -- shares the connector's name as a suffix (session.SensitiveTools),
+    -- pinning them all onto the privacy-floor route without listing
+    -- tool names in Go.
+    sensitive      boolean NOT NULL DEFAULT false,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );

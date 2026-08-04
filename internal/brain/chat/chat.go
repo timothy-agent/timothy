@@ -34,9 +34,9 @@ const (
 	// through candidates+classify before the normal agent lookup.
 	autoAgentName = "auto"
 	// classifyRoute serves the auto-dispatch classification call.
-	// "local" is a real, always-provisioned fixed route
-	// (migrations/0022_local_route.sql); "mini" was never seeded by
-	// any migration and every call on it failed with no_route. Unlike
+	// "local" is a real, always-provisioned fixed route; "mini" was
+	// never seeded by any migration and every call on it failed with
+	// no_route. Unlike
 	// classification, distillation and extraction default to the
 	// "summarize" cloud route — local now serves a reasoning model that
 	// burns its completion budget thinking before the strict-JSON

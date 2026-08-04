@@ -19,7 +19,7 @@ type Mission struct {
 	Kind    string `json:"kind"` // coding | research | scheduled
 	AgentID string `json:"agent_id,omitempty"`
 	// PromptOverlay is a snapshot of the creating agent's overlay text
-	// at create time — see 0025_missions.sql for why this isn't a live
+	// at create time — see 0010_missions.sql for why this isn't a live
 	// agent lookup.
 	PromptOverlay string         `json:"prompt_overlay,omitempty"`
 	Phase         Phase          `json:"phase"`

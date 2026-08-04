@@ -29,19 +29,20 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
     ON agents ((true)) WHERE is_default;
 
--- Sessions record which agent serves them; message events carry the
--- per-turn agent so mid-session switches attribute correctly.
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent text NOT NULL DEFAULT '';
-
 -- Seed only the agents the code depends on: 'general' because exactly
 -- one default agent must exist, 'researcher' because the /research
 -- page locks sessions to that name. Empty skills/tools = everything
 -- allowed; general routes 'research' rather than '' so the default
 -- agent also consults tools/sources instead of answering from memory
--- alone.
+-- alone. Guarded both ways for is_default: if any default agent
+-- already exists, this seed must not attempt to set is_default=true.
+INSERT INTO agents (name, description, prompt_overlay, route, is_default)
+SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'research',
+    NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
+WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');
+
 INSERT INTO agents (name, description, prompt_overlay, route, is_default)
 VALUES
-  ('general', 'Everyday questions and tasks on a strong all-round chain.', '', 'research', true),
   ('researcher',
    'Consults tools and sources before answering, never from memory alone.',
    'You are in research mode: consult tools and cite what you find before answering. Never answer purely from memory when a tool could verify.',

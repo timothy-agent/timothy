@@ -1,11 +1,16 @@
 -- Event-sourced sessions: an append-only log per session with two
--- projections (UI transcript, LLM context) derived in code. The
--- minimal sessions table gains the columns real session management
--- needs.
-
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_route text NOT NULL DEFAULT '';
+-- projections (UI transcript, LLM context) derived in code.
+CREATE TABLE IF NOT EXISTS sessions (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    title      text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    archived   boolean NOT NULL DEFAULT false,
+    last_route text NOT NULL DEFAULT '',
+    -- Sessions record which agent serves them; message events carry
+    -- the per-turn agent so mid-session switches attribute correctly.
+    agent      text NOT NULL DEFAULT ''
+);
 
 CREATE TABLE IF NOT EXISTS session_events (
     session_id uuid NOT NULL REFERENCES sessions(id),
