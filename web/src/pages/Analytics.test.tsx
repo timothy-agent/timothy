@@ -67,8 +67,9 @@ describe('Analytics budget alert', () => {
     renderPage()
     await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
     expect(screen.queryByRole('alert')).toBeNull()
-    // A configured limit still surfaces as a tile hint.
-    expect(screen.getByText('of $10.00 budget')).toBeInTheDocument()
+    // The day budget hint only surfaces on the "Today" range.
+    fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.getByText('of $10.00 budget')).toBeInTheDocument())
   })
 
   it('shows a banner naming every window over budget', async () => {
@@ -88,6 +89,19 @@ describe('Analytics budget alert', () => {
     // The shared widget-failure note appears; no budget banner.
     await screen.findByText(/widgets failed to load/)
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('Analytics spend tile', () => {
+  it('labels the spend tile after the selected range', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Spend this week')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.getByText('Spend today')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('30 days'))
+    await waitFor(() => expect(screen.getByText('Spend this month')).toBeInTheDocument())
   })
 })
 

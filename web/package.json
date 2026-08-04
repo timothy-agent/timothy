@@ -1,7 +1,7 @@
 {
   "name": "timothy-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.7",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -2,6 +2,7 @@ import {
   Analytics01Icon,
   Brain02Icon,
   BubbleChatIcon,
+  GithubIcon,
   Home01Icon,
   Key01Icon,
   Moon02Icon,
@@ -170,7 +171,18 @@ function AppSidebar({
               <span>API token</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="View on GitHub">
+              <a href="https://github.com/timothy-agent/timothy" target="_blank" rel="noreferrer">
+                <HugeiconsIcon icon={GithubIcon} />
+                <span>GitHub</span>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
+        <div className="px-2 py-1 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+          v{__APP_VERSION__} ({__GIT_SHA__})
+        </div>
       </SidebarFooter>
     </Sidebar>
   )
@@ -361,7 +373,7 @@ function App() {
                 <Route
                   path="/chat/:id?"
                   element={
-                    <div className="mx-auto flex h-full max-w-4xl flex-col">
+                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-8">
                       <Chat onNeedToken={openToken} />
                     </div>
                   }
@@ -369,7 +381,7 @@ function App() {
                 <Route
                   path="/research/:id?"
                   element={
-                    <div className="mx-auto flex h-full max-w-4xl flex-col">
+                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-8">
                       <Research onNeedToken={openToken} />
                     </div>
                   }

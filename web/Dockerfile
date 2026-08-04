@@ -3,6 +3,8 @@
 # The HugeIcons Pro registry token is consumed as a BuildKit secret so
 # it never lands in an image layer or the build history.
 FROM node:24.18.0-alpine AS build
+ARG GIT_SHA
+ENV GIT_SHA=${GIT_SHA}
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 RUN --mount=type=secret,id=hugeicons_token \

@@ -314,9 +314,7 @@ export function Memory() {
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('queue')
   return (
     <div className="h-full overflow-y-auto">
-      <div
-        className={`mx-auto w-full p-6 space-y-6 ${tab === 'graph' ? 'max-w-5xl' : 'max-w-3xl'}`}
-      >
+      <div className="mx-auto w-full max-w-full space-y-6 p-6">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">Memory</h1>
           <div className="ml-auto flex gap-1 rounded-lg border p-0.5">

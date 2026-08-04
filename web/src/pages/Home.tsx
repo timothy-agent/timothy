@@ -1,7 +1,8 @@
 import {
   Analytics01Icon,
-  BubbleChatIcon,
   InboxIcon,
+  RocketIcon,
+  Settings02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
@@ -71,7 +72,7 @@ export function Home() {
 
   return (
     <div className="flex h-full flex-col items-center overflow-y-auto px-4">
-      <div className="mt-[max(3rem,12vh)] w-full max-w-2xl text-center">
+      <div className="mt-[max(3rem,12vh)] w-full max-w-4xl text-center">
         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Timothy</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Ask anything. Chats remember what matters.
@@ -144,13 +145,13 @@ export function Home() {
         </button>
         <button
           type="button"
-          onClick={() => navigate('/research')}
+          onClick={() => navigate('/missions')}
           className="group flex flex-col items-center gap-2"
         >
           <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
-            <HugeiconsIcon icon={BubbleChatIcon} className="size-5.5" />
+            <HugeiconsIcon icon={RocketIcon} className="size-5.5" />
           </span>
-          <span className="text-xs text-muted-foreground">Research</span>
+          <span className="text-xs text-muted-foreground">Missions</span>
         </button>
         <button
           type="button"
@@ -161,6 +162,16 @@ export function Home() {
             <HugeiconsIcon icon={Analytics01Icon} className="size-5.5" />
           </span>
           <span className="text-xs text-muted-foreground">Analytics</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/settings')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <HugeiconsIcon icon={Settings02Icon} className="size-5.5" />
+          </span>
+          <span className="text-xs text-muted-foreground">Settings</span>
         </button>
       </div>
     </div>

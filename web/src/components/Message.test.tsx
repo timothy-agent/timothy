@@ -171,6 +171,12 @@ describe('copy buttons', () => {
     expect(onRetry).toHaveBeenCalledOnce()
   })
 
+  it('renders markdown in a user message', () => {
+    render(<UserMessage text={'**bold** and `code`'} />)
+    expect(screen.getByText('bold').tagName).toBe('STRONG')
+    expect(screen.getByText('code').tagName).toBe('CODE')
+  })
+
   it('hides the copy button while streaming', () => {
     const msg = play([{ type: 'chunk', text: 'partial' }])
     render(<AssistantMessage msg={msg} />)

@@ -26,7 +26,7 @@ export function Settings() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl py-8">
+      <div className="mx-auto max-w-full px-8 py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Providers, task allocation, and feature switches — changes serve immediately, no

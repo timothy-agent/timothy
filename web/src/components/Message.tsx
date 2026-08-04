@@ -228,8 +228,8 @@ export function UserMessage({
       <div className="group/message flex items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
-          <div className="max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 whitespace-pre-wrap text-white">
-            {text}
+          <div className="prose prose-sm prose-invert max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 text-white prose-pre:bg-blue-700">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
           </div>
         )}
       </div>

@@ -102,7 +102,7 @@ export function MissionDetail() {
   if (!id) return null
   if (!mission) {
     return (
-      <div className="mx-auto w-full max-w-5xl px-4 py-6">
+      <div className="mx-auto w-full max-w-full px-8 py-6">
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     )
@@ -180,7 +180,7 @@ export function MissionDetail() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-6">
+    <div className="mx-auto w-full max-w-full space-y-6 px-8 py-6">
       <Link
         to="/missions"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
@@ -331,9 +331,6 @@ export function MissionDetail() {
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
           <div className="rounded-lg border border-border bg-muted/50 p-3">
             <p className="text-sm whitespace-pre-wrap">{mission.last_evidence}</p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Worker-reported — not independently verified.
-            </p>
           </div>
         </section>
       )}

@@ -52,8 +52,6 @@ function compact(v: number): string {
 
 interface Loaded {
   summary: UsageSummary
-  month: UsageSummary
-  today: UsageSummary
   byProvider: UsagePoint[]
   byModel: UsagePoint[]
   byRoute: UsagePoint[]
@@ -128,11 +126,6 @@ export function Analytics() {
 
   useEffect(() => {
     const { from, to, bucket } = rangeDates(range)
-    const startOfToday = new Date()
-    startOfToday.setHours(0, 0, 0, 0)
-    const startOfMonth = new Date()
-    startOfMonth.setDate(1)
-    startOfMonth.setHours(0, 0, 0, 0)
 
     const emptySummary: UsageSummary = {
       cost_usd: 0,
@@ -151,8 +144,6 @@ export function Analytics() {
     setError(null)
     Promise.allSettled([
       usageSummary(from, to),
-      usageSummary(startOfMonth, to),
-      usageSummary(startOfToday, to),
       usageSeries(from, to, bucket, 'provider'),
       usageSeries(from, to, bucket, 'model'),
       usageSeries(from, to, bucket, 'route'),
@@ -171,17 +162,15 @@ export function Analytics() {
       }
       setData({
         summary: val(results[0], emptySummary),
-        month: val(results[1], emptySummary),
-        today: val(results[2], emptySummary),
-        byProvider: val(results[3], []),
-        byModel: val(results[4], []),
-        byRoute: val(results[5], []),
-        providerTotals: val(results[6], []),
-        modelTotals: val(results[7], []),
-        sessions: val(results[8], []),
-        latency: val(results[9], []),
-        cache: val(results[10], []),
-        budget: val<BudgetStatus | null>(results[11], null),
+        byProvider: val(results[1], []),
+        byModel: val(results[2], []),
+        byRoute: val(results[3], []),
+        providerTotals: val(results[4], []),
+        modelTotals: val(results[5], []),
+        sessions: val(results[6], []),
+        latency: val(results[7], []),
+        cache: val(results[8], []),
+        budget: val<BudgetStatus | null>(results[9], null),
       })
     })
     return () => {
@@ -254,13 +243,11 @@ export function Analytics() {
   const budget = data?.budget
   const budgetHint = (w?: { limit_usd: number | null }) =>
     w?.limit_usd != null ? `of ${money(w.limit_usd)} budget` : undefined
+  const spendLabel =
+    range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : 'Spend this month'
+  const spendHint = range === 'today' ? budgetHint(budget?.day) : range === '30d' ? budgetHint(budget?.month) : undefined
   const tiles = [
-    { label: 'Spend today', value: data ? money(data.today.cost_usd) : '—', hint: budgetHint(budget?.day) },
-    {
-      label: 'Spend this month',
-      value: data ? money(data.month.cost_usd) : '—',
-      hint: budgetHint(budget?.month),
-    },
+    { label: spendLabel, value: s ? money(s.cost_usd) : '—', hint: spendHint },
     {
       label: 'Requests',
       value: s ? compact(s.requests) : '—',
@@ -286,7 +273,7 @@ export function Analytics() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl py-8">
+      <div className="mx-auto max-w-full px-8 py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
@@ -336,7 +323,7 @@ export function Analytics() {
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           {tiles.map((t) => (
             <div key={t.label} className="rounded-xl border border-border p-4">
               <div className="text-xs text-muted-foreground">{t.label}</div>

@@ -28,7 +28,7 @@ export function EditSchedule() {
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-3xl px-4 py-6">
+      <div className="mx-auto w-full max-w-full px-8 py-6">
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     )
@@ -36,7 +36,7 @@ export function EditSchedule() {
 
   if (!schedule) {
     return (
-      <div className="mx-auto w-full max-w-3xl px-4 py-6">
+      <div className="mx-auto w-full max-w-full px-8 py-6">
         <p className="text-sm text-muted-foreground">
           Schedule not found.{' '}
           <Link to="/missions" className="underline underline-offset-2 hover:text-foreground">
@@ -48,7 +48,7 @@ export function EditSchedule() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-6">
+    <div className="mx-auto w-full max-w-full px-8 py-6">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Edit schedule</h1>
         <p className="text-sm text-muted-foreground">
