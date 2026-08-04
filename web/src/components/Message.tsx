@@ -269,8 +269,8 @@ export function CompactionDivider({ text }: { text: string }) {
 // answer plus an honest marker.
 export function InterruptedMessage({ text }: { text: string }) {
   return (
-    <div className="group/message flex flex-col items-start gap-2" data-testid="interrupted">
-      <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
+    <div className="group/message flex w-full flex-col items-start gap-2" data-testid="interrupted">
+      <div className="prose prose-sm w-full max-w-none dark:prose-invert prose-pre:bg-zinc-900">
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
       </div>
       <div className="flex items-center gap-1.5">
@@ -346,7 +346,7 @@ export function AssistantMessage({
     ? { body: msg.text, citations: [] }
     : splitSources(collapseRepeatedTail(msg.text))
   return (
-    <div className="group/message flex flex-col items-start gap-2">
+    <div className="group/message flex w-full flex-col items-start gap-2">
       {onShowActivity && <ActivityLine msg={msg} onOpen={onShowActivity} />}
 
       {msg.permissions.length > 0 && (
@@ -359,7 +359,7 @@ export function AssistantMessage({
         </Badge>
       )}
 
-      <div className="prose prose-sm max-w-3xl dark:prose-invert prose-pre:bg-zinc-900">
+      <div className="prose prose-sm w-full max-w-none dark:prose-invert prose-pre:bg-zinc-900">
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{body}</ReactMarkdown>
         {msg.streaming && msg.permissions.length === 0 && <span className="animate-pulse">▍</span>}
       </div>
