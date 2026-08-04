@@ -1,11 +1,14 @@
 # Timothy
 
 [![CI](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml/badge.svg)](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/timothy-agent/timothy?include_prereleases&label=release)](https://github.com/timothy-agent/timothy/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+![Timothy](assets/timothy.png)
 
 Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents, running on your own hardware, talking to whichever LLM providers you configure.
 
