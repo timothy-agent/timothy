@@ -1,0 +1,66 @@
+name: Bug report
+description: Something broke or behaves wrong
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag shown in the sidebar, or `git rev-parse --short HEAD` for source installs.
+      placeholder: v0.1.0-alpha.13
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - install.sh (prebuilt images)
+        - docker compose from source
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - chat / sessions
+        - missions
+        - providers / routing / gateway
+        - memory
+        - connectors (Google, MCP)
+        - secrets / settings
+        - web UI
+        - install / deploy
+        - other / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you saw, what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        Output of `docker compose -f deploy/docker-compose.yml logs --since 10m <service>`
+        around the failure (brain, gateway, web, ...). Redact anything sensitive —
+        never paste API keys or .env contents.
+      render: shell
+    validations:
+      required: false
