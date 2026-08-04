@@ -231,9 +231,11 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 	}
 }
 
-// SetSecretValue routes through the store-wide default backend: the
-// built-in store encrypts the value itself, an external default
-// records the value as that backend's reference.
+// SetSecretValue routes through the store-wide default backend: with
+// db (the seeded default) the built-in store encrypts the value
+// itself. The external-default half of this contract is write-through
+// and needs a live backend — TestSecretValueWriteThrough covers it
+// against a fake KV v2 server.
 func TestSetSecretValueFollowsDefaultBackend(t *testing.T) {
 	adm, _, _ := testAdmin(t)
 	ctx := t.Context()
@@ -244,39 +246,6 @@ func TestSetSecretValueFollowsDefaultBackend(t *testing.T) {
 	}
 	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "db" {
 		t.Fatalf("Status = %v %q %v, want configured via db", configured, backend, err)
-	}
-
-	// Shared table: restore the pre-test vault config and default flag.
-	// Defers run while t.Context() is still alive; t.Cleanup would not.
-	origCfg, err := adm.SecretBackendConfig(ctx, "vault")
-	if err != nil {
-		t.Fatalf("SecretBackendConfig: %v", err)
-	}
-	defer func() {
-		if string(origCfg) != "{}" {
-			if err := adm.SetSecretBackendConfig(ctx, "vault", origCfg); err != nil {
-				t.Errorf("restore vault config: %v", err)
-			}
-		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
-			t.Errorf("remove test vault config: %v", err)
-		}
-		if err := adm.SetDefaultSecretBackend(ctx, "db"); err != nil {
-			t.Errorf("restore default backend: %v", err)
-		}
-	}()
-
-	if err := adm.SetSecretBackendConfig(ctx, "vault", []byte(`{"address":"http://127.0.0.1:1"}`)); err != nil {
-		t.Fatalf("SetSecretBackendConfig: %v", err)
-	}
-	if err := adm.SetDefaultSecretBackend(ctx, "vault"); err != nil {
-		t.Fatalf("SetDefaultSecretBackend: %v", err)
-	}
-	extRef := adminMarker + "SECRET_VAULT"
-	if err := adm.SetSecretValue(ctx, extRef, "timothy/key#api_key"); err != nil {
-		t.Fatalf("SetSecretValue external: %v", err)
-	}
-	if configured, backend, err := adm.SecretStatus(ctx, extRef); err != nil || !configured || backend != "vault" {
-		t.Fatalf("Status = %v %q %v, want configured via vault", configured, backend, err)
 	}
 }
 
