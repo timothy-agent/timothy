@@ -33,18 +33,6 @@ const (
 	// me" (D-034 follow-up): the composer's "Auto" choice, resolved
 	// through candidates+classify before the normal agent lookup.
 	autoAgentName = "auto"
-	// classifyRoute serves the auto-dispatch classification call.
-	// "local" is a real, always-provisioned fixed route; "mini" was
-	// never seeded by any migration and every call on it failed with
-	// no_route. Unlike
-	// classification, distillation and extraction default to the
-	// "summarize" cloud route — local now serves a reasoning model that
-	// burns its completion budget thinking before the strict-JSON
-	// answer, so it's reserved for sensitive turns pinned there
-	// deliberately. autoTitle uses defaultRoute instead when the turn
-	// isn't sensitive — a session's name deserves the same model quality
-	// as the conversation it's naming, not the cheapest available one.
-	classifyRoute = "local"
 	// turnTimeout ceils a detached turn's lifetime (see Chat/Retry's
 	// turnCtx): must exceed loop's permissionTimeout (10m) so a parked
 	// permission ask can't be killed by the ceiling out from under it.
@@ -386,15 +374,33 @@ func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 	return agents.Dispatch(ctx, s.classify, message, candidates, "")
 }
 
-// ClassifyOverGateway builds an agents.Classify that asks classifyRoute
-// for a one-shot text reply — the same cheap side-call shape as
-// auto-title, distillation, and extraction use. Exported so main can
-// wire it via SetAutoDispatch using the raw gateway client, bypassing
-// the tool loop that only engages for Purpose=="chat".
+// ClassifyOverGateway builds an agents.Classify that asks the
+// "summarize" role's route for a one-shot text reply — the same cheap
+// side-call shape distillation and extraction already ride, resolved
+// dynamically by role (D-049) rather than a hardcoded route name:
+// a fixed name like "local" 502s with no_route on every install that
+// never seeded a route by that exact name. "summarize" over "default"
+// because the classification prompt carries the same message content
+// distillation/extraction already send there — the old "local for
+// privacy" rationale doesn't add anything a cheap cloud role doesn't
+// already get. When the role is unbound (or the gateway lookup fails),
+// this returns an error without calling Stream at all; agents.Dispatch
+// already treats any classify error as "fall back to the default
+// agent", so an unbound role just disables auto-dispatch rather than
+// breaking the turn. Exported so main can wire it via SetAutoDispatch
+// using the raw gateway client, bypassing the tool loop that only
+// engages for Purpose=="chat".
 func ClassifyOverGateway(gw Gateway) agents.Classify {
 	return func(ctx context.Context, prompt string) (string, error) {
+		route, ok, err := gw.RouteForRole(ctx, "summarize")
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("chat: classify: summarize role is unbound")
+		}
 		events, err := gw.Stream(ctx, gwclient.StreamRequest{
-			Route:     classifyRoute,
+			Route:     route,
 			Purpose:   "agent_dispatch",
 			System:    "Answer with only what is requested — no prose, no explanation.",
 			Messages:  []provider.Message{{Role: "user", Content: prompt}},

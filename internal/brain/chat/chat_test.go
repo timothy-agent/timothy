@@ -2252,3 +2252,114 @@ func TestTurnTimeoutCeilingEndsAbandonedTurn(t *testing.T) {
 		}
 	}
 }
+
+// roleGW is a fakeGW whose RouteForRole is caller-controlled, for
+// testing ClassifyOverGateway's role resolution directly (fakeGW's
+// default RouteForRole always reports ok=true, which can't exercise
+// the unbound-role path).
+type roleGW struct {
+	fakeGW
+	routeForRole func(context.Context, string) (string, bool, error)
+}
+
+func (g *roleGW) RouteForRole(ctx context.Context, role string) (string, bool, error) {
+	return g.routeForRole(ctx, role)
+}
+
+// ClassifyOverGateway resolves the classification call's route by the
+// "summarize" role (D-049) rather than any hardcoded route name, and
+// streams on whatever route that role currently resolves to.
+func TestClassifyOverGatewayResolvesSummarizeRole(t *testing.T) {
+	t.Parallel()
+	gw := &roleGW{
+		fakeGW: fakeGW{events: okEvents("2")},
+		routeForRole: func(_ context.Context, role string) (string, bool, error) {
+			if role != "summarize" {
+				t.Fatalf("role = %q, want summarize", role)
+			}
+			return "cheap-cloud", true, nil
+		},
+	}
+	classify := ClassifyOverGateway(gw)
+	reply, err := classify(t.Context(), "pick one")
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if reply != "2" {
+		t.Fatalf("reply = %q, want 2", reply)
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) != 1 {
+		t.Fatalf("Stream called %d times, want 1", len(gw.requests))
+	}
+	if got := gw.requests[0].Route; got != "cheap-cloud" {
+		t.Fatalf("route = %q, want cheap-cloud (resolved via summarize role)", got)
+	}
+}
+
+// When the "summarize" role is unbound, ClassifyOverGateway returns an
+// error WITHOUT calling Stream at all — agents.Dispatch already treats
+// any classify error as "fall back to the default agent", so this just
+// disables auto-dispatch rather than breaking the turn or firing an
+// avoidable request.
+func TestClassifyOverGatewaySkipsStreamWhenRoleUnbound(t *testing.T) {
+	t.Parallel()
+	gw := &roleGW{
+		fakeGW: fakeGW{events: okEvents("2")},
+		routeForRole: func(context.Context, string) (string, bool, error) {
+			return "", false, nil
+		},
+	}
+	classify := ClassifyOverGateway(gw)
+	if _, err := classify(t.Context(), "pick one"); err == nil {
+		t.Fatal("classify: want error when summarize role is unbound")
+	}
+	gw.mu.Lock()
+	n := len(gw.requests)
+	gw.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("Stream called %d times, want 0 (no dispatch call when role unbound)", n)
+	}
+}
+
+// Dispatch (agents package) already falls back to the default agent on
+// any classify error, so an unbound summarize role surfaces here as a
+// dispatch fallback, never a broken turn — this is the same contract
+// TestChatAutoWithoutDispatchWiredFallsBackToDefault exercises for a
+// nil classify, extended to a wired-but-erroring one.
+func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("done")}
+	log := newFakeLog()
+	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+		switch name {
+		case "", "general":
+			return agents.Agent{Name: "general", Route: "default"}, true
+		case "researcher":
+			return agents.Agent{Name: "researcher", Route: "research"}, true
+		default:
+			return agents.Agent{}, false
+		}
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	candidates := []agents.Agent{
+		{Name: "general", Description: "everyday tasks"},
+		{Name: "researcher", Description: "consults sources"},
+	}
+	svc.SetAutoDispatch(
+		func(context.Context) []agents.Agent { return candidates },
+		func(context.Context, string) (string, error) { return "", errors.New("summarize role unbound") },
+	)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's the RFC say?", Agent: autoAgentName})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := chatRequest(t, gw)
+	if sent.Agent != "general" || sent.Route != "default" {
+		t.Fatalf("agent/route = %s/%s, want general/default (dispatch fallback on classify error)", sent.Agent, sent.Route)
+	}
+}
