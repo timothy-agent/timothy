@@ -84,6 +84,15 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 // LastSuccess returns the provider+model that last served this
 // session successfully on this route — the stickiness signal that
 // keeps a session on one provider's warm prompt cache (D-018).
+//
+// Sticky resets when the route is edited: a ledger row older than the
+// route's own updated_at is ignored, so an operator's deliberate chain
+// reorder or model swap (router.go's Resolve otherwise prefers this
+// hint over the chain's written order) takes effect on the very next
+// request instead of being overridden by a stale sticky pick. Losing
+// prompt-cache affinity once per route edit is the accepted cost —
+// relies on routes.updated_at being bumped on every chain-affecting
+// PATCH (see internal/gateway/admin.go's route update paths).
 func (l *Ledger) LastSuccess(ctx context.Context, sessionID, route string) (providerName, model string, ok bool) {
 	db, err := l.db.Get()
 	if err != nil {
@@ -91,6 +100,7 @@ func (l *Ledger) LastSuccess(ctx context.Context, sessionID, route string) (prov
 	}
 	err = db.QueryRow(ctx, `SELECT provider, model FROM cost_ledger
 		WHERE session_id = $1 AND route = $2 AND status = 'ok'
+		AND ts > COALESCE((SELECT updated_at FROM routes WHERE name = $2), '-infinity'::timestamptz)
 		ORDER BY ts DESC LIMIT 1`, sessionID, route).Scan(&providerName, &model)
 	if err != nil {
 		return "", "", false
