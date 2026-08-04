@@ -47,6 +47,7 @@ export interface StreamEvent {
     | 'permission_resolved'
     | 'usage'
     | 'retry'
+    | 'failover'
     | 'incomplete'
     | 'done'
     | 'error'
@@ -58,6 +59,13 @@ export interface StreamEvent {
   usage?: Usage
   error?: { code: string; message: string; retryable: boolean }
   retry?: { attempt: number; backoff_ms: number; reason: string }
+  failover?: {
+    from_provider: string
+    from_model: string
+    to_provider: string
+    to_model: string
+    code: string
+  }
   meta?: { provider: string; model: string; ledger_id?: string }
 }
 

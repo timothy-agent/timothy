@@ -76,6 +76,17 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
         ...msg,
         notices: [...msg.notices, `retrying (attempt ${ev.retry?.attempt}): ${ev.retry?.reason}`],
       }
+    case 'failover': {
+      const f = ev.failover
+      if (!f) return msg
+      return {
+        ...msg,
+        notices: [
+          ...msg.notices,
+          `${f.from_provider} failed (${f.code}), switching to ${f.to_provider}`,
+        ],
+      }
+    }
     case 'incomplete':
       return { ...msg, notices: [...msg.notices, `incomplete: ${ev.text || 'stream cut off'}`] }
     case 'error':

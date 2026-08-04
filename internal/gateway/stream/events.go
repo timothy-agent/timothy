@@ -20,6 +20,7 @@ const (
 	EventToolEnd        EventType = "tool_end"        // tool call arguments complete
 	EventUsage          EventType = "usage"           // token accounting
 	EventRetry          EventType = "retry"           // transient failure, retrying
+	EventFailover       EventType = "failover"        // chain moved to the next provider
 	EventIncomplete     EventType = "incomplete"      // stream cut off before finish
 	EventDone           EventType = "done"            // terminal: success
 	EventError          EventType = "error"           // terminal: failure
@@ -43,6 +44,7 @@ type StreamEvent struct {
 	Usage      *Usage                   `json:"usage,omitempty"`
 	Err        *StreamError             `json:"error,omitempty"`
 	Retry      *RetryInfo               `json:"retry,omitempty"`
+	Failover   *FailoverInfo            `json:"failover,omitempty"`
 	Meta       *Meta                    `json:"meta,omitempty"`
 }
 
@@ -122,4 +124,16 @@ type RetryInfo struct {
 	Attempt   int    `json:"attempt"`
 	BackoffMs int64  `json:"backoff_ms"`
 	Reason    string `json:"reason"`
+}
+
+// FailoverInfo reports the chain moving from one provider to the
+// next after a failed attempt. Code is the classified error (e.g.
+// "timeout", "http_500") — never the raw provider error text, which
+// can leak wire-level detail the client has no use for.
+type FailoverInfo struct {
+	FromProvider string `json:"from_provider"`
+	FromModel    string `json:"from_model"`
+	ToProvider   string `json:"to_provider"`
+	ToModel      string `json:"to_model"`
+	Code         string `json:"code"`
 }

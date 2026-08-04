@@ -194,7 +194,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		Effort:    req.Effort,
 	}
 
-	var failed []string
+	var codes []string
 	for i, att := range attempts {
 		completion.Model = att.Model
 		// Last chain entry gets the full in-provider retry budget;
@@ -208,8 +208,15 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		}, send)
 
 		if res.failedOver() {
-			failed = append(failed, fmt.Sprintf("%s/%s: %s", att.ProviderName, att.Model, res.reason))
+			codes = append(codes, res.entry.ErrorCode)
 			a.recordAttempt(r.Context(), res.entry)
+			if next := i + 1; next < len(attempts) {
+				send(stream.StreamEvent{Type: stream.EventFailover, Failover: &stream.FailoverInfo{
+					FromProvider: att.ProviderName, FromModel: att.Model,
+					ToProvider: attempts[next].ProviderName, ToModel: attempts[next].Model,
+					Code: res.entry.ErrorCode,
+				}})
+			}
 			continue
 		}
 
@@ -218,13 +225,14 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Chain exhausted with nothing streamed: report every attempt. The
-	// per-attempt error rows recorded above ARE this request's
-	// accounting (one ledger row per provider call); no synthetic
-	// summary row is written.
+	// Chain exhausted with nothing streamed: report every attempt by
+	// error code only, never the raw provider error text (can carry
+	// wire-level detail with no use to the client). The per-attempt
+	// error rows recorded above ARE this request's accounting (one
+	// ledger row per provider call); no synthetic summary row is written.
 	send(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 		Code:    "chain_exhausted",
-		Message: "every provider attempt failed: " + strings.Join(failed, "; "),
+		Message: "every provider failed: " + strings.Join(codes, ", "),
 	}})
 }
 

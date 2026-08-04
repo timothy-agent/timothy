@@ -375,11 +375,14 @@ func TestStreamChainExhausted(t *testing.T) {
 	w := postJSON(t, a.handleStream, `{"route":"coding","messages":[{"role":"user","content":"hi"}]}`)
 
 	events := sseEvents(t, w.Body.String())
-	if len(events) != 1 || events[0].Type != stream.EventError || events[0].Err.Code != "chain_exhausted" {
-		t.Fatalf("events = %+v, want single chain_exhausted error", events)
+	if len(events) != 2 || events[0].Type != stream.EventFailover || events[1].Type != stream.EventError || events[1].Err.Code != "chain_exhausted" {
+		t.Fatalf("events = %+v, want [failover, chain_exhausted error]", events)
 	}
-	if !strings.Contains(events[0].Err.Message, "one/m1") || !strings.Contains(events[0].Err.Message, "two/m2") {
-		t.Fatalf("exhaustion message misses attempts: %s", events[0].Err.Message)
+	if events[0].Failover.FromProvider != "one" || events[0].Failover.ToProvider != "two" {
+		t.Fatalf("failover event = %+v, want from one to two", events[0].Failover)
+	}
+	if !strings.Contains(events[1].Err.Message, "http_401") {
+		t.Fatalf("exhaustion message missing error codes: %s", events[1].Err.Message)
 	}
 	if len(rec.all()) != 2 {
 		t.Fatalf("ledger entries = %d, want 2 failures", len(rec.all()))
