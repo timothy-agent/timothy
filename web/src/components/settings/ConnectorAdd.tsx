@@ -16,7 +16,7 @@ import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets } from './connectorPresets'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, secretField } from './util'
+import { errText, secretDestination } from './util'
 
 // slugify turns a display name into a connector name (tool-name
 // prefix): lowercase slug, the backend rejects anything else.
@@ -189,10 +189,10 @@ export function ConnectorAdd() {
               </Field>
               <Field label="OAuth client secret">
                 <Input
-                  type={secretField(defaultBackend, '').type}
+                  type="password"
                   value={clientSecret}
                   onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder={secretField(defaultBackend, 'GOCSPX-…').placeholder}
+                  placeholder="GOCSPX-…"
                   className="mt-1.5 h-10"
                   autoComplete="off"
                 />
@@ -233,22 +233,21 @@ export function ConnectorAdd() {
             <div>
               <Field label={preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'}>
                 <Input
-                  type={secretField(defaultBackend, '').type}
+                  type="password"
                   value={token}
                   onChange={(e) => {
                     setToken(e.target.value)
                     invalidate()
                   }}
-                  placeholder={secretField(defaultBackend, preset.tokenPlaceholder ?? 'token').placeholder}
+                  placeholder={preset.tokenPlaceholder ?? 'token'}
                   className="mt-1.5 h-10"
                   autoComplete="off"
                 />
               </Field>
-              {(secretField(defaultBackend, '').hint || preset.tokenHint) && (
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  {secretField(defaultBackend, '').hint || preset.tokenHint}
-                </p>
-              )}
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {preset.tokenHint ? `${preset.tokenHint} ` : ''}
+                {secretDestination(defaultBackend, `${refBase}_MCP_TOKEN`)}
+              </p>
             </div>
 
             <div

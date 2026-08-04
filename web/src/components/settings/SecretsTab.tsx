@@ -1,4 +1,4 @@
-import { Delete02Icon, Folder01Icon, LockIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { Delete02Icon, LockIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -80,28 +80,16 @@ export function SecretsTab() {
         />
       ),
     },
-    {
-      key: 'file',
-      isDefault: state('file')?.default ?? false,
-      render: () => (
-        <FileCard
-          isDefault={state('file')?.default ?? false}
-          onMakeDefault={() => makeDefault('file')}
-          onBackendsChanged={refresh}
-          onError={setError}
-        />
-      ),
-    },
   ].sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
 
   return (
     <div className="mt-6 space-y-4">
       <p className="text-sm text-muted-foreground">
         Where credentials live. Exactly one backend is the default: every key or token entered
-        anywhere (providers, connectors) is stored through it. Timothy storage keeps values
-        encrypted in its own database; with Vault or AWS Secrets Manager as default you enter
-        the reference of a secret already held there, Timothy only reads, never writes,
-        external systems.
+        anywhere (providers, connectors) is written there by Timothy. Timothy storage keeps
+        values encrypted in its own database; making Vault or AWS Secrets Manager the default
+        means Timothy needs write access there, every key entered in the UI is written into it
+        under a timothy/ prefix.
       </p>
       <ErrorBanner message={error} />
       {cards.map((c) => (
@@ -112,9 +100,9 @@ export function SecretsTab() {
 }
 
 // BackendIcon tiles a backend's icon consistently across cards. A
-// generic Hugeicon renders muted (Timothy storage, file mount); a
-// `logo` name renders the official mark from ProviderLogo's sprite on
-// its brand-color tile, same treatment as a configured provider.
+// generic Hugeicon renders muted (Timothy storage); a `logo` name
+// renders the official mark from ProviderLogo's sprite on its
+// brand-color tile, same treatment as a configured provider.
 function BackendIcon({
   icon,
   logo,
@@ -205,7 +193,7 @@ function StorageCard({
 // useBackendCard holds the shared load/save/test/remove machinery for
 // one external secret backend's card.
 function useBackendCard(
-  backend: 'vault' | 'asm' | 'file',
+  backend: 'vault' | 'asm',
   onLoaded: (cfg: Record<string, string>) => void,
   onError: (msg: string) => void,
   onChanged: () => void,
@@ -412,7 +400,7 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
         logo="vault"
         brandColor={VAULT_BRAND_COLOR}
         title="HashiCorp Vault"
-        subtitle="KV v2 mount. Credentials pasted here are kept in the encrypted store, never in this config."
+        subtitle="KV v2 mount. Timothy needs write access: every key entered in the UI is written here as the default."
         configured={card.configured}
         status={card.status}
         busy={card.busy}
@@ -533,7 +521,7 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
         logo="aws"
         brandColor={AWS_BRAND_COLOR}
         title="AWS Secrets Manager"
-        subtitle="Test requires secretsmanager:ListSecrets; resolving keys only needs GetSecretValue."
+        subtitle="Timothy needs write access (CreateSecret/PutSecretValue) to store keys here as the default."
         configured={card.configured}
         status={card.status}
         busy={card.busy}
@@ -612,62 +600,6 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
             </Field>
           </>
         )}
-      </div>
-    </div>
-  )
-}
-
-// FileCard is the non-third-party external option: secrets read from
-// files mounted into the container (Docker/Kubernetes secrets
-// convention). No credentials of its own — the mount itself is the
-// trust boundary, set up outside Timothy — so unlike Vault/ASM there's
-// nothing to paste here beyond the directory path.
-function FileCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: BackendCardProps) {
-  const [cfg, setCfg] = useState({ dir: '' })
-  const card = useBackendCard(
-    'file',
-    (c) => setCfg((v) => ({ ...v, ...c })),
-    onError,
-    onBackendsChanged,
-  )
-
-  const save = () =>
-    card.run(async () => {
-      await putSecretBackendConfig('file', cfg)
-      card.setConfigured(true)
-      onBackendsChanged()
-      return 'saved'
-    })
-
-  return (
-    <div className="rounded-xl border border-border p-4">
-      <BackendCardHeader
-        icon={Folder01Icon}
-        title="File mount"
-        subtitle="Reads one file per secret from a directory mounted into the container, no third-party service, no credentials of its own."
-        configured={card.configured}
-        status={card.status}
-        busy={card.busy}
-        canSave
-        isDefault={isDefault}
-        onMakeDefault={onMakeDefault}
-        onSave={save}
-        onTest={card.test}
-        onRemove={card.remove}
-      />
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label="Directory">
-          <Input
-            value={cfg.dir}
-            onChange={(e) => setCfg((v) => ({ ...v, dir: e.target.value }))}
-            placeholder="/run/secrets (default)"
-            className="mt-1 h-8"
-          />
-        </Field>
-        <p className="self-end pb-1.5 text-xs text-muted-foreground sm:col-span-2">
-          Each secret is a file in this directory named by its reference; the file&apos;s content
-          is the value. Mount it read-only.
-        </p>
       </div>
     </div>
   )

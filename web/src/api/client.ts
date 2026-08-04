@@ -596,12 +596,12 @@ export async function providersHealth(): Promise<ProviderHealth[]> {
   return providers ?? []
 }
 
-// setSecret stores a credential under refName through the store-wide
-// default backend (write-only: it is never returned by any endpoint).
-// Built-in storage encrypts the value; a Vault/ASM default records it
-// as the reference of a secret already held there. deleteSecret
-// removes it; the provider then builds without a key and shows
-// unhealthy until a new value is set.
+// setSecret writes a raw credential value under refName through the
+// store-wide default backend (write-only: it is never returned by any
+// endpoint). Built-in storage encrypts it in Timothy's database; a
+// Vault/ASM default has Timothy write it into that backend under the
+// name timothy/refName. deleteSecret removes it; the provider then
+// builds without a key and shows unhealthy until a new value is set.
 export async function setSecret(refName: string, value: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
     method: 'PUT',
@@ -657,7 +657,7 @@ export async function setDefaultSecretBackend(backend: string): Promise<void> {
 }
 
 export async function getSecretBackendConfig(
-  backend: 'vault' | 'asm' | 'file',
+  backend: 'vault' | 'asm',
 ): Promise<Record<string, string>> {
   const { config } = await request<{ config: Record<string, string> }>(
     `/v1/admin/secret-backends/${backend}`,
@@ -666,7 +666,7 @@ export async function getSecretBackendConfig(
 }
 
 export async function putSecretBackendConfig(
-  backend: 'vault' | 'asm' | 'file',
+  backend: 'vault' | 'asm',
   config: Record<string, string>,
 ): Promise<void> {
   await request<void>(`/v1/admin/secret-backends/${backend}`, {
@@ -675,12 +675,12 @@ export async function putSecretBackendConfig(
   })
 }
 
-export async function deleteSecretBackendConfig(backend: 'vault' | 'asm' | 'file'): Promise<void> {
+export async function deleteSecretBackendConfig(backend: 'vault' | 'asm'): Promise<void> {
   await request<void>(`/v1/admin/secret-backends/${backend}`, { method: 'DELETE' })
 }
 
 export async function testSecretBackend(
-  backend: 'vault' | 'asm' | 'file',
+  backend: 'vault' | 'asm',
 ): Promise<{ ok: boolean; error?: string }> {
   return request<{ ok: boolean; error?: string }>(`/v1/admin/secret-backends/${backend}/test`, {
     method: 'POST',

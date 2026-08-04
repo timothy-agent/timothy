@@ -23,14 +23,12 @@ import {
 import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
-import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { Field, Toggle } from './shared'
-import { errText, secretField } from './util'
+import { errText } from './util'
 
 export function ConnectorEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const defaultBackend = useDefaultSecretBackend()
 
   const [connector, setConnector] = useState<AdminConnector | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -193,7 +191,7 @@ export function ConnectorEdit() {
             <Field label="Rotate bearer token">
               <div className="mt-1.5 flex gap-2">
                 <Input
-                  type={secretField(defaultBackend, '').type}
+                  type="password"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   placeholder="paste new token"

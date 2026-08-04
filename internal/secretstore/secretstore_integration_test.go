@@ -5,12 +5,15 @@ package secretstore
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,24 +99,54 @@ func TestStoreSetResolveDelete(t *testing.T) {
 	}
 }
 
-// TestVaultResolve drives the vault backend end to end against a fake
-// KV v2 server: config + token stored through the store's own API,
-// then Resolve fetches through HTTP.
-func TestVaultResolve(t *testing.T) {
+// TestVaultWriteThrough drives the vault backend end to end against a
+// fake KV v2 server: with vault as the store-wide default, Set must
+// write the raw value into vault itself (not just record a reference),
+// Resolve must read it back through HTTP, and TestBackend's write
+// probe and Delete's external cleanup must round-trip against the
+// same fake mount.
+func TestVaultWriteThrough(t *testing.T) {
 	s := integrationStore(t)
 	ctx := t.Context()
 	ref := "TEST_VAULT_" + t.Name()
 
+	kv := map[string]string{} // path -> value, simulates the KV v2 mount
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Vault-Token") != "vault-tok" {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		switch r.URL.Path {
-		case "/v1/kv/data/timothy/anthropic":
-			w.Write([]byte(`{"data":{"data":{"api_key":"sk-from-vault"}}}`))
-		case "/v1/auth/token/lookup-self":
+		switch {
+		case r.URL.Path == "/v1/auth/token/lookup-self":
 			w.Write([]byte(`{}`))
+		case strings.HasPrefix(r.URL.Path, "/v1/kv/data/"):
+			path := strings.TrimPrefix(r.URL.Path, "/v1/kv/data/")
+			switch r.Method {
+			case http.MethodPost:
+				var body struct {
+					Data struct {
+						Value string `json:"value"`
+					} `json:"data"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				kv[path] = body.Data.Value
+				w.Write([]byte(`{}`))
+			case http.MethodGet:
+				val, ok := kv[path]
+				if !ok {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(`{"data":{"data":{"value":` + strconv.Quote(val) + `}}}`))
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		case strings.HasPrefix(r.URL.Path, "/v1/kv/metadata/") && r.Method == http.MethodDelete:
+			delete(kv, strings.TrimPrefix(r.URL.Path, "/v1/kv/metadata/"))
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -121,7 +154,8 @@ func TestVaultResolve(t *testing.T) {
 	defer srv.Close()
 
 	// Sweep leftovers from a crashed run, then save the shared vault
-	// config so it can be restored — a dev database may hold a real one.
+	// config/default so they can be restored — a dev database may hold
+	// real ones.
 	db, err := s.db.Get()
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -130,6 +164,10 @@ func TestVaultResolve(t *testing.T) {
 	origCfg, err := s.GetBackendConfig(ctx, "vault")
 	if err != nil {
 		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	origDefault, err := s.DefaultBackend(ctx)
+	if err != nil {
+		t.Fatalf("DefaultBackend: %v", err)
 	}
 	// A defer, not t.Cleanup — it runs while t.Context() and the pool
 	// are still alive, so the sweep cannot be silently lost.
@@ -141,6 +179,9 @@ func TestVaultResolve(t *testing.T) {
 		} else if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
 			t.Errorf("delete vault config: %v", err)
 		}
+		if err := s.SetDefaultBackend(ctx, origDefault); err != nil {
+			t.Errorf("restore default backend: %v", err)
+		}
 		if _, err := db.Exec(ctx, `DELETE FROM secrets WHERE ref_name LIKE 'TEST_VAULT_%'`); err != nil {
 			t.Errorf("sweep vault secrets: %v", err)
 		}
@@ -150,11 +191,21 @@ func TestVaultResolve(t *testing.T) {
 	if _, err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
 		t.Fatalf("SetBackendConfig: %v", err)
 	}
-	if err := s.Set(ctx, ref+"_TOKEN", "vault-tok"); err != nil {
-		t.Fatalf("Set token: %v", err)
+	// SetDB, not Set: the vault token is bootstrap for vault itself and
+	// must land in built-in storage regardless of the default backend
+	// (which is not vault yet at this point anyway).
+	if err := s.SetDB(ctx, ref+"_TOKEN", "vault-tok"); err != nil {
+		t.Fatalf("SetDB token: %v", err)
 	}
-	if err := s.SetExternal(ctx, ref, "vault", "timothy/anthropic#api_key"); err != nil {
-		t.Fatalf("SetExternal: %v", err)
+	if err := s.SetDefaultBackend(ctx, "vault"); err != nil {
+		t.Fatalf("SetDefaultBackend: %v", err)
+	}
+
+	if err := s.Set(ctx, ref, "sk-from-vault"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if kv["timothy/"+ref] != "sk-from-vault" {
+		t.Fatalf("vault mount holds %q, want sk-from-vault", kv["timothy/"+ref])
 	}
 
 	got, err := s.Resolve(ctx, ref)
@@ -164,13 +215,25 @@ func TestVaultResolve(t *testing.T) {
 	if got != "sk-from-vault" {
 		t.Fatalf("Resolve: got %q, want sk-from-vault", got)
 	}
+	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "vault" {
+		t.Fatalf("Status: configured=%v backend=%q err=%v", configured, backend, err)
+	}
 
 	if err := s.TestBackend(ctx, "vault"); err != nil {
 		t.Fatalf("TestBackend: %v", err)
 	}
+	if _, ok := kv["timothy/__probe"]; ok {
+		t.Error("TestBackend left its write probe behind in vault")
+	}
 
-	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "vault" {
-		t.Fatalf("Status: configured=%v backend=%q err=%v", configured, backend, err)
+	if err := s.Delete(ctx, ref); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := kv["timothy/"+ref]; ok {
+		t.Error("Delete left the secret behind in vault")
+	}
+	if _, err := s.Resolve(ctx, ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Resolve after Delete: got %v, want ErrNotFound", err)
 	}
 }
 

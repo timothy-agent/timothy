@@ -305,8 +305,9 @@ export interface BudgetStatus {
   month: BudgetWindow
 }
 
-// Control-plane shapes (/v1/admin/*). credential_ref is a NAME (env
-// var / Vault path / AWS profile) — secret values never travel.
+// Control-plane shapes (/v1/admin/*). credential_ref is a NAME the
+// secret is stored under (in whichever backend is default) — secret
+// values never travel.
 export interface AdminModel {
   id: string
   context_window?: number

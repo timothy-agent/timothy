@@ -56,9 +56,12 @@ func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *led
 	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, log: log}
 }
 
-// SetSecret stores value under refName (write-only: the value is never
-// read back through any admin endpoint) and reloads the serving
-// snapshot so a provider whose credential_ref matches starts resolving
+// SetSecret pins refName's value to built-in storage regardless of the
+// store-wide default backend — for backend-bootstrap credentials (the
+// vault token, the ASM static secret key) that can never live behind
+// the external backend they unlock. Write-only: the value is never
+// read back through any admin endpoint. Reloads the serving snapshot
+// so a provider whose credential_ref matches starts resolving
 // immediately.
 func (a *Admin) SetSecret(ctx context.Context, refName, value string) error {
 	if refName == "" {
@@ -67,7 +70,7 @@ func (a *Admin) SetSecret(ctx context.Context, refName, value string) error {
 	if value == "" {
 		return fmt.Errorf("value is required")
 	}
-	if err := a.secrets.Set(ctx, refName, value); err != nil {
+	if err := a.secrets.SetDB(ctx, refName, value); err != nil {
 		return err
 	}
 	a.audit(ctx, "set", "secret", refName, nil, map[string]bool{"configured": true})
@@ -85,34 +88,22 @@ func (a *Admin) DeleteSecret(ctx context.Context, refName string) error {
 	return nil
 }
 
-// SetSecretExternal points refName at a secret held in an external
-// backend (vault, asm) instead of storing a value. backendRef is the
-// path/name in that system.
-func (a *Admin) SetSecretExternal(ctx context.Context, refName, backend, backendRef string) error {
+// SetSecretValue stores value under refName through the store-wide
+// default backend: built-in storage encrypts the value itself, while
+// vault/asm write the value into that system.
+func (a *Admin) SetSecretValue(ctx context.Context, refName, value string) error {
 	if refName == "" {
 		return fmt.Errorf("ref name is required")
 	}
-	if err := a.secrets.SetExternal(ctx, refName, backend, backendRef); err != nil {
+	if value == "" {
+		return fmt.Errorf("value is required")
+	}
+	if err := a.secrets.Set(ctx, refName, value); err != nil {
 		return err
 	}
-	a.audit(ctx, "set", "secret", refName, nil, map[string]string{"backend": backend})
+	a.audit(ctx, "set", "secret", refName, nil, map[string]bool{"configured": true})
 	a.reload(ctx)
 	return nil
-}
-
-// SetSecretValue stores value under refName through the store-wide
-// default backend: built-in storage encrypts the value itself, while
-// vault/asm treat it as the reference (path or name) of a secret that
-// already lives there — Timothy never writes into external systems.
-func (a *Admin) SetSecretValue(ctx context.Context, refName, value string) error {
-	backend, err := a.secrets.DefaultBackend(ctx)
-	if err != nil {
-		return err
-	}
-	if backend == "db" {
-		return a.SetSecret(ctx, refName, value)
-	}
-	return a.SetSecretExternal(ctx, refName, backend, value)
 }
 
 // SecretBackends lists every secret backend with configured/default

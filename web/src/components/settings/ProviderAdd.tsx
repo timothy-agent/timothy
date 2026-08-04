@@ -14,7 +14,7 @@ import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, secretField, stripPaste } from './util'
+import { errText, secretDestination, stripPaste } from './util'
 
 // refFor derives a credential ref for a named provider instance: the
 // preset's conventional storage-key name, or one from the user's name.
@@ -112,13 +112,10 @@ export function ProviderAdd() {
   const isBedrock = preset.driver === 'bedrock'
   const wantsKey = preset.requiresKey
 
-  // Bedrock's two-input split (access key id / secret access key) only
-  // applies when the store writes the raw secret value itself (the
-  // "db" backend, secretField's 'password' mode). vault/asm/file take
-  // a reference to a secret already stored externally — the operator
-  // must have pre-populated that external secret with the JSON blob,
-  // so the generic single reference input stays for those backends.
-  const bedrockSplit = isBedrock && secretField(defaultBackend, '').type === 'password'
+  // Bedrock always splits into access key id / secret access key —
+  // every backend now writes through the raw value Timothy is given,
+  // so the split no longer depends on which backend is default.
+  const bedrockSplit = isBedrock
   const bedrockKeyJSON = () =>
     JSON.stringify({
       access_key_id: stripPaste(accessKeyId.trim()),
@@ -312,36 +309,34 @@ export function ProviderAdd() {
             )}
           </div>
         )}
-        {wantsKey &&
-          !bedrockSplit &&
-          (() => {
-            const field = secretField(defaultBackend, preset.keyPlaceholder ?? 'paste key')
-            return (
-              <div>
-                <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
-                  <Input
-                    type={field.type}
-                    value={key}
-                    onChange={(e) => {
-                      setKey(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder={field.placeholder}
-                    className="mt-1.5 h-10"
-                    autoComplete="off"
-                    aria-invalid={keyError != null}
-                  />
-                </Field>
-                {keyError && (
-                  <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
-                    <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
-                    {keyError}
-                  </p>
-                )}
-                {!keyError && (field.hint || preset.keyHint) && (
-                  <p className="mt-1.5 text-sm text-muted-foreground">
-                    {field.hint || preset.keyHint}
-                    {!field.hint && preset.keyURL && (
+        {wantsKey && !bedrockSplit && (
+          <div>
+            <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
+              <Input
+                type="password"
+                value={key}
+                onChange={(e) => {
+                  setKey(e.target.value)
+                  invalidate()
+                }}
+                placeholder={preset.keyPlaceholder ?? 'paste key'}
+                className="mt-1.5 h-10"
+                autoComplete="off"
+                aria-invalid={keyError != null}
+              />
+            </Field>
+            {keyError && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                {keyError}
+              </p>
+            )}
+            {!keyError && (
+              <div className="mt-1.5 space-y-1 text-sm text-muted-foreground">
+                {preset.keyHint && (
+                  <p>
+                    {preset.keyHint}
+                    {preset.keyURL && (
                       <>
                         {' '}
                         <a
@@ -356,9 +351,11 @@ export function ProviderAdd() {
                     )}
                   </p>
                 )}
+                <p>{secretDestination(defaultBackend, ref)}</p>
               </div>
-            )
-          })()}
+            )}
+          </div>
+        )}
 
         <Field label="Model" hint="validated with a one-token completion, becomes the default">
           <ModelInput

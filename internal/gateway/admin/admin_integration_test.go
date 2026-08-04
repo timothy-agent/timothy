@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -785,17 +787,83 @@ func TestSecretExternalBackendConfig(t *testing.T) {
 		}
 	}
 
-	if err := adm.SetSecretExternal(ctx, ref, "vault", "timothy/anthropic#api_key"); err != nil {
-		t.Fatalf("SetSecretExternal: %v", err)
+	// SetSecretValue with backend "db" pinned bypasses the vault
+	// default entirely — no need for a live vault to serve this path.
+	if err := adm.SetSecret(ctx, ref, "x"); err != nil {
+		t.Fatalf("SetSecret (db pin): %v", err)
+	}
+	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("SecretStatus: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+}
+
+// TestSecretValueWriteThrough drives SetSecretValue against a fake KV
+// v2 server with vault as the default backend: the routed Set must
+// write the raw value into vault itself, not just record a reference.
+func TestSecretValueWriteThrough(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+	ref := adminMarker + "vault-writethrough"
+
+	origCfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig (orig): %v", err)
+	}
+	origDefault, err := adm.secrets.DefaultBackend(ctx)
+	if err != nil {
+		t.Fatalf("DefaultBackend (orig): %v", err)
+	}
+	defer func() {
+		if string(origCfg) != "{}" {
+			if err := adm.SetSecretBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("remove test vault config: %v", err)
+		}
+		if err := adm.SetDefaultSecretBackend(ctx, origDefault); err != nil {
+			t.Errorf("restore default backend: %v", err)
+		}
+	}()
+
+	var wroteValue string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/auth/token/lookup-self":
+			w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/kv/data/timothy/"+ref:
+			var body struct {
+				Data struct {
+					Value string `json:"value"`
+				} `json:"data"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			wroteValue = body.Data.Value
+			w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	if err := adm.SetSecretBackendConfig(ctx, "vault",
+		[]byte(`{"address":"`+srv.URL+`","mount":"kv","token_ref":"`+ref+`_TOKEN"}`)); err != nil {
+		t.Fatalf("SetSecretBackendConfig: %v", err)
+	}
+	if err := adm.SetSecret(ctx, ref+"_TOKEN", "vault-tok"); err != nil {
+		t.Fatalf("SetSecret token: %v", err)
+	}
+	if err := adm.SetDefaultSecretBackend(ctx, "vault"); err != nil {
+		t.Fatalf("SetDefaultSecretBackend: %v", err)
+	}
+
+	if err := adm.SetSecretValue(ctx, ref, "sk-live-through"); err != nil {
+		t.Fatalf("SetSecretValue: %v", err)
+	}
+	if wroteValue != "sk-live-through" {
+		t.Fatalf("vault received value %q, want sk-live-through", wroteValue)
 	}
 	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "vault" {
 		t.Fatalf("SecretStatus: configured=%v backend=%q err=%v", configured, backend, err)
-	}
-
-	if err := adm.SetSecretExternal(ctx, ref, "db", "x"); err == nil {
-		t.Fatal("SetSecretExternal with backend db: want error")
-	}
-	if err := adm.SetSecretExternal(ctx, ref, "vault", ""); err == nil {
-		t.Fatal("SetSecretExternal without backend_ref: want error")
 	}
 }

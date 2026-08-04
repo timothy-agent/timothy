@@ -4,13 +4,18 @@
 // up in the secrets table; its backend column says how to fetch the
 // value: envelope-decrypt a ciphertext column (db), or read from an
 // external system by backend_ref (vault: KV v2, asm: AWS Secrets
-// Manager).
+// Manager). Writes are through: Set always takes a raw secret value
+// and, for external backends, writes it into that system itself under
+// a backend_ref Timothy generates and owns (timothy/<ref_name>) —
+// there is no user-typed external reference.
 package secretstore
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -89,8 +94,6 @@ func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
 		return s.resolveVault(ctx, r.backendRef)
 	case "asm":
 		return s.resolveASM(ctx, r.backendRef)
-	case "file":
-		return s.resolveFile(ctx, r.backendRef)
 	default:
 		return "", fmt.Errorf("secretstore: unknown backend %q for %s", r.backend, refName)
 	}
@@ -110,10 +113,61 @@ func (s *Store) Status(ctx context.Context, refName string) (configured bool, ba
 	return true, r.backend, nil
 }
 
-// Set encrypts value and upserts it under refName with backend "db".
-// External backends (vault, asm) are configured by writing their
-// secret out-of-band and pointing backend_ref at it — not through Set.
+// externalRef is the backend_ref every write-through secret gets in an
+// external backend — Timothy-owned, never user input, so Delete can
+// safely tell "a copy we wrote" from a pre-existing reference.
+func externalRef(refName string) string {
+	return "timothy/" + refName
+}
+
+// refNamePattern bounds ref names that become external paths/names:
+// externalRef embeds refName in a Vault URL path and an ASM secret
+// name, so separators or ".." would escape the timothy/ prefix.
+var refNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+
+func validExternalRefName(refName string) error {
+	if !refNamePattern.MatchString(refName) || strings.Contains(refName, "..") {
+		return fmt.Errorf("secretstore: ref name %q: external backends need a plain name (letters, digits, _ . -)", refName)
+	}
+	return nil
+}
+
+// Set stores value under refName through the store-wide default
+// backend: "db" encrypts it in place, "vault"/"asm" write it into that
+// system (at a Timothy-owned path/name derived from refName) and keep
+// only the pointer locally.
 func (s *Store) Set(ctx context.Context, refName, value string) error {
+	backend, err := s.DefaultBackend(ctx)
+	if err != nil {
+		return err
+	}
+	switch backend {
+	case "vault":
+		if err := validExternalRefName(refName); err != nil {
+			return err
+		}
+		if err := s.writeVault(ctx, externalRef(refName), value); err != nil {
+			return err
+		}
+		return s.upsertRef(ctx, refName, "vault", externalRef(refName)+"#value")
+	case "asm":
+		if err := validExternalRefName(refName); err != nil {
+			return err
+		}
+		if err := s.writeASM(ctx, externalRef(refName), value); err != nil {
+			return err
+		}
+		return s.upsertRef(ctx, refName, "asm", externalRef(refName))
+	default:
+		return s.SetDB(ctx, refName, value)
+	}
+}
+
+// SetDB encrypts value and upserts it under refName with backend "db",
+// bypassing the store-wide default. Used to pin backend-bootstrap
+// credentials (the vault token, the ASM static secret key) that can
+// never live behind the external backend they unlock.
+func (s *Store) SetDB(ctx context.Context, refName, value string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("secretstore: %w", err)
@@ -134,8 +188,51 @@ func (s *Store) Set(ctx context.Context, refName, value string) error {
 	return nil
 }
 
-// Delete removes a secret reference entirely.
+// upsertRef points refName at an external secret this store just wrote
+// (or overwrote) — ciphertext/nonce cleared, since the value now lives
+// out there, not here.
+func (s *Store) upsertRef(ctx context.Context, refName, backend, backendRef string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("secretstore: %w", err)
+	}
+	_, err = db.Exec(ctx, `
+		INSERT INTO secrets (ref_name, backend, backend_ref, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (ref_name) DO UPDATE
+			SET backend = $2, backend_ref = $3, ciphertext = NULL, nonce = NULL, updated_at = now()`,
+		refName, backend, backendRef)
+	if err != nil {
+		return fmt.Errorf("secretstore: set %s: %w", refName, err)
+	}
+	return nil
+}
+
+// Delete removes a secret reference entirely, best-effort deleting its
+// external copy first when this store owns it (backend_ref follows the
+// timothy/<ref_name> convention it writes in Set) — a reference typed
+// against the old external-reference model points at a secret Timothy
+// never owned and must never delete.
 func (s *Store) Delete(ctx context.Context, refName string) error {
+	r, err := s.row(ctx, refName)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if err == nil {
+		path, _ := splitRef(r.backendRef, "")
+		if path == externalRef(refName) {
+			// Best-effort: the external copy failing to delete must
+			// never block the row delete below. Nothing to log to here
+			// (the store carries no logger) — the row is the source of
+			// truth for "is refName configured", and it's gone either way.
+			switch r.backend {
+			case "vault":
+				_ = s.deleteVault(ctx, path)
+			case "asm":
+				_ = s.deleteASM(ctx, path)
+			}
+		}
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("secretstore: %w", err)

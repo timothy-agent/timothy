@@ -30,7 +30,7 @@ import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { backendLabel, errText, stripPaste, secretField } from './util'
+import { backendLabel, errText, secretDestination, stripPaste } from './util'
 
 // ProviderEdit is a provider's own page for the controls too heavy for
 // its summary card: rotating the stored key, and declaring which
@@ -311,13 +311,10 @@ function CredentialSection({
         ) : (
           <div className="flex gap-2">
             <Input
-              type={secretField(defaultBackend ?? 'db', '').type}
+              type="password"
               value={secretValue}
               onChange={(e) => setSecretValue(e.target.value)}
-              placeholder={
-                secretField(defaultBackend ?? 'db', configured ? 'paste new key to rotate' : 'paste key')
-                  .placeholder
-              }
+              placeholder={configured ? 'paste new key to rotate' : 'paste key'}
               className="h-10"
               autoComplete="off"
             />
@@ -326,17 +323,7 @@ function CredentialSection({
             </Button>
           </div>
         )}
-        {!bedrock && (
-          <p className="text-sm text-muted-foreground">
-            {defaultBackend === 'vault'
-              ? 'The key stays in Vault; only its path is saved. The default backend is set in the Secrets tab.'
-              : defaultBackend === 'asm'
-                ? 'The key stays in AWS Secrets Manager; only its name is saved. The default backend is set in the Secrets tab.'
-                : defaultBackend === 'file'
-                  ? 'The key stays in the mounted file; only its filename is saved. The default backend is set in the Secrets tab.'
-                  : 'Encrypted with the master key and kept in Timothy’s database.'}
-          </p>
-        )}
+        {!bedrock && <p className="text-sm text-muted-foreground">{secretDestination(defaultBackend ?? 'db', ref)}</p>}
         <details className="pt-1">
           <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
             Advanced: reference name
@@ -441,7 +428,7 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
           }}
           disabled={timeoutSaving}
           placeholder="5m"
-          className="mt-1.5 h-10 max-w-40"
+          className="mt-1.5 block h-10 max-w-40"
         />
       </Field>
     </section>

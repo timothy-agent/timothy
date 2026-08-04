@@ -173,9 +173,9 @@ describe('Secrets tab default backend', () => {
     renderPage('/settings/secrets')
     expect(await screen.findByText('Timothy storage')).toBeTruthy()
     expect(screen.getByText('default')).toBeTruthy()
-    // Unconfigured backends cannot claim the default: vault, asm, file.
+    // Unconfigured backends cannot claim the default: vault, asm.
     const buttons = screen.getAllByRole('button', { name: 'Make default' })
-    expect(buttons.length).toBe(3)
+    expect(buttons.length).toBe(2)
     for (const b of buttons) expect((b as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -280,7 +280,7 @@ describe('Providers tab', () => {
     expect((addButton as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('asks for a reference, not a key, when the default backend is external', async () => {
+  it('still asks for the raw key, and names Vault as its destination, when the default backend is external', async () => {
     vi.mocked(listAgents).mockResolvedValue([
       { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
     ])
@@ -293,10 +293,10 @@ describe('Providers tab', () => {
 
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
-    const input = await screen.findByPlaceholderText(/Vault path/)
-    // A reference is not a secret: no password masking.
-    expect((input as HTMLInputElement).type).toBe('text')
-    expect(screen.getByText(/paste the path of the secret/)).toBeTruthy()
+    const input = await screen.findByPlaceholderText('paste key')
+    // Every backend takes the raw key now, still masked.
+    expect((input as HTMLInputElement).type).toBe('password')
+    expect(screen.getByText(/Timothy stores the key in Vault \(path timothy\/ZAI_API_KEY\)/)).toBeTruthy()
   })
 
   it('keeps Add disabled and skips create when validation fails', async () => {

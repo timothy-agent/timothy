@@ -3,7 +3,6 @@ const backendLabels: Record<string, string> = {
   db: 'encrypted',
   vault: 'vault',
   asm: 'aws',
-  file: 'file mount',
 }
 export function backendLabel(b: string): string {
   return backendLabels[b] ?? b
@@ -19,33 +18,17 @@ export function stripPaste(v: string): string {
   return v.replace(/[\s​-‍⁠﻿]/g, '')
 }
 
-// secretField shapes a credential input for the store-wide default
-// backend: built-in storage takes the value itself (masked), an
-// external backend takes the reference of a secret already there.
-export function secretField(
-  backend: string,
-  dbPlaceholder: string,
-): { type: 'password' | 'text'; placeholder: string; hint: string } {
+// secretDestination describes where a pasted credential ends up under
+// the store-wide default backend — every backend now writes through
+// Timothy, so this is copy only, never a field shape.
+export function secretDestination(backend: string, ref: string): string {
+  const name = ref.trim() || 'reference name'
   switch (backend) {
     case 'vault':
-      return {
-        type: 'text',
-        placeholder: 'Vault path, e.g. timothy/anthropic#api_key',
-        hint: 'Default backend is Vault, paste the path of the secret, not the secret itself.',
-      }
+      return `Timothy stores the key in Vault (path timothy/${name}).`
     case 'asm':
-      return {
-        type: 'text',
-        placeholder: 'ASM name or ARN, optional #json_key',
-        hint: 'Default backend is AWS Secrets Manager, paste the secret name, not the secret itself.',
-      }
-    case 'file':
-      return {
-        type: 'text',
-        placeholder: 'filename in the mounted secrets directory',
-        hint: 'Default backend is a file mount, enter the filename, not the secret itself.',
-      }
+      return `Timothy stores the key in AWS Secrets Manager (name timothy/${name}).`
     default:
-      return { type: 'password', placeholder: dbPlaceholder, hint: '' }
+      return "Encrypted with the master key and kept in Timothy's database."
   }
 }

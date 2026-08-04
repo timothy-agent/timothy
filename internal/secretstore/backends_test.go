@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 )
 
 func TestSplitRef(t *testing.T) {
@@ -118,130 +117,97 @@ func TestNormalizeBackendConfigAuthMethods(t *testing.T) {
 	}
 }
 
-func TestValidBackendRef(t *testing.T) {
-	for _, ok := range []string{
-		"timothy/anthropic#api_key",
-		"arn:aws:secretsmanager:eu-west-1:123456789012:secret:prod/key-AbC123",
-		"prod/api#key",
-	} {
-		if err := validBackendRef(ok); err != nil {
-			t.Errorf("validBackendRef(%q) = %v, want nil", ok, err)
+func TestValidExternalBackend(t *testing.T) {
+	for _, ok := range []string{"vault", "asm"} {
+		if err := validExternalBackend(ok); err != nil {
+			t.Errorf("validExternalBackend(%q) = %v, want nil", ok, err)
 		}
 	}
-	for _, bad := range []string{
-		"",
-		"has space",
-		"../auth/token/lookup-self",
-		"a/../../b",
-		`{"looks":"like a secret"}`,
-	} {
-		if err := validBackendRef(bad); err == nil {
-			t.Errorf("validBackendRef(%q) = nil, want error", bad)
+	for _, bad := range []string{"file", "db", "nope"} {
+		if err := validExternalBackend(bad); err == nil {
+			t.Errorf("validExternalBackend(%q) = nil, want error", bad)
 		}
 	}
 }
 
-func TestNormalizeBackendConfigFile(t *testing.T) {
-	got, err := normalizeBackendConfig("file", json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
+func TestValidExternalRefName(t *testing.T) {
+	for _, ok := range []string{"OPENAI_API_KEY", "zai.api-key", "a"} {
+		if err := validExternalRefName(ok); err != nil {
+			t.Errorf("validExternalRefName(%q) = %v, want nil", ok, err)
+		}
 	}
-	var cfg FileConfig
-	if err := json.Unmarshal(got, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Dir != defaultFileDir {
-		t.Errorf("default dir = %q, want %q", cfg.Dir, defaultFileDir)
-	}
-
-	got, err = normalizeBackendConfig("file", json.RawMessage(`{"dir":"/mnt/secrets"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(got, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Dir != "/mnt/secrets" {
-		t.Errorf("dir = %q, want /mnt/secrets", cfg.Dir)
-	}
-
-	if _, err := normalizeBackendConfig("file", json.RawMessage(`{"dir":"relative/path"}`)); err == nil {
-		t.Fatal("relative dir: want error")
-	}
-}
-
-func TestValidExternalBackendAcceptsFile(t *testing.T) {
-	if err := validExternalBackend("file"); err != nil {
-		t.Errorf("validExternalBackend(file) = %v, want nil", err)
-	}
-	if err := validExternalBackend("nope"); err == nil {
-		t.Fatal("unknown backend: want error")
-	}
-}
-
-func TestReadFileSecret(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "api_key"), []byte("sk-live-123\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "no_newline"), []byte("sk-no-nl"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := readFileSecret(dir, "api_key")
-	if err != nil || got != "sk-live-123" {
-		t.Fatalf("readFileSecret = (%q, %v), want (sk-live-123, nil)", got, err)
-	}
-	// Only ONE trailing newline is trimmed — interior/multiple trailing
-	// whitespace is preserved as part of the value, not guessed at.
-	got, err = readFileSecret(dir, "no_newline")
-	if err != nil || got != "sk-no-nl" {
-		t.Fatalf("readFileSecret (no trailing newline) = (%q, %v), want (sk-no-nl, nil)", got, err)
-	}
-
-	if _, err := readFileSecret(dir, "missing"); err == nil {
-		t.Fatal("missing file: want error")
-	}
-}
-
-func TestReadFileSecretRejectsPathEscapes(t *testing.T) {
-	dir := t.TempDir()
-	for _, bad := range []string{
-		"",
-		"../outside",
-		"a/../../b",
-		"sub/dir/file",
-		"/etc/passwd",
-		`C:\Windows\file`,
-	} {
-		if _, err := readFileSecret(dir, bad); err == nil {
-			t.Errorf("readFileSecret(%q) = nil, want error (path escape)", bad)
+	for _, bad := range []string{"", "a/b", "../admin", "a..b", "a b", "a#b", strings.Repeat("x", 129)} {
+		if err := validExternalRefName(bad); err == nil {
+			t.Errorf("validExternalRefName(%q) = nil, want error", bad)
 		}
 	}
 }
 
-// stubASM fakes the Secrets Manager slice the store uses.
+// stubASM fakes the Secrets Manager slice the store uses. secrets maps
+// name -> current SecretString, mutated by Create/Put/Delete so tests
+// can assert write-through behavior, not just reads.
 type stubASM struct {
-	secret string
-	err    error
+	secrets map[string]string
+	err     error
 }
 
-func (s stubASM) GetSecretValue(context.Context, *secretsmanager.GetSecretValueInput,
-	...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
+func newStubASM(seed map[string]string) *stubASM {
+	if seed == nil {
+		seed = map[string]string{}
+	}
+	return &stubASM{secrets: seed}
+}
+
+func (s *stubASM) GetSecretValue(_ context.Context, in *secretsmanager.GetSecretValueInput,
+	_ ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &secretsmanager.GetSecretValueOutput{SecretString: &s.secret}, nil
+	val, ok := s.secrets[*in.SecretId]
+	if !ok {
+		return nil, &types.ResourceNotFoundException{}
+	}
+	return &secretsmanager.GetSecretValueOutput{SecretString: &val}, nil
 }
 
-func (s stubASM) ListSecrets(context.Context, *secretsmanager.ListSecretsInput,
+func (s *stubASM) ListSecrets(context.Context, *secretsmanager.ListSecretsInput,
 	...func(*secretsmanager.Options)) (*secretsmanager.ListSecretsOutput, error) {
 	return &secretsmanager.ListSecretsOutput{}, s.err
 }
 
+func (s *stubASM) CreateSecret(_ context.Context, in *secretsmanager.CreateSecretInput,
+	_ ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if _, exists := s.secrets[*in.Name]; exists {
+		return nil, &types.ResourceExistsException{}
+	}
+	s.secrets[*in.Name] = *in.SecretString
+	return &secretsmanager.CreateSecretOutput{Name: in.Name}, nil
+}
+
+func (s *stubASM) PutSecretValue(_ context.Context, in *secretsmanager.PutSecretValueInput,
+	_ ...func(*secretsmanager.Options)) (*secretsmanager.PutSecretValueOutput, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.secrets[*in.SecretId] = *in.SecretString
+	return &secretsmanager.PutSecretValueOutput{Name: in.SecretId}, nil
+}
+
+func (s *stubASM) DeleteSecret(_ context.Context, in *secretsmanager.DeleteSecretInput,
+	_ ...func(*secretsmanager.Options)) (*secretsmanager.DeleteSecretOutput, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	delete(s.secrets, *in.SecretId)
+	return &secretsmanager.DeleteSecretOutput{Name: in.SecretId}, nil
+}
+
 func TestResolveASMWithStub(t *testing.T) {
 	//nolint:gosec // G101: fake stub value, not a credential.
-	s := &Store{asm: stubASM{secret: `{"api_key":"sk-9","port":443}`}}
+	s := &Store{asm: newStubASM(map[string]string{"prod/key": `{"api_key":"sk-9","port":443}`})}
 
 	got, err := s.resolveASM(context.Background(), "prod/key#api_key")
 	if err != nil || got != "sk-9" {
@@ -258,9 +224,52 @@ func TestResolveASMWithStub(t *testing.T) {
 	if _, err := s.resolveASM(context.Background(), "prod/key#port"); err == nil {
 		t.Fatal("non-string field: want error")
 	}
+}
+
+// TestWriteASMCreatesThenFallsBackToPut pins write-through: a fresh
+// name goes through CreateSecret, a name that already exists falls
+// back to PutSecretValue (ResourceExistsException) rather than
+// erroring.
+func TestWriteASMCreatesThenFallsBackToPut(t *testing.T) {
+	stub := newStubASM(nil)
+	s := &Store{asm: stub}
+
+	if err := s.writeASM(context.Background(), "timothy/new", "sk-1"); err != nil {
+		t.Fatalf("writeASM (create): %v", err)
+	}
+	if stub.secrets["timothy/new"] != "sk-1" {
+		t.Fatalf("secrets[timothy/new] = %q, want sk-1", stub.secrets["timothy/new"])
+	}
+
+	if err := s.writeASM(context.Background(), "timothy/new", "sk-2"); err != nil {
+		t.Fatalf("writeASM (put fallback): %v", err)
+	}
+	if stub.secrets["timothy/new"] != "sk-2" {
+		t.Fatalf("secrets[timothy/new] = %q, want sk-2 after overwrite", stub.secrets["timothy/new"])
+	}
+}
+
+func TestDeleteASM(t *testing.T) {
+	stub := newStubASM(map[string]string{"timothy/gone": "sk-x"})
+	s := &Store{asm: stub}
+
+	if err := s.deleteASM(context.Background(), "timothy/gone"); err != nil {
+		t.Fatalf("deleteASM: %v", err)
+	}
+	if _, ok := stub.secrets["timothy/gone"]; ok {
+		t.Fatal("deleteASM left the secret behind")
+	}
+}
+
+func TestTestBackendASMWriteProbe(t *testing.T) {
+	stub := newStubASM(nil)
+	s := &Store{asm: stub}
 
 	if err := s.TestBackend(context.Background(), "asm"); err != nil {
-		t.Fatalf("TestBackend(asm) with stub: %v", err)
+		t.Fatalf("TestBackend(asm): %v", err)
+	}
+	if _, ok := stub.secrets[probeRef]; ok {
+		t.Error("TestBackend left its write probe behind in asm")
 	}
 }
 

@@ -9,15 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -33,17 +31,6 @@ type VaultConfig struct {
 	// AppRole fields; SecretIDRef names the stored secret_id.
 	RoleID      string `json:"role_id"`
 	SecretIDRef string `json:"secret_id_ref"`
-}
-
-// FileConfig connects the file backend to a directory of secret files
-// mounted into the container — Docker/Kubernetes secrets convention:
-// one file per secret, named by its ref, holding the raw value with an
-// optional trailing newline. No credentials of its own: the mount
-// itself is the trust boundary, set up outside Timothy.
-type FileConfig struct {
-	// Dir is the mount directory secret files live under. Defaults to
-	// /run/secrets, the Docker/Compose/Kubernetes convention.
-	Dir string `json:"dir"`
 }
 
 // ASMConfig connects the asm backend to AWS Secrets Manager. Region
@@ -67,6 +54,12 @@ type asmAPI interface {
 		opts ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
 	ListSecrets(ctx context.Context, in *secretsmanager.ListSecretsInput,
 		opts ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretsOutput, error)
+	CreateSecret(ctx context.Context, in *secretsmanager.CreateSecretInput,
+		opts ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error)
+	PutSecretValue(ctx context.Context, in *secretsmanager.PutSecretValueInput,
+		opts ...func(*secretsmanager.Options)) (*secretsmanager.PutSecretValueOutput, error)
+	DeleteSecret(ctx context.Context, in *secretsmanager.DeleteSecretInput,
+		opts ...func(*secretsmanager.Options)) (*secretsmanager.DeleteSecretOutput, error)
 }
 
 const (
@@ -76,14 +69,7 @@ const (
 	//nolint:gosec // G101: a ref NAME in the secret store, not a credential value.
 	defaultASMSecretKeyRef = "AWS_SECRET_ACCESS_KEY"
 	backendHTTPTimeout     = 10 * time.Second
-	defaultFileDir         = "/run/secrets"
 )
-
-// backendRefPattern bounds what a backend_ref may look like (vault
-// paths, ASM names/ARNs, an optional #field suffix). Like
-// credential_ref it must be a name, never a value: no spaces, quotes,
-// or long opaque blobs.
-var backendRefPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/#=+@-]{1,256}$`)
 
 // vaultHTTP never follows redirects: Go strips only Authorization and
 // Cookie on cross-host redirects, so a malicious or compromised
@@ -224,7 +210,7 @@ func (s *Store) Backends(ctx context.Context) ([]BackendStatus, error) {
 		return nil, fmt.Errorf("secretstore: list backends: %w", err)
 	}
 	out := []BackendStatus{{Backend: "db", Configured: true}}
-	for _, b := range []string{"vault", "asm", "file"} {
+	for _, b := range []string{"vault", "asm"} {
 		if isDefault, ok := state[b]; ok {
 			out = append(out, BackendStatus{Backend: b, Configured: true, Default: isDefault})
 		} else {
@@ -298,36 +284,15 @@ func (s *Store) SetDefaultBackend(ctx context.Context, backend string) error {
 	return nil
 }
 
-// SetExternal points refName at a secret held in an external backend.
-// backendRef is the path/name in that system (vault: "path[#field]"
-// within the configured mount, field default "value"; asm:
-// "name-or-arn[#json_key]").
-func (s *Store) SetExternal(ctx context.Context, refName, backend, backendRef string) error {
-	if err := validExternalBackend(backend); err != nil {
-		return err
-	}
-	if err := validBackendRef(backendRef); err != nil {
-		return err
-	}
-	db, err := s.db.Get()
-	if err != nil {
-		return fmt.Errorf("secretstore: %w", err)
-	}
-	_, err = db.Exec(ctx, `
-		INSERT INTO secrets (ref_name, backend, backend_ref, updated_at)
-		VALUES ($1, $2, $3, now())
-		ON CONFLICT (ref_name) DO UPDATE
-			SET backend = $2, backend_ref = $3, ciphertext = NULL, nonce = NULL, updated_at = now()`,
-		refName, backend, backendRef)
-	if err != nil {
-		return fmt.Errorf("secretstore: set external %s: %w", refName, err)
-	}
-	return nil
-}
+// probeRef is the backend_ref TestBackend's write probe uses — outside
+// the timothy/<ref_name> convention any real secret would use, so it
+// can never collide with or masquerade as one.
+const probeRef = "timothy/__probe"
 
-// TestBackend checks a backend's connectivity and auth without
-// touching any stored secret: vault does a token lookup-self, asm
-// lists at most one secret.
+// TestBackend checks a backend's connectivity, auth, and write access
+// without touching any stored secret: vault and asm each write then
+// delete a throwaway probe secret, so a backend missing write
+// permissions is caught at config time rather than on the next Set.
 func (s *Store) TestBackend(ctx context.Context, backend string) error {
 	switch backend {
 	case "vault":
@@ -339,7 +304,13 @@ func (s *Store) TestBackend(ctx context.Context, backend string) error {
 		if err != nil {
 			return err
 		}
-		return vaultRequest(ctx, cfg.Address, "/v1/auth/token/lookup-self", token, nil)
+		if err := vaultRequest(ctx, cfg.Address, "/v1/auth/token/lookup-self", token, nil); err != nil {
+			return err
+		}
+		if err := s.writeVault(ctx, probeRef, "probe"); err != nil {
+			return err
+		}
+		return s.deleteVault(ctx, probeRef)
 	case "asm":
 		client, err := s.asmClient(ctx)
 		if err != nil {
@@ -348,40 +319,20 @@ func (s *Store) TestBackend(ctx context.Context, backend string) error {
 		one := int32(1)
 		_, err = client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{MaxResults: &one})
 		if err != nil {
-			return fmt.Errorf("secretstore: asm test (needs secretsmanager:ListSecrets; resolution itself only needs GetSecretValue): %w", err)
+			return fmt.Errorf("secretstore: asm test (needs secretsmanager:ListSecrets, CreateSecret, PutSecretValue, DeleteSecret; resolution itself only needs GetSecretValue): %w", err)
 		}
-		return nil
-	case "file":
-		cfg, err := s.fileConfig(ctx)
-		if err != nil {
+		if err := s.writeASM(ctx, probeRef, "probe"); err != nil {
 			return err
 		}
-		info, err := os.Stat(cfg.Dir)
-		if err != nil {
-			return fmt.Errorf("secretstore: file backend: %w", err)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("secretstore: file backend: %s is not a directory", cfg.Dir)
-		}
-		return nil
+		return s.deleteASM(ctx, probeRef)
 	default:
 		return validExternalBackend(backend)
 	}
 }
 
 func validExternalBackend(backend string) error {
-	if backend != "vault" && backend != "asm" && backend != "file" {
+	if backend != "vault" && backend != "asm" {
 		return fmt.Errorf("secretstore: unknown backend %q", backend)
-	}
-	return nil
-}
-
-// validBackendRef rejects anything that isn't a plausible path or
-// name, and any ".." segment that could escape the vault mount when
-// spliced into the request path.
-func validBackendRef(ref string) error {
-	if !backendRefPattern.MatchString(ref) || strings.Contains(ref, "..") {
-		return fmt.Errorf("secretstore: backend_ref must be a path or name (vault path, ASM name/ARN), never a secret value")
 	}
 	return nil
 }
@@ -446,18 +397,6 @@ func normalizeBackendConfig(backend string, cfg json.RawMessage) (json.RawMessag
 			return nil, fmt.Errorf("secretstore: asm config: auth must be chain, profile or keys")
 		}
 		return json.Marshal(a)
-	case "file":
-		var f FileConfig
-		if err := json.Unmarshal(cfg, &f); err != nil {
-			return nil, fmt.Errorf("secretstore: file config: %w", err)
-		}
-		if f.Dir == "" {
-			f.Dir = defaultFileDir
-		}
-		if !filepath.IsAbs(f.Dir) {
-			return nil, fmt.Errorf("secretstore: file config: dir must be an absolute path")
-		}
-		return json.Marshal(f)
 	default:
 		return nil, validExternalBackend(backend)
 	}
@@ -482,50 +421,6 @@ func (s *Store) vaultConfig(ctx context.Context) (VaultConfig, error) {
 		cfg.TokenRef = defaultVaultTokenRef
 	}
 	return cfg, nil
-}
-
-func (s *Store) fileConfig(ctx context.Context) (FileConfig, error) {
-	raw, err := s.GetBackendConfig(ctx, "file")
-	if err != nil {
-		return FileConfig{}, err
-	}
-	var cfg FileConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return FileConfig{}, fmt.Errorf("secretstore: file config: %w", err)
-	}
-	if cfg.Dir == "" {
-		cfg.Dir = defaultFileDir
-	}
-	return cfg, nil
-}
-
-// resolveFile reads a secret file from the configured mount directory.
-func (s *Store) resolveFile(ctx context.Context, backendRef string) (string, error) {
-	cfg, err := s.fileConfig(ctx)
-	if err != nil {
-		return "", err
-	}
-	return readFileSecret(cfg.Dir, backendRef)
-}
-
-// readFileSecret reads backendRef as a secret file under dir.
-// backendRef must be a bare filename — never a path with its own
-// directory components, so a stored ref can't escape the mount via
-// "../" traversal or an absolute path. The file's content is trimmed
-// of a single trailing newline (the common `printf`/`echo`-without-
-// `-n` case); interior whitespace is preserved as part of the value.
-func readFileSecret(dir, backendRef string) (string, error) {
-	if backendRef == "" || strings.ContainsAny(backendRef, "/\\") || strings.Contains(backendRef, "..") {
-		return "", fmt.Errorf("secretstore: file backend_ref must be a bare filename, got %q", backendRef)
-	}
-	path := filepath.Join(dir, backendRef)
-	//nolint:gosec // G304: backendRef is validated above to be a bare filename,
-	// no separators or "..", so path cannot escape dir.
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("secretstore: file %s: %w", path, err)
-	}
-	return strings.TrimSuffix(string(data), "\n"), nil
 }
 
 // dbSecret decrypts a db-backed secret directly — never via Resolve —
@@ -606,6 +501,42 @@ func vaultRequest(ctx context.Context, address, endpoint, token string, out any)
 	return vaultDo(ctx, http.MethodGet, address, endpoint, token, nil, out)
 }
 
+// writeVault stores value in the configured KV v2 mount at path,
+// always under the "value" field so resolveVault's default field
+// convention reads it back.
+func (s *Store) writeVault(ctx context.Context, path, value string) error {
+	cfg, err := s.vaultConfig(ctx)
+	if err != nil {
+		return err
+	}
+	token, err := s.vaultToken(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{"data": map[string]string{"value": value}})
+	if err != nil {
+		return fmt.Errorf("secretstore: vault: %w", err)
+	}
+	endpoint := "/v1/" + cfg.Mount + "/data/" + strings.TrimPrefix(path, "/")
+	return vaultDo(ctx, http.MethodPost, cfg.Address, endpoint, token, body, nil)
+}
+
+// deleteVault permanently removes path and all its versions (metadata
+// delete, not just the current version) from the configured KV v2
+// mount.
+func (s *Store) deleteVault(ctx context.Context, path string) error {
+	cfg, err := s.vaultConfig(ctx)
+	if err != nil {
+		return err
+	}
+	token, err := s.vaultToken(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	endpoint := "/v1/" + cfg.Mount + "/metadata/" + strings.TrimPrefix(path, "/")
+	return vaultDo(ctx, http.MethodDelete, cfg.Address, endpoint, token, nil, nil)
+}
+
 func vaultDo(ctx context.Context, method, address, endpoint, token string, body []byte, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, backendHTTPTimeout)
 	defer cancel()
@@ -626,7 +557,7 @@ func vaultDo(ctx context.Context, method, address, endpoint, token string, body 
 		return fmt.Errorf("secretstore: vault: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return fmt.Errorf("secretstore: vault %s: status %d: %s", endpoint, resp.StatusCode, snippet)
 	}
@@ -663,6 +594,43 @@ func (s *Store) resolveASM(ctx context.Context, backendRef string) (string, erro
 		return "", fmt.Errorf("secretstore: asm %s: %w", id, err)
 	}
 	return val, nil
+}
+
+// writeASM creates a new secret named id, falling back to overwriting
+// its current value if one already exists under that name.
+func (s *Store) writeASM(ctx context.Context, id, value string) error {
+	client, err := s.asmClient(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = client.CreateSecret(ctx, &secretsmanager.CreateSecretInput{Name: &id, SecretString: &value})
+	if err == nil {
+		return nil
+	}
+	var exists *types.ResourceExistsException
+	if !errors.As(err, &exists) {
+		return fmt.Errorf("secretstore: asm create %s: %w", id, err)
+	}
+	if _, err := client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{SecretId: &id, SecretString: &value}); err != nil {
+		return fmt.Errorf("secretstore: asm put %s: %w", id, err)
+	}
+	return nil
+}
+
+// deleteASM permanently removes a secret without the recovery window
+// — a Timothy-owned secret has no independent lifecycle to recover
+// into once its ref_name row is gone.
+func (s *Store) deleteASM(ctx context.Context, id string) error {
+	client, err := s.asmClient(ctx)
+	if err != nil {
+		return err
+	}
+	force := true
+	_, err = client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{SecretId: &id, ForceDeleteWithoutRecovery: &force})
+	if err != nil {
+		return fmt.Errorf("secretstore: asm delete %s: %w", id, err)
+	}
+	return nil
 }
 
 func (s *Store) asmClient(ctx context.Context) (asmAPI, error) {
