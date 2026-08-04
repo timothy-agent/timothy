@@ -288,10 +288,29 @@ export function InterruptedMessage({ text }: { text: string }) {
 // terminal error/incomplete with nothing worth keeping, or a completed
 // turn with no text, reasoning, or tool calls. Surfacing this IS the
 // point — the turn used to vanish from the transcript silently.
-export function ErrorMessage({ text }: { text: string }) {
+export function ErrorMessage({
+  text,
+  onRetry,
+}: {
+  text: string
+  // Present only for the trailing item when it's safe to retry (same
+  // trailing-only condition Chat.tsx applies to user/assistant items) —
+  // without this a failed turn had no way back into the UI at all.
+  onRetry?: () => void
+}) {
   return (
     <div className="flex items-center gap-2" data-testid="turn-failed">
       <Badge variant="destructive">{text || 'this turn failed'}</Badge>
+      {onRetry && (
+        <button
+          type="button"
+          data-testid="retry-button"
+          onClick={onRetry}
+          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          retry
+        </button>
+      )}
     </div>
   )
 }

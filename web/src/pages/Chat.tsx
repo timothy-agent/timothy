@@ -585,7 +585,16 @@ export function Chat({
             case 'interrupted':
               return <InterruptedMessage key={item.id} text={item.text} />
             case 'error':
-              return <ErrorMessage key={item.id} text={item.text} />
+              return (
+                <ErrorMessage
+                  key={item.id}
+                  text={item.text}
+                  // Same trailing-only condition as user/assistant items:
+                  // a failed turn had no way back into the UI at all
+                  // without this — the user had to type the message again.
+                  onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                />
+              )
             default:
               return (
                 <AssistantMessage

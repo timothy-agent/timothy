@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, emptyAssistant, type AssistantState } from '../lib/chat'
-import { AssistantMessage, CompactionDivider, InterruptedMessage, UserMessage } from './Message'
+import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from './Message'
 
 vi.mock('../api/client', () => ({
   fetchAttachmentBlob: vi.fn(),
@@ -130,6 +130,19 @@ describe('replay-only components', () => {
     const el = screen.getByTestId('interrupted')
     expect(el).toHaveTextContent('Once upon a')
     expect(el).toHaveTextContent('interrupted')
+  })
+
+  it('renders no retry button on a failed turn without onRetry', () => {
+    render(<ErrorMessage text="context deadline exceeded" />)
+    expect(screen.getByTestId('turn-failed')).toHaveTextContent('context deadline exceeded')
+    expect(screen.queryByTestId('retry-button')).not.toBeInTheDocument()
+  })
+
+  it('shows a retry button on a failed turn when onRetry is given, and calls it on click', () => {
+    const onRetry = vi.fn()
+    render(<ErrorMessage text="context deadline exceeded" onRetry={onRetry} />)
+    fireEvent.click(screen.getByTestId('retry-button'))
+    expect(onRetry).toHaveBeenCalledOnce()
   })
 })
 
