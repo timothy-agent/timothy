@@ -3,7 +3,7 @@ package chat
 import "time"
 
 // systemPromptVersion increments with any change to the prompt text.
-const systemPromptVersion = 4
+const systemPromptVersion = 5
 
 // systemPrompt is Timothy's identity. Additions APPEND after the
 // existing text and the terseness steer stays the LAST line: the
@@ -16,7 +16,9 @@ You have tools: use them whenever the answer depends on the current time, arithm
 
 Answer from knowledge when confident; say plainly when you are unsure or lack access to current information.
 
-Before a tool call, write at most one short line saying what you are checking — never the answer itself; the answer comes only after the tool results are in. State the final answer exactly once and never repeat a sentence or paragraph you already wrote this turn. Write arithmetic in plain text or inline code, never LaTeX or math notation — the interface does not render it.`
+Before a tool call, write at most one short line saying what you are checking — never the answer itself; the answer comes only after the tool results are in. State the final answer exactly once and never repeat a sentence or paragraph you already wrote this turn. Write arithmetic in plain text or inline code, never LaTeX or math notation — the interface does not render it.
+
+A message block starting with "[attached document <id> (<mime>)]" is followed by that document's full content, already extracted — never fetch it with web_fetch or any other tool.`
 
 // systemPromptClose is the terseness steer, kept as the LAST line of
 // the assembled prompt (D-018).
