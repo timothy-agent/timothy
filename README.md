@@ -30,14 +30,14 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 
 Go microservices behind a single public API, one PostgreSQL database, React web UI. All run via Docker Compose.
 
-| Service      | Role                                                                                        |
-|--------------|---------------------------------------------------------------------------------------------|
+| Service      | Role                                                                                         |
+|--------------|----------------------------------------------------------------------------------------------|
 | `brain`      | Public API: chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming |
 | `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                   |
 | `memoryd`    | Internal memory service: pgvector-backed recall                                             |
 | `sandboxd`   | Internal service holding the Docker socket: per-mission sandbox containers                  |
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                 |
-| `searxng`    | Internal metasearch backend for the web_search tool                                         |
+| `searxng`    | Internal metasearch backend for the web_search tool                                          |
 | `markitdown` | Internal Python sidecar: file→markdown conversion                                           |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button                        |
 
@@ -57,15 +57,15 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 
 The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker and the released images.
 
-1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases).
-While Timothy is in alpha, every release is marked prerelease, so GitHub's `/releases/latest` redirect doesn't resolve; fetch the newest tag from the API instead (needs `jq`) or check the release badge for the tag (set the `TIMOTHY_VERSION` manually):
+1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases). While Timothy is alpha, every release is marked prerelease, so GitHub's `/releases/latest` redirect doesn't resolve; look up the newest tag instead:
 
    ```sh
    mkdir timothy && cd timothy
-   TIMOTHY_VERSION=$(curl -fsSL "https://api.github.com/repos/timothy-agent/timothy/releases?per_page=100" | jq -r 'sort_by(.created_at) | last.tag_name')
-   # or
-   TIMOTHY_VERSION=<SET_MANUALLY>
-   curl -fsSLo install.sh "https://github.com/timothy-agent/timothy/releases/download/$TIMOTHY_VERSION/install.sh"
+   TAG=$(curl -fsSL https://api.github.com/repos/timothy-agent/timothy/releases \
+     | grep -E '"tag_name"|"published_at"' | paste - - \
+     | sed -E 's/.*"tag_name": "([^"]+)".*"published_at": "([^"]+)".*/\2 \1/' \
+     | sort -r | head -1 | awk '{print $2}')
+   curl -fsSLo install.sh "https://github.com/timothy-agent/timothy/releases/download/$TAG/install.sh"
    ```
 
 2. Read `install.sh` before running it. Then run it:
