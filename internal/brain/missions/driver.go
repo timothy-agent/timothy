@@ -598,11 +598,12 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission) (StepInput, bool)
 	if err := d.verifyCurrentUnit(ctx, m); err != nil {
 		var vf *verifyFailure
 		if errors.As(err, &vf) {
-			note := fmt.Sprintf("Verification failed for unit %d before review: %s", vf.unit, vf.excerpt)
+			note := fmt.Sprintf("Verification failed for unit %d before review: %s", vf.unit+1, vf.excerpt)
 			if perr := d.recordProgress(ctx, m.ID, note); perr != nil {
 				d.log.Warn("driver: record verify-failure note failed", "mission_id", m.ID, "error", perr)
 			}
-			return StepInput{Input: InputWorkerRetry, Reason: truncate(note, 500)}, true
+			fp := fmt.Sprintf("verify_failed:unit_%d", vf.unit)
+			return StepInput{Input: InputWorkerRetry, Reason: truncate(note, 500), GapFingerprint: fp}, true
 		}
 		d.log.Warn("driver: pre-review verify errored; falling back to review", "mission_id", m.ID, "error", err)
 		return StepInput{}, false
@@ -685,7 +686,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 				// of looping forever. Tell the worker exactly what
 				// verification found, so the next turn doesn't just repeat
 				// the same false claim.
-				note := fmt.Sprintf("Verification failed for unit %d: the harness ran verify_cmd and it did NOT pass. Output:\n%s", vf.unit, vf.excerpt)
+				note := fmt.Sprintf("Verification failed for unit %d: the harness ran verify_cmd and it did NOT pass. Output:\n%s", vf.unit+1, vf.excerpt)
 				if err := d.recordProgress(ctx, m.ID, note); err != nil {
 					d.log.Warn("driver: record verify-failure note failed", "mission_id", m.ID, "error", err)
 				}

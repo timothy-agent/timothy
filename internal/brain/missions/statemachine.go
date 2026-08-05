@@ -185,7 +185,7 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 	case InputPhaseComplete:
 		return stepPhaseComplete(s)
 	case InputWorkerRetry:
-		return stepWorkerRetry(s, in)
+		return stepWorkerRetry(s, in, cfg)
 	case InputWorkerBlocked:
 		return Transition{
 			Next:   withStatus(s, StatusWaitingForInput),
@@ -280,11 +280,31 @@ func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 
 // stepWorkerRetry is a worker's own self-reported RETRY (failure
 // analysis, distinct from a harness-detected WorkerFailed): it costs
-// an iteration but does not count toward the backoff brake — the
-// worker is still making an attempt, not silently failing.
-func stepWorkerRetry(s StepState, in StepInput) Transition {
-	s.Iteration++
+// an iteration but does not count toward the ConsecutiveFailures
+// backoff brake — the worker is still making an attempt, not silently
+// failing. It still tracks the stall brake same as stepReviewRework:
+// two consecutive rounds with an IDENTICAL gap fingerprint (e.g. the
+// same harness verify_cmd failing the same way every time) mean no
+// real progress is happening, most likely because the check itself
+// can never pass — grinding to max_iterations wastes the rest of the
+// budget on a foregone conclusion.
+func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 	s.ConsecutiveFailures = 0
+	if in.GapFingerprint != "" {
+		if in.GapFingerprint == s.LastGapFingerprint {
+			s.StallCount++
+		} else {
+			s.StallCount = 1
+		}
+		s.LastGapFingerprint = in.GapFingerprint
+		if s.StallCount >= cfg.StallRounds {
+			return Transition{
+				Next:   withPause(s, PauseNoProgress),
+				Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},
+			}
+		}
+	}
+	s.Iteration++
 	if s.Iteration >= s.MaxIterations {
 		return Transition{
 			Next:   withPhaseFailed(s),
