@@ -20,7 +20,55 @@ jobs:
   # on main that already went green through ci-ok. Re-running build/
   # vet/test/lint against the same commit here would only slow the
   # release down for no new signal.
+
+  # Decides which of the 8 images actually need a rebuild for this
+  # tag. Diffs against the previous release tag (not the previous
+  # commit): a service skipped across several no-op releases in a row
+  # must still be compared against the last tag that actually built
+  # it, or a real change could be missed. First-ever release (no
+  # previous tag) marks everything changed.
+  diff:
+    runs-on: ubuntu-latest
+    outputs:
+      brain: ${{ steps.diff.outputs.brain }}
+      gateway: ${{ steps.diff.outputs.gateway }}
+      memoryd: ${{ steps.diff.outputs.memoryd }}
+      sandboxd: ${{ steps.diff.outputs.sandboxd }}
+      web: ${{ steps.diff.outputs.web }}
+      markitdown: ${{ steps.diff.outputs.markitdown }}
+      whisper: ${{ steps.diff.outputs.whisper }}
+      sandbox: ${{ steps.diff.outputs.sandbox }}
+      prev_tag: ${{ steps.prev.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: prev
+        run: |
+          prev=$(git tag --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1)
+          echo "tag=$prev" >> "$GITHUB_OUTPUT"
+      - id: diff
+        run: |
+          if [ -z "${{ steps.prev.outputs.tag }}" ]; then
+            echo "no previous release tag; building everything"
+            for name in brain gateway memoryd sandboxd web markitdown whisper sandbox; do
+              echo "$name=true" >> "$GITHUB_OUTPUT"
+            done
+            exit 0
+          fi
+          files=$(git diff --name-only "${{ steps.prev.outputs.tag }}" "$GITHUB_SHA")
+          changed() { echo "$files" | grep -qE "$1"; }
+          go_pattern='^(go\.mod|go\.sum|migrations/|internal/|cmd/|deploy/Dockerfile)'
+          for name in brain gateway memoryd sandboxd; do
+            changed "$go_pattern" && echo "$name=true" >> "$GITHUB_OUTPUT" || echo "$name=false" >> "$GITHUB_OUTPUT"
+          done
+          changed '^web/' && echo "web=true" >> "$GITHUB_OUTPUT" || echo "web=false" >> "$GITHUB_OUTPUT"
+          changed '^markitdown-svc/' && echo "markitdown=true" >> "$GITHUB_OUTPUT" || echo "markitdown=false" >> "$GITHUB_OUTPUT"
+          changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
+          changed '^deploy/sandbox\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
+
   images:
+    needs: diff
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -65,11 +113,15 @@ jobs:
             dockerfile: deploy/sandbox.Dockerfile
     steps:
       - uses: actions/checkout@v7
+        if: fromJSON(needs.diff.outputs[matrix.name])
       - id: version
         run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - id: sha
         run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
+        if: fromJSON(needs.diff.outputs[matrix.name])
+      # Always set up buildx: the copy-forward step below (unchanged
+      # images) also needs it for `docker buildx imagetools create`.
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -77,6 +129,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
+        if: fromJSON(needs.diff.outputs[matrix.name])
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -101,6 +154,18 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      # Unchanged image: no rebuild, just point the new version tag at
+      # the previous release's manifest list. Keeps every tag pinned
+      # to a real image (no floating tags) without paying for a
+      # redundant multi-arch build.
+      - name: Copy forward unchanged image
+        if: needs.diff.outputs.prev_tag != '' && !fromJSON(needs.diff.outputs[matrix.name])
+        run: |
+          prev_version="${{ needs.diff.outputs.prev_tag }}"
+          prev_version="${prev_version#v}"
+          docker buildx imagetools create \
+            --tag ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }} \
+            ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${prev_version}
 
   release:
     needs: images
