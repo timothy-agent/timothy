@@ -21,20 +21,25 @@ def health():
 
 
 @app.post("/transcribe")
-async def transcribe(request: Request):
+async def transcribe(request: Request, language: str | None = None):
     """Transcribes the request body (raw audio bytes) to text.
 
     Accepts whatever container format the browser recorded (webm/opus
     from MediaRecorder, also wav/ogg/mp3) — faster-whisper decodes via
     PyAV, which bundles its own ffmpeg libs, so no separate ffmpeg
     binary is needed in the image.
+
+    `language` is an optional ISO 639-1 code (e.g. "bn", "en"). Omitted
+    or empty falls back to faster-whisper's own auto-detection, which
+    can mis-guess on short clips or languages the model handles less
+    reliably.
     """
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="empty request body")
 
     try:
-        segments, _ = model.transcribe(io.BytesIO(body))
+        segments, _ = model.transcribe(io.BytesIO(body), language=language or None)
         text = "".join(segment.text for segment in segments).strip()
     except Exception as exc:  # faster-whisper/PyAV raise assorted decode errors
         raise HTTPException(status_code=422, detail=f"transcription failed: {exc}") from exc

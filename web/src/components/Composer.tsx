@@ -1,11 +1,13 @@
 import {
   Attachment02Icon,
+  ArrowDown01Icon,
   ArrowUp01Icon,
   Cancel01Icon,
   Loading03Icon,
   Mic01Icon,
   Pdf02Icon,
   StopIcon,
+  Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import type { ClipboardEvent, DragEvent } from 'react'
@@ -13,7 +15,18 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { transcribe, uploadAttachment } from '../api/client'
 import { skillLabels } from '../lib/skills'
+import {
+  getTranscribeLanguage,
+  setTranscribeLanguage,
+  TRANSCRIBE_LANGUAGES,
+} from '../lib/transcribeLanguage'
 import { AgentRoutePicker } from './AgentRoutePicker'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
 
 // PendingAttachment is one upload in flight or done, owned by the
 // page (same pattern as `draft`) so the send flow can read and clear
@@ -90,6 +103,7 @@ export function Composer({
   draftRef.current = draft
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
+  const [transcribeLanguage, setTranscribeLanguageState] = useState(getTranscribeLanguage)
 
   // Auto-grow up to a cap, then scroll inside. Runs on every draft
   // change so programmatic clears (post-send) shrink it back.
@@ -143,7 +157,7 @@ export function Composer({
   async function transcribeBlob(blob: Blob) {
     setTranscribing(true)
     try {
-      const text = await transcribe(blob)
+      const text = await transcribe(blob, transcribeLanguage)
       const cur = draftRef.current
       if (text) onDraft(cur ? `${cur} ${text}` : text)
     } catch (err) {
@@ -345,6 +359,47 @@ export function Composer({
               className={transcribing ? 'size-4 animate-spin' : 'size-4'}
             />
           </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="Speech input language"
+              disabled={disabled || recording || transcribing}
+              className="flex h-8 items-center gap-1 rounded-full px-2 text-xs text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600"
+            >
+              <span>
+                {TRANSCRIBE_LANGUAGES.find((l) => l.code === transcribeLanguage)?.label ?? 'Auto'}
+              </span>
+              <HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48 p-1.5">
+              <DropdownMenuItem
+                onSelect={() => {
+                  setTranscribeLanguageState('')
+                  setTranscribeLanguage('')
+                }}
+                data-selected={transcribeLanguage === '' || undefined}
+                className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+              >
+                <span className="text-sm">Auto-detect</span>
+                {transcribeLanguage === '' && <HugeiconsIcon icon={Tick02Icon} className="size-4" />}
+              </DropdownMenuItem>
+              {TRANSCRIBE_LANGUAGES.map((l) => (
+                <DropdownMenuItem
+                  key={l.code}
+                  onSelect={() => {
+                    setTranscribeLanguageState(l.code)
+                    setTranscribeLanguage(l.code)
+                  }}
+                  data-selected={transcribeLanguage === l.code || undefined}
+                  className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                >
+                  <span className="text-sm">{l.label}</span>
+                  {transcribeLanguage === l.code && (
+                    <HugeiconsIcon icon={Tick02Icon} className="size-4" />
+                  )}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         {streaming && onStop ? (
           <button

@@ -75,6 +75,32 @@ func TestRegisterTranscribe(t *testing.T) {
 		}
 	})
 
+	t.Run("forwards the language query param to the sidecar", func(t *testing.T) {
+		var gotQuery string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"text": "hello"}`))
+		}))
+		defer srv.Close()
+
+		a, _, _ := testAPI(t, "tok", nil)
+		m := http.NewServeMux()
+		a.registerTranscribe(m.Handle, srv.Client(), srv.URL)
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/transcribe?language=bn", strings.NewReader("audio"))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
+		}
+		if gotQuery != "language=bn" {
+			t.Fatalf("sidecar query = %q, want language=bn", gotQuery)
+		}
+	})
+
 	t.Run("rejects an empty body", func(t *testing.T) {
 		a, _, _ := testAPI(t, "tok", nil)
 		m := http.NewServeMux()

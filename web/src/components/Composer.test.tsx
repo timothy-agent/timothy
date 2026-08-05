@@ -46,6 +46,7 @@ const getUserMedia = vi.fn().mockResolvedValue(fakeStream)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
   FakeMediaRecorder.instances = []
   vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
   Object.defineProperty(navigator, 'mediaDevices', {
@@ -112,6 +113,24 @@ describe('Composer mic button', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('transcribe failed (502)'))
     expect(onDraft).not.toHaveBeenCalled()
+  })
+
+  it('passes the selected source language to transcribe and persists it', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.transcribe).mockResolvedValue('হ্যালো')
+    render(<Composer {...baseProps()} />)
+
+    const trigger = screen.getByRole('button', { name: 'Speech input language' })
+    fireEvent.pointerDown(trigger, { button: 0, pointerId: 1 })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByText('Bangla'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    await waitFor(() => expect(FakeMediaRecorder.instances).toHaveLength(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    await waitFor(() => expect(client.transcribe).toHaveBeenCalledWith(expect.anything(), 'bn'))
+    expect(localStorage.getItem('timothy.transcribeLanguage')).toBe('bn')
   })
 
   it('toasts when the microphone permission is denied', async () => {

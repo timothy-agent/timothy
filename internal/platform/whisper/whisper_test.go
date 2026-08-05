@@ -20,7 +20,7 @@ func TestTranscribe(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		out, err := Transcribe(context.Background(), srv.Client(), srv.URL, []byte("fake audio bytes"))
+		out, err := Transcribe(context.Background(), srv.Client(), srv.URL, []byte("fake audio bytes"), "")
 		if err != nil {
 			t.Fatalf("Transcribe: %v", err)
 		}
@@ -29,8 +29,42 @@ func TestTranscribe(t *testing.T) {
 		}
 	})
 
+	t.Run("passes the language as a query param when set", func(t *testing.T) {
+		var gotQuery string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"text": "hello"}`))
+		}))
+		defer srv.Close()
+
+		if _, err := Transcribe(context.Background(), srv.Client(), srv.URL, []byte("x"), "bn"); err != nil {
+			t.Fatalf("Transcribe: %v", err)
+		}
+		if gotQuery != "language=bn" {
+			t.Fatalf("query = %q, want language=bn", gotQuery)
+		}
+	})
+
+	t.Run("omits the query param when language is empty", func(t *testing.T) {
+		var gotQuery string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"text": "hello"}`))
+		}))
+		defer srv.Close()
+
+		if _, err := Transcribe(context.Background(), srv.Client(), srv.URL, []byte("x"), ""); err != nil {
+			t.Fatalf("Transcribe: %v", err)
+		}
+		if gotQuery != "" {
+			t.Fatalf("query = %q, want empty", gotQuery)
+		}
+	})
+
 	t.Run("unconfigured base URL errors without a request", func(t *testing.T) {
-		if _, err := Transcribe(context.Background(), nil, "", []byte("x")); err == nil {
+		if _, err := Transcribe(context.Background(), nil, "", []byte("x"), ""); err == nil {
 			t.Fatal("empty baseURL accepted")
 		}
 	})
@@ -41,7 +75,7 @@ func TestTranscribe(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := Transcribe(context.Background(), srv.Client(), srv.URL, []byte("x"))
+		_, err := Transcribe(context.Background(), srv.Client(), srv.URL, []byte("x"), "")
 		if err == nil || !strings.Contains(err.Error(), "422") {
 			t.Fatalf("err = %v, want http 422 surfaced", err)
 		}
@@ -58,7 +92,7 @@ func TestTranscribe(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := Transcribe(ctx, srv.Client(), srv.URL, []byte("x")); err == nil {
+		if _, err := Transcribe(ctx, srv.Client(), srv.URL, []byte("x"), ""); err == nil {
 			t.Fatal("canceled context accepted")
 		}
 	})

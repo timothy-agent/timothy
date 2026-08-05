@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"time"
 )
 
@@ -21,11 +22,17 @@ const transcribeTimeout = 120 * time.Second
 // Transcribe posts raw audio bytes to the whisper sidecar and returns
 // the transcribed text. baseURL empty means the sidecar isn't
 // configured — callers fall back to whatever they'd otherwise do.
-func Transcribe(ctx context.Context, client *http.Client, baseURL string, raw []byte) (string, error) {
+// language is an optional ISO 639-1 code (e.g. "bn"); empty lets the
+// sidecar auto-detect.
+func Transcribe(ctx context.Context, client *http.Client, baseURL string, raw []byte, language string) (string, error) {
 	if baseURL == "" {
 		return "", fmt.Errorf("whisper is not configured")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/transcribe", bytes.NewReader(raw))
+	url := baseURL + "/transcribe"
+	if language != "" {
+		url += "?language=" + neturl.QueryEscape(language)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}

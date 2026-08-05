@@ -331,9 +331,11 @@ export async function deleteSession(id: string): Promise<void> {
 // transcribe posts a recorded audio clip (from the mic button) to
 // brain's local speech-to-text proxy and returns the transcript.
 // Raw bytes, not JSON — the body IS the audio, so this bypasses
-// request()'s JSON content type.
-export async function transcribe(blob: Blob): Promise<string> {
-  const res = await fetch('/v1/transcribe', {
+// request()'s JSON content type. language is an optional ISO 639-1
+// code (e.g. "bn"); omitted lets the sidecar auto-detect.
+export async function transcribe(blob: Blob, language?: string): Promise<string> {
+  const url = language ? `/v1/transcribe?language=${encodeURIComponent(language)}` : '/v1/transcribe'
+  const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body: blob,

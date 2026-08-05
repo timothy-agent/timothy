@@ -28,7 +28,7 @@ func (a *API) registerTranscribe(handle func(pattern string, h http.Handler), cl
 			jsonError(w, http.StatusBadRequest, "bad_request", "empty request body")
 			return
 		}
-		text, err := whisper.Transcribe(r.Context(), client, whisperURL, raw)
+		text, err := whisper.Transcribe(r.Context(), client, whisperURL, raw, r.URL.Query().Get("language"))
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, "transcribe_failed", err.Error())
 			return
