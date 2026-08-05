@@ -19,6 +19,7 @@ import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ProgressSection } from '../components/missions/ProgressSection'
 import { PushBranchDialog } from '../components/missions/PushBranchDialog'
+import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -53,11 +54,20 @@ export function MissionDetail() {
   const [pushOpen, setPushOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
+  const refreshSeq = useRef(0)
+
   const refresh = useCallback(() => {
     if (!id) return
-    getMission(id).then(setMission, () => undefined)
-    missionEvents(id).then(setEvents, () => undefined)
-    missionUsage(id).then(setUsage, () => undefined)
+    const seq = ++refreshSeq.current
+    getMission(id).then((m) => {
+      if (seq === refreshSeq.current) setMission(m)
+    }, () => undefined)
+    missionEvents(id).then((e) => {
+      if (seq === refreshSeq.current) setEvents(e)
+    }, () => undefined)
+    missionUsage(id).then((u) => {
+      if (seq === refreshSeq.current) setUsage(u)
+    }, () => undefined)
   }, [id])
 
   const pendingPermission = mission?.pending_permission
@@ -208,9 +218,11 @@ export function MissionDetail() {
               <span className="capitalize">{mission.kind}</span>
               <span>{mission.phase}</span>
               <span>{mission.status.replace(/_/g, ' ')}</span>
-              <span>
-                iteration {mission.iteration}/{mission.max_iterations}
-              </span>
+              {!terminalPhases.has(mission.phase) && (
+                <span>
+                  iteration {mission.iteration + 1}/{mission.max_iterations}
+                </span>
+              )}
               {mission.budget_usd != null && <span>budget ${mission.budget_usd}</span>}
             </div>
             {mission.branch && (
@@ -330,9 +342,7 @@ export function MissionDetail() {
       {terminalPhases.has(mission.phase) && mission.last_evidence && (
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
-          <div className="rounded-lg border border-border bg-muted/50 p-3">
-            <p className="text-sm whitespace-pre-wrap">{mission.last_evidence}</p>
-          </div>
+          <ResultSection evidence={mission.last_evidence} />
         </section>
       )}
 

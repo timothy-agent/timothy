@@ -1,3 +1,5 @@
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { ProgressNote } from '../../api/types'
 
 export function ProgressSection({ notes }: { notes: ProgressNote[] }) {
@@ -7,9 +9,13 @@ export function ProgressSection({ notes }: { notes: ProgressNote[] }) {
   return (
     <ul className="space-y-2">
       {notes.map((n, i) => (
-        <li key={i} className="text-sm">
-          <span className="mr-2 text-xs text-muted-foreground">{new Date(n.at).toLocaleString()}</span>
-          {n.note}
+        <li key={i} className="rounded-lg border border-border bg-muted/30">
+          <div className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
+            {new Date(n.at).toLocaleString()}
+          </div>
+          <div className="prose prose-sm max-h-64 max-w-none overflow-y-auto p-3 dark:prose-invert">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{n.note}</ReactMarkdown>
+          </div>
         </li>
       ))}
     </ul>

@@ -14,9 +14,9 @@ function event(payload: unknown): MissionEvent {
 }
 
 describe('mission.unit_verified rendering', () => {
-  it('names the unit when the payload carries an index', () => {
-    expect(renderEvent(event({ unit: 0, passed: true }))).toBe('Unit 0 verification: passed')
-    expect(renderEvent(event({ unit: 2, passed: false }))).toBe('Unit 2 verification: failed')
+  it('names the unit 1-indexed when the payload carries a 0-indexed index', () => {
+    expect(renderEvent(event({ unit: 0, passed: true }))).toBe('Unit 1 verification: passed')
+    expect(renderEvent(event({ unit: 2, passed: false }))).toBe('Unit 3 verification: failed')
   })
 
   it('omits the unit index when the payload has none, rather than showing "Unit ?"', () => {
