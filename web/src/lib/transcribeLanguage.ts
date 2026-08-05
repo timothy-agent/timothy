@@ -22,6 +22,7 @@ export const TRANSCRIBE_LANGUAGES: { code: string; label: string }[] = [
   { code: 'es', label: 'Spanish' },
   { code: 'fr', label: 'French' },
   { code: 'de', label: 'German' },
+  { code: 'nl', label: 'Dutch' },
   { code: 'ar', label: 'Arabic' },
   { code: 'zh', label: 'Chinese' },
   { code: 'ja', label: 'Japanese' },

@@ -61,13 +61,18 @@ services:
     build:
       context: ../whisper-svc
       args:
-        WHISPER_MODEL: ${WHISPER_MODEL:-small}
+        WHISPER_MODEL: ${WHISPER_MODEL:-large-v3}
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3}
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng/markitdown. No user-facing
-    # knob in deploy/env.example — WHISPER_MODEL defaults to "small"
-    # here and is only worth changing per-deployment, not per-user.
+    # knob in deploy/env.example — WHISPER_MODEL defaults to
+    # "large-v3": smaller models (tried up to "medium") misidentify
+    # some languages entirely (e.g. Bangla decoded as Hindi even with
+    # the language explicitly forced), not just lower accuracy within
+    # the right language. Slower per clip and a bigger image, but
+    # dictation is not latency-sensitive the way live transcription
+    # would be.
 
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and

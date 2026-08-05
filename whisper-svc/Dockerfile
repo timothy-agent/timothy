@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # HF_HOME lives outside /root so the model cached at build time stays
 # readable at runtime, where the service runs as nobody.
 ENV HF_HOME=/models
-ARG WHISPER_MODEL=small
+ARG WHISPER_MODEL=large-v3
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')" \
     && chmod -R a+rX /models
 

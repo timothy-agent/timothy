@@ -59,10 +59,10 @@ services:
     <<: *service
     image: ghcr.io/timothy-agent/timothy-whisper:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
     environment:
-      # The published image bakes model "small" at build time;
+      # The published image bakes model "large-v3" at build time;
       # overriding this requires rebuilding the image, not just
       # changing the value here.
-      WHISPER_MODEL: small
+      WHISPER_MODEL: large-v3
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng/markitdown.
 

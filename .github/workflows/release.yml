@@ -107,7 +107,7 @@ jobs:
             context: whisper-svc
             dockerfile: whisper-svc/Dockerfile
             build-args: |
-              WHISPER_MODEL=small
+              WHISPER_MODEL=large-v3
           - name: sandbox
             context: .
             dockerfile: deploy/sandbox.Dockerfile
