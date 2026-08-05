@@ -173,9 +173,10 @@ export function MissionDetail() {
   const decidePermission = async (decision: 'once' | 'session' | 'deny') => {
     try {
       await answerMissionPermission(id, decision)
-      refresh()
     } catch (err) {
       toast.error('Could not answer permission request', { description: errText(err) })
+    } finally {
+      refresh()
     }
   }
 
