@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -213,19 +212,16 @@ func main() {
 		})
 	}
 
-	// SANDBOXD_URL empty (MISSION_SANDBOX_IMAGE unset in compose) keeps a
-	// nil client and the original in-process exec fallback — same
-	// nil-able-dependency convention as every other optional brain
-	// dependency. Unlike the old direct-socket path, brain itself can no
-	// longer fail closed on a Docker problem: that fail-closed behavior
-	// moved to sandboxd's own boot (it holds the socket now), and a
-	// sandboxd that's unreachable or degraded surfaces here as a
-	// degraded health check, with missions failing as infra at exec
-	// time instead of brain refusing to start.
-	var missionSandbox *sandboxclient.Client
-	if sandboxdURL := os.Getenv("SANDBOXD_URL"); sandboxdURL != "" {
-		missionSandbox = sandboxclient.New(sandboxdURL)
+	// Mission shell/verify_cmd execution always runs sandboxed via
+	// sandboxd (it holds the Docker socket, brain no longer touches it
+	// directly). Brain doesn't fail closed if sandboxd itself is
+	// unreachable at boot — that surfaces as a degraded health check
+	// below, with missions failing as infra at exec time instead.
+	sandboxdURL := os.Getenv("SANDBOXD_URL")
+	if sandboxdURL == "" {
+		sandboxdURL = "http://sandboxd:8083"
 	}
+	missionSandbox := sandboxclient.New(sandboxdURL)
 
 	// Built here, above buildMissions, so both the scheduler (fire-time
 	// route/review_route/budget/prompt_overlay resolution) and the
@@ -242,22 +238,14 @@ func main() {
 	}
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, app.Log)
 	if missionDriver != nil {
-		var sandboxSweeper interface {
-			Sweep(ctx context.Context, isTerminal func(missionID string) bool) error
-		}
-		if missionSandbox != nil {
-			sandboxSweeper = missionSandbox
-		}
-		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, sandboxSweeper, app.Log)
+		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, app.Log)
 	}
-	if missionSandbox != nil {
-		app.AddCheck("sandbox", func() httpserver.Check {
-			if err := missionSandbox.Health(ctx); err != nil {
-				return httpserver.Check{Status: "degraded", Detail: err.Error()}
-			}
-			return httpserver.Check{Status: "ok"}
-		})
-	}
+	app.AddCheck("sandbox", func() httpserver.Check {
+		if err := missionSandbox.Health(ctx); err != nil {
+			return httpserver.Check{Status: "degraded", Detail: err.Error()}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
 
 	// sensitiveConnectorNames is the connector-level input to
 	// SensitiveTools: every enabled connector marked sensitive in
@@ -516,16 +504,10 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 			floorDeny = append(floorDeny, s)
 		}
 	}
-	// sandboxMgr non-nil routes model-authored command execution (the
+	// sandboxMgr routes model-authored command execution (the
 	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
-	// through sandboxd, into a per-mission Docker container; nil
-	// (SANDBOXD_URL unset) keeps the original in-process
-	// exec.CommandContext behavior.
-	var sandboxExec func(context.Context, string, string, string, time.Duration, io.Writer) (int, error)
-	if sandboxMgr != nil {
-		sandboxExec = sandboxMgr.Exec
-	}
-	runner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxExec, log)
+	// through sandboxd, into a per-mission Docker container.
+	runner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, log)
 	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
 	notifier := missions.NewNotifier(db, webhookURL, log)
 	notifier.SetHub(hub)
@@ -534,10 +516,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// Postgres directly), so a fresh instance behaves identically. Used
 	// only to pre-authorize a mission's hidden session at creation.
 	perms := tools.NewPermissions(db, toolWorkspaceRoot)
-	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, log)
-	if sandboxMgr != nil {
-		driver.SetSandbox(sandboxExec, sandboxMgr)
-	}
+	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 

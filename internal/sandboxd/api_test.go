@@ -67,33 +67,6 @@ func TestHandleRemoveInvalidMissionID(t *testing.T) {
 	}
 }
 
-func TestHandleExecNilManagerReturns503(t *testing.T) {
-	t.Parallel()
-	rec := httptest.NewRecorder()
-	testAPI(nil).handleExec(rec, execReq(validUUID, `{"workdir":"/workspace","command":"true","timeout_seconds":5}`))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", rec.Code)
-	}
-}
-
-func TestHandleRemoveNilManagerReturns503(t *testing.T) {
-	t.Parallel()
-	rec := httptest.NewRecorder()
-	testAPI(nil).handleRemove(rec, removeReq(validUUID))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", rec.Code)
-	}
-}
-
-func TestHandleListNilManagerReturns503(t *testing.T) {
-	t.Parallel()
-	rec := httptest.NewRecorder()
-	testAPI(nil).handleList(rec, httptest.NewRequest(http.MethodGet, "/v1/sandboxes", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", rec.Code)
-	}
-}
-
 func TestHandleExecWorkdirEscape(t *testing.T) {
 	t.Parallel()
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

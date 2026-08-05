@@ -123,9 +123,6 @@ type parkNotifier interface {
 // needs — kept as a function type (not an import of the sandbox
 // package) so missions has no compile-time dependency on Docker; the
 // driver wires the real *sandbox.Manager.Exec in cmd/brain/main.go.
-// nil means no sandbox is configured: missionTools then builds a
-// Runner-less shell, which falls back to shell.go's original
-// in-process exec.CommandContext.
 type sandboxExec func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
 
 // nativeRunner is Phase 1's only Runner: every call is one loop.Agent
@@ -141,9 +138,7 @@ type nativeRunner struct {
 	// instead of burning iterations. Empty = floor disabled.
 	modelFloorDeny []string
 	// sandbox executes worker/reviewer shell commands in a per-mission
-	// Docker container instead of brain's own process — never nil in
-	// the fully in-process fallback, since missionTools checks it and
-	// only wires builtin.ShellConfig.Runner when it's set.
+	// Docker container instead of brain's own process.
 	sandbox sandboxExec
 }
 
@@ -159,9 +154,7 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 // NewNativeRunnerWithFloor is NewNativeRunner plus a model floor deny
 // list (see nativeRunner.modelFloorDeny) and a sandbox exec backend
 // (a *sandbox.Manager.Exec closure) — worker and reviewer shell calls
-// route through it instead of brain's own process. sandbox nil (what
-// happens when MISSION_SANDBOX_IMAGE is unset) keeps the original
-// in-process behavior.
+// route through it instead of brain's own process.
 func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, log *slog.Logger) Runner {
 	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, log: log}
 }
@@ -172,10 +165,9 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 // the root cause of a whole failure family was workers writing into
 // the shared root while verify_cmd and the reviewer looked in the
 // per-mission directory — and write_file, so artifact writes never go
-// through destructive-classified shell redirects. When r.sandbox is
-// set, the shell's Runner routes commands into the mission's own
-// Docker container (see builtin.ShellConfig.Runner) instead of
-// brain's own process.
+// through destructive-classified shell redirects. The shell's Runner
+// routes commands into the mission's own Docker container (see
+// builtin.ShellConfig.Runner) instead of brain's own process.
 // sandboxShellMaxTimeout is the mission shell's timeout ceiling when
 // backed by a sandbox container — 120s (chat's shell ceiling) is far
 // too tight for app-development work: package installs, builds, and
@@ -189,11 +181,11 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 	if root == "" {
 		return nil
 	}
-	shellCfg := builtin.ShellConfig{WorkspaceRoot: root}
-	if r.sandbox != nil {
-		shellCfg.MaxTimeout = sandboxShellMaxTimeout
-		missionID, workdir := m.ID, root
-		shellCfg.Runner = func(ctx context.Context, command string, timeout time.Duration) (string, error) {
+	missionID, workdir := m.ID, root
+	shellCfg := builtin.ShellConfig{
+		WorkspaceRoot: root,
+		MaxTimeout:    sandboxShellMaxTimeout,
+		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
 			var out strings.Builder
 			capped := &cappedStringWriter{w: &out, max: shellOutputCap}
 			exitCode, err := r.sandbox(ctx, missionID, workdir, command, timeout, capped)
@@ -212,7 +204,7 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 				result = fmt.Sprintf("%s\n(exit status %d)", result, exitCode)
 			}
 			return result, nil
-		}
+		},
 	}
 	return []*tools.Tool{
 		builtin.Shell(shellCfg),
@@ -619,18 +611,15 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, researchNotes
 // assumed Python in an environment that had none). WorkPacket.Render
 // carries the same text to the worker via ExecEnvironmentNote.
 func (r *nativeRunner) execEnvironmentNote() string {
-	return execEnvironmentNote(r.sandbox != nil)
+	return execEnvironmentNote()
 }
 
 // execEnvironmentNote is the shared wording nativeRunner (planner
 // prompt) and Driver (worker packet) both need — kept as one function
 // so the two prompts never drift out of sync about what's actually
 // available.
-func execEnvironmentNote(sandboxed bool) string {
-	if sandboxed {
-		return " Commands run inside an isolated Linux container with python3, node, git, and standard POSIX/coreutils tools available; each mission gets its own container, state persists across your commands within the mission."
-	}
-	return " Commands run in a minimal shell environment — do not assume python3, node, or any interpreter beyond POSIX shell builtins and coreutils (grep, sed, awk, wc, test) are present; verify_cmd must only rely on tools you can confirm exist."
+func execEnvironmentNote() string {
+	return " Commands run inside an isolated Linux container with python3, node, git, and standard POSIX/coreutils tools available; each mission gets its own container, state persists across your commands within the mission."
 }
 
 // parseSpec decodes the planner's reply strictly: fences stripped,

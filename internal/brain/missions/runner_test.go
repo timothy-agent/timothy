@@ -700,23 +700,6 @@ func shellExtraTool(t *testing.T, extras []*tools.Tool) *tools.Tool {
 	return nil
 }
 
-// TestMissionToolsNoSandboxUsesLocalExec confirms a runner with no
-// sandbox configured builds a shell with no Runner set — the local
-// exec.CommandContext fallback shell.go already had.
-func TestMissionToolsNoSandboxUsesLocalExec(t *testing.T) {
-	r := newTestRunner(&scriptedAgent{})
-	extraTools := r.missionTools(Mission{ID: "m1", Workspace: t.TempDir()})
-	shell := shellExtraTool(t, extraTools)
-	args, _ := json.Marshal(map[string]string{"command": "echo real-exec"})
-	out, err := shell.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if strings.TrimSpace(out) != "real-exec" {
-		t.Fatalf("output = %q, want local exec to have actually run", out)
-	}
-}
-
 // TestMissionToolsSandboxRoutesShell confirms that with r.sandbox set,
 // missionTools wires a shell whose Runner calls the sandbox backend
 // (never local exec) with the mission id and mission's own work root,

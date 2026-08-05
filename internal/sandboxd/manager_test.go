@@ -1,7 +1,6 @@
 package sandboxd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -9,7 +8,6 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -241,32 +239,12 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 	}
 }
 
-func TestManagerDisabledReturnsErrDisabled(t *testing.T) {
-	var mgr *Manager // simulates MISSION_SANDBOX_IMAGE unset
-	ctx := context.Background()
-	if err := mgr.Ping(ctx); err != ErrDisabled {
-		t.Errorf("Ping on nil manager = %v, want ErrDisabled", err)
-	}
-	if err := mgr.CheckImage(ctx); err != ErrDisabled {
-		t.Errorf("CheckImage on nil manager = %v, want ErrDisabled", err)
-	}
-	if _, err := mgr.Exec(ctx, "m1", "/workspace", "true", time.Second, &bytes.Buffer{}); err != ErrDisabled {
-		t.Errorf("Exec on nil manager = %v, want ErrDisabled", err)
-	}
-	if err := mgr.Remove(ctx, "m1"); err != ErrDisabled {
-		t.Errorf("Remove on nil manager = %v, want ErrDisabled", err)
-	}
-	if _, err := mgr.List(ctx); err != ErrDisabled {
-		t.Errorf("List on nil manager = %v, want ErrDisabled", err)
-	}
-}
-
-func TestNewManagerEmptyImageDisables(t *testing.T) {
+func TestNewManagerEmptyImageErrors(t *testing.T) {
 	mgr, err := NewManager(context.Background(), "", nil)
-	if err != nil {
-		t.Fatalf("NewManager(\"\"): %v", err)
+	if err == nil {
+		t.Fatal("NewManager(\"\") = nil error, want an error (sandbox is mandatory)")
 	}
 	if mgr != nil {
-		t.Fatalf("NewManager(\"\") = %v, want nil (disabled)", mgr)
+		t.Fatalf("NewManager(\"\") = %v, want nil manager alongside the error", mgr)
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -174,8 +176,25 @@ func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, researchNot
 	return s, nil
 }
 
+// fakeSandboxExec runs command via /bin/sh -c directly in workdir —
+// tests exercising verify_cmd need the real exit code/output a plan's
+// check produces, not a mocked one, and don't care that it isn't
+// actually containerized.
+func fakeSandboxExec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec // test-only, command is test-authored
+	cmd.Dir = workdir
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode(), nil
+		}
+		return 0, err
+	}
+	return 0, nil
+}
+
 func testDriver(store driverStore, runner Runner) *Driver {
-	return NewDriver(store, runner, nil, nil, nil, nil, slog.Default())
+	return NewDriver(store, runner, nil, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
 }
 
 // driveN calls Advance up to n times, stopping early if it returns
@@ -489,7 +508,7 @@ func (f *fakeGranter) Grant(ctx context.Context, sessionID, tool, pattern string
 func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
 	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true}, "")
 	if err != nil {
@@ -511,7 +530,7 @@ func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
 	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}, ""); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -528,7 +547,7 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 		if agentID != "briefing-agent" {
 			return AgentDefaults{}, false
@@ -566,7 +585,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 		return AgentDefaults{}, false
 	})
@@ -601,7 +620,7 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, granter, slog.Default())
+	d := NewDriver(store, runner, workspace, nil, sessions, granter, nil, nil, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -639,7 +658,7 @@ func TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned(t *testing.T) {
 	granter := &fakeGranter{}
 	sessions := &fakeSessionCreator{}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, nil, nil, sessions, granter, slog.Default())
+	d := NewDriver(store, runner, nil, nil, sessions, granter, nil, nil, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)

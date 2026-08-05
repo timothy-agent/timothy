@@ -48,7 +48,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 		},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
-	d := NewDriver(store, runner, workspace, nil, nil, nil, log)
+	d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, log)
 
 	// The scripted worker "does the work" by actually creating the file
 	// the verify_cmd checks for — RunVerify runs for real against the
@@ -146,7 +146,7 @@ func TestDriverLazilyProvisionsBareSchedulerStyleMission(t *testing.T) {
 	sessions := session.NewStore(store.db, log)
 	perms := tools.NewPermissions(store.db, wsRoot)
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, perms, log)
+	d := NewDriver(store, runner, workspace, nil, sessions, perms, nil, nil, log)
 
 	if _, err := d.Advance(ctx, id); err != nil {
 		t.Fatalf("Advance: %v", err)

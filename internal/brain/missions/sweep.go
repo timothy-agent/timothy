@@ -45,8 +45,6 @@ type sandboxSweeper interface {
 // sweeps orphaned sandbox containers on the same tick (see
 // runWorkSlotSweep). This is the one entry point cmd/brain/main.go
 // needs — it owns the Driver, which carries its own Store reference.
-// sandbox may be nil (SANDBOXD_URL unset), in which case the container
-// sweep is skipped entirely.
 func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, log *slog.Logger) {
 	recoverWorking(ctx, d, store, log)
 	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, log)

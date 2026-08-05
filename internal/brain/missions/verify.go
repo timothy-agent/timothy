@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,9 +29,9 @@ const verifyTimeout = 10 * time.Minute
 // full digest — enough to see what failed without storing megabytes.
 const verifyExcerptCap = 2 << 10
 
-// VerifyResult is a plan unit's verification evidence. Only RunVerify
-// produces this — never model output — and only this evidence may
-// flip a PlanUnit's Passes flag.
+// VerifyResult is a plan unit's verification evidence. Only
+// RunVerifyWithBackend produces this — never model output — and only
+// this evidence may flip a PlanUnit's Passes flag.
 type VerifyResult struct {
 	ExitCode     int
 	OutputSHA256 string
@@ -40,35 +39,13 @@ type VerifyResult struct {
 	Passed       bool
 }
 
-// RunVerify executes a plan unit's verify_cmd via /bin/sh -c in the
-// work root. Evidence recorded: exit code, sha256 digest of the full
-// output, and a trailing excerpt — "done is auditable from events
-// alone."
-func RunVerify(ctx context.Context, workRoot, verifyCmd string) (VerifyResult, error) {
-	cctx, cancel := context.WithTimeout(ctx, verifyTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, "/bin/sh", "-c", verifyCmd) //nolint:gosec // verify_cmd is operator-authored plan content, not user input
-	cmd.Dir = workRoot
-	out, runErr := cmd.CombinedOutput()
-
-	exitCode := 0
-	if runErr != nil {
-		if ee, ok := runErr.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
-		} else {
-			return VerifyResult{}, runErr // context deadline, command not found, etc.
-		}
-	}
-	return newVerifyResult(exitCode, out), nil
-}
-
-// RunVerifyWithBackend is RunVerify's sandbox-routed counterpart:
-// verify_cmd runs via backend (a sandbox container) instead of
-// brain's own process. Output is streamed into a sha256 hash and a
-// bounded tail buffer rather than collected in full — a verify_cmd
-// with runaway output must not balloon memory the way a plain
-// CombinedOutput() would, and the resulting VerifyResult carries the
-// same evidence shape (digest + excerpt) either way.
+// RunVerifyWithBackend executes a plan unit's verify_cmd via backend
+// (the mission's sandbox container) in the work root. Output is
+// streamed into a sha256 hash and a bounded tail buffer rather than
+// collected in full — a verify_cmd with runaway output must not
+// balloon memory. Evidence recorded: exit code, sha256 digest of the
+// full output, and a trailing excerpt — "done is auditable from
+// events alone."
 func RunVerifyWithBackend(ctx context.Context, backend verifyBackend, workRoot, verifyCmd string) (VerifyResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
@@ -85,23 +62,6 @@ func RunVerifyWithBackend(ctx context.Context, backend verifyBackend, workRoot, 
 		Excerpt:      tail.String(),
 		Passed:       exitCode == 0,
 	}, nil
-}
-
-// newVerifyResult builds a VerifyResult from a fully-collected output
-// buffer — RunVerify's local-exec shape, where CombinedOutput already
-// returns the whole thing.
-func newVerifyResult(exitCode int, out []byte) VerifyResult {
-	digest := sha256.Sum256(out)
-	excerpt := out
-	if len(excerpt) > verifyExcerptCap {
-		excerpt = excerpt[len(excerpt)-verifyExcerptCap:]
-	}
-	return VerifyResult{
-		ExitCode:     exitCode,
-		OutputSHA256: hex.EncodeToString(digest[:]),
-		Excerpt:      string(excerpt),
-		Passed:       exitCode == 0,
-	}
 }
 
 // tailBuffer keeps only the last max bytes written to it — a bounded

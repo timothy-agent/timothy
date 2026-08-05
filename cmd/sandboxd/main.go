@@ -47,12 +47,10 @@ func main() {
 	log := logging.New(cfg.Name, cfg.LogLevel)
 	m := metrics.New()
 
-	// Fail closed: an operator who set MISSION_SANDBOX_IMAGE opted into
-	// sandboxed execution, so a manager that cannot initialize (daemon
-	// unreachable, workspace mount unresolvable) must stop this service
-	// loudly rather than come up in a state where every exec fails
-	// opaquely. A missing image is deliberately NOT fatal: the health
-	// check below reports it, and building the image needs no restart.
+	// Fail closed: sandboxed execution is mandatory, so a manager that
+	// cannot initialize (image not set, daemon unreachable, workspace
+	// mount unresolvable) must stop this service loudly rather than come
+	// up in a state where every exec fails opaquely.
 	mgr, err := sandboxd.NewManager(ctx, os.Getenv("MISSION_SANDBOX_IMAGE"), log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -71,19 +69,10 @@ func main() {
 	}
 }
 
-// health assembles /health's checks from the Manager: a nil manager
-// (MISSION_SANDBOX_IMAGE unset) reports one degraded check rather than
-// the usual docker+image pair, since there is nothing to Ping or
-// CheckImage yet.
+// health assembles /health's checks from the Manager: docker daemon
+// reachability and whether the configured sandbox image actually
+// exists locally.
 func health(ctx context.Context, mgr *sandboxd.Manager) httpserver.Health {
-	if mgr == nil {
-		return httpserver.Health{
-			Status: "degraded",
-			Checks: map[string]httpserver.Check{
-				"sandbox": {Status: "degraded", Detail: "MISSION_SANDBOX_IMAGE not set"},
-			},
-		}
-	}
 	checks := map[string]httpserver.Check{}
 	status := "ok"
 	if err := mgr.Ping(ctx); err != nil {

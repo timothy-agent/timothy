@@ -42,7 +42,7 @@ func TestIsLastUnit(t *testing.T) {
 // full round before the harness ever verified it.
 func TestMarkUnitPassedDoesNotAliasCaller(t *testing.T) {
 	store := newFakeStore()
-	d := NewDriver(store, nil, nil, nil, nil, nil, slog.Default())
+	d := NewDriver(store, nil, nil, nil, nil, nil, nil, nil, slog.Default())
 
 	units := []PlanUnit{{Title: "a", Passes: true}, {Title: "b", Passes: false}, {Title: "c", Passes: false}}
 	m := Mission{ID: "m1", Spec: Spec{Units: units}}

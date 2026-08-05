@@ -78,8 +78,7 @@ type driverStore interface {
 // sandboxRemover is the narrow slice of *sandbox.Manager Driver needs —
 // kept as an interface (not an import of the sandbox package) so
 // missions has no compile-time dependency on Docker; cmd/brain/main.go
-// wires the real *sandbox.Manager. Nil means no sandbox is configured
-// (the in-process-exec fallback everywhere else in this package).
+// wires the real *sandbox.Manager.
 type sandboxRemover interface {
 	Remove(ctx context.Context, missionID string) error
 }
@@ -99,12 +98,10 @@ type Driver struct {
 	log       *slog.Logger
 	cfg       Config
 
-	// sandboxExec, when set, routes a plan unit's verify_cmd through the
-	// mission's sandbox container instead of brain's own process — the
-	// same backend nativeRunner uses for worker/reviewer shell calls
-	// (see SetSandboxExec). sandboxRemove tears the container down at a
-	// mission's terminal transition; both are nil in the fully
-	// in-process fallback (MISSION_SANDBOX_IMAGE unset).
+	// sandboxExec routes a plan unit's verify_cmd through the mission's
+	// sandbox container — the same backend nativeRunner uses for
+	// worker/reviewer shell calls. sandboxRemove tears the container
+	// down at a mission's terminal transition.
 	sandboxExec   sandboxExec
 	sandboxRemove sandboxRemover
 
@@ -136,21 +133,14 @@ type Driver struct {
 	driving   map[string]bool
 }
 
-func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify notifier, sessions sessionCreator, perms sessionGranter, log *slog.Logger) *Driver {
+func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify notifier, sessions sessionCreator, perms sessionGranter, sandboxExec sandboxExec, sandboxRemove sandboxRemover, log *slog.Logger) *Driver {
 	return &Driver{
 		store: store, runner: runner, workspace: workspace, notify: notify, sessions: sessions, perms: perms, log: log,
+		sandboxExec: sandboxExec, sandboxRemove: sandboxRemove,
 		cfg:         DefaultConfig,
 		gatekeepers: map[string]*GatekeeperState{},
 		driving:     map[string]bool{},
 	}
-}
-
-// SetSandbox wires a per-mission sandbox exec backend and its
-// container remover — cmd/brain/main.go calls this only when
-// MISSION_SANDBOX_IMAGE is configured, leaving both nil (the
-// in-process fallback) otherwise.
-func (d *Driver) SetSandbox(exec sandboxExec, remove sandboxRemover) {
-	d.sandboxExec, d.sandboxRemove = exec, remove
 }
 
 // SetAgentResolver wires the resolver ensureProvisioned uses to grant
@@ -803,18 +793,14 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	return WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(d.sandboxExec != nil),
+		ExecEnvironmentNote: execEnvironmentNote(),
 	}, nil
 }
 
-// runVerify executes verify_cmd via the mission's sandbox container
-// when one is configured, or brain's own process otherwise — the
-// verify-side counterpart of nativeRunner routing shell/write_file
+// runVerify executes verify_cmd via the mission's sandbox container —
+// the verify-side counterpart of nativeRunner routing shell/write_file
 // through the same backend.
 func (d *Driver) runVerify(ctx context.Context, missionID, workRoot, verifyCmd string) (VerifyResult, error) {
-	if d.sandboxExec == nil {
-		return RunVerify(ctx, workRoot, verifyCmd)
-	}
 	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		return d.sandboxExec(ctx, missionID, workdir, command, timeout, out)
 	}

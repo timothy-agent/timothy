@@ -71,10 +71,6 @@ const (
 	execClientSlack = 35 * time.Second
 )
 
-// ErrDisabled is returned by every Manager method when no image was
-// configured — callers check this to fall back to in-process exec.
-var ErrDisabled = errors.New("sandbox: not configured")
-
 // ErrTimeout wraps Exec's two timeout-return paths so the HTTP handler
 // can classify a timeout (SSE event: error, code "timeout") separately
 // from every other infrastructure failure via errors.Is, without
@@ -105,12 +101,10 @@ type Manager struct {
 // only reliable way to learn the exact volume name (or bind source)
 // brain is running under, since it may differ from any assumed
 // compose-project prefix and a wrong name would silently create a
-// fresh, empty volume instead of failing loudly. image empty disables
-// the manager entirely (nil-able-dependency convention: callers get
-// ErrDisabled and fall back to local exec).
+// fresh, empty volume instead of failing loudly.
 func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, error) {
 	if image == "" {
-		return nil, nil //nolint:nilnil // disabled-by-config sentinel; callers check for a nil *Manager exactly like every other optional brain dependency
+		return nil, fmt.Errorf("sandbox: MISSION_SANDBOX_IMAGE not set")
 	}
 	// API-version negotiation is on by default in this client (unlike the
 	// old github.com/docker/docker client, which required
@@ -155,21 +149,15 @@ func resolveWorkspaceMount(ctx context.Context, cli *client.Client) (mount.Mount
 // Ping reports whether the Docker daemon is reachable — the sandbox
 // health check.
 func (m *Manager) Ping(ctx context.Context) error {
-	if m == nil {
-		return ErrDisabled
-	}
 	_, err := m.cli.Ping(ctx, client.PingOptions{})
 	return err
 }
 
 // CheckImage confirms the configured sandbox image actually exists
-// locally — an operator who set MISSION_SANDBOX_IMAGE but never ran
-// `make sandbox-image` would otherwise see every mission shell call
-// fail opaquely instead of a clear boot-time health signal.
+// locally — an operator who never ran `make sandbox-image` would
+// otherwise see every mission shell call fail opaquely instead of a
+// clear boot-time health signal.
 func (m *Manager) CheckImage(ctx context.Context) error {
-	if m == nil {
-		return ErrDisabled
-	}
 	_, err := m.cli.ImageInspect(ctx, m.image)
 	return err
 }
@@ -306,9 +294,6 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name string) (
 // builtin.Shell's contract: a command that ran and exited non-zero is
 // reported via exitCode, not err).
 func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	if m == nil {
-		return 0, ErrDisabled
-	}
 	containerID, err := m.ensureContainer(ctx, missionID)
 	if err != nil {
 		return 0, err
@@ -410,9 +395,6 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 // treat this as best-effort — a slow or unreachable daemon must never
 // block a mission's terminal state transition.
 func (m *Manager) Remove(ctx context.Context, missionID string) error {
-	if m == nil {
-		return ErrDisabled
-	}
 	name := containerName(missionID)
 	_, err := m.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
@@ -431,9 +413,6 @@ func (m *Manager) Remove(ctx context.Context, missionID string) error {
 // remove — this package holds no Postgres state to make that call
 // itself.
 func (m *Manager) List(ctx context.Context) ([]string, error) {
-	if m == nil {
-		return nil, ErrDisabled
-	}
 	result, err := m.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: make(client.Filters).Add("label", missionLabel),

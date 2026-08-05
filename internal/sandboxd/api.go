@@ -68,9 +68,7 @@ type API struct {
 	maxContainers int
 }
 
-// Register mounts sandboxd's routes on the shared server. mgr may be
-// nil (MISSION_SANDBOX_IMAGE unset) — every route reports 503 rather
-// than panicking.
+// Register mounts sandboxd's routes on the shared server.
 func Register(s *httpserver.Server, mgr *Manager, cfg Config, log *slog.Logger) {
 	maxExecs := cfg.MaxExecs
 	if maxExecs <= 0 {
@@ -133,11 +131,6 @@ func (a *API) handleExec(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "invalid mission id")
 		return
 	}
-	if a.mgr == nil {
-		jsonError(w, http.StatusServiceUnavailable, "not_configured", ErrDisabled.Error())
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, execBodyLimit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -259,10 +252,6 @@ func (a *API) handleRemove(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "invalid mission id")
 		return
 	}
-	if a.mgr == nil {
-		jsonError(w, http.StatusServiceUnavailable, "not_configured", ErrDisabled.Error())
-		return
-	}
 	if err := a.mgr.Remove(r.Context(), missionID); err != nil {
 		a.log.Warn("sandbox remove failed", "mission_id", missionID, "error", err)
 		jsonError(w, http.StatusBadGateway, "infra", err.Error())
@@ -280,10 +269,6 @@ type listResponse struct {
 // remove; this service holds no Postgres state to make that decision
 // itself.
 func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
-	if a.mgr == nil {
-		jsonError(w, http.StatusServiceUnavailable, "not_configured", ErrDisabled.Error())
-		return
-	}
 	ids, err := a.mgr.List(r.Context())
 	if err != nil {
 		a.log.Warn("sandbox list failed", "error", err)

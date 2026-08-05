@@ -10,66 +10,6 @@ import (
 	"time"
 )
 
-func TestRunVerifySuccess(t *testing.T) {
-	res, err := RunVerify(context.Background(), t.TempDir(), "true")
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if !res.Passed || res.ExitCode != 0 {
-		t.Fatalf("RunVerify(true) = %+v, want passed with exit 0", res)
-	}
-}
-
-func TestRunVerifyFailure(t *testing.T) {
-	res, err := RunVerify(context.Background(), t.TempDir(), "false")
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if res.Passed || res.ExitCode != 1 {
-		t.Fatalf("RunVerify(false) = %+v, want failed with exit 1", res)
-	}
-}
-
-func TestRunVerifyExitCode(t *testing.T) {
-	res, err := RunVerify(context.Background(), t.TempDir(), "exit 3")
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if res.Passed || res.ExitCode != 3 {
-		t.Fatalf("RunVerify(exit 3) = %+v, want failed with exit 3", res)
-	}
-}
-
-func TestRunVerifyDigestCorrectness(t *testing.T) {
-	res, err := RunVerify(context.Background(), t.TempDir(), "printf hello")
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	// sha256("hello")
-	const wantDigest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-	if res.OutputSHA256 != wantDigest {
-		t.Fatalf("digest = %q, want %q", res.OutputSHA256, wantDigest)
-	}
-}
-
-func TestRunVerifyExcerptTruncatesFromEnd(t *testing.T) {
-	// Produce output well over the excerpt cap; the excerpt must be the
-	// TRAILING slice, not the head.
-	res, err := RunVerify(context.Background(), t.TempDir(), `for i in $(seq 1 5000); do echo "line $i"; done`)
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if len(res.Excerpt) > verifyExcerptCap {
-		t.Fatalf("excerpt length %d exceeds cap %d", len(res.Excerpt), verifyExcerptCap)
-	}
-	if !strings.Contains(res.Excerpt, "line 5000") {
-		t.Fatalf("excerpt does not contain the LAST line of output: %q", res.Excerpt[:min(200, len(res.Excerpt))])
-	}
-	if strings.Contains(res.Excerpt, "line 1\n") {
-		t.Fatal("excerpt contains the first line — truncation kept the head instead of the tail")
-	}
-}
-
 func TestCheckArtifacts(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "summary.md"), []byte("429 means Too Many Requests"), 0o600); err != nil {
@@ -143,21 +83,27 @@ func fakeVerifyBackend(output string, exitCode int, err error) verifyBackend {
 	}
 }
 
-// TestRunVerifyWithBackendMatchesLocalDigest confirms the sandbox-
-// routed path produces byte-identical evidence (digest, excerpt,
-// passed) to RunVerify's local exec path for the same output — the
-// backend must not change what "passed" evidence means, only where
-// the command actually ran.
-func TestRunVerifyWithBackendMatchesLocalDigest(t *testing.T) {
+// TestRunVerifyWithBackendDigestCorrectness confirms the streamed
+// evidence (digest, excerpt, passed) matches what's actually written
+// by the backend, byte for byte — the sha256 hash and tail buffer must
+// see exactly what a full CombinedOutput() collection would have.
+func TestRunVerifyWithBackendDigestCorrectness(t *testing.T) {
 	const output = "hello"
-	local := newVerifyResult(0, []byte(output))
+	// sha256("hello")
+	const wantDigest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 
 	got, err := RunVerifyWithBackend(context.Background(), fakeVerifyBackend(output, 0, nil), "/workspace", "printf hello")
 	if err != nil {
 		t.Fatalf("RunVerifyWithBackend: %v", err)
 	}
-	if got != local {
-		t.Fatalf("RunVerifyWithBackend = %+v, want %+v (identical to the local-exec path)", got, local)
+	if !got.Passed || got.ExitCode != 0 {
+		t.Fatalf("RunVerifyWithBackend(exit 0) = %+v, want passed with exit 0", got)
+	}
+	if got.OutputSHA256 != wantDigest {
+		t.Fatalf("digest = %q, want %q", got.OutputSHA256, wantDigest)
+	}
+	if got.Excerpt != output {
+		t.Fatalf("excerpt = %q, want %q", got.Excerpt, output)
 	}
 }
 
@@ -179,10 +125,10 @@ func TestRunVerifyWithBackendInfraErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestTailBufferBoundsMemoryKeepsEnd confirms the streamed excerpt path
-// is bounded like the local path's slice-from-the-end truncation, and
-// keeps the TAIL, not the head — same contract as
-// TestRunVerifyExcerptTruncatesFromEnd for the local path.
+// TestTailBufferBoundsMemoryKeepsEnd confirms the streamed excerpt is
+// bounded to the cap and keeps the TAIL of the output, not the head —
+// a verify_cmd with runaway output must not balloon memory, and the
+// kept slice must still show what actually failed at the end.
 func TestTailBufferBoundsMemoryKeepsEnd(t *testing.T) {
 	tail := &tailBuffer{max: 5}
 	full := "0123456789" // 10 bytes written in one shot, cap is 5
