@@ -78,7 +78,7 @@ The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker
 
 3. Open the printed link: the web UI signs in automatically from the token in the URL.
 
-To upgrade later: bump `TIMOTHY_VERSION` in `.env` and run `docker compose pull && docker compose up -d`, or just re-run `install.sh` (it leaves an existing `.env` untouched and only refreshes `docker-compose.yml` and the searxng config).
+To upgrade later: bump `TIMOTHY_VERSION` in `.env`, run `docker compose pull && docker compose up -d`, then `docker pull ghcr.io/timothy-agent/timothy-sandbox:$TIMOTHY_VERSION` (the per-mission sandbox image sandboxd pulls via the Docker socket, outside compose's own pull) — or just re-run `install.sh`, which does all three (it leaves an existing `.env` untouched and only refreshes `docker-compose.yml`, the searxng config, and the sandbox image).
 
 The rest of this README covers building and running from source instead.
 

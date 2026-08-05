@@ -106,11 +106,10 @@ services:
       # Local speech-to-text for the web mic button; compose-internal
       # only, audio never leaves the box.
       WHISPER_URL: http://whisper:8001
-      # sandboxd's internal address — set only when MISSION_SANDBOX_IMAGE
-      # is configured (sandboxd itself always runs; without an image it
-      # just idles degraded). Empty keeps the original in-process exec
-      # behavior; brain never touches the Docker socket directly.
-      SANDBOXD_URL: ${MISSION_SANDBOX_IMAGE:+http://sandboxd:8083}
+      # sandboxd's internal address — mission shell/verify_cmd execution
+      # always runs there; brain never touches the Docker socket
+      # directly.
+      SANDBOXD_URL: http://sandboxd:8083
       # Content-addressed image attachment bytes (metadata only in
       # Postgres); compose-internal path, not user-facing.
       ATTACHMENTS_DIR: /attachments
@@ -143,10 +142,9 @@ services:
     environment:
       PORT: "8083"
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # The one operator knob: empty keeps sandboxd up but degraded
-      # (nothing to Ping/CheckImage), same parity as brain's old
-      # in-process behavior when this was unset.
-      MISSION_SANDBOX_IMAGE: ${MISSION_SANDBOX_IMAGE:-}
+      # Always the same release as every other service — one version
+      # knob, no separate tag to fall out of sync on upgrade.
+      MISSION_SANDBOX_IMAGE: ghcr.io/timothy-agent/timothy-sandbox:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
     volumes:
       # Metadata-only read: resolveWorkspaceMount inspects this mount to
       # learn the exact volume/bind spec, then replicates it (rw) into

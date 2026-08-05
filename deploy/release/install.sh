@@ -75,13 +75,14 @@ echo "Pulling images..."
 docker compose pull
 
 # compose pull only covers services; the mission sandbox image is an
-# env var handed to sandboxd, so pull it explicitly or missions stay
-# degraded until someone pulls it by hand.
-sandbox_image=$(sed -n 's/^MISSION_SANDBOX_IMAGE=//p' .env | head -n1)
-if [ -n "$sandbox_image" ]; then
-  echo "Pulling mission sandbox image..."
-  docker pull "$sandbox_image"
-fi
+# env var handed to sandboxd (which pulls per-mission containers via
+# the Docker socket, not through compose), so pull it explicitly here —
+# same TIMOTHY_VERSION tag as everything else, read back from .env so
+# an upgrade (TIMOTHY_VERSION bumped by hand, .env otherwise untouched)
+# pulls the matching sandbox tag too.
+timothy_version=$(sed -n 's/^TIMOTHY_VERSION=//p' .env | head -n1)
+echo "Pulling mission sandbox image..."
+docker pull "ghcr.io/timothy-agent/timothy-sandbox:${timothy_version}"
 
 echo "Starting Timothy..."
 docker compose up -d

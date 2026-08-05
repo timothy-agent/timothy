@@ -60,7 +60,10 @@ skills-validate:
 		-e GATEWAY_URL=http://gateway:8081 \
 		$(GO_IMAGE) go run ./cmd/skills-validate -dir skills
 
-up:
+# sandbox-image first: sandboxd is mandatory infrastructure and fails
+# to boot (NewManager errors on a missing image) without it — a fresh
+# clone's first `make up` must not crash-loop waiting on a manual step.
+up: sandbox-image
 	$(COMPOSE) up -d --build
 
 # Per-service rebuild+restart for when only one service changed:
@@ -90,16 +93,16 @@ canary:
 	./scripts/canary-mission.sh
 
 # Same gate for the coding path: worktree provisioning, LLM review,
-# artifact verified inside the worktree. Needs the stack up. If
-# MISSION_SANDBOX_IMAGE is set in deploy/.env, run `make sandbox-image`
-# first — otherwise mission shell calls fail opaquely.
+# artifact verified inside the worktree. Needs the stack up and
+# `make sandbox-image` run first — mission shell calls fail opaquely
+# without it.
 canary-coding:
 	./scripts/canary-coding.sh
 
 # Builds the per-mission sandbox image (python3/node/git/bash — see
 # deploy/sandbox.Dockerfile). Not a compose service: sandboxes are
 # containers brain creates dynamically via the Docker Go SDK, not
-# something `docker compose up` runs on its own. Only needed when
-# MISSION_SANDBOX_IMAGE is set.
+# something `docker compose up` runs on its own. Required before
+# running any mission.
 sandbox-image:
 	docker build -f deploy/sandbox.Dockerfile -t timothy-sandbox:latest .
