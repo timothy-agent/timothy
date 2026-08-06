@@ -46,7 +46,6 @@ export function MissionForm({
   const [goal, setGoal] = useState('')
   const [kind, setKind] = useState<(typeof kinds)[number]['value']>('research')
   const [agentID, setAgentID] = useState('')
-  const [repoPath, setRepoPath] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [route, setRoute] = useState('')
   const [reviewRoute, setReviewRoute] = useState('')
@@ -119,9 +118,7 @@ export function MissionForm({
   const canSubmit =
     mode === 'edit'
       ? scheduleName.trim() !== '' && goal.trim() !== '' && validCronShape(cron)
-      : goal.trim() !== '' &&
-        (kind !== 'coding' || repoPath.trim() !== '') &&
-        (!repeat || validCronShape(cron))
+      : goal.trim() !== '' && (!repeat || validCronShape(cron))
 
   const submitMission = async () => {
     const { id } = await createMission({
@@ -132,7 +129,6 @@ export function MissionForm({
       review_route: reviewRoute || undefined,
       escalation_route: escalationRoute || undefined,
       budget_usd: budget ? Number(budget) : undefined,
-      repo_path: kind === 'coding' ? repoPath.trim() : undefined,
       auto_approve_safe: autoApproveSafe,
     })
     toast.success('Mission created')
@@ -251,18 +247,6 @@ export function MissionForm({
             Coding missions aren't supported on a recurring schedule yet: each fire has no
             repository to work in.
           </p>
-        )}
-
-        {kind === 'coding' && !repeat && mode === 'create' && (
-          <div className="space-y-1.5">
-            <Label htmlFor="mission-repo">Repository path</Label>
-            <Input
-              id="mission-repo"
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
-              placeholder="/workspace/my-repo"
-            />
-          </div>
         )}
       </section>
 

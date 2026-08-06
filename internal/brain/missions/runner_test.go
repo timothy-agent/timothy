@@ -166,8 +166,59 @@ func TestRunWorkerForcedRetryWhenSentinelNeverArrives(t *testing.T) {
 	if v.Outcome != "retry" {
 		t.Fatalf("RunWorker verdict when sentinel never arrives = %+v, want forced retry", v)
 	}
+	if !v.Forced {
+		t.Fatalf("RunWorker verdict when sentinel never arrives = %+v, want Forced=true", v)
+	}
 	if agent.call != 2 {
 		t.Fatalf("expected exactly two turns (original + one recovery, then give up), got %d", agent.call)
+	}
+}
+
+// TestRunWorkerFallsBackToXMLTextSentinel covers the observed GLM-5.2
+// failure: the worker never calls mission_status as a tool, but ends
+// its turn with the XML-ish self-closing tag form. The runner must
+// recover the verdict from text instead of forcing a retry.
+func TestRunWorkerFallsBackToXMLTextSentinel(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent(`All files have been created. <mission_status outcome="done" evidence="All files have been created and tests pass."/>`)},
+	}}
+	r := newTestRunner(agent)
+	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if v.Outcome != "done" || v.Evidence != "All files have been created and tests pass." {
+		t.Fatalf("RunWorker verdict via XML text fallback = %+v", v)
+	}
+	if v.Forced {
+		t.Fatal("a successfully-recovered text-form sentinel must not be marked Forced")
+	}
+	// The XML form arrived on the FIRST turn (no tool call at all), so the
+	// runner still needs its one recovery re-run before falling back to
+	// text extraction — that ladder order is unchanged by this fix.
+	if agent.call != 2 {
+		t.Fatalf("expected two turns (original + one recovery) before the text fallback kicks in, got %d", agent.call)
+	}
+}
+
+// TestRunWorkerFallsBackToTokenJSONTextSentinel covers the observed
+// qwen3:30b failure: a bare "mission_status" line followed by a JSON
+// object, never a tool call.
+func TestRunWorkerFallsBackToTokenJSONTextSentinel(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("no sentinel here")},
+		{textEvent("mission_status\n{\"outcome\": \"retry\", \"analysis\": \"hit an error, will retry\"}")},
+	}}
+	r := newTestRunner(agent)
+	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if v.Outcome != "retry" || v.Analysis != "hit an error, will retry" {
+		t.Fatalf("RunWorker verdict via token+JSON text fallback = %+v", v)
+	}
+	if v.Forced {
+		t.Fatal("a successfully-recovered text-form sentinel must not be marked Forced")
 	}
 }
 
@@ -284,6 +335,47 @@ func TestRunReviewRecoversWhenVerdictMissingThenPresent(t *testing.T) {
 	}
 	if agent.call != 2 {
 		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+}
+
+// TestRunReviewFallsBackToTextSentinel covers the observed qwen3:30b
+// reviewer failure: prose review, never a review_verdict tool call —
+// the runner must recover the verdict from a text-form sentinel in the
+// recovery turn instead of erroring the round out.
+func TestRunReviewFallsBackToTextSentinel(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("Looking at this closely, I think it holds up.")}, // no tool call
+		{textEvent(`Confirmed. <review_verdict decision="approve"/>`)}, // recovery: still text-only
+	}}
+	r := newTestRunner(agent)
+	v, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"}, nil)
+	if err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if !v.Approved {
+		t.Fatalf("RunReview verdict via text fallback = %+v, want approved", v)
+	}
+}
+
+// TestRunReviewFallsBackToTokenJSONTextSentinel mirrors the XML case
+// for the token+JSON text form, on a rework decision — findings are
+// empty in the text form (acceptable: GapFingerprint of empty findings
+// is empty, which the state machine already tolerates).
+func TestRunReviewFallsBackToTokenJSONTextSentinel(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("still analyzing")},
+		{textEvent("review_verdict\n{\"decision\": \"rework\"}")},
+	}}
+	r := newTestRunner(agent)
+	v, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"}, nil)
+	if err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if v.Approved {
+		t.Fatalf("RunReview verdict via token+JSON text fallback = %+v, want rework", v)
+	}
+	if len(v.Findings) != 0 {
+		t.Fatalf("RunReview findings = %+v, want empty (text form carries no structured findings)", v.Findings)
 	}
 }
 

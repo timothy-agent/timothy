@@ -842,7 +842,6 @@ export interface CreateMissionInput {
   escalation_route?: string
   max_iterations?: number
   budget_usd?: number
-  repo_path?: string
   auto_approve_safe?: boolean
 }
 

@@ -44,12 +44,15 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 	return &Workspace{root: root, identity: identity, log: log}
 }
 
-// Provision creates the mission's directory. Coding missions run `git
-// worktree add -b mission/<slug> <dir>` against repoPath and capture
-// the base commit with a tight timeout (degrades to the sentinel
-// "(unavailable)" rather than blocking). Non-coding missions get a
-// plain directory, no git.
-func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoPath string) (workspace, worktree, branch, baseCommit string, err error) {
+// Provision creates the mission's directory. Coding missions get their
+// own fresh git repo self-initialized inside the workspace (see
+// initSelfRepo) — the brain container has no pre-existing repo to work
+// against on a real deployment, so every coding mission's repo lives
+// wholly inside its own workspace dir. The base commit is captured
+// with a tight timeout (degrades to the sentinel "(unavailable)"
+// rather than blocking). Non-coding missions get a plain directory, no
+// git.
+func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind string) (workspace, worktree, branch, baseCommit string, err error) {
 	workspace = filepath.Join(w.root, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
@@ -61,16 +64,57 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoPa
 
 	branch = "mission/" + Slug(goal, missionID)
 	worktree = filepath.Join(workspace, "wt")
-	gctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(gctx, "git", "worktree", "add", "-b", branch, worktree) //nolint:gosec // branch is Slug()-derived (alphanumeric+hyphen only), not raw user input
-	cmd.Dir = repoPath
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", "", "", "", fmt.Errorf("worktree: git worktree add: %w: %s", err, string(out))
+
+	if err := w.initSelfRepo(ctx, worktree, branch, missionID); err != nil {
+		return "", "", "", "", err
 	}
 
 	baseCommit = w.captureBaseCommit(ctx, worktree)
 	return workspace, worktree, branch, baseCommit, nil
+}
+
+// initSelfRepo creates a brand-new git repo at dir on branch, with one
+// initial commit as the base for BaselineDiff/git log. The initial
+// commit tracks a placeholder file rather than being truly empty:
+// `git checkout -- .` (Rollback's discard step, run after every
+// worker/reviewer turn) fails with "pathspec '.' did not match any
+// file(s)" against a commit with zero tracked content, so the repo
+// needs at least one tracked file from the start. `git init -b`
+// requires git >= 2.28, which the brain image's alpine base satisfies.
+func (w *Workspace) initSelfRepo(ctx context.Context, dir, branch, missionID string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("worktree: init self repo: mkdir %s: %w", dir, err)
+	}
+	gctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
+	defer cancel()
+	if out, err := runGit(gctx, dir, "init", "-q", "-b", branch); err != nil {
+		return fmt.Errorf("worktree: git init: %w: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitkeep"), []byte(""), 0o600); err != nil {
+		return fmt.Errorf("worktree: init self repo: write .gitkeep: %w", err)
+	}
+	if out, err := runGit(gctx, dir, "add", ".gitkeep"); err != nil {
+		return fmt.Errorf("worktree: git init: add .gitkeep: %w: %s", err, out)
+	}
+	name, email := commitName, commitEmail
+	if w.identity != nil {
+		if n, e := w.identity(ctx); n != "" || e != "" {
+			if n != "" {
+				name = n
+			}
+			if e != "" {
+				email = e
+			}
+		}
+	}
+	cmd := exec.CommandContext(gctx, "git", //nolint:gosec // name/email travel as -c key=value args, never shell-interpolated; message is driver-built from the mission id
+		"-c", "user.name="+name, "-c", "user.email="+email,
+		"commit", "-m", "mission "+missionID+" initial")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("worktree: git init: initial commit: %w: %s", err, string(out))
+	}
+	return nil
 }
 
 // captureBaseCommit reads HEAD under a tight timeout — provisioning
@@ -162,21 +206,11 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 	return nil
 }
 
-// Teardown removes the workspace. Coding missions: `git worktree
-// remove --force` (the branch itself survives, only the checkout
-// goes). Other kinds: os.RemoveAll.
+// Teardown removes the workspace. Every coding mission's repo lives
+// wholly inside its own workspace dir (see Provision) — there is no
+// separate source repo to leave a branch behind in, so this is a plain
+// os.RemoveAll for every kind.
 func (w *Workspace) Teardown(ctx context.Context, workspace, worktree, kind string) error {
-	if kind == "coding" && worktree != "" {
-		cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
-		defer cancel()
-		// git worktree remove must run from the main repo, not the
-		// worktree being removed — but it also works from any directory
-		// git can resolve the worktree path from, so run it unanchored.
-		cmd := exec.CommandContext(cctx, "git", "worktree", "remove", "--force", worktree) //nolint:gosec // worktree is a path this package created under its own workspace root, not user input
-		if out, err := cmd.CombinedOutput(); err != nil {
-			w.log.Warn("worktree: remove failed, falling back to rmdir", "worktree", worktree, "error", err, "output", string(out))
-		}
-	}
 	if err := os.RemoveAll(workspace); err != nil {
 		return fmt.Errorf("worktree: teardown: rmdir %s: %w", workspace, err)
 	}

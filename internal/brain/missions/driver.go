@@ -180,13 +180,13 @@ func (d *Driver) removeSandbox(id string) {
 // off the first Drive in a background goroutine — callers (the API's
 // create handler) get the new id back immediately without waiting on
 // the mission to actually run.
-func (d *Driver) Create(ctx context.Context, m Mission, repoPath string) (string, error) {
+func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {
 	id, err := d.store.Create(ctx, m)
 	if err != nil {
 		return "", fmt.Errorf("driver: create: %w", err)
 	}
 	m.ID = id
-	if _, err := d.ensureProvisioned(ctx, m, repoPath); err != nil {
+	if _, err := d.ensureProvisioned(ctx, m); err != nil {
 		return "", fmt.Errorf("driver: create: %w", err)
 	}
 	go func() { //nolint:gosec // G118: deliberate — the mission must outlive the HTTP request that created it, driveTimeBound is Drive's own cap
@@ -213,7 +213,7 @@ func (d *Driver) Create(ctx context.Context, m Mission, repoPath string) (string
 // provisioning halves below — same shape as Create always had, plus
 // the new ApprovalAllowlist grants (via resolveAgent) once a session
 // exists, whichever half of ensureProvisioned actually created it.
-func (d *Driver) ensureProvisioned(ctx context.Context, m Mission, repoPath string) (Mission, error) {
+func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, error) {
 	if m.SessionID == "" && d.sessions != nil {
 		sessionID, err := d.sessions.Create(ctx, "")
 		if err != nil {
@@ -226,7 +226,7 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission, repoPath stri
 		d.grantSessionDefaults(ctx, m)
 	}
 	if d.workspace != nil && m.Workspace == "" && m.Worktree == "" {
-		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, repoPath)
+		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
@@ -313,10 +313,21 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	// no shell/write_file tools (runner.go's missionTools returns nil for
 	// an empty WorkRoot).
 	if m.SessionID == "" || (m.Workspace == "" && m.Worktree == "") {
-		m, err = d.ensureProvisioned(ctx, m, "")
-		if err != nil {
-			return false, fmt.Errorf("driver advance: ensure provisioned: %w", err)
+		provisioned, provErr := d.ensureProvisioned(ctx, m)
+		if provErr != nil {
+			// Returning the error here would leave the mission idle for
+			// the work-slot sweep to retry ensureProvisioned every 30s
+			// forever. Pause it as an infra failure instead, same path a
+			// phase-run error takes below.
+			d.log.Error("driver: provisioning failed", "mission_id", id, "error", provErr)
+			in := StepInput{Input: InputReviewInfraFailure, Reason: "provisioning failed: " + provErr.Error()}
+			t := Step(toStepState(m), in, d.cfg)
+			if err := d.store.ApplyTransition(ctx, id, t); err != nil {
+				return false, fmt.Errorf("driver advance: apply transition after provisioning failure: %w", err)
+			}
+			return false, nil
 		}
+		m = provisioned
 	}
 
 	before := m.Status
@@ -564,7 +575,18 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 				d.log.Warn("driver: rollback failed", "mission_id", m.ID, "error", err)
 			}
 		}
-		return StepInput{Input: InputWorkerRetry, Reason: truncate(verdict.Analysis, 500)}, nil
+		in := StepInput{Input: InputWorkerRetry, Reason: truncate(verdict.Analysis, 500)}
+		if verdict.Forced {
+			// Neither a tool call nor a text-form sentinel (runner.go's
+			// extractTextSentinel) could be read from this turn — a
+			// distinct, stable fingerprint (rather than none at all) so
+			// the stall brake (stepWorkerRetry, StallRounds consecutive
+			// identical fingerprints) pauses the mission after repeated
+			// sentinel-less turns instead of grinding to max_iterations on
+			// a model that never learns to end its turn correctly.
+			in.GapFingerprint = "no_sentinel"
+		}
+		return in, nil
 	}
 }
 

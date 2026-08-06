@@ -530,8 +530,7 @@ export interface AdminConnector {
 
 // MissionTemplate is the frozen mission-creation payload a schedule
 // fires at each tick (internal/brain/missions.MissionTemplate) — same
-// shape as CreateMissionInput, minus repo_path (out of scope for
-// scheduled missions in v1).
+// shape as CreateMissionInput.
 export interface MissionTemplate {
   goal: string
   kind: 'coding' | 'research'

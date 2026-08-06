@@ -402,15 +402,31 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		return v, text + "\n" + recoverText, nil
 	}
 
+	// Neither turn produced a tool call: before giving up, check whether
+	// the model expressed the sentinel as TEXT instead — observed on
+	// non-frontier models (GLM-5.2's XML-ish self-closing tag, qwen3:30b's
+	// bare "mission_status" token followed by a JSON object). A text-form
+	// verdict is trust-equivalent to the tool-call form: both are the
+	// model's own self-report, and the harness's own verify_cmd/
+	// CheckArtifacts evidence — never model output — is what actually
+	// gates a unit's Passes flag. This is strictly a fallback: the
+	// tool-call path above always wins when it succeeds.
+	combined := text + "\n" + recoverText
+	if raw, ok := extractTextSentinel(combined, missionStatusToolName); ok {
+		if v, ok := r.tryParseVerdict(raw); ok {
+			r.log.Warn("mission worker expressed mission_status as text, not a tool call", "mission_id", m.ID)
+			return v, combined, nil
+		}
+	}
+
 	// Still missing: bail detection informs the log, but either way this
 	// is a forced retry — detection accuracy never gates the outcome.
-	combined := text + "\n" + recoverText
 	if detectBail(combined) {
 		r.log.Warn("mission worker bailed without a sentinel call", "mission_id", m.ID)
 	} else {
 		r.log.Warn("mission worker ended without a sentinel call", "mission_id", m.ID)
 	}
-	return WorkerVerdict{Outcome: "retry", Analysis: "the worker did not report a status; treated as a failed attempt"}, combined, nil
+	return WorkerVerdict{Outcome: "retry", Analysis: "the worker did not report a status; treated as a failed attempt", Forced: true}, combined, nil
 }
 
 func (r *nativeRunner) tryParseVerdict(args json.RawMessage) (WorkerVerdict, bool) {
@@ -470,9 +486,26 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 			return ReviewVerdict{}, nil, err
 		}
 		if len(recoverArgs) == 0 {
-			return ReviewVerdict{}, nil, fmt.Errorf("mission runner: reviewer ended without a review_verdict call")
+			// Neither turn produced a review_verdict tool call: before
+			// failing the round, check for a text-form verdict — observed
+			// on qwen3:30b reviewers that write prose analysis and never
+			// call the tool. Trust-equivalent to the tool-call form (see
+			// RunWorker's identical fallback above): the harness's own
+			// artifact/diff evidence, not the reviewer's self-report,
+			// decides whether a unit actually holds up. A text-form rework
+			// with no parseable findings is acceptable — GapFingerprint of
+			// empty findings is empty, which the state machine already
+			// tolerates.
+			combined := text + "\n" + recoverText
+			if raw, ok := extractTextSentinel(combined, reviewVerdictToolName); ok {
+				r.log.Warn("mission reviewer expressed review_verdict as text, not a tool call", "mission_id", m.ID)
+				text, args = combined, raw
+			} else {
+				return ReviewVerdict{}, nil, fmt.Errorf("mission runner: reviewer ended without a review_verdict call")
+			}
+		} else {
+			text, args = text+"\n"+recoverText, recoverArgs
 		}
-		text, args = text+"\n"+recoverText, recoverArgs
 	}
 	verdict, err := parseReviewVerdict(args)
 	if err != nil {

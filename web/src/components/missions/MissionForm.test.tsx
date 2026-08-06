@@ -83,17 +83,20 @@ describe('MissionForm — create mode, one-off mission', () => {
     expect(createButton.disabled).toBe(false)
   })
 
-  it('requires a repo path before submitting a coding mission', () => {
+  it('allows submitting a coding mission with just a goal', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm3' })
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
     fireEvent.click(screen.getByRole('button', { name: /^Coding /i }))
 
     const createButton = screen.getByRole('button', { name: 'Create mission' }) as HTMLButtonElement
-    expect(createButton.disabled).toBe(true)
-
-    fireEvent.change(screen.getByLabelText('Repository path'), { target: { value: '/workspace/repo' } })
     expect(createButton.disabled).toBe(false)
+
+    fireEvent.click(createButton)
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ kind: 'coding' })),
+    )
   })
 
   it('calls onCancel when Cancel is clicked', () => {
@@ -148,7 +151,6 @@ describe('MissionForm — create mode, repeat on schedule', () => {
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByRole('button', { name: /^Coding /i }))
-    fireEvent.change(screen.getByLabelText('Repository path'), { target: { value: '/workspace/repo' } })
     fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
 

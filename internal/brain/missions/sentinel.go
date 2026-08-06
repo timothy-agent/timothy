@@ -3,6 +3,7 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -106,6 +107,15 @@ type WorkerVerdict struct {
 	Evidence string
 	Analysis string
 	Question string
+	// Forced marks a verdict the runner fabricated because NEITHER a
+	// tool call NOR a text-form sentinel (extractTextSentinel) could be
+	// found after the recovery re-run — set true ONLY on that path
+	// (runner.go's RunWorker). The driver fingerprints this case
+	// distinctly (GapFingerprint "no_sentinel") so the stall brake
+	// pauses after StallRounds consecutive sentinel-less turns instead
+	// of burning to max_iterations on a model that never learns to call
+	// the tool.
+	Forced bool
 }
 
 // parseWorkerVerdict decodes a mission_status tool call's arguments.
@@ -115,6 +125,135 @@ func parseWorkerVerdict(args json.RawMessage) (WorkerVerdict, error) {
 		return WorkerVerdict{}, err
 	}
 	return v, nil
+}
+
+// sentinelAttrs lists the known attribute/field names extractTextSentinel
+// will pull out of a text-form sentinel, per tool — anything else in
+// the tag or JSON object is ignored rather than round-tripped, since
+// the only fields WorkerVerdict/ReviewVerdict-parsing code ever reads
+// are these.
+var sentinelAttrs = map[string][]string{
+	missionStatusToolName: {"outcome", "evidence", "analysis", "question"},
+	reviewVerdictToolName: {"decision"},
+}
+
+// sentinelDiscriminator names the field whose value is validated
+// against sentinelDiscriminatorValues before a text-form match is
+// trusted — the same field the tool's own JSON schema marks required.
+var sentinelDiscriminator = map[string]string{
+	missionStatusToolName: "outcome",
+	reviewVerdictToolName: "decision",
+}
+
+var sentinelDiscriminatorValues = map[string]map[string]bool{
+	missionStatusToolName: {"done": true, "retry": true, "blocked": true},
+	reviewVerdictToolName: {"approve": true, "rework": true},
+}
+
+// xmlTagPattern matches an XML-ish sentinel tag: <toolName attr="val"
+// attr2='val2' ... /> or <toolName ...>, attribute values in either
+// quote style, attributes in any order. %s is the exact tool name —
+// callers build one pattern per tool so an unrelated tag never matches.
+const xmlTagPatternFmt = `<%s\b((?:\s+[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*/?>`
+
+// attrPattern pulls one name="value" or name='value' pair out of a
+// matched tag's attribute string.
+var attrPattern = regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+
+// extractTextSentinel scans model text for a text-form end-of-turn
+// sentinel when the tool call itself never arrived — observed on
+// non-frontier models (GLM-5.2, qwen3:30b) that express the same
+// intent as prose instead of a structured call. Two forms are
+// recognized:
+//
+//  1. An XML-ish tag named exactly toolName, self-closing or not, with
+//     known attributes: `<mission_status outcome="done" .../>`.
+//  2. The tool name as a bare token followed by a JSON object (or a
+//     ```json fenced one) whose fields are read directly, e.g.
+//     `mission_status\n{"outcome":"done",...}`.
+//
+// When a form matches more than once, the LAST valid occurrence wins —
+// models sometimes repeat or revise the tag within one reply, and the
+// final one is the turn's actual verdict. Returns ok=false when
+// nothing recognizable — carrying the required discriminator field
+// with a valid enum value — is found.
+//
+// Trust note: a text-form sentinel is trust-equivalent to the tool-call
+// form — both are the model's own self-report of its own turn, neither
+// is verified here. The harness's own evidence (CheckArtifacts,
+// verify_cmd, RunVerify) is what actually gates a unit's Passes flag;
+// this function only saves a turn from being misread as "said nothing"
+// when it in fact reported an outcome in the wrong shape.
+func extractTextSentinel(text, toolName string) (json.RawMessage, bool) {
+	knownAttrs := sentinelAttrs[toolName]
+	discriminator := sentinelDiscriminator[toolName]
+	validValues := sentinelDiscriminatorValues[toolName]
+	if discriminator == "" || len(knownAttrs) == 0 {
+		return nil, false
+	}
+
+	var best map[string]string
+	bestPos := -1
+
+	// Form 1: XML-ish tag.
+	tagPattern := regexp.MustCompile(fmt.Sprintf(xmlTagPatternFmt, regexp.QuoteMeta(toolName)))
+	for _, m := range tagPattern.FindAllStringSubmatchIndex(text, -1) {
+		attrsText := text[m[2]:m[3]]
+		fields := map[string]string{}
+		for _, am := range attrPattern.FindAllStringSubmatch(attrsText, -1) {
+			name := am[1]
+			val := am[2]
+			if am[3] != "" {
+				val = am[3]
+			}
+			fields[name] = val
+		}
+		if v, ok := fields[discriminator]; ok && validValues[v] && m[0] > bestPos {
+			best, bestPos = fields, m[0]
+		}
+	}
+
+	// Form 2: bare token followed by a JSON object, or a ```json fenced
+	// one — position-compared against form 1 so whichever form's match
+	// starts LATER in the text wins overall (models sometimes repeat or
+	// revise the sentinel; the final occurrence is the turn's actual
+	// verdict, regardless of which form it's expressed in).
+	tokenPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(toolName) + `\b\s*:?\s*(?:` + "```(?:json)?" + `)?\s*`)
+	for _, loc := range tokenPattern.FindAllStringIndex(text, -1) {
+		rest := text[loc[1]:]
+		start := strings.IndexByte(rest, '{')
+		if start == -1 || (start > 0 && strings.TrimSpace(rest[:start]) != "") {
+			continue
+		}
+		dec := json.NewDecoder(strings.NewReader(rest[start:]))
+		var obj map[string]any
+		if err := dec.Decode(&obj); err != nil {
+			continue
+		}
+		v, ok := obj[discriminator].(string)
+		if !ok || !validValues[v] {
+			continue
+		}
+		if loc[0] <= bestPos {
+			continue
+		}
+		fields := map[string]string{}
+		for _, attr := range knownAttrs {
+			if s, ok := obj[attr].(string); ok {
+				fields[attr] = s
+			}
+		}
+		best, bestPos = fields, loc[0]
+	}
+
+	if best == nil {
+		return nil, false
+	}
+	raw, err := json.Marshal(best)
+	if err != nil {
+		return nil, false
+	}
+	return json.RawMessage(raw), true
 }
 
 // bailPatterns are the known-weak stopgap layer for detecting a

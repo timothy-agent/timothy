@@ -130,7 +130,6 @@ type createMissionRequest struct {
 	EscalationRoute string   `json:"escalation_route"`
 	MaxIterations   int      `json:"max_iterations"`
 	BudgetUSD       *float64 `json:"budget_usd"`
-	RepoPath        string   `json:"repo_path"`
 	// AutoApproveSafe defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
@@ -158,11 +157,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", `kind must be "coding", "research", or "scheduled"`)
 		return
 	}
-	if req.Kind == "coding" && req.RepoPath == "" {
-		jsonError(w, http.StatusBadRequest, "bad_request", "repo_path is required for coding missions")
-		return
-	}
-
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
 	// mission created without an explicit agent still needs a real
@@ -210,7 +204,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		MaxIterations: req.MaxIterations, BudgetUSD: req.BudgetUSD,
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay,
 	}
-	id, err := h.driver.Create(r.Context(), m, req.RepoPath)
+	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
 		failMission(w, err)
 		return

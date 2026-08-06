@@ -510,7 +510,7 @@ func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true}, "")
+	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}, ""); err != nil {
+	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if len(granter.calls) != 0 {
@@ -558,7 +558,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 	id, err := d.Create(context.Background(), Mission{
 		Goal: "test", Kind: "research", AgentID: "briefing-agent",
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false,
-	}, "")
+	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	if _, err := d.Create(context.Background(), Mission{
 		Goal: "test", Kind: "research", AutoApproveSafe: false,
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
-	}, ""); err != nil {
+	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if len(granter.calls) != 0 {
@@ -668,6 +668,49 @@ func TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned(t *testing.T) {
 	}
 	if sessions.n != 0 {
 		t.Fatalf("sessions.Create was called %d times, want 0 for an already-provisioned mission", sessions.n)
+	}
+}
+
+// TestDriverAdvancePausesInsteadOfErroringOnProvisioningFailure
+// reproduces the hardening around mission provisioning: before, a
+// mission whose workspace can't be created left Advance returning an
+// error and the mission idle — exactly the state the work-slot sweep
+// retries ensureProvisioned against every 30s, forever. Now Advance
+// must pause the mission as an infra failure instead, so the sweep
+// leaves it alone.
+func TestDriverAdvancePausesInsteadOfErroringOnProvisioningFailure(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "test", Kind: "coding",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	})
+	// wsRoot is a file, not a directory: Workspace.Provision's
+	// os.MkdirAll(workspace, ...) underneath it fails, giving
+	// ensureProvisioned a real error to propagate without needing git
+	// or any other external dependency.
+	wsRoot := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(wsRoot, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	workspace := NewWorkspace(wsRoot, nil, slog.Default())
+	granter := &fakeGranter{}
+	sessions := &fakeSessionCreator{}
+	runner := &scriptedRunner{}
+	d := NewDriver(store, runner, workspace, nil, sessions, granter, nil, nil, slog.Default())
+
+	canContinue, err := d.Advance(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if canContinue {
+		t.Fatal("Advance reported it can continue after a provisioning failure")
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused {
+		t.Fatalf("mission status = %q, want paused", m.Status)
+	}
+	if m.PauseReason != PauseInfra {
+		t.Fatalf("mission pause reason = %q, want %q", m.PauseReason, PauseInfra)
 	}
 }
 
@@ -801,6 +844,38 @@ func TestDriverEscalatesRepeatedRework(t *testing.T) {
 	}
 	if _, ok := d.gatekeepers["m1"]; ok {
 		t.Fatal("gatekeeper state survived a repeated identical rework — must be dropped for fresh-eyes review")
+	}
+}
+
+// TestDriverForcedRetriesStallInsteadOfBurningIterations reproduces the
+// real observed failure: a worker whose turns never yield a sentinel
+// (no tool call, no text-form fallback either) used to burn every
+// remaining iteration on identical forced retries because
+// InputWorkerRetry carried no GapFingerprint at all — the stall brake
+// never had two identical fingerprints to compare. runner.go now sets
+// WorkerVerdict.Forced on that path, and driver.go's runExecute maps it
+// to a stable "no_sentinel" GapFingerprint, so two consecutive forced
+// retries now pause the mission (no_progress) well short of
+// MaxIterations instead of grinding through the whole budget.
+func TestDriverForcedRetriesStallInsteadOfBurningIterations(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 12})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
+		{Outcome: "retry", Analysis: "the worker did not report a status; treated as a failed attempt", Forced: true},
+	}}
+	d := testDriver(store, runner)
+
+	// Two forced retries must be enough to stall-pause (StallRounds=2),
+	// nowhere near MaxIterations=12 — driveN would otherwise burn all 12
+	// exactly like the real incident this guards against.
+	driveN(t, d, "m1", 2)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseNoProgress {
+		t.Fatalf("mission after 2 consecutive Forced retries = %s/%s (iteration %d), want paused/no_progress", m.Status, m.PauseReason, m.Iteration)
+	}
+	if m.Iteration >= m.MaxIterations {
+		t.Fatalf("mission burned to max_iterations (%d) instead of stalling on the fingerprint", m.Iteration)
 	}
 }
 

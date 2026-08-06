@@ -24,7 +24,6 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	repo := scratchRepo(t)
 	wsRoot := t.TempDir()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	workspace := NewWorkspace(wsRoot, nil, log)
@@ -33,7 +32,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	ws, wt, branch, base, err := workspace.Provision(ctx, id, marker+"e2e coding", "coding", repo)
+	ws, wt, branch, base, err := workspace.Provision(ctx, id, marker+"e2e coding", "coding")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
