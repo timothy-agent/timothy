@@ -124,7 +124,7 @@ jobs:
       # images) also needs it for `docker buildx imagetools create`.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v1
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
