@@ -28,7 +28,7 @@ jobs:
   # it, or a real change could be missed. First-ever release (no
   # previous tag) marks everything changed.
   diff:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       brain: ${{ steps.diff.outputs.brain }}
       gateway: ${{ steps.diff.outputs.gateway }}
@@ -69,7 +69,7 @@ jobs:
 
   images:
     needs: diff
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       packages: write
     strategy:
@@ -122,7 +122,8 @@ jobs:
         if: fromJSON(needs.diff.outputs[matrix.name])
       # Always set up buildx: the copy-forward step below (unchanged
       # images) also needs it for `docker buildx imagetools create`.
-      - uses: docker/setup-buildx-action@v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -130,7 +131,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
         if: fromJSON(needs.diff.outputs[matrix.name])
-        uses: docker/build-push-action@v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -152,8 +153,6 @@ jobs:
           # repository_owner, not a literal: survives org renames and
           # keeps images under whatever org the repo lives in.
           tags: ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
       # Unchanged image: no rebuild, just point the new version tag at
       # the previous release's manifest list. Keeps every tag pinned
       # to a real image (no floating tags) without paying for a
@@ -169,7 +168,7 @@ jobs:
 
   release:
     needs: images
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
