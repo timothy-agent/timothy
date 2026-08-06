@@ -45,6 +45,10 @@ func MissionStatusTool() *tools.Tool {
 				"question": {
 					"type": "string",
 					"description": "Required for blocked: the exact question the user must answer."
+				},
+				"handoff": {
+					"type": "string",
+					"description": "Optional: a concise note to the next worker session — current state of the work, what remains, and any gotchas discovered. This is the ONLY context the next session receives besides the plan and git log, so include anything it must know."
 				}
 			},
 			"required": ["outcome"]
@@ -107,6 +111,7 @@ type WorkerVerdict struct {
 	Evidence string
 	Analysis string
 	Question string
+	Handoff  string
 	// Forced marks a verdict the runner fabricated because NEITHER a
 	// tool call NOR a text-form sentinel (extractTextSentinel) could be
 	// found after the recovery re-run — set true ONLY on that path
@@ -133,7 +138,7 @@ func parseWorkerVerdict(args json.RawMessage) (WorkerVerdict, error) {
 // the only fields WorkerVerdict/ReviewVerdict-parsing code ever reads
 // are these.
 var sentinelAttrs = map[string][]string{
-	missionStatusToolName: {"outcome", "evidence", "analysis", "question"},
+	missionStatusToolName: {"outcome", "evidence", "analysis", "question", "handoff"},
 	reviewVerdictToolName: {"decision"},
 }
 

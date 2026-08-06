@@ -634,7 +634,14 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	if err != nil {
 		return StepInput{}, err
 	}
-	if err := d.recordProgress(ctx, m.ID, text); err != nil {
+	// A handoff note is the worker's deliberate summary for the next
+	// session; prefer it over the raw turn text, which is often just
+	// tool chatter with no orientation value once the turn ends.
+	progressNote := text
+	if verdict.Handoff != "" {
+		progressNote = verdict.Handoff
+	}
+	if err := d.recordProgress(ctx, m.ID, progressNote); err != nil {
 		d.log.Warn("driver: record progress failed", "mission_id", m.ID, "error", err)
 	}
 

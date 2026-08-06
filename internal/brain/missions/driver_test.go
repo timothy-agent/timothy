@@ -161,6 +161,10 @@ type scriptedRunner struct {
 	workerVerdicts []WorkerVerdict
 	workerIdx      int
 	workerErr      error
+	// workerText overrides the raw turn text RunWorker returns; empty
+	// means the "worker output" default, matching every pre-existing
+	// caller that doesn't care about the raw text.
+	workerText     string
 	reviewVerdicts []ReviewVerdict
 	reviewIdx      int
 	plans          []Spec
@@ -175,7 +179,11 @@ func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPa
 	if r.workerIdx < len(r.workerVerdicts)-1 {
 		r.workerIdx++
 	}
-	return v, "worker output", nil
+	text := r.workerText
+	if text == "" {
+		text = "worker output"
+	}
+	return v, text, nil
 }
 
 func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
@@ -262,6 +270,57 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	}
 	if m.LastEvidence != "did it" {
 		t.Fatalf("mission.LastEvidence = %q, want the worker's evidence persisted for the reviewer", m.LastEvidence)
+	}
+}
+
+// TestDriverExecuteRecordsHandoffOverRawText confirms that when the
+// worker's mission_status call carries a handoff note, the harness
+// records THAT as the progress note for the next session, not the
+// turn's raw text — the raw text is often just tool chatter with no
+// orientation value, while the handoff is the worker's deliberate
+// summary.
+func TestDriverExecuteRecordsHandoffOverRawText(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "hit a wall", Handoff: "half the migration is done; finish the token refresh path next"}},
+		workerText:     "raw turn text nobody should see in progress",
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if len(m.Progress) != 1 {
+		t.Fatalf("Progress = %+v, want exactly one note", m.Progress)
+	}
+	if m.Progress[0].Note != "half the migration is done; finish the token refresh path next" {
+		t.Fatalf("progress note = %q, want the handoff text", m.Progress[0].Note)
+	}
+}
+
+// TestDriverExecuteRecordsRawTextWithoutHandoff confirms the pre-
+// existing behavior is unchanged when the worker doesn't supply a
+// handoff: the raw turn text is still what gets recorded.
+func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "hit a wall"}},
+		workerText:     "raw turn text",
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if len(m.Progress) != 1 {
+		t.Fatalf("Progress = %+v, want exactly one note", m.Progress)
+	}
+	if m.Progress[0].Note != "raw turn text" {
+		t.Fatalf("progress note = %q, want the raw turn text", m.Progress[0].Note)
 	}
 }
 

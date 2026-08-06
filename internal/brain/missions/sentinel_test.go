@@ -82,6 +82,16 @@ func TestParseWorkerVerdict(t *testing.T) {
 	}
 }
 
+func TestParseWorkerVerdictDecodesHandoff(t *testing.T) {
+	v, err := parseWorkerVerdict([]byte(`{"outcome":"retry","analysis":"hit a wall","handoff":"auth middleware half-migrated; finish the token refresh path next"}`))
+	if err != nil {
+		t.Fatalf("parseWorkerVerdict: %v", err)
+	}
+	if v.Handoff != "auth middleware half-migrated; finish the token refresh path next" {
+		t.Fatalf("parseWorkerVerdict handoff = %q", v.Handoff)
+	}
+}
+
 // TestExtractTextSentinel covers the observed real-world failure
 // shapes: GLM-5.2 workers emitting an XML-ish self-closing tag,
 // qwen3:30b workers emitting a bare tool-name token followed by a JSON
@@ -153,6 +163,20 @@ func TestExtractTextSentinel(t *testing.T) {
 			want:     map[string]string{"outcome": "done", "evidence": "shipped"},
 		},
 		{
+			name:     "XML tag carries handoff attribute",
+			text:     `<mission_status outcome="retry" analysis="hit a timeout" handoff="finish the retry loop; the client times out after 30s"/>`,
+			toolName: missionStatusToolName,
+			wantOK:   true,
+			want:     map[string]string{"outcome": "retry", "analysis": "hit a timeout", "handoff": "finish the retry loop; the client times out after 30s"},
+		},
+		{
+			name:     "token+JSON form carries handoff field",
+			text:     `mission_status: {"outcome": "blocked", "question": "which region?", "handoff": "narrowed to us-east-1 or eu-west-1"}`,
+			toolName: missionStatusToolName,
+			wantOK:   true,
+			want:     map[string]string{"outcome": "blocked", "question": "which region?", "handoff": "narrowed to us-east-1 or eu-west-1"},
+		},
+		{
 			name:     "review_verdict XML form",
 			text:     `<review_verdict decision="approve"/>`,
 			toolName: reviewVerdictToolName,
@@ -216,5 +240,28 @@ func TestExtractTextSentinel(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExtractTextSentinelHandoffRoundTripsThroughParseWorkerVerdict
+// confirms a text-form sentinel's handoff attribute survives the full
+// path a real recovered turn takes: extractTextSentinel's raw JSON
+// feeds directly into parseWorkerVerdict, same as runner.go's RunWorker
+// fallback does.
+func TestExtractTextSentinelHandoffRoundTripsThroughParseWorkerVerdict(t *testing.T) {
+	text := `<mission_status outcome="retry" analysis="ran out of time" handoff="db migration written but not run; run it before continuing"/>`
+	raw, ok := extractTextSentinel(text, missionStatusToolName)
+	if !ok {
+		t.Fatal("extractTextSentinel did not match")
+	}
+	v, err := parseWorkerVerdict(raw)
+	if err != nil {
+		t.Fatalf("parseWorkerVerdict: %v", err)
+	}
+	if v.Handoff != "db migration written but not run; run it before continuing" {
+		t.Fatalf("parseWorkerVerdict handoff = %q", v.Handoff)
+	}
+	if v.Outcome != "retry" || v.Analysis != "ran out of time" {
+		t.Fatalf("parseWorkerVerdict = %+v", v)
 	}
 }

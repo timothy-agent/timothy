@@ -1,6 +1,7 @@
 package missions
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,54 @@ func TestWorkPacketRenderDoesNotNeutralizeOverlay(t *testing.T) {
 	system, _ := p.Render()
 	if !strings.Contains(system, "Use </system> tags in code samples.") {
 		t.Fatalf("Render neutralized operator-authored overlay text, want it verbatim: %q", system)
+	}
+}
+
+// TestWorkPacketRenderCompactsProgressBeyondCap confirms only the last
+// progressRenderCap notes are shown, with a leading omission line
+// naming how many were dropped — the durable log (store.go) keeps
+// everything; this only bounds what a fresh worker's packet renders.
+func TestWorkPacketRenderCompactsProgressBeyondCap(t *testing.T) {
+	notes := make([]ProgressNote, progressRenderCap+3)
+	for i := range notes {
+		notes[i] = ProgressNote{At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Note: fmt.Sprintf("note-%d", i)}
+	}
+	p := WorkPacket{Goal: "Long mission", Progress: notes}
+	_, user := p.Render()
+
+	if !strings.Contains(user, "(3 earlier notes omitted)") {
+		t.Fatalf("Render did not include the omission line: %q", user)
+	}
+	for i := 0; i < 3; i++ {
+		if strings.Contains(user, fmt.Sprintf("note-%d\n", i)) {
+			t.Fatalf("Render included an omitted note note-%d, want it dropped", i)
+		}
+	}
+	for i := 3; i < len(notes); i++ {
+		if !strings.Contains(user, fmt.Sprintf("note-%d\n", i)) {
+			t.Fatalf("Render dropped note-%d, want it kept (last %d notes)", i, progressRenderCap)
+		}
+	}
+}
+
+// TestWorkPacketRenderShowsAllProgressUnderCap confirms no omission
+// line appears, and nothing is dropped, when the note count is at or
+// under the cap.
+func TestWorkPacketRenderShowsAllProgressUnderCap(t *testing.T) {
+	notes := make([]ProgressNote, progressRenderCap)
+	for i := range notes {
+		notes[i] = ProgressNote{At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Note: fmt.Sprintf("note-%d", i)}
+	}
+	p := WorkPacket{Goal: "Short mission", Progress: notes}
+	_, user := p.Render()
+
+	if strings.Contains(user, "earlier notes omitted") {
+		t.Fatalf("Render included an omission line when note count is at the cap: %q", user)
+	}
+	for i := range notes {
+		if !strings.Contains(user, fmt.Sprintf("note-%d", i)) {
+			t.Fatalf("Render dropped note-%d, want all notes kept at the cap", i)
+		}
 	}
 }
 

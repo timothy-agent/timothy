@@ -9,6 +9,13 @@ import (
 // enough to orient on recent progress, not the whole project history.
 const gitLogCap = 4 << 10
 
+// progressRenderCap bounds how many progress notes a rendered packet
+// shows — on a long-running mission the durable log (missions.Progress,
+// append-only in store.go) keeps growing, and rendering all of it into
+// every fresh worker's first turn would balloon packet tokens over time.
+// The durable log itself is untouched; this only bounds what's shown.
+const progressRenderCap = 10
+
 // WorkPacket is everything a FRESH worker session is seeded with —
 // workers never inherit prior transcripts (statelessness between
 // turns); durability lives here (spec, progress log, git log), not in
@@ -39,7 +46,7 @@ type WorkPacket struct {
 // messages, an earlier note); both pass through NeutralizeSlot before
 // insertion — self-injection hardening.
 func (p WorkPacket) Render() (system, user string) {
-	system = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you; artifact tracking depends on write_file being the only way files get created. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it." + p.ExecEnvironmentNote
+	system = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you; artifact tracking depends on write_file being the only way files get created. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff, the plan, and the git log." + p.ExecEnvironmentNote
 	if p.PromptOverlay != "" {
 		// Operator-authored config, not model output — unlike Progress/
 		// GitLog below, this never passes through NeutralizeSlot.
@@ -73,7 +80,12 @@ func (p WorkPacket) Render() (system, user string) {
 
 	if len(p.Progress) > 0 {
 		b.WriteString("Progress so far:\n")
-		for _, n := range p.Progress {
+		notes := p.Progress
+		if len(notes) > progressRenderCap {
+			fmt.Fprintf(&b, "(%d earlier notes omitted)\n", len(notes)-progressRenderCap)
+			notes = notes[len(notes)-progressRenderCap:]
+		}
+		for _, n := range notes {
 			fmt.Fprintf(&b, "- %s: %s\n", n.At.Format("2006-01-02 15:04"), NeutralizeSlot(n.Note))
 		}
 		b.WriteString("\n")
