@@ -147,14 +147,6 @@ export function AgentForm({
           </div>
         </Field>
       </div>
-      <Field label="Skills allowlist" hint="comma-separated; empty = all">
-        <Input
-          value={fields.skillsText}
-          onChange={(e) => fields.setSkillsText(e.target.value)}
-          placeholder="coding-task, research-task"
-          className="mt-1.5 h-10"
-        />
-      </Field>
       <Field label="Tools allowlist" hint="pick from the live tool surface; empty = all">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>

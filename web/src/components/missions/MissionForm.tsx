@@ -1,30 +1,79 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { createMission, createSchedule, getSettings, patchSchedule } from '../../api/client'
+import {
+  classifyMission,
+  createMission,
+  createSchedule,
+  getSettings,
+  patchSchedule,
+} from '../../api/client'
 import type { AdminAgent, Schedule } from '../../api/types'
-import { useAgents } from '../AgentPicker'
+import { useAgents, useRoutes } from '../AgentPicker'
 import { slugify } from '../settings/AgentForm'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
 import { CURRENCIES } from '../../lib/currencies'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Calendar } from '../ui/calendar'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Textarea } from '../ui/textarea'
 import { errText } from '../settings/util'
 
-const kinds = [
-  {
-    value: 'research',
-    label: 'Research',
-    description: 'Investigate, gather sources, write findings.',
-  },
-  {
-    value: 'coding',
-    label: 'Coding',
-    description: 'Work a repository: plan, edit, verify.',
-  },
-] as const
+type Kind = 'coding' | 'general'
+
+const kindCopy: Record<Kind, string> = {
+  coding: 'Coding · branches from repo',
+  general: 'General · scratch workspace',
+}
+
+// A schedule's mission_template carries route/review_route/budget as
+// explicit undefined when unset (see types.ts) — "non-default" means
+// any of them, or a non-default agent, actually has a value.
+function hasNonDefaults(t: Schedule['mission_template']): boolean {
+  return !!(t.agent_id || t.route || t.review_route || t.budget_amount != null)
+}
+
+// Radix Select.Item rejects an empty string value, so the "no route
+// chosen" state is represented by this sentinel on the wire between the
+// Select and the route/reviewRoute/escalationRoute state (which stay ''
+// to match the API's own empty-means-default semantics).
+const ROUTE_DEFAULT = '__default__'
+
+// expiresAt is stored as the wire-compatible 'YYYY-MM-DDTHH:mm' string the
+// API already expects; these split it into a Date (for the calendar) and a
+// 'HH:mm' string (for the time input) and back.
+function expiresAtToDate(v: string): Date | undefined {
+  if (!v) return undefined
+  const [datePart, timePart] = v.split('T')
+  const [y, m, d] = datePart.split('-').map(Number)
+  const [h, min] = (timePart ?? '00:00').split(':').map(Number)
+  return new Date(y, m - 1, d, h, min)
+}
+
+function expiresAtToTime(v: string): string {
+  return v.split('T')[1] ?? '00:00'
+}
+
+function dateAndTimeToExpiresAt(date: Date, time: string): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}T${time}`
+}
+
+function formatExpiresAt(v: string): string {
+  const date = expiresAtToDate(v)
+  if (!date) return 'Never'
+  return `${date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })}, ${expiresAtToTime(v)}`
+}
 
 // MissionForm is the shared form behind both the new-mission page and
 // the edit-schedule page. In 'create' mode it submits a one-off
@@ -44,8 +93,16 @@ export function MissionForm({
   onCancel: () => void
 }) {
   const agents = useAgents()
+  const routes = useRoutes()
+  const enabledRoutes = routes?.filter((r) => r.enabled) ?? []
   const [goal, setGoal] = useState('')
-  const [kind, setKind] = useState<(typeof kinds)[number]['value']>('research')
+  const [kind, setKind] = useState<Kind>('general')
+  // kindLocked freezes kind against further auto-classify calls once
+  // the user has explicitly chosen it (chip click, or the repeat-mode
+  // general override below) — cleared when the goal is emptied, which
+  // resets to auto-detect for whatever's typed next.
+  const [kindLocked, setKindLocked] = useState(false)
+  const [classifying, setClassifying] = useState(false)
   const [agentID, setAgentID] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [route, setRoute] = useState('')
@@ -90,9 +147,10 @@ export function MissionForm({
     setPreset(presetFor(schedule.cron))
     setGoal(schedule.mission_template.goal)
     setKind(schedule.mission_template.kind)
+    setKindLocked(true)
     setAgentID(schedule.mission_template.agent_id ?? '')
     setAutoApproveSafe(schedule.mission_template.auto_approve_safe ?? true)
-    setShowAdvanced(false)
+    setShowAdvanced(hasNonDefaults(schedule.mission_template))
     setRoute(schedule.mission_template.route ?? '')
     setReviewRoute(schedule.mission_template.review_route ?? '')
     setMaxIterations(
@@ -110,6 +168,42 @@ export function MissionForm({
     setCronError(null)
   }, [mode, schedule])
 
+  // Live kind inference: debounced 600ms after goal edits, skipped
+  // once the user has locked a manual choice or the goal is empty.
+  // Unlocking on an emptied goal happens in the textarea's onChange
+  // below (a direct user edit), not here — this effect also runs on
+  // mount/schedule-load with the PREVIOUS render's goal, and clearing
+  // the lock from here would race the schedule-seed effect's own
+  // setKindLocked(true) and stomp it back to false.
+  useEffect(() => {
+    if (goal.trim() === '' || kindLocked) return
+    setClassifying(true)
+    const t = setTimeout(() => {
+      classifyMission(goal.trim())
+        .then((r) => setKind(r.kind))
+        .catch(() => {
+          // Best-effort preview: a failed classify leaves whatever kind
+          // was already showing rather than blocking the form.
+        })
+        .finally(() => setClassifying(false))
+    }, 600)
+    return () => {
+      clearTimeout(t)
+      setClassifying(false)
+    }
+  }, [goal, kindLocked])
+
+  const onGoalChange = (v: string) => {
+    setGoal(v)
+    if (v.trim() === '') setKindLocked(false)
+  }
+
+  const toggleKind = () => {
+    if (repeat && kind === 'general') return // coding is unavailable while repeating
+    setKind((k) => (k === 'coding' ? 'general' : 'coding'))
+    setKindLocked(true)
+  }
+
   const pickAgent = (id: string) => {
     setAgentID(id)
     const agent = agents.find((a) => a.id === id)
@@ -123,6 +217,16 @@ export function MissionForm({
     setPreset(v)
     const found = cronPresets.find((p) => p.value === v)
     if (found?.cron) setCron(found.cron)
+  }
+
+  const pickExpiresDate = (date: Date | undefined) => {
+    if (!date) return
+    setExpiresAt(dateAndTimeToExpiresAt(date, expiresAtToTime(expiresAt) || '00:00'))
+  }
+
+  const pickExpiresTime = (time: string) => {
+    const date = expiresAtToDate(expiresAt) ?? new Date()
+    setExpiresAt(dateAndTimeToExpiresAt(date, time))
   }
 
   // A client-side 5-field shape check only — the server is the
@@ -225,7 +329,7 @@ export function MissionForm({
   const submitLabel = mode === 'edit' ? 'Save schedule' : repeat ? 'Create schedule' : 'Create mission'
 
   return (
-    <div className="space-y-8 pb-24">
+    <div className="space-y-8">
       <section className="space-y-3">
         <div>
           <h2 className="text-sm font-semibold">Goal</h2>
@@ -237,34 +341,20 @@ export function MissionForm({
           id="mission-goal"
           aria-label="Goal"
           value={goal}
-          onChange={(e) => setGoal(e.target.value)}
+          onChange={(e) => onGoalChange(e.target.value)}
           placeholder="What should this mission accomplish?"
-          rows={5}
+          rows={10}
           autoFocus
-          className="text-base"
+          className="min-h-60 text-base"
         />
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {kinds.map((k) => {
-            const disabled = repeat && k.value === 'coding'
-            const selected = kind === k.value
-            return (
-              <button
-                key={k.value}
-                type="button"
-                disabled={disabled}
-                onClick={() => setKind(k.value)}
-                aria-pressed={selected}
-                className={`rounded-lg border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                  selected ? 'border-primary bg-accent' : 'border-border hover:bg-muted'
-                }`}
-              >
-                <span className="text-sm font-medium">{k.label}</span>
-                <p className="mt-0.5 text-xs text-muted-foreground">{k.description}</p>
-              </button>
-            )
-          })}
-        </div>
+        {goal.trim() !== '' && (
+          <button type="button" onClick={toggleKind} disabled={repeat && kind === 'general'}>
+            <Badge variant={classifying ? 'outline' : 'secondary'} className="cursor-pointer">
+              {classifying ? 'Detecting…' : kindCopy[kind]}
+            </Badge>
+          </button>
+        )}
         {repeat && (
           <p className="text-xs text-muted-foreground">
             Coding missions aren't supported on a recurring schedule yet: each fire has no
@@ -299,7 +389,10 @@ export function MissionForm({
               type="button"
               onClick={() => {
                 setRepeat(true)
-                if (kind === 'coding') setKind('research')
+                if (kind === 'coding') {
+                  setKind('general')
+                  setKindLocked(true)
+                }
               }}
               aria-pressed={repeat}
               className={`rounded-md px-3 py-1.5 font-medium transition ${
@@ -350,24 +443,34 @@ export function MissionForm({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="mission-max-iterations">Max iterations</Label>
-              <Input
-                id="mission-max-iterations"
-                type="number"
-                value={maxIterations}
-                onChange={(e) => setMaxIterations(e.target.value)}
-                placeholder="Default"
-              />
-            </div>
-
-            <div className="space-y-1.5">
               <Label htmlFor="mission-expires">Expires</Label>
-              <Input
-                id="mission-expires"
-                type="datetime-local"
-                value={expiresAt}
-                onChange={(e) => setExpiresAt(e.target.value)}
-              />
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button id="mission-expires" variant="outline" className="w-full justify-start">
+                    {formatExpiresAt(expiresAt)}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0">
+                  <Calendar
+                    mode="single"
+                    selected={expiresAtToDate(expiresAt)}
+                    onSelect={pickExpiresDate}
+                  />
+                  <div className="flex items-center gap-2 border-t border-border p-2.5">
+                    <Input
+                      aria-label="Expires time"
+                      type="time"
+                      value={expiresAtToTime(expiresAt)}
+                      onChange={(e) => pickExpiresTime(e.target.value)}
+                      disabled={!expiresAt}
+                      className="flex-1"
+                    />
+                    <Button variant="outline" size="sm" onClick={() => setExpiresAt('')}>
+                      Clear
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
               <p className="text-xs text-muted-foreground">
                 Server time. The schedule stops firing after this moment. Empty means it never
                 expires.
@@ -401,102 +504,166 @@ export function MissionForm({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => setShowAdvanced((v) => !v)}
-          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-        >
-          {showAdvanced ? 'Hide advanced options' : 'Show advanced options'}
-        </button>
-
-        {showAdvanced && (
-          <div className="grid gap-4 rounded-lg border border-border p-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="mission-route">Route</Label>
-              <Input
-                id="mission-route"
-                value={route}
-                onChange={(e) => setRoute(e.target.value)}
-                placeholder="default"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="mission-review-route">Review route</Label>
-              <Input
-                id="mission-review-route"
-                value={reviewRoute}
-                onChange={(e) => setReviewRoute(e.target.value)}
-                placeholder="default"
-              />
-            </div>
-            {mode === 'create' && !repeat && (
+        <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
+          <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+            {showAdvanced ? 'Hide advanced options' : 'Show advanced options'}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-3 grid gap-4 rounded-lg border border-border p-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="mission-escalation-route">Escalation route</Label>
-                <Input
-                  id="mission-escalation-route"
-                  value={escalationRoute}
-                  onChange={(e) => setEscalationRoute(e.target.value)}
-                  placeholder="Off, set to switch route after a failed or reworked turn"
-                />
+                <Label htmlFor="mission-route">Route</Label>
+                {routes === null ? (
+                  <Input
+                    id="mission-route"
+                    value={route}
+                    onChange={(e) => setRoute(e.target.value)}
+                    placeholder="default"
+                  />
+                ) : (
+                  <Select
+                    value={route || ROUTE_DEFAULT}
+                    onValueChange={(v) => setRoute(v === ROUTE_DEFAULT ? '' : v)}
+                  >
+                    <SelectTrigger id="mission-route" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ROUTE_DEFAULT}>Default</SelectItem>
+                      {enabledRoutes.map((r) => (
+                        <SelectItem key={r.name} value={r.name}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
-            )}
-            <div className="space-y-1.5">
-              <Label htmlFor="mission-budget">Budget</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="mission-budget"
-                  type="number"
-                  value={budget}
-                  onChange={(e) => setBudget(e.target.value)}
-                  placeholder="No limit"
-                  className="flex-1"
-                />
-                <Select value={budgetCurrency} onValueChange={setBudgetCurrency}>
-                  <SelectTrigger className="w-24" aria-label="Budget currency">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CURRENCIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-review-route">Review route</Label>
+                {routes === null ? (
+                  <Input
+                    id="mission-review-route"
+                    value={reviewRoute}
+                    onChange={(e) => setReviewRoute(e.target.value)}
+                    placeholder="default"
+                  />
+                ) : (
+                  <Select
+                    value={reviewRoute || ROUTE_DEFAULT}
+                    onValueChange={(v) => setReviewRoute(v === ROUTE_DEFAULT ? '' : v)}
+                  >
+                    <SelectTrigger id="mission-review-route" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ROUTE_DEFAULT}>Default</SelectItem>
+                      {enabledRoutes.map((r) => (
+                        <SelectItem key={r.name} value={r.name}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
-            </div>
-            <label
-              htmlFor="mission-auto-approve"
-              className="flex items-start gap-2 text-sm sm:col-span-2"
-            >
-              <input
-                id="mission-auto-approve"
-                type="checkbox"
-                checked={autoApproveSafe}
-                onChange={(e) => setAutoApproveSafe(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                Auto-approve safe tool calls
-                <span className="block text-xs text-muted-foreground">
-                  Runs unattended without pausing for approval on routine commands. Destructive or
-                  unrecognized commands still always ask.
+              {mode === 'create' && !repeat && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-escalation-route">Escalation route</Label>
+                  {routes === null ? (
+                    <Input
+                      id="mission-escalation-route"
+                      value={escalationRoute}
+                      onChange={(e) => setEscalationRoute(e.target.value)}
+                      placeholder="Off, set to switch route after a failed or reworked turn"
+                    />
+                  ) : (
+                    <Select
+                      value={escalationRoute || ROUTE_DEFAULT}
+                      onValueChange={(v) => setEscalationRoute(v === ROUTE_DEFAULT ? '' : v)}
+                    >
+                      <SelectTrigger id="mission-escalation-route" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={ROUTE_DEFAULT}>Off</SelectItem>
+                        {enabledRoutes.map((r) => (
+                          <SelectItem key={r.name} value={r.name}>
+                            {r.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-budget">Budget</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="mission-budget"
+                    type="number"
+                    value={budget}
+                    onChange={(e) => setBudget(e.target.value)}
+                    placeholder="No limit"
+                    className="flex-1"
+                  />
+                  <Select value={budgetCurrency} onValueChange={setBudgetCurrency}>
+                    <SelectTrigger className="w-24" aria-label="Budget currency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CURRENCIES.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {repeat && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-max-iterations">Max iterations</Label>
+                  <Input
+                    id="mission-max-iterations"
+                    type="number"
+                    value={maxIterations}
+                    onChange={(e) => setMaxIterations(e.target.value)}
+                    placeholder="Default"
+                  />
+                </div>
+              )}
+              <label
+                htmlFor="mission-auto-approve"
+                className="flex items-start gap-2 text-sm sm:col-span-2"
+              >
+                <input
+                  id="mission-auto-approve"
+                  type="checkbox"
+                  checked={autoApproveSafe}
+                  onChange={(e) => setAutoApproveSafe(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  Auto-approve safe tool calls
+                  <span className="block text-xs text-muted-foreground">
+                    Runs unattended without pausing for approval on routine commands. Destructive
+                    or unrecognized commands still always ask.
+                  </span>
                 </span>
-              </span>
-            </label>
-          </div>
-        )}
+              </label>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </section>
 
-      <div className="fixed inset-x-0 bottom-0 border-t border-border bg-background/95 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl justify-end gap-2 px-4 py-3">
-          <Button variant="outline" disabled={busy} onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
-            {submitLabel}
-          </Button>
-        </div>
+      <div className="flex gap-2">
+        <Button variant="outline" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
+          {submitLabel}
+        </Button>
       </div>
     </div>
   )

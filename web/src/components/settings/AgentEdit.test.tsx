@@ -59,7 +59,13 @@ describe('AgentEdit', () => {
     // in useAgentForm, these stay blank/default forever.
     expect(await screen.findByDisplayValue(coder.description)).toBeTruthy()
     expect(screen.getByDisplayValue(coder.prompt_overlay)).toBeTruthy()
-    expect(screen.getByDisplayValue('coding-task')).toBeTruthy()
     expect(screen.getByRole('combobox', { name: 'agent route' })).toHaveTextContent('coding')
+  })
+
+  it('does not show a skills allowlist field', async () => {
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    expect(screen.queryByText('Skills allowlist')).not.toBeInTheDocument()
   })
 })

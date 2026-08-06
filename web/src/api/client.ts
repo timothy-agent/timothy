@@ -842,7 +842,7 @@ export async function patchSettingValues(changes: Record<string, string>): Promi
 
 export interface CreateMissionInput {
   goal: string
-  kind: 'coding' | 'research'
+  kind: 'coding' | 'general'
   agent_id?: string
   route?: string
   review_route?: string
@@ -872,6 +872,16 @@ export async function createMission(input: CreateMissionInput): Promise<{ id: st
   return request<{ id: string }>('/v1/missions', {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+// classifyMission previews the kind create() would infer for goal —
+// the same classifyKind logic the server falls back to when kind is
+// omitted, exposed standalone for the create form's live chip.
+export async function classifyMission(goal: string): Promise<{ kind: 'coding' | 'general' }> {
+  return request<{ kind: 'coding' | 'general' }>('/v1/missions/classify', {
+    method: 'POST',
+    body: JSON.stringify({ goal }),
   })
 }
 

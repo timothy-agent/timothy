@@ -34,7 +34,7 @@ function captureSubscribe() {
 const mission: Mission = {
   id: 'm1',
   goal: 'Fix the login bug',
-  kind: 'research',
+  kind: 'general',
   phase: 'execute',
   status: 'working',
   spec: { units: [] },

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { listAgents } from '../api/client'
-import type { AdminAgent } from '../api/types'
+import { listAgents, listRoutes } from '../api/client'
+import type { AdminAgent, AdminRoute } from '../api/types'
 
 // Sentinel value meaning "let the system pick" (D-034 follow-up) —
 // matches the backend's autoAgentName. Not a real agent row: the
@@ -24,4 +24,22 @@ export function useAgents(): AdminAgent[] {
     )
   }, [])
   return agents
+}
+
+// Module-level cache: the picker renders in every composer; the route
+// list changes rarely and a stale list self-heals on the next mount.
+let cachedRoutes: AdminRoute[] | null = null
+
+export function useRoutes(): AdminRoute[] | null {
+  const [routes, setRoutes] = useState<AdminRoute[] | null>(cachedRoutes)
+  useEffect(() => {
+    listRoutes().then(
+      (list) => {
+        cachedRoutes = list
+        setRoutes(cachedRoutes)
+      },
+      () => undefined, // admin proxy may be unreachable — picker hides itself
+    )
+  }, [])
+  return routes
 }

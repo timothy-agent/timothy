@@ -18,6 +18,7 @@ import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ProgressSection } from '../components/missions/ProgressSection'
+import { ExploreSection } from '../components/missions/ExploreSection'
 import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Button } from '../components/ui/button'
@@ -421,6 +422,13 @@ export function MissionDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {mission.explore_notes && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Explore</h2>
+          <ExploreSection notes={mission.explore_notes} />
+        </section>
+      )}
 
       <section>
         <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>

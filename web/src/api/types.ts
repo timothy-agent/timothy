@@ -500,14 +500,14 @@ export interface ProgressNote {
 }
 
 // Mission is one long-running, agent-driven unit of work
-// (internal/brain/missions): research -> plan -> execute -> review
+// (internal/brain/missions): explore -> plan -> execute -> review
 // under a state machine.
 export interface Mission {
   id: string
   goal: string
-  kind: 'coding' | 'research'
+  kind: 'coding' | 'general'
   agent_id?: string
-  phase: 'research' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
+  phase: 'explore' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
   pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | ''
   pause_message?: string
@@ -515,6 +515,11 @@ export interface Mission {
   worktree?: string
   branch?: string
   base_commit?: string
+  // explore_notes is set once, at the end of the explore phase
+  // (driver.go's runExplore) — absent/empty for a mission created
+  // before the explore phase existed, or one that hasn't reached it
+  // yet.
+  explore_notes?: string
   spec: { units: PlanUnit[] }
   progress: ProgressNote[]
   iteration: number
@@ -589,7 +594,7 @@ export interface AdminConnector {
 // shape as CreateMissionInput.
 export interface MissionTemplate {
   goal: string
-  kind: 'coding' | 'research'
+  kind: 'coding' | 'general'
   agent_id?: string
   route?: string
   review_route?: string

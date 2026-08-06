@@ -5,10 +5,7 @@ import {
   Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useState } from 'react'
-import { listRoutes } from '../api/client'
-import type { AdminRoute } from '../api/types'
-import { AUTO_AGENT, useAgents } from './AgentPicker'
+import { AUTO_AGENT, useAgents, useRoutes } from './AgentPicker'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,24 +14,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
-
-// Module-level cache: the picker renders in every composer; the route
-// list changes rarely and a stale list self-heals on the next mount.
-let cachedRoutes: AdminRoute[] | null = null
-
-function useRoutes(): AdminRoute[] | null {
-  const [routes, setRoutes] = useState<AdminRoute[] | null>(cachedRoutes)
-  useEffect(() => {
-    listRoutes().then(
-      (list) => {
-        cachedRoutes = list
-        setRoutes(cachedRoutes)
-      },
-      () => undefined, // admin proxy may be unreachable — picker hides itself
-    )
-  }, [])
-  return routes
-}
 
 // AgentRoutePicker combines who serves the next message with which
 // model chain serves it (D-034) into one control: the agent carries

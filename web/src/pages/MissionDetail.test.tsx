@@ -282,6 +282,29 @@ describe('MissionDetail', () => {
     expect(screen.queryByText(/Allow/)).toBeNull()
   })
 
+  it('omits the Explore section when explore_notes is absent', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('Explore')).toBeNull()
+  })
+
+  it('shows a collapsed Explore section above Plan when explore_notes is set', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      explore_notes: 'found **three** prior approaches',
+    })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
+    expect(headings.indexOf('Explore')).toBeGreaterThanOrEqual(0)
+    expect(headings.indexOf('Explore')).toBeLessThan(headings.indexOf('Plan'))
+    expect(screen.queryByText('three')).toBeNull()
+
+    fireEvent.click(screen.getByText('Show exploration'))
+    expect(screen.getByText('three').tagName).toBe('STRONG')
+  })
+
   it('shows the permission banner with tool detail when pending_permission is set', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
@@ -582,7 +605,7 @@ describe('MissionDetail', () => {
         id: 'sc1',
         name: 'daily-brief',
         cron: '0 7 * * *',
-        mission_template: { goal: 'brief', kind: 'research' },
+        mission_template: { goal: 'brief', kind: 'general' },
         enabled: true,
         next_run: '2026-01-02T07:00:00Z',
         created_at: '2026-01-01T00:00:00Z',
