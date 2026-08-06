@@ -85,12 +85,16 @@ type PermissionResolvedEvent struct {
 // the gateway API so callers attribute without a second lookup.
 // DurationMs is never set by the gateway (it has no notion of a brain-
 // level turn); brain's chat package stamps it on the relayed event
-// before forwarding downstream.
+// before forwarding downstream. Cost is nil when the price table has
+// no entry for this provider/model — unknown price is never guessed
+// (D-013); Currency is blank in that case too.
 type Meta struct {
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	LedgerID   string `json:"ledger_id,omitempty"`
-	DurationMs int64  `json:"duration_ms,omitempty"`
+	Provider   string   `json:"provider"`
+	Model      string   `json:"model"`
+	LedgerID   string   `json:"ledger_id,omitempty"`
+	DurationMs int64    `json:"duration_ms,omitempty"`
+	Cost       *float64 `json:"cost,omitempty"`
+	Currency   string   `json:"currency,omitempty"`
 }
 
 // ToolCallEvent identifies a tool call. Input carries the complete

@@ -20,6 +20,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
@@ -60,6 +61,13 @@ type API struct {
 	perms PermissionResolver
 	token string
 	log   *slog.Logger
+
+	// flags/rates drive display-currency conversion of chat cost (the
+	// terminal SSE meta event and the transcript replay) — same
+	// nil-able pattern as UsageDecorator: either being nil just turns
+	// conversion off, it never blocks or errors the read/stream.
+	flags *settings.Store
+	rates *fxrates.Store
 }
 
 // memoryRoutePatterns is the EXHAUSTIVE list of memoryd routes brain
@@ -80,8 +88,8 @@ var memoryRoutePatterns = []string{
 // proxy to the gateway's internal control plane, conns the local
 // connector control plane (nil leaves any of them unmounted).
 // whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, toolset Toolset, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, token string, log *slog.Logger) {
-	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log}
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, toolset Toolset, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, token string, log *slog.Logger) {
+	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
 			srv.Handle(pattern, a.auth(memories))
@@ -296,6 +304,11 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []session.TranscriptItem{}
 	}
+	for i := range items {
+		if converted, target, asOf, ok := a.convertedCost(r.Context(), items[i].Cost, items[i].Currency); ok {
+			items[i].ConvertedCost, items[i].ConvertedCurrency, items[i].RateAsOf = &converted, target, asOf
+		}
+	}
 	// turn_active is read straight off chat.Service's own broadcaster
 	// registry (TurnActive) — the single source of truth for "is a turn
 	// running right now", not a separate flag that could drift from it.
@@ -449,8 +462,10 @@ func (a *API) handleStop(w http.ResponseWriter, r *http.Request) {
 // contract): brain's chat SSE stream ALWAYS ends with exactly one
 // meta event, emitted after the relayed gateway terminal (done or
 // error). Clients must read until meta, not stop at done. Provider,
-// model, usage, and ledger_id are best-effort — absent when no
-// provider attempt succeeded.
+// model, usage, ledger_id, cost, and currency are best-effort — absent
+// when no provider attempt succeeded. Cost is nil when the gateway had
+// no price for the serving model — unknown price is never guessed
+// (D-013); Currency is blank in that case too.
 type meta struct {
 	Type       string        `json:"type"` // always "meta"
 	SessionID  string        `json:"session_id"`
@@ -459,6 +474,55 @@ type meta struct {
 	Usage      *stream.Usage `json:"usage,omitempty"`
 	LedgerID   string        `json:"ledger_id,omitempty"`
 	DurationMs int64         `json:"duration_ms,omitempty"`
+	Cost       *float64      `json:"cost,omitempty"`
+	Currency   string        `json:"currency,omitempty"`
+	// ConvertedCost/ConvertedCurrency/RateAsOf are additive display
+	// fields: Cost/Currency always stay exactly what the gateway
+	// billed (D-013). Computed at emit time from the user's
+	// default_currency setting and the latest stored fx rate — never
+	// persisted, since rates drift and session_events must keep only
+	// billed truth. Present only when the target differs from the
+	// billed currency and a usable rate exists; absent otherwise (the
+	// pill then just falls back to the billed amount).
+	ConvertedCost     *float64 `json:"converted_cost,omitempty"`
+	ConvertedCurrency string   `json:"converted_currency,omitempty"`
+	RateAsOf          string   `json:"rate_as_of,omitempty"`
+}
+
+// convertedCost resolves a.flags' default_currency and a.rates' latest
+// USD-base table, then delegates to convertCost — nil flags/rates
+// degrade to "nothing converts" (ok=false), same contract as
+// UsageDecorator: a read must never fail or block on this.
+func (a *API) convertedCost(ctx context.Context, cost *float64, billed string) (converted float64, target, asOf string, ok bool) {
+	if a.flags == nil || a.rates == nil {
+		return 0, "", "", false
+	}
+	target = a.flags.DefaultCurrency(ctx)
+	rates, err := a.rates.LatestUSDRates(ctx)
+	if err != nil {
+		rates = nil // degrade to "nothing converts," never guess
+	}
+	return convertCost(cost, billed, target, rates)
+}
+
+// convertCost is the pure core of convertedCost, split out so it's
+// table-testable without a live settings/fxrates Store (mirrors
+// DecorateUsageResponse's split from UsageDecorator.Decorate in
+// usage.go). ok is false — never an error — whenever cost is nil,
+// billed is blank, target already equals billed, or no usable rate
+// covers the pair.
+func convertCost(cost *float64, billed, target string, rates map[string]fxrates.Rate) (converted float64, gotTarget, asOf string, ok bool) {
+	if cost == nil || billed == "" || target == "" || target == billed {
+		return 0, "", "", false
+	}
+	c, rate, convertOK := fxrates.Convert(*cost, billed, target, rates)
+	if !convertOK {
+		return 0, "", "", false
+	}
+	if !rate.AsOf.IsZero() {
+		asOf = rate.AsOf.Format("2006-01-02")
+	}
+	return c, target, asOf, true
 }
 
 // streamHeartbeat keeps a chat SSE connection alive through proxies
@@ -524,6 +588,9 @@ func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, run func(contex
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				if converted, target, asOf, convOK := a.convertedCost(r.Context(), m.Cost, m.Currency); convOK {
+					m.ConvertedCost, m.ConvertedCurrency, m.RateAsOf = &converted, target, asOf
+				}
 				send(m)
 				return
 			}
@@ -533,6 +600,7 @@ func (a *API) streamTurn(w http.ResponseWriter, r *http.Request, run func(contex
 			if ev.Meta != nil {
 				m.Provider, m.Model, m.LedgerID = ev.Meta.Provider, ev.Meta.Model, ev.Meta.LedgerID
 				m.DurationMs = ev.Meta.DurationMs
+				m.Cost, m.Currency = ev.Meta.Cost, ev.Meta.Currency
 			}
 			send(ev)
 		case <-ticker.C:

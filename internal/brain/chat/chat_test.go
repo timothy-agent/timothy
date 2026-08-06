@@ -233,6 +233,66 @@ func TestChatPersistsTurnAsEvents(t *testing.T) {
 	}
 }
 
+// TestChatPersistsTurnCost confirms the persisted assistant_turn
+// carries the gateway's cost attribution (D-013: cost is priced or
+// absent, never guessed) exactly as the done-frame meta reported it.
+func TestChatPersistsTurnCost(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	cost := 0.0042
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: "the answer"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led", Cost: &cost, Currency: "USD"}},
+	}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	events, _ := log.Events(t.Context(), "s1")
+	var turn session.AssistantTurn
+	if err := json.Unmarshal(events[2].Payload, &turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if turn.Cost == nil || *turn.Cost != cost || turn.Currency != "USD" {
+		t.Fatalf("turn cost/currency = %v/%q, want %v/USD", turn.Cost, turn.Currency, cost)
+	}
+}
+
+// TestChatPersistsTurnCostAbsentWhenUnpriced confirms an unpriced
+// model's turn persists with no cost field at all (omitempty), never a
+// guessed 0 — the replay must be able to distinguish "unpriced" from
+// "free".
+func TestChatPersistsTurnCostAbsentWhenUnpriced(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("the answer")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	events, _ := log.Events(t.Context(), "s1")
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(events[2].Payload, &raw); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if _, ok := raw["cost"]; ok {
+		t.Fatalf("payload has cost key, want omitted: %s", raw["cost"])
+	}
+	if _, ok := raw["currency"]; ok {
+		t.Fatalf("payload has currency key, want omitted: %s", raw["currency"])
+	}
+}
+
 // TestChatPersistsTurnDuration confirms the persisted assistant_turn
 // carries a wall-clock DurationMs covering the turn — a stand-in
 // upstream delay proves it's measuring real elapsed time, not just

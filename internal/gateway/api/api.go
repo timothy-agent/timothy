@@ -200,12 +200,13 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		// Last chain entry gets the full in-provider retry budget;
 		// earlier entries fail fast so the chain can advance.
 		completion.FinalAttempt = i == len(attempts)-1
+		prices := snap.Prices(att.ProviderName, att.Model)
 		res := streamAttempt(r.Context(), att, completion, ledger.Entry{
 			ID:       ledger.NewID(),
 			Provider: att.ProviderName, Model: att.Model,
 			Route: req.Route, Agent: req.Agent, Purpose: req.Purpose,
 			SessionID: req.SessionID, MissionID: req.MissionID,
-		}, send)
+		}, prices, send)
 
 		if res.failedOver() {
 			codes = append(codes, res.entry.ErrorCode)
@@ -220,11 +221,6 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		prices := snap.Prices(att.ProviderName, att.Model)
-		res.entry.Cost = ledger.Cost(prices, res.entry.Usage)
-		if prices != nil {
-			res.entry.Currency = prices.Currency
-		}
 		a.recordAttempt(r.Context(), res.entry)
 		return
 	}
@@ -279,9 +275,13 @@ func (r attemptResult) failedOver() bool {
 // (nothing emitted to the client); once content has been sent, the
 // stream is never restarted on another provider — errors after content
 // are relayed honestly instead.
+// prices prices this attempt's usage the moment it's known (the
+// EventUsage case, always seen before EventDone in the same channel) so
+// cost can ride the terminal event's Meta — the ledger write happens
+// later, in the caller, but the client never blocks on it.
 // The named return is load-bearing: the deferred latency stamp must
 // mutate the value the caller receives, not a dead local copy.
-func streamAttempt(ctx context.Context, att router.Attempt, completion provider.CompletionRequest, entry ledger.Entry, send func(stream.StreamEvent)) (res attemptResult) {
+func streamAttempt(ctx context.Context, att router.Attempt, completion provider.CompletionRequest, entry ledger.Entry, prices *router.ModelPrices, send func(stream.StreamEvent)) (res attemptResult) {
 	res = attemptResult{entry: entry}
 	start := time.Now()
 	defer func() { res.entry.LatencyMS = time.Since(start).Milliseconds() }()
@@ -306,6 +306,10 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			send(ev)
 		case stream.EventUsage:
 			res.entry.Usage = ev.Usage
+			res.entry.Cost = ledger.Cost(prices, res.entry.Usage)
+			if prices != nil {
+				res.entry.Currency = prices.Currency
+			}
 			send(ev)
 		case stream.EventIncomplete:
 			sawTerminal = true
@@ -326,11 +330,23 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 				send(stream.StreamEvent{Type: stream.EventIncomplete, Text: "provider produced no output"})
 			}
 			// Attribute the serving provider on the terminal event so
-			// callers need no second lookup.
+			// callers need no second lookup. Cost/Currency ride along when
+			// usage was known in time (D-013: unknown price/usage stays
+			// nil, never guessed) — the ledger row itself is written by
+			// the caller after this function returns. Currency defaults
+			// to USD here the same way ledger.Record defaults it at
+			// insert time (router.ModelPrices: "blank means USD") — the
+			// client has no equivalent insert-time default to fall back on.
+			currency := res.entry.Currency
+			if currency == "" && res.entry.Cost != nil {
+				currency = "USD"
+			}
 			ev.Meta = &stream.Meta{
 				Provider: att.ProviderName,
 				Model:    att.Model,
 				LedgerID: entry.ID,
+				Cost:     res.entry.Cost,
+				Currency: currency,
 			}
 			send(ev)
 		default:

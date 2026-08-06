@@ -386,7 +386,7 @@ func main() {
 
 	usageDecorator := api.NewUsageDecorator(flags, fxStore)
 	api.Register(app.Server, svc, store, broker,
-		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags,
+		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
 

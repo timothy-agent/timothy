@@ -133,6 +133,12 @@ type AssistantTurn struct {
 	// persistence), not the sum of tool durations — set by chat.go so
 	// live and replayed stats agree.
 	DurationMs int64 `json:"duration_ms,omitempty"`
+	// Cost and Currency mirror the gateway meta's cost attribution at
+	// write time (D-013: unknown price is never guessed) — Cost is nil
+	// and Currency blank when the serving model had no price, and both
+	// stay absent through omitempty rather than persisting a 0.
+	Cost     *float64 `json:"cost,omitempty"`
+	Currency string   `json:"currency,omitempty"`
 }
 
 // ToolExecution stores a digest only; full results are transient.

@@ -210,9 +210,19 @@ type TranscriptItem struct {
 	Model      string             `json:"model,omitempty"`
 	Usage      *stream.Usage      `json:"usage,omitempty"`
 	DurationMs int64              `json:"duration_ms,omitempty"`
-	Tool       *ToolExecution     `json:"tool,omitempty"`
-	Permission *PermissionRequest `json:"permission,omitempty"`
-	CreatedAt  time.Time          `json:"created_at"`
+	Cost       *float64           `json:"cost,omitempty"`
+	Currency   string             `json:"currency,omitempty"`
+	// ConvertedCost/ConvertedCurrency/RateAsOf are additive display
+	// fields the api package fills in at serve time (never persisted —
+	// rates drift, session_events keeps only billed truth): the same
+	// cost converted into the user's default_currency setting, present
+	// only when it differs from Currency and a usable fx rate exists.
+	ConvertedCost     *float64           `json:"converted_cost,omitempty"`
+	ConvertedCurrency string             `json:"converted_currency,omitempty"`
+	RateAsOf          string             `json:"rate_as_of,omitempty"`
+	Tool              *ToolExecution     `json:"tool,omitempty"`
+	Permission        *PermissionRequest `json:"permission,omitempty"`
+	CreatedAt         time.Time          `json:"created_at"`
 }
 
 // UITranscript projects the log into the full rich replay. Unlike the
@@ -248,6 +258,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			item.Provider, item.Model = t.Provider, t.Model
 			item.Usage = t.Usage
 			item.DurationMs = t.DurationMs
+			item.Cost, item.Currency = t.Cost, t.Currency
 		case KindToolExecution:
 			var te ToolExecution
 			if err := decode(ev, &te); err != nil {

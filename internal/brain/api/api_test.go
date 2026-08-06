@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -444,11 +445,14 @@ func doMux(a *API, method, path, body string) *httptest.ResponseRecorder {
 }
 
 func okEvents() []stream.StreamEvent {
+	cost := 0.0012
 	return []stream.StreamEvent{
 		{Type: stream.EventChunk, Text: "hi "},
 		{Type: stream.EventChunk, Text: "there"},
 		{Type: stream.EventUsage, Usage: &stream.Usage{InputTokens: 5, OutputTokens: 2}},
-		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led-1"}},
+		{Type: stream.EventDone, Meta: &stream.Meta{
+			Provider: "prov", Model: "mod", LedgerID: "led-1", Cost: &cost, Currency: "USD",
+		}},
 	}
 }
 
@@ -588,6 +592,43 @@ func TestTranscriptEndpoint(t *testing.T) {
 	}
 }
 
+// TestTranscriptEndpointCostConversion covers the api.API-side
+// decoration of cost, not fxrates/settings themselves: with no
+// flags/rates Store wired (testAPI never has a live DB), conversion
+// degrades and the billed cost/currency ride through untouched, same
+// contract as UsageDecorator.
+func TestTranscriptEndpointCostConversion(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "t")
+	cost := 0.05
+	var turn session.AssistantTurn
+	turn.Provider, turn.Model = "prov", "mod"
+	turn.Cost, turn.Currency = &cost, "USD"
+	_, _ = dir.Append(t.Context(), id, session.KindAssistantTurn, turn)
+
+	w := doMux(a, http.MethodGet, "/v1/sessions/"+id, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("transcript: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Items []session.TranscriptItem `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("items = %+v, want 1", resp.Items)
+	}
+	item := resp.Items[0]
+	if item.Cost == nil || *item.Cost != cost || item.Currency != "USD" {
+		t.Fatalf("billed cost/currency = %+v/%q, want %v/USD", item.Cost, item.Currency, cost)
+	}
+	if item.ConvertedCost != nil || item.ConvertedCurrency != "" || item.RateAsOf != "" {
+		t.Fatalf("converted fields = %+v, want absent with no flags/rates wired", item)
+	}
+}
+
 // --- chat ---
 
 func TestMessagesEndpointStreamsAndPersists(t *testing.T) {
@@ -614,6 +655,15 @@ func TestMessagesEndpointStreamsAndPersists(t *testing.T) {
 	}
 	if m.Type != "meta" || m.SessionID != id || m.Provider != "prov" || m.Usage == nil {
 		t.Fatalf("meta = %+v", m)
+	}
+	if m.Cost == nil || *m.Cost != 0.0012 || m.Currency != "USD" {
+		t.Fatalf("meta cost/currency = %+v/%q, want 0.0012/USD", m.Cost, m.Currency)
+	}
+	// No flags/rates wired on the test API (no live settings/fxrates
+	// Store) — conversion degrades to absent fields, billed cost/currency
+	// left exactly as the gateway reported them.
+	if m.ConvertedCost != nil || m.ConvertedCurrency != "" || m.RateAsOf != "" {
+		t.Fatalf("meta converted fields = %+v, want absent with no flags/rates wired", m)
 	}
 
 	if w = doMux(a, http.MethodPost, "/v1/sessions/missing/messages", `{"message":"x"}`); w.Code != http.StatusNotFound {
@@ -779,5 +829,77 @@ func TestListCursorPaging(t *testing.T) {
 	}
 	if w := doMux(a, http.MethodGet, "/v1/sessions?before=2026-07-10T12:00:00Z", ""); w.Code != http.StatusBadRequest {
 		t.Fatalf("before alone: code = %d, want 400", w.Code)
+	}
+}
+
+// --- cost currency conversion ---
+
+// TestConvertCost is the pure-function core of convertedCost (mirrors
+// DecorateUsageResponse's split from UsageDecorator.Decorate): the
+// display-only converted_cost/converted_currency/rate_as_of trio,
+// never touching the billed cost/currency it's computed alongside.
+func TestConvertCost(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	rates := map[string]fxrates.Rate{"EUR": {Value: 0.86, AsOf: asOf}}
+	cost := 100.0
+
+	tests := []struct {
+		name   string
+		cost   *float64
+		billed string
+		target string
+		rates  map[string]fxrates.Rate
+		wantOK bool
+	}{
+		{
+			name: "converts when a usable rate exists", cost: &cost,
+			billed: "USD", target: "EUR", rates: rates, wantOK: true,
+		},
+		{
+			name: "nil cost never converts", cost: nil,
+			billed: "USD", target: "EUR", rates: rates, wantOK: false,
+		},
+		{
+			name: "target equal to billed does not convert", cost: &cost,
+			billed: "USD", target: "USD", rates: rates, wantOK: false,
+		},
+		{
+			name: "missing rate leaves it unconverted", cost: &cost,
+			billed: "GBP", target: "EUR", rates: rates, wantOK: false,
+		},
+		{
+			name: "nil rate table never converts", cost: &cost,
+			billed: "USD", target: "EUR", rates: nil, wantOK: false,
+		},
+		{
+			name: "blank billed currency never converts", cost: &cost,
+			billed: "", target: "EUR", rates: rates, wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			converted, target, rateAsOf, ok := convertCost(tt.cost, tt.billed, tt.target, tt.rates)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !tt.wantOK {
+				if converted != 0 || target != "" || rateAsOf != "" {
+					t.Fatalf("degraded result = (%v, %q, %q), want all zero", converted, target, rateAsOf)
+				}
+				return
+			}
+			if target != tt.target {
+				t.Fatalf("target = %q, want %q", target, tt.target)
+			}
+			if converted < 85 || converted > 87 {
+				t.Fatalf("converted = %v, want ~86", converted)
+			}
+			if rateAsOf != "2026-07-20" {
+				t.Fatalf("rateAsOf = %q, want 2026-07-20", rateAsOf)
+			}
+		})
 	}
 }

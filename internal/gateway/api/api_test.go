@@ -216,8 +216,18 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	if text != "hello" {
 		t.Fatalf("chunks = %q, events %+v", text, events)
 	}
-	if events[len(events)-1].Type != stream.EventDone {
-		t.Fatalf("last event = %v", events[len(events)-1].Type)
+	done := events[len(events)-1]
+	if done.Type != stream.EventDone {
+		t.Fatalf("last event = %v", done.Type)
+	}
+	// Cost must ride the terminal event's Meta, not just the ledger row
+	// written after streamAttempt returns: the client has no other way
+	// to see the price of a turn it just watched happen.
+	if done.Meta == nil || done.Meta.Cost == nil || *done.Meta.Cost != 10.0/1e6+2*5.0/1e6 {
+		t.Fatalf("done.Meta.Cost = %+v, want the priced cost", done.Meta)
+	}
+	if done.Meta.Currency != "USD" {
+		t.Fatalf("done.Meta.Currency = %q, want USD", done.Meta.Currency)
 	}
 
 	entries := rec.all()
@@ -400,7 +410,7 @@ func TestStreamAttemptSilentCloseIsAFailure(t *testing.T) {
 	t.Parallel()
 	att := router.Attempt{Provider: silentCutProvider{name: "one"}, ProviderName: "one", Model: "m1"}
 	var sent []stream.StreamEvent
-	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{}, func(ev stream.StreamEvent) {
+	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{}, nil, func(ev stream.StreamEvent) {
 		sent = append(sent, ev)
 	})
 
@@ -431,7 +441,7 @@ func TestStreamAttemptMidStreamCutSendsErrorEvent(t *testing.T) {
 	t.Parallel()
 	att := router.Attempt{Provider: midStreamCutProvider{name: "one"}, ProviderName: "one", Model: "m1"}
 	var sent []stream.StreamEvent
-	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{}, func(ev stream.StreamEvent) {
+	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{}, nil, func(ev stream.StreamEvent) {
 		sent = append(sent, ev)
 	})
 

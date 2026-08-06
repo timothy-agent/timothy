@@ -442,6 +442,47 @@ func TestUITranscriptExposesDuration(t *testing.T) {
 	}
 }
 
+// TestUITranscriptExposesCost confirms UITranscript carries an
+// assistant_turn's Cost/Currency through to the replay item — a
+// reloaded session must show the same cost pill the live SSE meta
+// event carried.
+func TestUITranscriptExposesCost(t *testing.T) {
+	t.Parallel()
+	var a AssistantTurn
+	a.LLM.Message = "hi"
+	a.UI.Blocks = []UIBlock{{Type: "text", Text: "hi"}}
+	cost := 0.0042
+	a.Cost, a.Currency = &cost, "USD"
+	events := []Event{ev(t, 1, KindAssistantTurn, a)}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 1 || items[0].Cost == nil || *items[0].Cost != cost || items[0].Currency != "USD" {
+		t.Fatalf("items = %+v, want cost %v currency USD", items, cost)
+	}
+}
+
+// TestUITranscriptOmitsCostWhenAbsent confirms a turn persisted before
+// cost tracking (or for an unpriced model) replays with Cost nil and
+// Currency blank — never a guessed value (D-013).
+func TestUITranscriptOmitsCostWhenAbsent(t *testing.T) {
+	t.Parallel()
+	var a AssistantTurn
+	a.LLM.Message = "hi"
+	a.UI.Blocks = []UIBlock{{Type: "text", Text: "hi"}}
+	events := []Event{ev(t, 1, KindAssistantTurn, a)}
+
+	items, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	if len(items) != 1 || items[0].Cost != nil || items[0].Currency != "" {
+		t.Fatalf("items = %+v, want cost absent", items)
+	}
+}
+
 // TestLLMContextPrefixStability pins the D-018 contract: growing a log
 // without a compaction never rewrites earlier projected messages.
 // Pending checkpoints are deliberately absent from the generator: an

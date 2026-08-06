@@ -1158,6 +1158,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	if meta != nil {
 		turn.Provider, turn.Model, turn.LedgerID = meta.Provider, meta.Model, meta.LedgerID
 		turn.DurationMs = meta.DurationMs
+		turn.Cost, turn.Currency = meta.Cost, meta.Currency
 	}
 	turn.Usage = usage
 
