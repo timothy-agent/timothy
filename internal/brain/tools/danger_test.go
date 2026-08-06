@@ -112,3 +112,32 @@ func TestClassifyCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestIsOpaqueRationale locks in the distinction D-050's sandbox
+// relaxation depends on: an opaque-form verdict must be recognizable
+// apart from an explicit dangerRules verdict, since only the former
+// may downgrade inside a sandbox-confined session.
+func TestIsOpaqueRationale(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{name: "interpreter -c is opaque", command: "python3 -c 'print(1)'", want: true},
+		{name: "command substitution is opaque", command: "echo `rm -rf x`", want: true},
+		{name: "eval is opaque", command: "eval \"do something\"", want: true},
+		{name: "rm is explicit destructive, not opaque", command: "rm -rf build/", want: false},
+		{name: "git push is explicit destructive, not opaque", command: "git push origin main", want: false},
+		{name: "safe command has no rationale at all", command: "ls -la", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, matched := ClassifyCommand(tc.command)
+			if got := IsOpaqueRationale(matched); got != tc.want {
+				t.Fatalf("IsOpaqueRationale(%v) = %v, want %v", matched, got, tc.want)
+			}
+		})
+	}
+}

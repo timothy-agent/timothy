@@ -194,6 +194,24 @@ func TestResolveShortCircuits(t *testing.T) {
 			t.Fatalf("rationale %q does not name the rule", res.Rationale)
 		}
 	})
+
+	// D-050: without a registered sandbox (chat sessions never register
+	// one — nil db here means sandboxFor always returns "") an opaque
+	// command still forces the ask exactly as before. Chat's behavior
+	// must not change.
+	t.Run("opaque command with no sandbox still asks (chat unchanged)", func(t *testing.T) {
+		t.Parallel()
+		res, err := p.Resolve(ctx, "s1", "shell", json.RawMessage(`{"command":"python3 -c 'print(1)'"}`))
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if res.Decision != DecisionAsk || res.Danger != DangerDestructive {
+			t.Fatalf("res = %+v, want ask+destructive", res)
+		}
+		if !strings.Contains(res.Rationale, "opaque command") {
+			t.Fatalf("rationale %q does not name the opaque rule", res.Rationale)
+		}
+	})
 }
 
 // TestSandboxAllowsGating covers the pieces of the sandbox downgrade

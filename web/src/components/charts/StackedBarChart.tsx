@@ -31,18 +31,23 @@ export function StackedBarChart({
 
   const W = 640
   const H = height
-  const padL = 52
   const padR = 8
   const padT = 8
   const padB = 24
-  const plotW = W - padL - padR
-  const plotH = H - padT - padB
 
   const visibleGroups = groups.filter((g) => !hidden.has(g))
   const totals = rows.map((r) => visibleGroups.reduce((s, g) => s + (Number(r[g]) || 0), 0))
   const maxV = niceMax(Math.max(...totals, 0.0001) * 1.15)
 
   const ticks = 4
+  // Left padding sized to the longest tick label ("BDT 123.73" is
+  // wider than the old fixed 52px allowed), so currency-prefixed axis
+  // labels never clip out of the frame. ~6.3px per char at 10.5px font.
+  const tickLabels = Array.from({ length: ticks + 1 }, (_, t) => valueLabel((maxV / ticks) * t))
+  const maxLabelChars = Math.max(...tickLabels.map((l) => l.length))
+  const padL = Math.min(96, Math.max(52, 12 + Math.ceil(maxLabelChars * 6.3)))
+  const plotW = W - padL - padR
+  const plotH = H - padT - padB
   const slot = rows.length > 0 ? plotW / rows.length : plotW
   const barW = Math.min(24, slot * 0.5)
   const gap = 2

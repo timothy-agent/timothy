@@ -10,16 +10,16 @@ import (
 func TestBudgetSetValidation(t *testing.T) {
 	t.Parallel()
 	s := &BudgetStore{}
-	neg := -5.0
-	zero := 0.0
+	neg := &BudgetLimit{Amount: -5.0, Currency: "USD"}
+	zero := &BudgetLimit{Amount: 0.0, Currency: "USD"}
 
 	if err := s.Set(t.Context(), "week", nil); err == nil || !strings.Contains(err.Error(), "unknown budget scope") {
 		t.Fatalf("unknown scope: err = %v", err)
 	}
-	if err := s.Set(t.Context(), "day", &neg); err == nil || !strings.Contains(err.Error(), "must be positive") {
+	if err := s.Set(t.Context(), "day", neg); err == nil || !strings.Contains(err.Error(), "must be positive") {
 		t.Fatalf("negative limit: err = %v", err)
 	}
-	if err := s.Set(t.Context(), "month", &zero); err == nil || !strings.Contains(err.Error(), "must be positive") {
+	if err := s.Set(t.Context(), "month", zero); err == nil || !strings.Contains(err.Error(), "must be positive") {
 		t.Fatalf("zero limit: err = %v", err)
 	}
 }

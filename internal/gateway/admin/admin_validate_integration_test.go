@@ -138,12 +138,12 @@ func TestConnectionProbePricesACostedModel(t *testing.T) {
 	const want = (2*1.0 + 1*2.0) / 1_000_000.0
 	db, _ := pool.Get()
 	var got float64
-	if err := db.QueryRow(ctx, `SELECT cost_usd FROM cost_ledger
+	if err := db.QueryRow(ctx, `SELECT cost FROM cost_ledger
 		WHERE provider = $1 ORDER BY ts DESC LIMIT 1`, name).Scan(&got); err != nil {
 		t.Fatalf("ledger row: %v", err)
 	}
 	if got != want {
-		t.Fatalf("cost_usd = %v, want %v", got, want)
+		t.Fatalf("cost = %v, want %v", got, want)
 	}
 }
 

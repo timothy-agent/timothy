@@ -33,7 +33,10 @@ type Entry struct {
 	LatencyMS int64
 	Status    string // ok | error | incomplete
 	ErrorCode string
-	CostUSD   *float64
+	Cost      *float64
+	// Currency is the provider's billing currency for Cost. Blank
+	// defaults to USD at write time (all current providers bill USD).
+	Currency string
 }
 
 // Recorder is what the API layer depends on; tests supply an in-memory
@@ -68,14 +71,18 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	if e.Usage != nil {
 		in, out, cr, cw = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens
 	}
+	currency := e.Currency
+	if currency == "" {
+		currency = "USD"
+	}
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
 		(id, provider, model, route, agent, purpose, session_id, mission_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-		 latency_ms, status, error_code, cost_usd)
+		 latency_ms, status, error_code, cost, currency)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
-		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, NULLIF($15, ''), $16)`,
+		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17)`,
 		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
-		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.CostUSD)
+		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
 	}
@@ -119,8 +126,9 @@ func NewID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// Cost computes USD for usage under a price table. nil prices or nil
-// usage mean unknown → nil, never guessed (D-013).
+// Cost computes spend for usage under a price table, in the price
+// table's billing currency. nil prices or nil usage mean unknown →
+// nil, never guessed (D-013).
 func Cost(prices *router.ModelPrices, u *stream.Usage) *float64 {
 	if prices == nil || u == nil {
 		return nil

@@ -195,8 +195,8 @@ describe('spend budgets', () => {
   it('fetches budget status from the usage surface', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
     const status = {
-      day: { limit_usd: 1, spend_usd: 1.5, over: true },
-      month: { limit_usd: null, spend_usd: 8, over: false },
+      day: { currency: 'USD', limit: { amount: 1, currency: 'USD' }, spend: 1.5, over: true },
+      month: { currency: 'USD', limit: null, spend: 8, over: false },
     }
     const fetchMock = vi
       .fn()
@@ -214,12 +214,15 @@ describe('spend budgets', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await patchBudget({ day: 5, month: null })
+    await patchBudget({ day: { amount: 5, currency: 'USD' }, month: null })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/v1/admin/usage/budget')
     expect(init.method).toBe('PATCH')
-    expect(JSON.parse(init.body as string)).toEqual({ day: 5, month: null })
+    expect(JSON.parse(init.body as string)).toEqual({
+      day: { amount: 5, currency: 'USD' },
+      month: null,
+    })
   })
 })
 

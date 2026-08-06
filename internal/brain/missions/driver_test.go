@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 )
 
 // fakeStore is an in-memory driverStore for scripting Driver scenarios
@@ -23,10 +25,26 @@ type fakeStore struct {
 	missions map[string]Mission
 	events   map[string][]Event
 	seq      map[string]int64
+	// spend scripts Spend's return per mission id — nil/absent means
+	// zero spend in every currency, matching a mission with no ledger
+	// rows yet.
+	spend map[string]MissionSpend
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{missions: map[string]Mission{}, events: map[string][]Event{}, seq: map[string]int64{}}
+	return &fakeStore{missions: map[string]Mission{}, events: map[string][]Event{}, seq: map[string]int64{}, spend: map[string]MissionSpend{}}
+}
+
+// Spend returns the scripted MissionSpend for id, or a zero-value
+// (empty ByCurrency) if the test never set one — mirrors a real
+// mission with no cost_ledger rows.
+func (f *fakeStore) Spend(ctx context.Context, missionID string) (MissionSpend, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.spend[missionID]; ok {
+		return s, nil
+	}
+	return MissionSpend{ByCurrency: map[string]float64{}}, nil
 }
 
 func (f *fakeStore) put(id string, m Mission) {
@@ -197,6 +215,19 @@ func testDriver(store driverStore, runner Runner) *Driver {
 	return NewDriver(store, runner, nil, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
 }
 
+// fakeFXRates scripts LatestUSDRates for the budget-brake conversion
+// tests without a real Postgres-backed fxrates.Store. nil rates (the
+// zero value) models an empty table — every currency comes back
+// unconvertible, same as a genuinely absent rate.
+type fakeFXRates struct {
+	rates map[string]fxrates.Rate
+	err   error
+}
+
+func (f *fakeFXRates) LatestUSDRates(ctx context.Context) (map[string]fxrates.Rate, error) {
+	return f.rates, f.err
+}
+
 // driveN calls Advance up to n times, stopping early if it returns
 // false (mission parked/terminal).
 func driveN(t *testing.T, d *Driver, id string, n int) {
@@ -303,24 +334,117 @@ func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
 	}
 }
 
+// TestDriverBudgetPause confirms same-currency ledger spend actually
+// reaches the budget brake through toStepState/driverStore.Spend — the
+// bug this feature fixes: toStepState used to hardcode spend at 0, so
+// PauseBudget could never fire regardless of real spend.
 func TestDriverBudgetPause(t *testing.T) {
 	store := newFakeStore()
 	budget := 1.0
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetUSD: &budget})
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "USD"})
+	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 1.5}}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 	d := testDriver(store, runner)
 
-	// toStepState currently reports SpentUSD=0 (ledger integration is
-	// M3/M4), so budget pausing isn't reachable via Advance yet in
-	// Phase 1 — this test documents that boundary explicitly rather
-	// than asserting a pause that can't happen until spend tracking
-	// lands. Confirm the mission instead completes normally.
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Status == StatusPaused && m.PauseReason == PauseBudget {
-		t.Fatal("budget pause fired despite SpentUSD always being 0 in Phase 1 — toStepState must have started reporting real spend; update this test")
+	if m.Status != StatusPaused || m.PauseReason != PauseBudget {
+		t.Fatalf("mission after same-currency spend >= budget = %+v, want paused/budget", m)
+	}
+}
+
+// TestDriverBudgetPauseMixedCurrency confirms spend recorded in a
+// currency OTHER than the mission's budget currency pauses the mission
+// too, even when same-currency spend is zero — comparing across
+// currencies would need a guessed FX rate, which this codebase never
+// does, so the safe move is to pause and let a human sort it out.
+func TestDriverBudgetPauseMixedCurrency(t *testing.T) {
+	store := newFakeStore()
+	budget := 100.0
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "USD"})
+	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"EUR": 0.01}}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseMixedCurrency {
+		t.Fatalf("mission after mixed-currency spend = %+v, want paused/mixed_currency", m)
+	}
+}
+
+// TestDriverBudgetConvertsOtherCurrencySpendWhenRateAvailable confirms
+// a mission with a EUR budget and USD spend converts that spend
+// through a wired fx rate table instead of pausing as mixed-currency —
+// the fix this feature adds. Spend converts to just under the limit,
+// so the mission must NOT pause yet.
+func TestDriverBudgetConvertsOtherCurrencySpendWhenRateAvailable(t *testing.T) {
+	store := newFakeStore()
+	budget := 10.0
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
+	// 8 USD spend; 1 USD = 0.86 EUR -> 6.88 EUR, under the 10 EUR budget.
+	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 8}}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+	d := testDriver(store, runner)
+	asOf := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	d.SetFXRates(&fakeFXRates{rates: map[string]fxrates.Rate{"EUR": {Value: 0.86, AsOf: asOf}}})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status == StatusPaused {
+		t.Fatalf("mission after convertible under-budget spend = %+v, want NOT paused", m)
+	}
+}
+
+// TestDriverBudgetPausesWhenConvertedSpendReachesLimit confirms the
+// converted total, not just same-currency spend, is what the brake
+// compares against the budget.
+func TestDriverBudgetPausesWhenConvertedSpendReachesLimit(t *testing.T) {
+	store := newFakeStore()
+	budget := 5.0
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
+	// 8 USD spend; 1 USD = 0.86 EUR -> 6.88 EUR, over the 5 EUR budget.
+	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 8}}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+	d := testDriver(store, runner)
+	asOf := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	d.SetFXRates(&fakeFXRates{rates: map[string]fxrates.Rate{"EUR": {Value: 0.86, AsOf: asOf}}})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseBudget {
+		t.Fatalf("mission after converted spend over budget = %+v, want paused/budget", m)
+	}
+}
+
+// TestDriverBudgetPauseMixedCurrencyWhenRateMissing confirms a wired
+// fx rate source that simply has no entry for the spent currency still
+// falls back to the conservative mixed-currency pause — never a
+// guessed rate.
+func TestDriverBudgetPauseMixedCurrencyWhenRateMissing(t *testing.T) {
+	store := newFakeStore()
+	budget := 100.0
+	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
+	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 1}}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+	d := testDriver(store, runner)
+	// Rate table has entries, but not for USD -> no usable cross to EUR.
+	d.SetFXRates(&fakeFXRates{rates: map[string]fxrates.Rate{"GBP": {Value: 0.74, AsOf: time.Now()}}})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseMixedCurrency {
+		t.Fatalf("mission after unconvertible spend = %+v, want paused/mixed_currency", m)
 	}
 }
 

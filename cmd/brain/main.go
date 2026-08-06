@@ -21,6 +21,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
@@ -165,7 +166,14 @@ func main() {
 	sensitiveRoute := func(ctx context.Context) string {
 		return flags.Value(ctx, settings.ValueSensitiveToolRoute)
 	}
-	agent, broker, outputs, builtinSet, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute)
+	// fxStore backs both the daily rate fetch (below) and
+	// currency_convert's table-first lookup (buildAgent) — one fetch,
+	// one table, shared by the live tool and by display conversion
+	// (Analytics, mission usage) elsewhere in this file.
+	fxStore := fxrates.NewStore(app.DB)
+	go fxrates.NewFetcher(fxStore, settings.AllowedCurrencies(), app.Log).Run(ctx)
+
+	agent, broker, outputs, builtinSet, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -236,7 +244,7 @@ func main() {
 		}
 		return name
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, app.Log)
 	}
@@ -376,8 +384,9 @@ func main() {
 		svc.SetMarkitdown(markitdownURL)
 	}
 
+	usageDecorator := api.NewUsageDecorator(flags, fxStore)
 	api.Register(app.Server, svc, store, broker,
-		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, app.Log), flags,
+		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags,
 		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
 
@@ -466,7 +475,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 		}
 		return missions.AgentDefaults{
 			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
-			BudgetUSD: a.BudgetUSD, ApprovalAllowlist: a.ApprovalAllowlist,
+			BudgetAmount: a.BudgetUSD, ApprovalAllowlist: a.ApprovalAllowlist,
 		}, true
 	}
 }
@@ -480,7 +489,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -517,6 +526,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// only to pre-authorize a mission's hidden session at creation.
 	perms := tools.NewPermissions(db, toolWorkspaceRoot)
 	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
+	driver.SetFXRates(fxStore)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 
@@ -553,8 +563,14 @@ func memoryProxy(memorydURL string, log *slog.Logger) http.Handler {
 
 // adminProxy forwards the browser's control-plane reads to the
 // gateway's internal API: /v1/admin/usage/* maps onto
-// /internal/usage/*. Brain adds only the bearer gate.
-func adminProxy(gatewayURL string, log *slog.Logger) http.Handler {
+// /internal/usage/*. Brain adds the bearer gate and, for the usage
+// sub-tree only, decorates money fields with a converted_amount in the
+// user's default_currency (usageDecorate) — the gateway itself has no
+// settings access and no fx_rates reader (it's a separate, settings-
+// unaware service), so this is the one seam where both are already
+// available. Every other admin endpoint (providers, routes, secrets)
+// passes through byte-for-byte untouched.
+func adminProxy(gatewayURL string, usageDecorate func(*http.Response) error, log *slog.Logger) http.Handler {
 	target, err := url.Parse(gatewayURL)
 	if err != nil {
 		log.Error("invalid GATEWAY_URL; admin routes disabled", "error", err)
@@ -564,6 +580,15 @@ func adminProxy(gatewayURL string, log *slog.Logger) http.Handler {
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 			r.Out.URL.Path = "/internal/admin/" + strings.TrimPrefix(r.In.URL.Path, "/v1/admin/")
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			// resp.Request is the OUTBOUND request — Rewrite above has
+			// already turned /v1/admin/... into /internal/admin/..., so
+			// the scope check must match the rewritten prefix.
+			if usageDecorate == nil || !strings.HasPrefix(resp.Request.URL.Path, "/internal/admin/usage/") {
+				return nil
+			}
+			return usageDecorate(resp)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Warn("gateway admin proxy error", "path", r.URL.Path, "error", err)
@@ -620,7 +645,7 @@ func (r turnRouter) RouteForRole(ctx context.Context, role string) (string, bool
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string, fxStore *fxrates.Store) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now),
@@ -630,7 +655,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 		builtin.Shell(builtin.ShellConfig{WorkspaceRoot: workspace}),
 		builtin.RetrieveOutput(outputs),
 		builtin.Remember(remember),
-		builtin.ConvertCurrency(),
+		builtin.ConvertCurrency(builtin.CurrencyLookupFromStore(fxStore)),
 	}
 	// Search is optional infra: only registered when a backend is
 	// configured, so an environment without SearXNG still runs clean.

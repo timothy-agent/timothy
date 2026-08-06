@@ -13,13 +13,17 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
-// ModelPrices are USD per million tokens. Absent prices mean cost is
-// unknown and recorded as null — never guessed.
+// ModelPrices are per-million-token prices in the provider's billing
+// currency (Currency; blank means USD). Absent prices mean cost is
+// unknown and recorded as null — never guessed. No FX conversion
+// happens anywhere in this codebase, so Currency must match what the
+// provider actually bills in.
 type ModelPrices struct {
 	InputPerMTok      float64 `json:"input_per_mtok"`
 	OutputPerMTok     float64 `json:"output_per_mtok"`
 	CacheReadPerMTok  float64 `json:"cache_read_per_mtok"`
 	CacheWritePerMTok float64 `json:"cache_write_per_mtok"`
+	Currency          string  `json:"currency,omitempty"`
 }
 
 // ModelInfo is one entry of a provider's models jsonb.

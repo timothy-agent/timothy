@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
@@ -73,6 +74,16 @@ type driverStore interface {
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	AppendProgress(ctx context.Context, id, note string) error
+	Spend(ctx context.Context, missionID string) (MissionSpend, error)
+}
+
+// fxRateSource is the narrow slice of *fxrates.Store Driver needs for
+// the budget brake's cross-currency conversion — an interface (not a
+// concrete *fxrates.Store field) so driver_test.go's scenarios can fake
+// a rate table without a real Postgres pool, same reasoning as
+// driverStore.
+type fxRateSource interface {
+	LatestUSDRates(ctx context.Context) (map[string]fxrates.Rate, error)
 }
 
 // sandboxRemover is the narrow slice of *sandbox.Manager Driver needs —
@@ -110,6 +121,12 @@ type Driver struct {
 	// nil-safe: unset means no allowlist grants, same as before this
 	// existed.
 	resolveAgent AgentResolver
+
+	// fxRates backs the budget brake's cross-currency conversion (see
+	// SetFXRates / toStepState) — nil-safe: unset means the brake never
+	// converts, degrading to the original mixed-currency-always-pauses
+	// behavior.
+	fxRates fxRateSource
 
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
@@ -150,6 +167,15 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify no
 // closes over.
 func (d *Driver) SetAgentResolver(resolve AgentResolver) {
 	d.resolveAgent = resolve
+}
+
+// SetFXRates wires the stored USD-base rate table the budget brake
+// converts cross-currency spend through (toStepState) — a setter (not
+// a NewDriver parameter) for the same reason SetAgentResolver is: it
+// keeps the constructor's parameter list from growing for every
+// optional cross-cutting dependency.
+func (d *Driver) SetFXRates(store fxRateSource) {
+	d.fxRates = store
 }
 
 // removeSandbox best-effort tears down a mission's sandbox container in
@@ -321,7 +347,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// phase-run error takes below.
 			d.log.Error("driver: provisioning failed", "mission_id", id, "error", provErr)
 			in := StepInput{Input: InputReviewInfraFailure, Reason: "provisioning failed: " + provErr.Error()}
-			t := Step(toStepState(m), in, d.cfg)
+			t := Step(d.toStepState(ctx, m), in, d.cfg)
 			if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 				return false, fmt.Errorf("driver advance: apply transition after provisioning failure: %w", err)
 			}
@@ -374,7 +400,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if err != nil {
 		return false, fmt.Errorf("driver advance: reload after phase: %w", err)
 	}
-	state := toStepState(m)
+	state := d.toStepState(ctx, m)
 	t := Step(state, in, d.cfg)
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return false, fmt.Errorf("driver advance: apply transition: %w", err)
@@ -450,7 +476,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		return ErrTerminal
 	}
 	before := m.Status
-	t := Step(toStepState(m), StepInput{Input: input}, d.cfg)
+	t := Step(d.toStepState(ctx, m), StepInput{Input: input}, d.cfg)
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return fmt.Errorf("driver: signal: apply transition: %w", err)
 	}
@@ -473,16 +499,75 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	return nil
 }
 
-// toStepState projects a Mission onto the state machine's input shape.
-func toStepState(m Mission) StepState {
-	spent := 0.0 // Phase 1 has no spend-tracking wired into StepState yet beyond BudgetUSD's presence; see M3/M4 for ledger integration.
+// toStepState projects a Mission onto the state machine's input shape,
+// pulling actual ledger spend for the budget brake. A Spend query
+// failure is treated the same as zero spend (best-effort, never blocks
+// Advance/Signal over a bookkeeping read) — just logged.
+func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
+	var spent float64
+	var mixed bool
+	var rateAsOf string
+	if m.BudgetAmount != nil {
+		usage, err := d.store.Spend(ctx, m.ID)
+		if err != nil {
+			d.log.Warn("driver: mission spend lookup failed", "mission_id", m.ID, "error", err)
+		} else {
+			spent = usage.ByCurrency[m.BudgetCurrency]
+			spent, mixed, rateAsOf = d.convertOtherCurrencySpend(ctx, usage, m.BudgetCurrency, spent)
+		}
+	}
 	return StepState{
 		Phase: m.Phase, Status: m.Status, PauseReason: m.PauseReason,
 		Iteration: m.Iteration, MaxIterations: m.MaxIterations,
 		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
-		StallCount: m.StallCount, SpentUSD: spent, BudgetUSD: m.BudgetUSD,
+		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
+		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
 		LastUnit: isLastUnit(m.Spec),
 	}
+}
+
+// convertOtherCurrencySpend folds every currency in usage OTHER than
+// budgetCurrency into spent, using the driver's stored fx rate table —
+// same USD-base cross the display-conversion seam uses (D-013's spend
+// sibling: never a guessed rate). mixed comes back true the moment ANY
+// currency has no usable stored rate (missing pair, or stale beyond
+// the store's own bound) — at that point the brake can no longer
+// safely judge the mission's true spend, so it must pause rather than
+// under-count. rateAsOf is the oldest date among whichever converted
+// legs participated, "" when nothing needed converting.
+func (d *Driver) convertOtherCurrencySpend(ctx context.Context, usage MissionSpend, budgetCurrency string, spent float64) (newSpent float64, mixed bool, rateAsOf string) {
+	others := make([]string, 0, len(usage.ByCurrency))
+	for currency, amount := range usage.ByCurrency {
+		if currency != budgetCurrency && amount > 0 {
+			others = append(others, currency)
+		}
+	}
+	if len(others) == 0 {
+		return spent, false, ""
+	}
+	if d.fxRates == nil {
+		return spent, true, "" // no rate source wired: same conservative pause as before
+	}
+	rates, err := d.fxRates.LatestUSDRates(ctx)
+	if err != nil {
+		d.log.Warn("driver: fx rate lookup failed; treating as unconvertible", "error", err)
+		return spent, true, ""
+	}
+	var oldest fxrates.Rate
+	for _, currency := range others {
+		converted, rate, ok := fxrates.Convert(usage.ByCurrency[currency], currency, budgetCurrency, rates)
+		if !ok {
+			return spent, true, ""
+		}
+		spent += converted
+		if oldest.AsOf.IsZero() || rate.AsOf.Before(oldest.AsOf) {
+			oldest = rate
+		}
+	}
+	if !oldest.AsOf.IsZero() {
+		rateAsOf = oldest.AsOf.Format("2006-01-02")
+	}
+	return spent, false, rateAsOf
 }
 
 // isLastUnit reports whether every unit in the plan has passed — the
@@ -797,7 +882,7 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
 // mutating — m.Spec.Units is a slice header, so writing through it
 // in place would silently mutate the caller's own Mission value too
 // (same backing array), corrupting whatever that caller does with it
-// afterward in the same round (e.g. Advance's toStepState(m) call).
+// afterward in the same round (e.g. Advance's toStepState call).
 func (d *Driver) markUnitPassed(ctx context.Context, m Mission, unit int) error {
 	units := make([]PlanUnit, len(m.Spec.Units))
 	copy(units, m.Spec.Units)

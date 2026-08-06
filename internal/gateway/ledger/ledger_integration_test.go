@@ -52,7 +52,7 @@ func TestRecordWritesRows(t *testing.T) {
 		Provider: "itest-provider", Model: "m1", Route: "coding",
 		SessionID: "sess-1",
 		Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10},
-		LatencyMS: 321, Status: "ok", CostUSD: &cost,
+		LatencyMS: 321, Status: "ok", Cost: &cost,
 	})
 	// Failure without usage: cost, tokens, session all NULL.
 	l.Record(ctx, Entry{
@@ -64,7 +64,7 @@ func TestRecordWritesRows(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
 		WHERE provider = 'itest-provider' AND status = 'ok'
 		AND input_tokens = 100 AND output_tokens = 50 AND cache_read_tokens = 10
-		AND session_id = 'sess-1' AND cost_usd = 0.001234`).Scan(&okCount); err != nil {
+		AND session_id = 'sess-1' AND cost = 0.001234 AND currency = 'USD'`).Scan(&okCount); err != nil {
 		t.Fatalf("query ok row: %v", err)
 	}
 	if okCount != 1 {
@@ -72,7 +72,7 @@ func TestRecordWritesRows(t *testing.T) {
 	}
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
 		WHERE provider = 'itest-provider' AND status = 'error' AND error_code = 'timeout'
-		AND input_tokens IS NULL AND cost_usd IS NULL AND session_id IS NULL`).Scan(&nullUsage); err != nil {
+		AND input_tokens IS NULL AND cost IS NULL AND session_id IS NULL`).Scan(&nullUsage); err != nil {
 		t.Fatalf("query error row: %v", err)
 	}
 	if nullUsage != 1 {

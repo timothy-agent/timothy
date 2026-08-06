@@ -60,24 +60,24 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 	}()
 
 	// Round-trip: set both, read back, clear one.
-	day, month := 0.9, 1e9
-	if err := s.Set(ctx, "day", &day); err != nil {
+	day, month := &BudgetLimit{Amount: 0.9, Currency: "USD"}, &BudgetLimit{Amount: 1e9, Currency: "USD"}
+	if err := s.Set(ctx, "day", day); err != nil {
 		t.Fatalf("set day: %v", err)
 	}
-	if err := s.Set(ctx, "month", &month); err != nil {
+	if err := s.Set(ctx, "month", month); err != nil {
 		t.Fatalf("set month: %v", err)
 	}
 	limits, err := s.Limits(ctx)
 	if err != nil {
 		t.Fatalf("limits: %v", err)
 	}
-	if limits.Day == nil || *limits.Day != day || limits.Month == nil || *limits.Month != month {
+	if limits.Day == nil || limits.Day.Amount != day.Amount || limits.Month == nil || limits.Month.Amount != month.Amount {
 		t.Fatalf("limits = %+v, want day=%v month=%v", limits, day, month)
 	}
 
 	// Upsert overwrites.
-	day2 := 0.8
-	if err := s.Set(ctx, "day", &day2); err != nil {
+	day2 := &BudgetLimit{Amount: 0.8, Currency: "USD"}
+	if err := s.Set(ctx, "day", day2); err != nil {
 		t.Fatalf("set day again: %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 		l.Record(ctx, Entry{
 			Provider: "itest-budget", Model: "m1", Route: "coding",
 			Usage:     &stream.Usage{InputTokens: 1, OutputTokens: 1},
-			LatencyMS: 1, Status: "ok", CostUSD: &cost,
+			LatencyMS: 1, Status: "ok", Cost: &cost,
 		})
 	}
 	limits, err = s.Limits(ctx)
@@ -102,14 +102,14 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.Day.SpendUSD < 1.0 || !status.Day.Over {
+	if status.Day.Spend < 1.0 || !status.Day.Over {
 		t.Fatalf("day = %+v, want spend >= 1.0 and over", status.Day)
 	}
 	if status.Month.Over {
 		t.Fatalf("month = %+v, want not over under limit %v", status.Month, month)
 	}
-	if status.Month.LimitUSD == nil || *status.Month.LimitUSD != month {
-		t.Fatalf("month limit = %v, want %v", status.Month.LimitUSD, month)
+	if status.Month.Limit == nil || status.Month.Limit.Amount != month.Amount {
+		t.Fatalf("month limit = %v, want %v", status.Month.Limit, month)
 	}
 
 	// Clear: nil deletes the row.
@@ -128,7 +128,73 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status after clear: %v", err)
 	}
-	if status.Day.Over || status.Day.LimitUSD != nil {
+	if status.Day.Over || status.Day.Limit != nil {
 		t.Fatalf("day after clear = %+v, want no limit and not over", status.Day)
+	}
+}
+
+// TestBudgetStatusIgnoresOtherCurrencySpend confirms a budget in one
+// currency never gets checked against spend recorded in another —
+// comparing across currencies would need a guessed FX rate, which
+// this codebase never does.
+func TestBudgetStatusIgnoresOtherCurrencySpend(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, _ = db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider = 'itest-budget-eur'")
+
+	s := NewBudgetStore(pool)
+	orig, err := s.Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits (orig): %v", err)
+	}
+	defer func() {
+		if err := s.Set(ctx, "day", orig.Day); err != nil {
+			t.Errorf("restore day budget: %v", err)
+		}
+		if _, err := db.Exec(ctx, "DELETE FROM cost_ledger WHERE provider = 'itest-budget-eur'"); err != nil {
+			t.Errorf("sweep itest-budget-eur ledger rows: %v", err)
+		}
+	}()
+
+	// A USD day budget with a huge headroom; all the spend below is EUR.
+	if err := s.Set(ctx, "day", &BudgetLimit{Amount: 1e9, Currency: "USD"}); err != nil {
+		t.Fatalf("set day: %v", err)
+	}
+
+	l := New(pool, log)
+	cost := 500.0
+	l.Record(ctx, Entry{
+		Provider: "itest-budget-eur", Model: "m1", Route: "coding",
+		Usage:     &stream.Usage{InputTokens: 1, OutputTokens: 1},
+		LatencyMS: 1, Status: "ok", Cost: &cost, Currency: "EUR",
+	})
+
+	limits, err := s.Limits(ctx)
+	if err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	agg := NewAggregator(pool)
+	status, err := agg.BudgetStatus(ctx, limits, time.Now())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Day.Currency != "USD" || status.Day.Spend != 0 || status.Day.Over {
+		t.Fatalf("day = %+v, want USD currency, zero spend, not over (EUR spend must not count)", status.Day)
 	}
 }

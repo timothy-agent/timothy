@@ -220,7 +220,11 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		res.entry.CostUSD = ledger.Cost(snap.Prices(att.ProviderName, att.Model), res.entry.Usage)
+		prices := snap.Prices(att.ProviderName, att.Model)
+		res.entry.Cost = ledger.Cost(prices, res.entry.Usage)
+		if prices != nil {
+			res.entry.Currency = prices.Currency
+		}
 		a.recordAttempt(r.Context(), res.entry)
 		return
 	}
@@ -441,7 +445,11 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		}
 
 		entry.Status = "ok"
-		entry.CostUSD = ledger.Cost(snap.Prices(att.ProviderName, att.Model), usage)
+		prices := snap.Prices(att.ProviderName, att.Model)
+		entry.Cost = ledger.Cost(prices, usage)
+		if prices != nil {
+			entry.Currency = prices.Currency
+		}
 		a.recordAttempt(r.Context(), entry)
 
 		w.Header().Set("Content-Type", "application/json")

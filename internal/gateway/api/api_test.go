@@ -232,8 +232,8 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 		t.Fatalf("usage = %+v", e.Usage)
 	}
 	// priced model: 10/1e6*1 + 5/1e6*2
-	if e.CostUSD == nil || *e.CostUSD != 10.0/1e6+2*5.0/1e6 {
-		t.Fatalf("cost = %v", e.CostUSD)
+	if e.Cost == nil || *e.Cost != 10.0/1e6+2*5.0/1e6 {
+		t.Fatalf("cost = %v", e.Cost)
 	}
 	// The fake server sleeps before responding: a zero here means the
 	// deferred latency stamp mutated a dead copy again.

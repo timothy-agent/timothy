@@ -52,31 +52,38 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "budget exhausted pauses regardless of input, pre-empting review_approve",
-			state: StepState{Phase: PhaseReview, Status: StatusWorking, SpentUSD: 10, BudgetUSD: budget(10)},
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, Spent: 10, Budget: budget(10)},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseBudget, SpentUSD: 10, BudgetUSD: budget(10)},
+			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseBudget, Spent: 10, Budget: budget(10)},
 		},
 		{
 			name:  "spend under budget does not pause",
-			state: StepState{Phase: PhaseReview, Status: StatusWorking, SpentUSD: 5, BudgetUSD: budget(10), LastUnit: true},
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, Spent: 5, Budget: budget(10), LastUnit: true},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseDone, Status: StatusDone, SpentUSD: 5, BudgetUSD: budget(10), LastUnit: true},
+			want:  StepState{Phase: PhaseDone, Status: StatusDone, Spent: 5, Budget: budget(10), LastUnit: true},
 		},
 		{
 			name:  "nil budget never pauses on spend",
-			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, SpentUSD: 1_000_000},
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, Spent: 1_000_000},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: ""},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, SpentUSD: 1_000_000, Iteration: 1},
+			want:  StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, Spent: 1_000_000, Iteration: 1},
 		},
 		{
 			name:  "budget check does not apply to a terminal mission",
-			state: StepState{Phase: PhaseDone, Status: StatusDone, SpentUSD: 999, BudgetUSD: budget(1)},
+			state: StepState{Phase: PhaseDone, Status: StatusDone, Spent: 999, Budget: budget(1)},
 			input: StepInput{Input: InputResume},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseDone, Status: StatusDone, SpentUSD: 999, BudgetUSD: budget(1)},
+			want:  StepState{Phase: PhaseDone, Status: StatusDone, Spent: 999, Budget: budget(1)},
+		},
+		{
+			name:  "mixed-currency spend pauses even when same-currency spend is well under budget",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
+			input: StepInput{Input: InputWorkerRetry},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseMixedCurrency, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
 		},
 		{
 			name:  "phase_complete advances research to plan",
@@ -275,6 +282,26 @@ func TestStepReviewApproveEmitsPassedTrue(t *testing.T) {
 	passed, ok := got.Events[0].Payload["passed"].(bool)
 	if !ok || !passed {
 		t.Fatalf("Events[0].Payload = %+v, want passed=true", got.Events[0].Payload)
+	}
+}
+
+// TestStepMixedCurrencyPauseDetail confirms the mixed-currency pause
+// event's detail is distinguishable from an ordinary budget-reached
+// pause purely from the event log — the two have different root
+// causes and a human reading the log later needs to tell them apart.
+func TestStepMixedCurrencyPauseDetail(t *testing.T) {
+	budget := 100.0
+	got := Step(
+		StepState{Phase: PhaseExecute, Status: StatusWorking, Budget: &budget, MixedCurrencySpend: true},
+		StepInput{Input: InputWorkerRetry},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.paused" {
+		t.Fatalf("Events = %+v, want exactly one mission.paused event", got.Events)
+	}
+	detail, _ := got.Events[0].Payload["detail"].(string)
+	if detail == "" || detail == "budget reached" {
+		t.Fatalf("Events[0].Payload[detail] = %q, want a mixed-currency-specific message", detail)
 	}
 }
 

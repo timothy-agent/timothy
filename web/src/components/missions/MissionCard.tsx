@@ -40,9 +40,7 @@ export function MissionCard({ mission }: { mission: Mission }) {
             recurring
           </span>
         )}
-        <span>
-          iteration {mission.iteration}/{mission.max_iterations}
-        </span>
+        {mission.iteration > 0 && <span>Retries {mission.iteration}</span>}
         {progress && <span>{progress}</span>}
       </div>
       {mission.pause_message && (

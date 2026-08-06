@@ -21,10 +21,10 @@ func UpdateSpendGauges(ctx context.Context, agg *Aggregator, budgets *BudgetStor
 		return err
 	}
 	set := func(window string, w BudgetWindow) {
-		spend.WithLabelValues(window).Set(w.SpendUSD)
+		spend.WithLabelValues(window).Set(w.Spend)
 		var limit float64
-		if w.LimitUSD != nil {
-			limit = *w.LimitUSD
+		if w.Limit != nil {
+			limit = w.Limit.Amount
 		}
 		budget.WithLabelValues(window).Set(limit)
 	}

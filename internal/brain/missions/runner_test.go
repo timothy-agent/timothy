@@ -415,10 +415,13 @@ func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 	}
 }
 
-// TestPlanSessionRejectsCommandSubstitution guards the fix for a real
-// canary flake: a planner-authored verify_cmd containing $(...) parked
-// the mission when the worker's own shell classifier correctly denied
-// it as opaque (D-039) — the plan should be rejected here, at
+// TestPlanSessionRejectsCommandSubstitution guards parseSpec's
+// determinism rule: verify_cmd runs harness-side via RunVerify,
+// outside the permission chain (D-050's sandbox relaxation for a
+// worker/reviewer shell CALL does not apply here) — a planner-authored
+// verify_cmd containing $(...) is rejected because command
+// substitution undermines a reproducible content check, not because of
+// any permission concern. The plan should be rejected here, at
 // submission, with feedback the planner can act on immediately.
 func TestPlanSessionRejectsCommandSubstitution(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{

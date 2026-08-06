@@ -39,7 +39,7 @@ type WorkPacket struct {
 // messages, an earlier note); both pass through NeutralizeSlot before
 // insertion — self-injection hardening.
 func (p WorkPacket) Render() (system, user string) {
-	system = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which require interactive approval and will stall you. Use shell for reading and checking, not writing. Avoid command substitution ($(...) or backticks) in shell commands too — it classifies as opaque and requires interactive approval, same as the redirects above. The harness verifies your declared artifacts exist on disk; describing a file is not producing it." + p.ExecEnvironmentNote
+	system = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you; artifact tracking depends on write_file being the only way files get created. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it." + p.ExecEnvironmentNote
 	if p.PromptOverlay != "" {
 		// Operator-authored config, not model output — unlike Progress/
 		// GitLog below, this never passes through NeutralizeSlot.

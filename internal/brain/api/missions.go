@@ -129,7 +129,13 @@ type createMissionRequest struct {
 	// so a route change is always an explicit choice.
 	EscalationRoute string   `json:"escalation_route"`
 	MaxIterations   int      `json:"max_iterations"`
-	BudgetUSD       *float64 `json:"budget_usd"`
+	BudgetAmount    *float64 `json:"budget_amount"`
+	// BudgetCurrency is optional; an omitted value defaults to "USD"
+	// directly in create() below. The web UI, not this handler, is
+	// responsible for sending the settings page's configured default
+	// currency when the user hasn't explicitly overridden it — this
+	// keeps the handler simple and stateless w.r.t. settings.
+	BudgetCurrency string `json:"budget_currency"`
 	// AutoApproveSafe defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
@@ -172,8 +178,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			if req.ReviewRoute == "" {
 				req.ReviewRoute = a.ReviewRoute
 			}
-			if req.BudgetUSD == nil {
-				req.BudgetUSD = a.BudgetUSD
+			if req.BudgetAmount == nil {
+				req.BudgetAmount = a.BudgetUSD
 			}
 			promptOverlay = a.PromptOverlay
 		}
@@ -198,10 +204,14 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	if req.AutoApproveSafe != nil {
 		autoApproveSafe = *req.AutoApproveSafe
 	}
+	budgetCurrency := req.BudgetCurrency
+	if budgetCurrency == "" {
+		budgetCurrency = "USD"
+	}
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
-		MaxIterations: req.MaxIterations, BudgetUSD: req.BudgetUSD,
+		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay,
 	}
 	id, err := h.driver.Create(r.Context(), m)

@@ -674,15 +674,17 @@ func parseSpec(raw string) (Spec, error) {
 	if len(spec.Units) == 0 {
 		return Spec{}, fmt.Errorf("mission runner: plan has no units")
 	}
-	// verify_cmd runs through RunVerify (a plain /bin/sh -c), but a
-	// worker's own shell classifies $()/backticks as an opaque,
-	// unattended-denied command (D-039, tools/danger.go opaqueForms) —
-	// correct there, but a plan authored with command substitution in
-	// verify_cmd would only discover that after execute/review, parking
-	// the mission far from the actual mistake. Reject it here instead,
-	// at the same point the empty-plan check already rejects a bad
-	// plan, so the planner's retry loop sees the real problem
-	// immediately.
+	// verify_cmd runs through RunVerify (a plain /bin/sh -c) — harness-
+	// side, outside the permission chain entirely, so D-050's sandbox
+	// relaxation (which only changes how a worker/reviewer's own shell
+	// TOOL CALL is classified) has no bearing here. The rejection below
+	// is a determinism concern, not a permission one: verify_cmd must
+	// check the CONTENT of declared artifacts reproducibly, and command
+	// substitution invites exactly the kind of "prove nothing" or
+	// environment-dependent check (e.g. $(date) in the expected value)
+	// that undermines that. Reject it here, at the same point the
+	// empty-plan check already rejects a bad plan, so the planner's
+	// retry loop sees the real problem immediately.
 	for _, u := range spec.Units {
 		if strings.Contains(u.VerifyCmd, "$(") || strings.Contains(u.VerifyCmd, "`") {
 			return Spec{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks) — write the direct command instead")

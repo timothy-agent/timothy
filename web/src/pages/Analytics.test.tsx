@@ -25,7 +25,8 @@ import {
 } from '../api/client'
 
 const summary: UsageSummary = {
-  cost_usd: 2.5,
+  currency: 'USD',
+  cost: 2.5,
   input_tokens: 1000,
   output_tokens: 500,
   cache_read_tokens: 0,
@@ -38,8 +39,8 @@ const summary: UsageSummary = {
 }
 
 const calmBudget: BudgetStatus = {
-  day: { limit_usd: 10, spend_usd: 2.5, over: false },
-  month: { limit_usd: null, spend_usd: 2.5, over: false },
+  day: { currency: 'USD', limit: { amount: 10, currency: 'USD' }, spend: 2.5, over: false },
+  month: { currency: 'USD', limit: null, spend: 2.5, over: false },
 }
 
 function renderPage() {
@@ -53,7 +54,7 @@ function renderPage() {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(usageSummary).mockResolvedValue(summary)
+  vi.mocked(usageSummary).mockResolvedValue([summary])
   vi.mocked(usageSeries).mockResolvedValue([])
   vi.mocked(usageTotals).mockResolvedValue([])
   vi.mocked(usageSessions).mockResolvedValue([])
@@ -65,22 +66,22 @@ beforeEach(() => {
 describe('Analytics budget alert', () => {
   it('shows no banner while spend stays under budget', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
     expect(screen.queryByRole('alert')).toBeNull()
     // The day budget hint only surfaces on the "Today" range.
     fireEvent.click(screen.getByText('Today'))
-    await waitFor(() => expect(screen.getByText('of $10.00 budget')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('of USD 10.00 budget')).toBeInTheDocument())
   })
 
   it('shows a banner naming every window over budget', async () => {
     vi.mocked(usageBudget).mockResolvedValue({
-      day: { limit_usd: 1, spend_usd: 1.5, over: true },
-      month: { limit_usd: 100, spend_usd: 120, over: true },
+      day: { currency: 'USD', limit: { amount: 1, currency: 'USD' }, spend: 1.5, over: true },
+      month: { currency: 'USD', limit: { amount: 100, currency: 'USD' }, spend: 120, over: true },
     })
     renderPage()
     const banner = await screen.findByRole('alert')
-    expect(banner).toHaveTextContent('Daily budget reached: $1.50 spent of $1.00.')
-    expect(banner).toHaveTextContent('Monthly budget reached: $120.00 spent of $100.00.')
+    expect(banner).toHaveTextContent('Daily budget reached: USD 1.50 spent of USD 1.00.')
+    expect(banner).toHaveTextContent('Monthly budget reached: USD 120.00 spent of USD 100.00.')
   })
 
   it('stays silent when the budget endpoint fails', async () => {
@@ -105,14 +106,33 @@ describe('Analytics spend tile', () => {
   })
 })
 
+describe('Analytics converted spend display', () => {
+  it('shows the converted amount as primary with the billed amount secondary', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([
+      { ...summary, currency: 'USD', cost: 2.75, converted_amount: 2.53, converted_currency: 'EUR', rate_as_of: '2026-07-20' },
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('EUR 2.53')).toBeInTheDocument())
+    expect(screen.getByText('USD 2.75 billed')).toBeInTheDocument()
+  })
+
+  it('falls back to the billed amount alone when nothing converted', async () => {
+    renderPage() // default `summary` fixture carries no converted_* fields
+    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/billed/)).toBeNull()
+  })
+})
+
 describe('Analytics token tiles', () => {
   it('shows total input and output tokens for the range', async () => {
-    vi.mocked(usageSummary).mockResolvedValue({
-      ...summary,
-      input_tokens: 1_250_000,
-      output_tokens: 84_000,
-      cache_read_tokens: 400_000,
-    })
+    vi.mocked(usageSummary).mockResolvedValue([
+      {
+        ...summary,
+        input_tokens: 1_250_000,
+        output_tokens: 84_000,
+        cache_read_tokens: 400_000,
+      },
+    ])
     renderPage()
     expect(await screen.findByText('Input tokens')).toBeTruthy()
     expect(screen.getByText('1.3M')).toBeTruthy()
@@ -124,13 +144,14 @@ describe('Analytics token tiles', () => {
 
 describe('Analytics unpriced usage', () => {
   it('notes unpriced calls with a catalog estimate', async () => {
-    vi.mocked(usageSummary).mockResolvedValue({ ...summary, unpriced_requests: 4 })
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unpriced_requests: 4 }])
     // gpt-5.6-sol prices in the catalog: $5/mtok in, $30/mtok out.
     vi.mocked(usageSeries).mockResolvedValue([
       {
         bucket: '2026-07-24T00:00:00Z',
         group: 'gpt-5.6-sol',
-        cost_usd: 0,
+        currency: 'USD',
+        cost: 0,
         input_tokens: 1_000_000,
         output_tokens: 100_000,
         requests: 4,
@@ -141,12 +162,12 @@ describe('Analytics unpriced usage', () => {
     ])
     renderPage()
     const note = await screen.findByText(/had no configured price/)
-    expect(note).toHaveTextContent('≈$8.00 at catalog prices')
+    expect(note).toHaveTextContent('≈USD 8.00 at catalog prices')
   })
 
   it('stays silent when every call is priced', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
     expect(screen.queryByText(/had no configured price/)).toBeNull()
   })
 })
@@ -154,7 +175,8 @@ describe('Analytics unpriced usage', () => {
 const providerPoint: UsagePoint = {
   bucket: '2026-07-24T00:00:00Z',
   group: 'openai',
-  cost_usd: 1.5,
+  currency: 'USD',
+  cost: 1.5,
   input_tokens: 100,
   output_tokens: 50,
   requests: 3,
@@ -165,7 +187,8 @@ const providerPoint: UsagePoint = {
 
 const providerTotal: GroupTotal = {
   group: 'openai',
-  cost_usd: 1.5,
+  currency: 'USD',
+  cost: 1.5,
   input_tokens: 100,
   output_tokens: 50,
   requests: 3,
@@ -221,7 +244,8 @@ describe('Analytics zero-cost exclusion', () => {
   const freeModelPoint: UsagePoint = {
     bucket: '2026-07-24T00:00:00Z',
     group: 'local-llama',
-    cost_usd: 0,
+    currency: 'USD',
+    cost: 0,
     input_tokens: 5_000,
     output_tokens: 2_000,
     requests: 2,
@@ -231,7 +255,8 @@ describe('Analytics zero-cost exclusion', () => {
   }
   const freeModelTotal: GroupTotal = {
     group: 'local-llama',
-    cost_usd: 0,
+    currency: 'USD',
+    cost: 0,
     input_tokens: 5_000,
     output_tokens: 2_000,
     requests: 2,

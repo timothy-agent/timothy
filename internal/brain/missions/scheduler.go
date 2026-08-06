@@ -48,8 +48,9 @@ type MissionTemplate struct {
 	AgentID       string   `json:"agent_id"`
 	Route         string   `json:"route"`
 	ReviewRoute   string   `json:"review_route"`
-	MaxIterations int      `json:"max_iterations"`
-	BudgetUSD     *float64 `json:"budget_usd,omitempty"`
+	MaxIterations   int      `json:"max_iterations"`
+	BudgetAmount    *float64 `json:"budget_amount,omitempty"`
+	BudgetCurrency  string   `json:"budget_currency,omitempty"`
 	// AutoApproveSafe defaults true for a scheduled mission, same as
 	// api/missions.go's create handler — a mission fired unattended
 	// needs the same standing shell approval a UI-created one gets by
@@ -62,10 +63,14 @@ type MissionTemplate struct {
 // api/missions.go's create-handler resolution so a scheduler-fired
 // mission gets the same defaults a UI-created one would.
 type AgentDefaults struct {
-	Route             string
-	ReviewRoute       string
-	PromptOverlay     string
-	BudgetUSD         *float64
+	Route         string
+	ReviewRoute   string
+	PromptOverlay string
+	// BudgetAmount is a plain fallback number: an agent-level default
+	// carries no currency of its own, it always inherits whatever
+	// currency the firing mission/request resolves to (request's
+	// explicit budget_currency, or "USD" if that's also empty).
+	BudgetAmount      *float64
 	ApprovalAllowlist []string
 }
 
@@ -270,10 +275,14 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
 	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole)
 	spec, _ := json.Marshal(Spec{})
+	budgetCurrency := t.BudgetCurrency
+	if budgetCurrency == "" {
+		budgetCurrency = "USD"
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetUSD, t.Route, t.ReviewRoute,
+			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute,
 		promptOverlay, t.AutoApproveSafe, spec, sc.ID)
 	return err
 }
@@ -296,8 +305,8 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			if t.ReviewRoute == "" {
 				t.ReviewRoute = defaults.ReviewRoute
 			}
-			if t.BudgetUSD == nil {
-				t.BudgetUSD = defaults.BudgetUSD
+			if t.BudgetAmount == nil {
+				t.BudgetAmount = defaults.BudgetAmount
 			}
 			promptOverlay = defaults.PromptOverlay
 		}

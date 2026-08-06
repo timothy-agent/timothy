@@ -173,16 +173,15 @@ func (a *Admin) TestSecretBackend(ctx context.Context, backend string) error {
 }
 
 // PatchBudget applies per-window budget changes: a key maps a window
-// scope to its new USD limit, nil clears it, absent keys stay
-// untouched. All keys are validated before any write so a bad entry
-// cannot leave a partial update. No snapshot reload: budgets never
-// affect routing.
-func (a *Admin) PatchBudget(ctx context.Context, patch map[string]*float64) error {
+// scope to its new limit, nil clears it, absent keys stay untouched.
+// All keys are validated before any write so a bad entry cannot leave
+// a partial update. No snapshot reload: budgets never affect routing.
+func (a *Admin) PatchBudget(ctx context.Context, patch map[string]*ledger.BudgetLimit) error {
 	for scope, limit := range patch {
 		if scope != "day" && scope != "month" {
 			return fmt.Errorf("unknown budget scope %q", scope)
 		}
-		if limit != nil && *limit <= 0 {
+		if limit != nil && limit.Amount <= 0 {
 			return fmt.Errorf("budget limit for %s must be positive", scope)
 		}
 	}
@@ -1009,7 +1008,10 @@ func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, 
 		}
 		if res.OK {
 			entry.Status = "ok"
-			entry.CostUSD = ledger.Cost(prices, entry.Usage)
+			entry.Cost = ledger.Cost(prices, entry.Usage)
+			if prices != nil {
+				entry.Currency = prices.Currency
+			}
 		} else {
 			entry.Status, entry.ErrorCode = "error", "provider_error"
 		}

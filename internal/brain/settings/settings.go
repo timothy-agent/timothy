@@ -49,12 +49,40 @@ const (
 	// compaction) pin to; empty means the feature is off. Set from the
 	// web settings panel.
 	ValueSensitiveToolRoute = "sensitive_tool_route"
+	// ValueDefaultCurrency is the ISO 4217 code new budgets/missions
+	// default to when the caller doesn't specify one; empty defers to
+	// "USD" via DefaultCurrency below.
+	ValueDefaultCurrency = "default_currency"
 )
 
 var knownValueKeys = map[string]bool{
 	ValueTokenBudget: true, ValueSkillsAllowlist: true,
 	ValueGitAuthorName: true, ValueGitAuthorEmail: true,
-	ValueSensitiveToolRoute: true,
+	ValueSensitiveToolRoute: true, ValueDefaultCurrency: true,
+}
+
+// allowedCurrencies is the flat, fixed list of ISO 4217 codes the
+// default-currency setting accepts — no FX conversion, no per-currency
+// formatting rules, just a membership check.
+var allowedCurrencies = map[string]bool{
+	"USD": true, "EUR": true, "GBP": true, "JPY": true, "CNY": true,
+	"INR": true, "BDT": true, "CHF": true, "CAD": true, "AUD": true,
+	"NZD": true, "SEK": true, "NOK": true, "DKK": true, "PLN": true,
+	"CZK": true, "HUF": true, "TRY": true, "AED": true, "SAR": true,
+	"SGD": true, "HKD": true, "KRW": true, "TWD": true, "THB": true,
+	"MYR": true, "IDR": true, "PHP": true, "VND": true, "BRL": true,
+	"MXN": true, "ZAR": true, "ILS": true,
+}
+
+// AllowedCurrencies returns a copy of the supported ISO 4217 code set
+// — internal/brain/fxrates' daily fetcher uses this as the set of
+// quote currencies to store, so the two lists never drift apart.
+func AllowedCurrencies() map[string]bool {
+	out := make(map[string]bool, len(allowedCurrencies))
+	for k, v := range allowedCurrencies {
+		out[k] = v
+	}
+	return out
 }
 
 const cacheTTL = 10 * time.Second
@@ -108,6 +136,16 @@ func (s *Store) TokenBudget(ctx context.Context, def int) int {
 		}
 	}
 	return def
+}
+
+// DefaultCurrency returns the configured default currency, falling
+// back to "USD" when unset — mirrors TokenBudget's parse-with-
+// fallback pattern.
+func (s *Store) DefaultCurrency(ctx context.Context) string {
+	if v := s.Value(ctx, ValueDefaultCurrency); v != "" {
+		return v
+	}
+	return "USD"
 }
 
 // SkillAllowed reports whether the allowlist admits a pack name;
@@ -204,6 +242,12 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 	if key == ValueTokenBudget && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n <= 0 {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
+		}
+	}
+	if key == ValueDefaultCurrency && value != "" {
+		value = strings.ToUpper(value)
+		if !allowedCurrencies[value] {
+			return fmt.Errorf("%s: unsupported currency code %q", key, value)
 		}
 	}
 	return s.write(ctx, key, s.Value(ctx, key), value)

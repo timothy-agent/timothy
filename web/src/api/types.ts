@@ -209,10 +209,26 @@ export interface EntityGraphData {
   edges: EntityEdge[]
 }
 
+// ConvertedMoney is the additive trio brain's usage decorator
+// (internal/brain/api/usage.go) adds next to a {cost|amount, currency}
+// row: the same figure converted into the user's default_currency,
+// present only when a stored fx rate exists for the row's currency
+// (never a guess) and it differs from the target. The original
+// cost/currency fields are always left exactly as the ledger recorded
+// them (D-013) — these are purely additive display fields.
+export interface ConvertedMoney {
+  converted_amount?: number
+  converted_currency?: string
+  rate_as_of?: string
+}
+
 // Usage aggregates served by /v1/admin/usage/* — chart-ready, never
-// raw ledger rows.
-export interface UsageSummary {
-  cost_usd: number
+// raw ledger rows. Money fields are grouped by billing currency (no FX
+// conversion anywhere): a range spanning more than one currency comes
+// back as multiple rows, one per currency, never summed together.
+export interface UsageSummary extends ConvertedMoney {
+  currency: string
+  cost: number
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
@@ -224,10 +240,11 @@ export interface UsageSummary {
   unpriced_output_tokens: number
 }
 
-export interface UsagePoint {
+export interface UsagePoint extends ConvertedMoney {
   bucket: string
   group: string
-  cost_usd: number
+  currency: string
+  cost: number
   input_tokens: number
   output_tokens: number
   requests: number
@@ -239,9 +256,10 @@ export interface UsagePoint {
 // GroupTotal is one group's totals over a whole range — the
 // non-time-bucketed sibling of UsagePoint, for tables/charts that rank
 // groups rather than plot them over time.
-export interface GroupTotal {
+export interface GroupTotal extends ConvertedMoney {
   group: string
-  cost_usd: number
+  currency: string
+  cost: number
   input_tokens: number
   output_tokens: number
   requests: number
@@ -250,8 +268,8 @@ export interface GroupTotal {
 }
 
 // One mission's total ledger footprint. unpriced_requests counts turns
-// whose cost is unknown (NULL in the ledger) — cost_usd is then a
-// floor, not the whole bill.
+// whose cost is unknown (NULL in the ledger) — cost_by_currency is
+// then a floor per currency, not the whole bill.
 export interface ModelUsed {
   provider: string
   model: string
@@ -261,7 +279,13 @@ export interface ModelUsed {
 
 export interface MissionUsage {
   mission_id: string
-  cost_usd: number
+  cost_by_currency: Record<string, number>
+  // converted_cost_by_currency mirrors cost_by_currency, converted into
+  // default_currency, present only when at least one entry had a
+  // usable stored fx rate — an entry with no rate is simply omitted,
+  // so this map's total can be a floor, not the whole bill.
+  converted_cost_by_currency?: Record<string, number>
+  rate_as_of?: string
   input_tokens: number
   output_tokens: number
   requests: number
@@ -269,9 +293,10 @@ export interface MissionUsage {
   models: ModelUsed[]
 }
 
-export interface SessionUsage {
+export interface SessionUsage extends ConvertedMoney {
   session_id: string
-  cost_usd: number
+  currency: string
+  cost: number
   input_tokens: number
   output_tokens: number
   requests: number
@@ -292,11 +317,18 @@ export interface CacheRow {
   hit_ratio: number
 }
 
-// Budget position per UTC calendar window; limit_usd is null when no
-// budget is configured.
-export interface BudgetWindow {
-  limit_usd: number | null
-  spend_usd: number
+// Budget position per UTC calendar window; limit is null when no
+// budget is configured, in which case currency/spend are also absent
+// (no currency to scope spend to yet).
+export interface BudgetLimit extends ConvertedMoney {
+  amount: number
+  currency: string
+}
+
+export interface BudgetWindow extends ConvertedMoney {
+  currency: string
+  limit: BudgetLimit | null
+  spend: number
   over: boolean
 }
 
@@ -454,7 +486,7 @@ export interface Mission {
   agent_id?: string
   phase: 'research' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
-  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | ''
+  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | ''
   pause_message?: string
   workspace?: string
   worktree?: string
@@ -467,7 +499,8 @@ export interface Mission {
   consecutive_failures: number
   last_gap_fingerprint?: string
   stall_count: number
-  budget_usd?: number
+  budget_amount?: number
+  budget_currency?: string
   route: string
   review_route: string
   escalation_route?: string
@@ -538,7 +571,8 @@ export interface MissionTemplate {
   route?: string
   review_route?: string
   max_iterations?: number
-  budget_usd?: number
+  budget_amount?: number
+  budget_currency?: string
   auto_approve_safe?: boolean
 }
 

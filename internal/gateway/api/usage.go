@@ -54,12 +54,12 @@ func (u *usageAPI) handleSummary(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	s, err := u.agg.Summary(r.Context(), from, to)
+	s, err := u.agg.SummaryByCurrency(r.Context(), from, to)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "usage_failed", err.Error())
 		return
 	}
-	writeJSON(w, s)
+	writeJSON(w, map[string]any{"summaries": s})
 }
 
 func (u *usageAPI) handleSeries(w http.ResponseWriter, r *http.Request) {

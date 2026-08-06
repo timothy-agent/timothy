@@ -43,7 +43,8 @@ type Mission struct {
 	ConsecutiveFailures int      `json:"consecutive_failures"`
 	LastGapFingerprint  string   `json:"last_gap_fingerprint,omitempty"`
 	StallCount          int      `json:"stall_count"`
-	BudgetUSD           *float64 `json:"budget_usd,omitempty"`
+	BudgetAmount        *float64 `json:"budget_amount,omitempty"`
+	BudgetCurrency      string   `json:"budget_currency,omitempty"`
 	Route               string   `json:"route"`
 	ReviewRoute         string   `json:"review_route"`
 	// EscalationRoute, when non-empty, is the route worker turns switch

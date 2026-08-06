@@ -8,9 +8,10 @@ vi.mock('../../api/client', () => ({
   createSchedule: vi.fn(),
   patchSchedule: vi.fn(),
   listAgents: vi.fn(),
+  getSettings: vi.fn(),
 }))
 
-import { createMission, createSchedule, listAgents, patchSchedule } from '../../api/client'
+import { createMission, createSchedule, getSettings, listAgents, patchSchedule } from '../../api/client'
 
 const schedule: Schedule = {
   id: 's1',
@@ -34,6 +35,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listAgents).mockResolvedValue([])
+  vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
 })
 
 describe('MissionForm — create mode, one-off mission', () => {

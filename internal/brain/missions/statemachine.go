@@ -76,6 +76,14 @@ const (
 	PauseNoProgress PauseReason = "no_progress" // stall: identical reviewer rejection twice
 	PauseInfra      PauseReason = "infra"       // harness/reviewer/driver error
 	PauseBudget     PauseReason = "budget"      // spend >= cap
+	// PauseMixedCurrency fires when the mission has recorded spend in a
+	// currency other than its own budget currency AND the driver has no
+	// usable stored fx rate to convert that amount (toStepState) —
+	// comparing across currencies without one would require a guessed
+	// rate, which this codebase never does (D-013's sibling invariant
+	// for spend, not just price). A convertible other-currency amount
+	// is folded into Spent instead and never reaches this pause.
+	PauseMixedCurrency PauseReason = "mixed_currency"
 )
 
 // Input is one event the driver feeds into Step.
@@ -105,8 +113,22 @@ type StepState struct {
 	ConsecutiveFailures int
 	LastGapFingerprint  string
 	StallCount          int
-	SpentUSD            float64
-	BudgetUSD           *float64
+	// Spent is this mission's spend in Budget's currency, INCLUDING any
+	// other-currency spend the driver could convert via a stored fx
+	// rate (toStepState) — 0 if there is no spend at all yet, honest
+	// zero, not a guess. MixedCurrencySpend now means "the mission has
+	// spend in a currency the driver could NOT convert" (no stored
+	// rate for that currency, or the rate itself is stale) — a
+	// convertible other-currency amount is folded into Spent instead
+	// and never sets this. RateAsOf carries the date of whichever
+	// stored rate participated in that conversion, "" when none did
+	// (single-currency spend, or spend already recorded directly in
+	// Budget's currency) — event payloads and API responses surface it
+	// as provenance for the converted number.
+	Spent              float64
+	Budget             *float64
+	MixedCurrencySpend bool
+	RateAsOf           string
 	// LastUnit reports whether the unit under review is the plan's
 	// last unit — PhaseReview's approve transition needs this to
 	// decide between advancing to execute (more units left) or done.
@@ -155,9 +177,10 @@ var DefaultConfig = Config{BackoffFailures: 3, StallRounds: 2}
 // deterministic given (state, input). Cross-cutting order, checked
 // before any input-specific switch:
 //  1. cancel is legal from any non-terminal state, checked FIRST.
-//  2. budget check (SpentUSD >= *BudgetUSD) checked second, before any
-//     input-specific handling — an over-budget mission pauses
-//     regardless of what input arrived.
+//  2. budget check (Spent >= *Budget, or unconvertible spend present —
+//     see StepState.MixedCurrencySpend) checked second, before any
+//     input-specific handling — an over-budget or unconvertible-spend
+//     mission pauses regardless of what input arrived.
 //  3. input-specific switch on (Phase, Status, Input).
 func Step(s StepState, in StepInput, cfg Config) Transition {
 	if in.Input == InputCancel {
@@ -172,10 +195,25 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 		}
 	}
 
-	if s.BudgetUSD != nil && s.SpentUSD >= *s.BudgetUSD && !s.Phase.Terminal() {
-		return Transition{
-			Next:   withPause(s, PauseBudget),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBudget)}}},
+	if s.Budget != nil && !s.Phase.Terminal() {
+		if s.MixedCurrencySpend {
+			return Transition{
+				Next: withPause(s, PauseMixedCurrency),
+				Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
+					"reason": string(PauseMixedCurrency),
+					"detail": "spend recorded in a currency with no usable stored exchange rate to convert against the mission's budget",
+				}}},
+			}
+		}
+		if s.Spent >= *s.Budget {
+			payload := map[string]any{"reason": string(PauseBudget)}
+			if s.RateAsOf != "" {
+				payload["rate_as_of"] = s.RateAsOf
+			}
+			return Transition{
+				Next:   withPause(s, PauseBudget),
+				Events: []EventDraft{{Kind: "mission.paused", Payload: payload}},
+			}
 		}
 	}
 

@@ -20,7 +20,7 @@ const catalogPrices = (() => {
 })()
 
 // estimateUnpriced prices a model-grouped series' unpriced tokens from
-// the advisory catalog. The ledger's cost_usd stays the honest record
+// the advisory catalog. The ledger's cost stays the honest record
 // (unknown price = NULL, never guessed server-side); this is a display
 // hint for what the unpriced calls would roughly cost. Models absent
 // from the catalog contribute nothing — the estimate is itself a floor.

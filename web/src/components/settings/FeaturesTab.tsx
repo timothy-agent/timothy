@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getSettings, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
+import { CURRENCIES } from '../../lib/currencies'
 import { getNotificationSoundEnabled, setNotificationSoundEnabled } from '../../lib/sound'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -68,6 +69,7 @@ export function FeaturesTab() {
         </div>
       ))}
       {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
       <NotificationSoundCard />
     </div>
   )
@@ -97,6 +99,62 @@ function NotificationSoundCard() {
         }}
         label="Notification sound"
       />
+    </div>
+  )
+}
+
+// DefaultCurrencyCard picks the ISO 4217 code new budgets (missions,
+// spend limits) default to when the user hasn't overridden it —
+// mirrors SensitiveRouteCard's fetch-on-mount / save-button shape,
+// minus the fallback-to-text-input path since the currency list is
+// static, never fetched.
+function DefaultCurrencyCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [currency, setCurrency] = useState(values.default_currency || 'USD')
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ default_currency: currency })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Default currency</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <span>Currency</span>
+          <Select value={currency} onValueChange={setCurrency}>
+            <SelectTrigger className="h-10 w-56" aria-label="Default currency">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CURRENCIES.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        New mission budgets default to this currency unless overridden at creation time.
+      </p>
     </div>
   )
 }

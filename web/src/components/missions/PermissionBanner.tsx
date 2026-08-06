@@ -9,21 +9,38 @@ function prettyArgs(raw: string): string {
   }
 }
 
+// answeredCopy describes each decision's in-flight status line, shown
+// once the broker has resolved but before the mission row's own
+// pending_permission clears (that only happens once the approved tool
+// call finishes executing, which for a long-running command can be
+// minutes — the card must not look unanswered for that whole span).
+const answeredCopy: Record<'once' | 'session' | 'deny' | 'unknown', string> = {
+  once: 'Approved — command running…',
+  session: 'Approved — command running…',
+  deny: 'Denied — returning to worker…',
+  unknown: 'Answered — waiting for the worker to continue…',
+}
+
 // PermissionBanner renders only when a mission has a live
 // pending_permission — the same once|session|deny vocabulary and tool
 // detail chat's PermissionModal shows, just inline rather than modal
-// since a mission isn't a focused single-turn interaction.
+// since a mission isn't a focused single-turn interaction. Once
+// answered (answeredDecision set), the action buttons are replaced by
+// a status line — the buttons are no longer valid after the broker
+// resolves, and a second click would just 404.
 export function PermissionBanner({
   tool,
   args,
   danger,
   rationale,
+  answeredDecision,
   onDecide,
 }: {
   tool?: string
   args?: string
   danger?: string
   rationale?: string
+  answeredDecision?: 'once' | 'session' | 'deny' | 'unknown'
   onDecide: (decision: 'once' | 'session' | 'deny') => void
 }) {
   return (
@@ -36,17 +53,23 @@ export function PermissionBanner({
           </p>
           {rationale && <p className="text-sm text-amber-800 dark:text-amber-300">{rationale}</p>}
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Button variant="ghost" size="sm" onClick={() => onDecide('deny')}>
-            Deny
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => onDecide('session')}>
-            Allow for session
-          </Button>
-          <Button size="sm" onClick={() => onDecide('once')}>
-            Allow once
-          </Button>
-        </div>
+        {answeredDecision !== undefined ? (
+          <p className="shrink-0 text-sm text-amber-800 dark:text-amber-300">
+            {answeredCopy[answeredDecision]}
+          </p>
+        ) : (
+          <div className="flex shrink-0 gap-2">
+            <Button variant="ghost" size="sm" onClick={() => onDecide('deny')}>
+              Deny
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => onDecide('session')}>
+              Allow for session
+            </Button>
+            <Button size="sm" onClick={() => onDecide('once')}>
+              Allow once
+            </Button>
+          </div>
+        )}
       </div>
       {args && (
         <pre className="max-h-48 overflow-auto rounded bg-white/60 p-3 text-xs whitespace-pre-wrap text-amber-950 dark:bg-black/20 dark:text-amber-100">

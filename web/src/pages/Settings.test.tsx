@@ -126,8 +126,8 @@ describe('Features tab sensitive tool route', () => {
       values: { sensitive_tool_route: '' },
     })
     vi.mocked(usageBudget).mockResolvedValue({
-      day: { limit_usd: null, spend_usd: 0, over: false },
-      month: { limit_usd: null, spend_usd: 0, over: false },
+      day: { currency: '', limit: null, spend: 0, over: false },
+      month: { currency: '', limit: null, spend: 0, over: false },
     })
     vi.mocked(patchSettingValues).mockResolvedValue()
   })

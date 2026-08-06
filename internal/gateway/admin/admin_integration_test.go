@@ -463,8 +463,8 @@ func TestPatchBudgetValidatesAndAudits(t *testing.T) {
 	}()
 
 	// Any invalid key rejects the whole patch before writes.
-	limit := 5.0
-	if err := adm.PatchBudget(ctx, map[string]*float64{"day": &limit, "week": &limit}); err == nil {
+	limit := &ledger.BudgetLimit{Amount: 5.0, Currency: "USD"}
+	if err := adm.PatchBudget(ctx, map[string]*ledger.BudgetLimit{"day": limit, "week": limit}); err == nil {
 		t.Fatal("unknown scope accepted")
 	}
 	var count int
@@ -474,15 +474,15 @@ func TestPatchBudgetValidatesAndAudits(t *testing.T) {
 	}
 
 	// Valid patch writes both windows and audits once.
-	month := 100.0
-	if err := adm.PatchBudget(ctx, map[string]*float64{"day": &limit, "month": &month}); err != nil {
+	month := &ledger.BudgetLimit{Amount: 100.0, Currency: "USD"}
+	if err := adm.PatchBudget(ctx, map[string]*ledger.BudgetLimit{"day": limit, "month": month}); err != nil {
 		t.Fatalf("patch: %v", err)
 	}
 	limits, err := ledger.NewBudgetStore(pool).Limits(ctx)
 	if err != nil {
 		t.Fatalf("limits: %v", err)
 	}
-	if limits.Day == nil || *limits.Day != limit || limits.Month == nil || *limits.Month != month {
+	if limits.Day == nil || limits.Day.Amount != limit.Amount || limits.Month == nil || limits.Month.Amount != month.Amount {
 		t.Fatalf("limits = %+v, want day=%v month=%v", limits, limit, month)
 	}
 	var audits int

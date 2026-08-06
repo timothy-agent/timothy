@@ -73,19 +73,19 @@ func seedAgg(t *testing.T, led *Ledger) (from, to time.Time) {
 	rows := []Entry{
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20},
-			LatencyMS: 100, Status: "ok", CostUSD: usd(0.10)},
+			LatencyMS: 100, Status: "ok", Cost: usd(0.10)},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
-			LatencyMS: 300, Status: "ok", CostUSD: usd(0.20)},
+			LatencyMS: 300, Status: "ok", Cost: usd(0.20)},
 		{Provider: aggMarker + "b", Model: "m2", Route: "mini", SessionID: "s2",
 			Usage:     &stream.Usage{InputTokens: 10, OutputTokens: 5},
-			LatencyMS: 50, Status: "ok", CostUSD: usd(0.01)},
+			LatencyMS: 50, Status: "ok", Cost: usd(0.01)},
 		{Provider: aggMarker + "b", Model: "m2", Route: "mini", SessionID: "s2",
 			LatencyMS: 5, Status: "error", ErrorCode: "provider_error"},
 		// Test-connection probe: excluded from every aggregate.
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", Purpose: "test",
 			Usage:     &stream.Usage{InputTokens: 999999, OutputTokens: 999999},
-			LatencyMS: 9999, Status: "ok", CostUSD: usd(99.0)},
+			LatencyMS: 9999, Status: "ok", Cost: usd(99.0)},
 	}
 	for _, e := range rows {
 		led.Record(ctx, e)
@@ -109,7 +109,7 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 	for _, p := range points {
 		if len(p.Group) >= len(aggMarker) && p.Group[:len(aggMarker)] == aggMarker {
 			agg := byProvider[p.Group]
-			agg.CostUSD += p.CostUSD
+			agg.Cost += p.Cost
 			agg.InputTokens += p.InputTokens
 			agg.OutputTokens += p.OutputTokens
 			agg.Requests += p.Requests
@@ -119,21 +119,98 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 	}
 	a, b := byProvider[aggMarker+"a"], byProvider[aggMarker+"b"]
 	// Provider a: 2 real rows (the 99-dollar test probe must be gone).
-	if a.Requests != 2 || a.CostUSD != 0.30 || a.InputTokens != 300 || a.OutputTokens != 150 {
+	if a.Requests != 2 || a.Cost != 0.30 || a.InputTokens != 300 || a.OutputTokens != 150 {
 		t.Fatalf("provider a = %+v, want 2 req / $0.30 / 300 in / 150 out", a)
 	}
-	if b.Requests != 2 || b.Errors != 1 || b.CostUSD != 0.01 {
+	if b.Requests != 2 || b.Errors != 1 || b.Cost != 0.01 {
 		t.Fatalf("provider b = %+v, want 2 req / 1 error / $0.01", b)
 	}
 
 	// Summary-level exclusion: the $99 probe would dominate any real
 	// total in this window; its absence proves the purpose filter.
-	sum, err := agg.Summary(t.Context(), from, to)
+	// The window may span more than one currency in a shared DB, so sum
+	// the USD row specifically rather than assuming SummaryByCurrency
+	// returns exactly one entry.
+	summaries, err := agg.SummaryByCurrency(t.Context(), from, to)
 	if err != nil {
-		t.Fatalf("Summary: %v", err)
+		t.Fatalf("SummaryByCurrency: %v", err)
 	}
-	if sum.Requests < 4 || sum.CostUSD >= 99 {
-		t.Fatalf("summary = %+v, want >=4 requests and the $99 test probe excluded", sum)
+	var usdRequests int64
+	var usdCost float64
+	for _, s := range summaries {
+		if s.Currency == "USD" {
+			usdRequests, usdCost = s.Requests, s.Cost
+		}
+	}
+	if usdRequests < 4 || usdCost >= 99 {
+		t.Fatalf("USD summary requests=%d cost=%v, want >=4 requests and the $99 test probe excluded", usdRequests, usdCost)
+	}
+}
+
+// TestAggregateSeriesAndTotalsSplitByCurrency confirms Series and
+// Totals never sum a group's cost across billing currencies: two rows
+// for the same provider, one in USD and one in EUR, come back as two
+// separate rows (same group, different currency), each with its own
+// cost — not one row with a blended (meaningless) total.
+func TestAggregateSeriesAndTotalsSplitByCurrency(t *testing.T) {
+	agg, led := testAggregator(t)
+	ctx := t.Context()
+	provider := aggMarker + "multi-currency"
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+
+	led.Record(ctx, Entry{
+		Provider: provider, Model: "m1", Route: "coding",
+		Usage: &stream.Usage{InputTokens: 100, OutputTokens: 50},
+		LatencyMS: 100, Status: "ok", Cost: usd(1.00), Currency: "USD",
+	})
+	led.Record(ctx, Entry{
+		Provider: provider, Model: "m1", Route: "coding",
+		Usage: &stream.Usage{InputTokens: 200, OutputTokens: 100},
+		LatencyMS: 100, Status: "ok", Cost: usd(2.00), Currency: "EUR",
+	})
+	from, to := base, time.Now().UTC().Add(time.Hour)
+
+	totals, err := agg.Totals(ctx, from, to, "provider")
+	if err != nil {
+		t.Fatalf("Totals: %v", err)
+	}
+	var usdRow, eurRow *GroupTotal
+	for i := range totals {
+		if totals[i].Group != provider {
+			continue
+		}
+		switch totals[i].Currency {
+		case "USD":
+			usdRow = &totals[i]
+		case "EUR":
+			eurRow = &totals[i]
+		}
+	}
+	if usdRow == nil || eurRow == nil {
+		t.Fatalf("Totals for %s = %+v, want separate USD and EUR rows", provider, totals)
+	}
+	if usdRow.Cost != 1.00 || eurRow.Cost != 2.00 {
+		t.Fatalf("Totals cost = USD:%v EUR:%v, want USD:1.00 EUR:2.00 (never summed together)", usdRow.Cost, eurRow.Cost)
+	}
+
+	points, err := agg.Series(ctx, from, to, "day", "provider")
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	var usdCost, eurCost float64
+	for _, p := range points {
+		if p.Group != provider {
+			continue
+		}
+		switch p.Currency {
+		case "USD":
+			usdCost += p.Cost
+		case "EUR":
+			eurCost += p.Cost
+		}
+	}
+	if usdCost != 1.00 || eurCost != 2.00 {
+		t.Fatalf("Series cost = USD:%v EUR:%v, want USD:1.00 EUR:2.00 (never summed together)", usdCost, eurCost)
 	}
 }
 
@@ -153,10 +230,10 @@ func TestAggregateTotalsGroupsWholeRangeExcludingTest(t *testing.T) {
 	// Same fixture as the Series-based summary test: 2 real rows for
 	// provider a ($0.30, 300 in / 150 out), 2 for b ($0.01) — the $99
 	// test probe must be absent from both the row count and the sum.
-	if a.Requests != 2 || a.CostUSD != 0.30 || a.InputTokens != 300 || a.OutputTokens != 150 {
+	if a.Requests != 2 || a.Cost != 0.30 || a.InputTokens != 300 || a.OutputTokens != 150 {
 		t.Fatalf("totals[a] = %+v, want 2 req / $0.30 / 300 in / 150 out", a)
 	}
-	if b.Requests != 2 || b.CostUSD != 0.01 {
+	if b.Requests != 2 || b.Cost != 0.01 {
 		t.Fatalf("totals[b] = %+v, want 2 req / $0.01", b)
 	}
 
@@ -173,10 +250,10 @@ func TestAggregateMissionUsage(t *testing.T) {
 	rows := []Entry{
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50},
-			LatencyMS: 100, Status: "ok", CostUSD: usd(0.10)},
+			LatencyMS: 100, Status: "ok", Cost: usd(0.10)},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
-			LatencyMS: 100, Status: "ok", CostUSD: usd(0.20)},
+			LatencyMS: 100, Status: "ok", Cost: usd(0.20)},
 		// A fallback to a second model — the whole point of Models: a
 		// route is a chain, not one model, so both must show up.
 		{Provider: aggMarker + "a", Model: "m-local", Route: "coding", MissionID: mission,
@@ -185,10 +262,10 @@ func TestAggregateMissionUsage(t *testing.T) {
 		// Another mission and a test probe: both excluded.
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: aggMarker + "other",
 			Usage:     &stream.Usage{InputTokens: 1000, OutputTokens: 1000},
-			LatencyMS: 100, Status: "ok", CostUSD: usd(9.0)},
+			LatencyMS: 100, Status: "ok", Cost: usd(9.0)},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission, Purpose: "test",
 			Usage:     &stream.Usage{InputTokens: 999999, OutputTokens: 999999},
-			LatencyMS: 100, Status: "ok", CostUSD: usd(99.0)},
+			LatencyMS: 100, Status: "ok", Cost: usd(99.0)},
 	}
 	for _, e := range rows {
 		led.Record(ctx, e)
@@ -198,7 +275,7 @@ func TestAggregateMissionUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mission: %v", err)
 	}
-	if got.MissionID != mission || got.CostUSD != 0.30 || got.InputTokens != 340 ||
+	if got.MissionID != mission || got.CostByCurrency["USD"] != 0.30 || got.InputTokens != 340 ||
 		got.OutputTokens != 170 || got.Requests != 3 || got.UnpricedRequests != 1 {
 		t.Fatalf("Mission = %+v, want mission_id=%s cost=0.30 in=340 out=170 requests=3 unpriced=1",
 			got, mission)
@@ -222,8 +299,37 @@ func TestAggregateMissionUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mission(empty): %v", err)
 	}
-	if empty.Requests != 0 || empty.CostUSD != 0 || len(empty.Models) != 0 {
+	if empty.Requests != 0 || len(empty.CostByCurrency) != 0 || len(empty.Models) != 0 {
 		t.Fatalf("empty mission = %+v, want zeros and no models", empty)
+	}
+}
+
+// TestAggregateMissionUsageMixedCurrency confirms a mission that spent
+// in two different billing currencies gets both totals back distinct
+// — never summed together, since that would require a guessed FX
+// rate (D-013's spend-side sibling invariant).
+func TestAggregateMissionUsageMixedCurrency(t *testing.T) {
+	agg, led := testAggregator(t)
+	ctx := t.Context()
+	mission := aggMarker + "mixed-mission"
+
+	led.Record(ctx, Entry{
+		Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
+		Usage: &stream.Usage{InputTokens: 100, OutputTokens: 50},
+		LatencyMS: 100, Status: "ok", Cost: usd(0.10), Currency: "USD",
+	})
+	led.Record(ctx, Entry{
+		Provider: aggMarker + "eu", Model: "m2", Route: "coding", MissionID: mission,
+		Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5},
+		LatencyMS: 100, Status: "ok", Cost: usd(0.05), Currency: "EUR",
+	})
+
+	got, err := agg.Mission(ctx, mission)
+	if err != nil {
+		t.Fatalf("Mission: %v", err)
+	}
+	if len(got.CostByCurrency) != 2 || got.CostByCurrency["USD"] != 0.10 || got.CostByCurrency["EUR"] != 0.05 {
+		t.Fatalf("CostByCurrency = %+v, want {USD: 0.10, EUR: 0.05}", got.CostByCurrency)
 	}
 }
 

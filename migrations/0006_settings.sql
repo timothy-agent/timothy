@@ -8,10 +8,13 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Spend budgets for the alert surface: at most one USD limit per
--- window. Absent row = no budget set, nothing to alert on.
+-- Spend budgets for the alert surface: at most one limit per window,
+-- scoped to a single currency (no FX conversion anywhere in this
+-- codebase — spend is only ever compared within the same currency).
+-- Absent row = no budget set, nothing to alert on.
 CREATE TABLE IF NOT EXISTS spend_budgets (
-    scope      text PRIMARY KEY CHECK (scope IN ('day', 'month')),
-    limit_usd  numeric(12, 2) NOT NULL CHECK (limit_usd > 0),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    scope         text PRIMARY KEY CHECK (scope IN ('day', 'month')),
+    limit_amount  numeric(12, 2) NOT NULL CHECK (limit_amount > 0),
+    currency      char(3) NOT NULL DEFAULT 'USD',
+    updated_at    timestamptz NOT NULL DEFAULT now()
 );

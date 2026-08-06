@@ -44,7 +44,7 @@ func (s *Store) SetHub(hub *Hub) {
 
 const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, pause_message,
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
-	consecutive_failures, last_gap_fingerprint, stall_count, budget_usd, route, review_route,
+	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	escalation_route, prompt_overlay,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
@@ -60,7 +60,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
-		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetUSD, &m.Route, &m.ReviewRoute,
+		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.EscalationRoute, &m.PromptOverlay,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
@@ -116,10 +116,14 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		return "", fmt.Errorf("missions create spec: %w", err)
 	}
 	var id string
+	budgetCurrency := m.BudgetCurrency
+	if budgetCurrency == "" {
+		budgetCurrency = "USD"
+	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_usd, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::uuid, $12) RETURNING id`,
-		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetUSD, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe,
+			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, $13) RETURNING id`,
+		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -701,6 +705,43 @@ func (s *Store) RecoverStaleWorking(ctx context.Context, staleAfter time.Duratio
 			return nil, fmt.Errorf("missions recover stale working: %w", err)
 		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MissionSpend is a mission's cost_ledger footprint broken out by
+// billing currency — never summed across currencies (see toStepState).
+type MissionSpend struct {
+	ByCurrency map[string]float64
+}
+
+// Spend totals a mission's ledger cost per currency. Rows with cost
+// NULL (unpriced calls) contribute 0, same as everywhere else in this
+// codebase that treats "unknown price" as best-effort zero for
+// brake/alert purposes while still recording NULL, never a guess, at
+// write time (D-013). Only currencies with at least one ledger row for
+// this mission appear in the map — an absent key means zero spend in
+// that currency, same as a present zero.
+func (s *Store) Spend(ctx context.Context, missionID string) (MissionSpend, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT currency, COALESCE(SUM(cost), 0)
+		FROM cost_ledger WHERE mission_id = $1 GROUP BY currency`, missionID)
+	if err != nil {
+		return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
+	}
+	defer rows.Close()
+
+	out := MissionSpend{ByCurrency: map[string]float64{}}
+	for rows.Next() {
+		var currency string
+		var total float64
+		if err := rows.Scan(&currency, &total); err != nil {
+			return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
+		}
+		out.ByCurrency[currency] = total
 	}
 	return out, rows.Err()
 }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"regexp"
+	"strings"
 )
 
 // DangerLevel classifies a shell command's blast radius.
@@ -118,6 +119,21 @@ var harmlessRedirects = regexp.MustCompile(`[0-9]?>>?\s*/dev/null|[0-9]?>&[0-9]`
 // obfuscation) back to a space so token patterns still match.
 var ifsExpansion = regexp.MustCompile(`\$\{?IFS\}?`)
 
+// opaqueRulePrefix marks a matched-rules entry as having come from
+// opaqueForms rather than the explicit dangerRules table — Resolve
+// (D-050) checks this prefix to tell "cannot be classified" apart from
+// "classified as explicitly destructive," since only the former may
+// relax inside a sandbox-confined session.
+const opaqueRulePrefix = "opaque command ("
+
+// IsOpaqueRationale reports whether matchedRules (as returned by
+// ClassifyCommand) names an opaque form rather than an explicit
+// dangerRules match — the D-050 sandbox relaxation applies only to the
+// former.
+func IsOpaqueRationale(matchedRules []string) bool {
+	return len(matchedRules) == 1 && strings.HasPrefix(matchedRules[0], opaqueRulePrefix)
+}
+
 // ClassifyCommand scores a shell command against the danger table and
 // returns the level plus the names of matched rules (for the
 // permission prompt's rationale). Obfuscation the classifier cannot
@@ -127,7 +143,7 @@ func ClassifyCommand(command string) (DangerLevel, []string) {
 	// classifier cannot reason about it — force a prompt.
 	for _, f := range opaqueForms {
 		if f.pattern.MatchString(command) {
-			return DangerDestructive, []string{"opaque command (" + f.name + "): cannot be classified, approval required"}
+			return DangerDestructive, []string{opaqueRulePrefix + f.name + "): cannot be classified, approval required"}
 		}
 	}
 

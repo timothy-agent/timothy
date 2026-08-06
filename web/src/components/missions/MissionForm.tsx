@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { createMission, createSchedule, patchSchedule } from '../../api/client'
+import { createMission, createSchedule, getSettings, patchSchedule } from '../../api/client'
 import type { AdminAgent, Schedule } from '../../api/types'
 import { useAgents } from '../AgentPicker'
 import { slugify } from '../settings/AgentForm'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
+import { CURRENCIES } from '../../lib/currencies'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
@@ -51,8 +52,24 @@ export function MissionForm({
   const [reviewRoute, setReviewRoute] = useState('')
   const [escalationRoute, setEscalationRoute] = useState('')
   const [budget, setBudget] = useState('')
+  const [budgetCurrency, setBudgetCurrency] = useState('USD')
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
   const [busy, setBusy] = useState(false)
+
+  // Pre-select the settings page's configured default currency for a
+  // fresh create — edit mode below overwrites this with the schedule's
+  // own saved currency once it loads.
+  useEffect(() => {
+    if (mode !== 'create') return
+    getSettings()
+      .then((s) => {
+        const v = s.values.default_currency
+        if (v) setBudgetCurrency(v)
+      })
+      .catch(() => {
+        // Best-effort: falls back to the USD default already set.
+      })
+  }, [mode])
 
   // Repeat-on-schedule fields — read/submitted whenever repeat is on
   // (create mode) or always (edit mode, which only ever edits a
@@ -84,8 +101,11 @@ export function MissionForm({
         : '',
     )
     setBudget(
-      schedule.mission_template.budget_usd != null ? String(schedule.mission_template.budget_usd) : '',
+      schedule.mission_template.budget_amount != null
+        ? String(schedule.mission_template.budget_amount)
+        : '',
     )
+    setBudgetCurrency(schedule.mission_template.budget_currency || 'USD')
     setExpiresAt(schedule.expires_at ? schedule.expires_at.slice(0, 16) : '')
     setCronError(null)
   }, [mode, schedule])
@@ -128,7 +148,8 @@ export function MissionForm({
       route: route || undefined,
       review_route: reviewRoute || undefined,
       escalation_route: escalationRoute || undefined,
-      budget_usd: budget ? Number(budget) : undefined,
+      budget_amount: budget ? Number(budget) : undefined,
+      budget_currency: budget ? budgetCurrency : undefined,
       auto_approve_safe: autoApproveSafe,
     })
     toast.success('Mission created')
@@ -146,7 +167,8 @@ export function MissionForm({
         route: route || undefined,
         review_route: reviewRoute || undefined,
         max_iterations: maxIterations ? Number(maxIterations) : undefined,
-        budget_usd: budget ? Number(budget) : undefined,
+        budget_amount: budget ? Number(budget) : undefined,
+        budget_currency: budget ? budgetCurrency : undefined,
         auto_approve_safe: autoApproveSafe,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
@@ -167,7 +189,8 @@ export function MissionForm({
         route: route || undefined,
         review_route: reviewRoute || undefined,
         max_iterations: maxIterations ? Number(maxIterations) : undefined,
-        budget_usd: budget ? Number(budget) : undefined,
+        budget_amount: budget ? Number(budget) : undefined,
+        budget_currency: budget ? budgetCurrency : undefined,
         auto_approve_safe: autoApproveSafe,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
@@ -418,14 +441,29 @@ export function MissionForm({
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="mission-budget">Budget (USD)</Label>
-              <Input
-                id="mission-budget"
-                type="number"
-                value={budget}
-                onChange={(e) => setBudget(e.target.value)}
-                placeholder="No limit"
-              />
+              <Label htmlFor="mission-budget">Budget</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="mission-budget"
+                  type="number"
+                  value={budget}
+                  onChange={(e) => setBudget(e.target.value)}
+                  placeholder="No limit"
+                  className="flex-1"
+                />
+                <Select value={budgetCurrency} onValueChange={setBudgetCurrency}>
+                  <SelectTrigger className="w-24" aria-label="Budget currency">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CURRENCIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <label
               htmlFor="mission-auto-approve"

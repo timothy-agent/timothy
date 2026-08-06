@@ -64,7 +64,13 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     latency_ms         integer NOT NULL,
     status             text NOT NULL,
     error_code         text,
-    cost_usd           numeric(12, 6),
+    cost               numeric(12, 6),
+    -- Provider's billing currency (D-013's cost-honesty sibling: no FX
+    -- conversion happens anywhere in this codebase, so this column
+    -- must always match the currency the provider actually billed in).
+    -- All current providers bill USD; the column exists so a future
+    -- non-USD provider doesn't silently get mislabeled as USD.
+    currency           char(3) NOT NULL DEFAULT 'USD',
     -- Distinguish WHY a call was made from WHICH route served it:
     -- distill, auto-title, and compaction summaries all ride cheap
     -- routes, so the route alone cannot separate internal calls from
@@ -93,6 +99,23 @@ CREATE TABLE IF NOT EXISTS admin_audit (
 );
 
 CREATE INDEX IF NOT EXISTS admin_audit_ts_idx ON admin_audit (ts);
+
+-- Daily USD-base reference rates for DISPLAY conversion only (D-013's
+-- honesty invariant is unchanged: cost_ledger.cost/currency are never
+-- rewritten, and nothing here feeds back into what a provider was
+-- actually billed). Append-only by day: a (base, quote, as_of) row is
+-- never updated once written, so a rate a UI already showed stays
+-- reproducible. base is always 'USD' today (internal/brain/fxrates'
+-- fetcher's only source), kept as a column rather than assumed so a
+-- future non-USD-base source doesn't need a schema change.
+CREATE TABLE IF NOT EXISTS fx_rates (
+    base       char(3) NOT NULL,
+    quote      char(3) NOT NULL,
+    rate       numeric NOT NULL,
+    as_of      date NOT NULL,
+    fetched_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (base, quote, as_of)
+);
 
 -- Seed only the route NAMES the code references — no providers, no
 -- chains, no opinions (the user configures providers in Settings and

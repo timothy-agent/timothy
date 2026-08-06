@@ -70,19 +70,19 @@ func TestHandleTotalsGroupsWholeRangeAsJSON(t *testing.T) {
 	led.Record(ctx, ledger.Entry{
 		Provider: usageMarker + "p1", Model: "m1", Route: "coding",
 		Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50},
-		LatencyMS: 10, Status: "ok", CostUSD: usd(0.05),
+		LatencyMS: 10, Status: "ok", Cost: usd(0.05),
 	})
 	led.Record(ctx, ledger.Entry{
 		Provider: usageMarker + "p1", Model: "m1", Route: "coding",
 		Usage:     &stream.Usage{InputTokens: 40, OutputTokens: 10},
-		LatencyMS: 10, Status: "ok", CostUSD: usd(0.02),
+		LatencyMS: 10, Status: "ok", Cost: usd(0.02),
 	})
 	// A test-connection probe: must be excluded from the totals, same
 	// as every other aggregate on this ledger.
 	led.Record(ctx, ledger.Entry{
 		Provider: usageMarker + "p1", Model: "m1", Route: "coding", Purpose: "test",
 		Usage:     &stream.Usage{InputTokens: 999999, OutputTokens: 999999},
-		LatencyMS: 10, Status: "ok", CostUSD: usd(99.0),
+		LatencyMS: 10, Status: "ok", Cost: usd(99.0),
 	})
 
 	to := time.Now().UTC().Add(time.Hour)
@@ -110,7 +110,7 @@ func TestHandleTotalsGroupsWholeRangeAsJSON(t *testing.T) {
 	if got == nil {
 		t.Fatalf("provider %q missing from totals: %+v", usageMarker+"p1", out.Totals)
 	}
-	if got.Requests != 2 || got.CostUSD != 0.07 || got.InputTokens != 140 || got.OutputTokens != 60 {
+	if got.Requests != 2 || got.Cost != 0.07 || got.InputTokens != 140 || got.OutputTokens != 60 {
 		t.Fatalf("totals[p1] = %+v, want 2 req / $0.07 / 140 in / 60 out (test probe excluded)", got)
 	}
 }

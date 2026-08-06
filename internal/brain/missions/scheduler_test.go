@@ -119,7 +119,7 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			name:     "empty template fields fill from resolved agent",
 			template: MissionTemplate{Goal: "g", AgentID: "briefing"},
 			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
-				return AgentDefaults{Route: "fast", ReviewRoute: "careful", BudgetUSD: &budget, PromptOverlay: "overlay text"}, true
+				return AgentDefaults{Route: "fast", ReviewRoute: "careful", BudgetAmount: &budget, PromptOverlay: "overlay text"}, true
 			},
 			wantRoute:   "fast",
 			wantReview:  "careful",
@@ -148,10 +148,10 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			if got.ReviewRoute != tc.wantReview {
 				t.Errorf("ReviewRoute = %q, want %q", got.ReviewRoute, tc.wantReview)
 			}
-			if (got.BudgetUSD == nil) != (tc.wantBudget == nil) {
-				t.Errorf("BudgetUSD = %v, want %v", got.BudgetUSD, tc.wantBudget)
-			} else if got.BudgetUSD != nil && *got.BudgetUSD != *tc.wantBudget {
-				t.Errorf("BudgetUSD = %v, want %v", *got.BudgetUSD, *tc.wantBudget)
+			if (got.BudgetAmount == nil) != (tc.wantBudget == nil) {
+				t.Errorf("BudgetAmount = %v, want %v", got.BudgetAmount, tc.wantBudget)
+			} else if got.BudgetAmount != nil && *got.BudgetAmount != *tc.wantBudget {
+				t.Errorf("BudgetAmount = %v, want %v", *got.BudgetAmount, *tc.wantBudget)
 			}
 			if overlay != tc.wantOverlay {
 				t.Errorf("overlay = %q, want %q", overlay, tc.wantOverlay)

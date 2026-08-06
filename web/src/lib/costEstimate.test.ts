@@ -6,7 +6,8 @@ function point(overrides: Partial<UsagePoint>): UsagePoint {
   return {
     bucket: '2026-07-24T00:00:00Z',
     group: 'gpt-5.6-sol',
-    cost_usd: 0,
+    currency: 'USD',
+    cost: 0,
     input_tokens: 0,
     output_tokens: 0,
     requests: 1,
@@ -30,7 +31,7 @@ describe('estimateUnpriced', () => {
   it('skips models absent from the catalog and priced usage', () => {
     const est = estimateUnpriced([
       point({ group: 'my-local-finetune', unpriced_input_tokens: 5_000_000 }),
-      point({ cost_usd: 1.23, input_tokens: 100_000 }), // priced: no unpriced tokens
+      point({ cost: 1.23, input_tokens: 100_000 }), // priced: no unpriced tokens
     ])
     expect(est.size).toBe(0)
     expect(totalEstimate(est)).toBe(0)

@@ -5,6 +5,7 @@ import type {
   AdminRoute,
   AdminTool,
   AvailableModel,
+  BudgetLimit,
   BudgetStatus,
   CacheRow,
   ChainEntry,
@@ -468,8 +469,14 @@ function rangeParams(from: Date, to: Date, extra: Record<string, string> = {}): 
   return params.toString()
 }
 
-export async function usageSummary(from: Date, to: Date): Promise<UsageSummary> {
-  return request<UsageSummary>(`/v1/admin/usage/summary?${rangeParams(from, to)}`)
+// usageSummary returns one row per billing currency present in the
+// range — never summed together (D-013's spend-side sibling: no FX
+// conversion anywhere in this codebase).
+export async function usageSummary(from: Date, to: Date): Promise<UsageSummary[]> {
+  const { summaries } = await request<{ summaries: UsageSummary[] }>(
+    `/v1/admin/usage/summary?${rangeParams(from, to)}`,
+  )
+  return summaries ?? []
 }
 
 export async function usageSeries(
@@ -520,11 +527,11 @@ export async function usageBudget(): Promise<BudgetStatus> {
   return request<BudgetStatus>('/v1/admin/usage/budget')
 }
 
-// patchBudget updates spend limits per window: a number sets, null
-// clears, an absent key stays untouched.
+// patchBudget updates spend limits per window: a BudgetLimit sets,
+// null clears, an absent key stays untouched.
 export async function patchBudget(changes: {
-  day?: number | null
-  month?: number | null
+  day?: BudgetLimit | null
+  month?: BudgetLimit | null
 }): Promise<void> {
   await request<void>('/v1/admin/usage/budget', {
     method: 'PATCH',
@@ -841,7 +848,8 @@ export interface CreateMissionInput {
   review_route?: string
   escalation_route?: string
   max_iterations?: number
-  budget_usd?: number
+  budget_amount?: number
+  budget_currency?: string
   auto_approve_safe?: boolean
 }
 

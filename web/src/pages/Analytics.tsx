@@ -41,8 +41,41 @@ function rangeDates(key: string): { from: Date; to: Date; bucket: 'hour' | 'day'
   return { from, to, bucket: r.bucket }
 }
 
-function money(v: number): string {
-  return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`
+// money labels an amount with its billing currency code rather than
+// assuming "$"/USD — the ledger itself never converts (D-013): this
+// always renders the amount exactly as recorded.
+function money(v: number, currency = 'USD'): string {
+  if (v === 0) return `${currency} 0`
+  return v >= 1 ? `${currency} ${v.toFixed(2)}` : `${currency} ${v.toFixed(4)}`
+}
+
+// ConvertedRow is the shape brain's usage decorator adds to a
+// {cost|amount, currency} row: converted_amount/currency, present only
+// when a stored fx rate exists (never a guess) and it differs from the
+// row's own currency.
+interface ConvertedRow {
+  currency: string
+  converted_amount?: number
+  converted_currency?: string
+}
+
+// primaryMoney renders the user's default_currency figure as the
+// headline number when the server could convert this row (a stored fx
+// rate exists), falling back to the row's own billing currency
+// otherwise — never blocking on a rate that doesn't exist yet.
+function primaryMoney(row: ConvertedRow, amount: number): string {
+  if (row.converted_amount != null && row.converted_currency) {
+    return money(row.converted_amount, row.converted_currency)
+  }
+  return money(amount, row.currency)
+}
+
+// secondaryMoney is the original billing-currency amount, shown muted
+// next to a converted primary figure — omitted when nothing converted
+// (the primary IS the original amount already).
+function secondaryMoney(row: ConvertedRow, amount: number): string | undefined {
+  if (row.converted_amount == null || !row.converted_currency) return undefined
+  return money(amount, row.currency)
 }
 
 function compact(v: number): string {
@@ -52,7 +85,10 @@ function compact(v: number): string {
 }
 
 interface Loaded {
-  summary: UsageSummary
+  // One summary row per billing currency present in the range — never
+  // summed together. The header tiles show the dominant (first) row;
+  // any additional currencies get their own note below the tiles.
+  summaries: UsageSummary[]
   byProvider: UsagePoint[]
   byModel: UsagePoint[]
   byRoute: UsagePoint[]
@@ -83,18 +119,39 @@ function pivot(points: UsagePoint[], metric: (p: UsagePoint) => number, onlyGrou
   return { groups, rows: [...rows.values()] }
 }
 
+// TotalsRow is one group's collapsed totals — extends ConvertedRow so
+// primaryMoney/secondaryMoney work on it directly.
+interface TotalsRow extends ConvertedRow {
+  group: string
+  cost: number
+  requests: number
+  errors: number
+  tokens: number
+}
+
 // totals collapses a series into one row per group for the tables.
-function totals(points: UsagePoint[]) {
-  const acc = new Map<string, { cost: number; requests: number; errors: number; tokens: number }>()
+// Grouped by (group, currency) so a group's cost is never summed
+// across billing currencies — in practice this is almost always one
+// currency, but the split stays correct if that ever changes.
+// converted_amount is summed the same way: every point in range was
+// decorated against the same target currency and rate, so summing the
+// per-bucket converted figures is exactly as safe as summing cost.
+function totals(points: UsagePoint[]): TotalsRow[] {
+  const acc = new Map<string, TotalsRow>()
   for (const p of points) {
-    const t = acc.get(p.group) ?? { cost: 0, requests: 0, errors: 0, tokens: 0 }
-    t.cost += p.cost_usd
+    const key = `${p.group} ${p.currency}`
+    const t = acc.get(key) ?? {
+      group: p.group, currency: p.currency, cost: 0, requests: 0, errors: 0, tokens: 0,
+      converted_amount: p.converted_amount != null ? 0 : undefined, converted_currency: p.converted_currency,
+    }
+    t.cost += p.cost
     t.requests += p.requests
     t.errors += p.errors
     t.tokens += p.input_tokens + p.output_tokens
-    acc.set(p.group, t)
+    if (t.converted_amount != null && p.converted_amount != null) t.converted_amount += p.converted_amount
+    acc.set(key, t)
   }
-  return [...acc.entries()].sort((a, b) => b[1].cost - a[1].cost)
+  return [...acc.values()].sort((a, b) => b.cost - a.cost)
 }
 
 const bucketLabel = (iso: string, bucket: string) => {
@@ -128,19 +185,6 @@ export function Analytics() {
   useEffect(() => {
     const { from, to, bucket } = rangeDates(range)
 
-    const emptySummary: UsageSummary = {
-      cost_usd: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      requests: 0,
-      errors: 0,
-      unpriced_requests: 0,
-      unpriced_input_tokens: 0,
-      unpriced_output_tokens: 0,
-    }
-
     let live = true
     setError(null)
     Promise.allSettled([
@@ -162,7 +206,7 @@ export function Analytics() {
         return r.status === 'fulfilled' ? r.value : fallback
       }
       setData({
-        summary: val(results[0], emptySummary),
+        summaries: val(results[0], []),
         byProvider: val(results[1], []),
         byModel: val(results[2], []),
         byRoute: val(results[3], []),
@@ -191,16 +235,29 @@ export function Analytics() {
   // the provider/model cost tables and bar charts, but never from
   // token charts fed by the same series.
   const pricedProviders = useMemo(
-    () => new Set((data?.providerTotals ?? []).filter((g) => g.cost_usd > 0).map((g) => g.group)),
+    () => new Set((data?.providerTotals ?? []).filter((g) => g.cost > 0).map((g) => g.group)),
     [data],
   )
   const pricedModels = useMemo(
-    () => new Set((data?.modelTotals ?? []).filter((g) => g.cost_usd > 0).map((g) => g.group)),
+    () => new Set((data?.modelTotals ?? []).filter((g) => g.cost > 0).map((g) => g.group)),
     [data],
   )
 
+  // Charts plot the user's default_currency figure when the server
+  // could convert a point (converted_amount present), the raw billing
+  // amount otherwise — a point in a foreign currency with no stored
+  // rate falls back to its recorded amount rather than vanishing.
+  const chartCost = (p: UsagePoint) => p.converted_amount ?? p.cost
+  const chartCurrency = useMemo(() => {
+    for (const p of data?.byProvider ?? []) {
+      if (p.converted_currency) return p.converted_currency
+    }
+    return data?.byProvider.find((p) => p.cost > 0)?.currency ?? 'USD'
+  }, [data])
+  const chartMoney = (v: number) => money(v, chartCurrency)
+
   const cost = useMemo(
-    () => (data ? pivot(data.byProvider, (p) => p.cost_usd, pricedProviders) : { groups: [], rows: [] }),
+    () => (data ? pivot(data.byProvider, chartCost, pricedProviders) : { groups: [], rows: [] }),
     [data, pricedProviders],
   )
   const tokens = useMemo(() => {
@@ -216,7 +273,7 @@ export function Analytics() {
   }, [data])
 
   const modelCost = useMemo(
-    () => (data ? pivot(data.byModel, (p) => p.cost_usd, pricedModels) : { groups: [], rows: [] }),
+    () => (data ? pivot(data.byModel, chartCost, pricedModels) : { groups: [], rows: [] }),
     [data, pricedModels],
   )
   const modelTokens = useMemo(
@@ -225,7 +282,7 @@ export function Analytics() {
   )
 
   // Advisory estimates for calls the ledger recorded without a price
-  // (cost_usd NULL). Computed client-side from the model catalog and
+  // (cost NULL). Computed client-side from the model catalog and
   // always shown with a ≈ so they never masquerade as accounting.
   const estimates = useMemo(
     () => (data ? estimateUnpriced(data.byModel) : new Map<string, number>()),
@@ -240,15 +297,25 @@ export function Analytics() {
     return read + fresh > 0 ? read / (read + fresh) : 0
   }, [data])
 
-  const s = data?.summary
+  // The dominant currency's summary row drives the header tiles — in
+  // practice almost everything is one currency; any additional
+  // currencies present in range get their own note below the tiles
+  // rather than being folded into these numbers.
+  const s = data?.summaries[0]
+  const otherSummaries = data?.summaries.slice(1) ?? []
   const budget = data?.budget
-  const budgetHint = (w?: { limit_usd: number | null }) =>
-    w?.limit_usd != null ? `of ${money(w.limit_usd)} budget` : undefined
+  const budgetHint = (w?: { limit: { amount: number; currency: string } | null }) =>
+    w?.limit != null ? `of ${money(w.limit.amount, w.limit.currency)} budget` : undefined
   const spendLabel =
     range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : 'Spend this month'
   const spendHint = range === 'today' ? budgetHint(budget?.day) : range === '30d' ? budgetHint(budget?.month) : undefined
+  const spendOriginal = s ? secondaryMoney(s, s.cost) : undefined
   const tiles = [
-    { label: spendLabel, value: s ? money(s.cost_usd) : 'N/A', hint: spendHint },
+    {
+      label: spendLabel,
+      value: s ? primaryMoney(s, s.cost) : 'N/A',
+      hint: spendOriginal ? `${spendOriginal} billed` : spendHint,
+    },
     {
       label: 'Requests',
       value: s ? compact(s.requests) : 'N/A',
@@ -312,11 +379,11 @@ export function Analytics() {
             className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-400"
           >
             {[
-              budget.day.over && budget.day.limit_usd != null
-                ? `Daily budget reached: ${money(budget.day.spend_usd)} spent of ${money(budget.day.limit_usd)}.`
+              budget.day.over && budget.day.limit != null
+                ? `Daily budget reached: ${money(budget.day.spend, budget.day.currency)} spent of ${money(budget.day.limit.amount, budget.day.limit.currency)}.`
                 : null,
-              budget.month.over && budget.month.limit_usd != null
-                ? `Monthly budget reached: ${money(budget.month.spend_usd)} spent of ${money(budget.month.limit_usd)}.`
+              budget.month.over && budget.month.limit != null
+                ? `Monthly budget reached: ${money(budget.month.spend, budget.month.currency)} spent of ${money(budget.month.limit.amount, budget.month.limit.currency)}.`
                 : null,
             ]
               .filter(Boolean)
@@ -333,6 +400,14 @@ export function Analytics() {
             </div>
           ))}
         </div>
+
+        {otherSummaries.length > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Also in range:{' '}
+            {otherSummaries.map((o) => primaryMoney(o, o.cost)).join(', ')} (shown separately —
+            never summed with the totals above).
+          </p>
+        )}
 
         {s && s.unpriced_requests > 0 && (
           <p className="mt-3 text-xs text-muted-foreground">
@@ -352,7 +427,7 @@ export function Analytics() {
                 colorOf={(g) => colorOf(g, cost.groups)}
                 hidden={costLegend.hidden}
                 xLabel={(v) => bucketLabel(v, bucket)}
-                valueLabel={money}
+                valueLabel={chartMoney}
               />
             </div>
             <ChartLegend
@@ -394,7 +469,7 @@ export function Analytics() {
                 colorOf={(g) => colorOf(g, modelCost.groups)}
                 hidden={modelCostLegend.hidden}
                 xLabel={(v) => bucketLabel(v, bucket)}
-                valueLabel={money}
+                valueLabel={chartMoney}
               />
             </div>
             <ChartLegend
@@ -452,7 +527,14 @@ export function Analytics() {
                     </Link>
                   </td>
                   <td className="py-2 text-right text-muted-foreground">{sess.requests} req</td>
-                  <td className="py-2 text-right font-medium">{money(sess.cost_usd)}</td>
+                  <td className="py-2 text-right font-medium">
+                    {primaryMoney(sess, sess.cost)}
+                    {secondaryMoney(sess, sess.cost) && (
+                      <span className="ml-1 text-xs font-normal text-muted-foreground">
+                        ({secondaryMoney(sess, sess.cost)})
+                      </span>
+                    )}
+                  </td>
                 </tr>
               ))}
               {data && data.sessions.length === 0 && (
@@ -511,7 +593,7 @@ function BreakdownTable({
   estimates,
 }: {
   title: string
-  rows: [string, { cost: number; requests: number; errors: number; tokens: number }][]
+  rows: TotalsRow[]
   estimates?: Map<string, number>
 }) {
   return (
@@ -519,18 +601,23 @@ function BreakdownTable({
       <h2 className="text-sm font-medium">{title}</h2>
       <table className="mt-3 w-full text-sm">
         <tbody>
-          {rows.map(([group, t]) => (
-            <tr key={group} className="border-t border-border/60">
-              <td className="max-w-36 truncate py-2 pr-2">{group}</td>
+          {rows.map((t) => (
+            <tr key={`${t.group} ${t.currency}`} className="border-t border-border/60">
+              <td className="max-w-36 truncate py-2 pr-2">{t.group}</td>
               <td className="py-2 text-right text-muted-foreground">{compact(t.tokens)} tok</td>
               <td className="py-2 text-right font-medium">
-                {money(t.cost)}
-                {(estimates?.get(group) ?? 0) > 0 && (
+                {primaryMoney(t, t.cost)}
+                {secondaryMoney(t, t.cost) && (
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">
+                    ({secondaryMoney(t, t.cost)})
+                  </span>
+                )}
+                {(estimates?.get(t.group) ?? 0) > 0 && (
                   <span
                     className="ml-1 text-xs font-normal text-muted-foreground"
                     title="Estimated from catalog prices for calls with no configured price."
                   >
-                    +≈{money(estimates?.get(group) ?? 0)}
+                    +≈{money(estimates?.get(t.group) ?? 0, t.currency)}
                   </span>
                 )}
               </td>
@@ -547,19 +634,25 @@ function BreakdownTable({
   )
 }
 
-type SortKey = 'group' | 'cost_usd' | 'requests'
+type SortKey = 'group' | 'cost' | 'requests'
 
 // ProviderCostTable is the sortable "cost by provider" table backed by
 // usageTotals — the non-time-bucketed sibling of the stacked bar chart
 // above it. Zero-cost providers (unpriced NULL rows tallied elsewhere,
 // or a genuinely free local model) are excluded: they add no signal to
-// a cost ranking.
+// a cost ranking. Restricted to the dominant (first-seen) currency so
+// "% of total" stays a meaningful ratio — summing % across currencies
+// would be as wrong as summing the cost itself.
 function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>('cost_usd')
+  const [sortKey, setSortKey] = useState<SortKey>('cost')
   const [asc, setAsc] = useState(false)
 
-  const priced = useMemo(() => rows.filter((r) => r.cost_usd > 0), [rows])
-  const totalCost = useMemo(() => priced.reduce((n, r) => n + r.cost_usd, 0), [priced])
+  const currency = rows[0]?.currency ?? 'USD'
+  const priced = useMemo(
+    () => rows.filter((r) => r.cost > 0 && r.currency === currency),
+    [rows, currency],
+  )
+  const totalCost = useMemo(() => priced.reduce((n, r) => n + r.cost, 0), [priced])
   const sorted = useMemo(() => {
     const copy = [...priced]
     copy.sort((a, b) => {
@@ -597,9 +690,9 @@ function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
             </th>
             <th
               className="cursor-pointer pb-2 text-right font-medium"
-              onClick={() => toggleSort('cost_usd')}
+              onClick={() => toggleSort('cost')}
             >
-              Cost{sortIndicator('cost_usd')}
+              Cost{sortIndicator('cost')}
             </th>
             <th className="pb-2 text-right font-medium">% of total</th>
           </tr>
@@ -609,9 +702,16 @@ function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
             <tr key={r.group} className="border-t border-border/60">
               <td className="max-w-28 truncate py-2 pr-2">{r.group}</td>
               <td className="py-2 text-right text-muted-foreground">{compact(r.requests)}</td>
-              <td className="py-2 text-right font-medium">{money(r.cost_usd)}</td>
+              <td className="py-2 text-right font-medium">
+                {primaryMoney(r, r.cost)}
+                {secondaryMoney(r, r.cost) && (
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">
+                    ({secondaryMoney(r, r.cost)})
+                  </span>
+                )}
+              </td>
               <td className="py-2 text-right text-muted-foreground">
-                {totalCost > 0 ? `${((r.cost_usd / totalCost) * 100).toFixed(0)}%` : 'N/A'}
+                {totalCost > 0 ? `${((r.cost / totalCost) * 100).toFixed(0)}%` : 'N/A'}
               </td>
             </tr>
           ))}

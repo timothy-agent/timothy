@@ -30,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
+import { formatDuration } from '../components/Activity'
 import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
@@ -38,6 +39,25 @@ import { subscribeEvents } from '../lib/events'
 function formatDate(v?: string): string {
   if (!v) return 'N/A'
   return new Date(v).toLocaleString()
+}
+
+// turnStats derives the detail view's Turns/Processing figures purely
+// from the mission.turn events the page already fetches — one event
+// per phase run (driver.go's Advance), so counting them is an honest
+// turn count without a dedicated backend field.
+function turnStats(events: MissionEvent[]): { turns: number; processingMs: number } {
+  let turns = 0
+  let processingMs = 0
+  for (const e of events) {
+    if (e.kind !== 'mission.turn') continue
+    turns++
+    const payload = e.payload
+    if (payload && typeof payload === 'object' && 'duration_ms' in payload) {
+      const ms = (payload as { duration_ms?: unknown }).duration_ms
+      if (typeof ms === 'number') processingMs += ms
+    }
+  }
+  return { turns, processingMs }
 }
 
 const resumableStatuses = new Set(['paused', 'waiting_for_input'])
@@ -53,6 +73,20 @@ export function MissionDetail() {
   const [busy, setBusy] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // answeredPermission tracks the pending_permission id the user just
+  // decided on, so the card stops being actionable immediately — the
+  // decision POST resolves the broker right away, but
+  // mission.pending_permission on the mission row only clears once the
+  // approved tool call finishes executing (runner.go clears it on the
+  // tool result), which can be minutes for a long-running command.
+  // Keyed by the permission id string (not a bare boolean) so a NEW
+  // pending_permission arriving later — a different id — renders as a
+  // fresh actionable card rather than staying stuck in the answered
+  // state from the previous one.
+  const [answeredPermission, setAnsweredPermission] = useState<{
+    id: string
+    decision: 'once' | 'session' | 'deny'
+  } | null>(null)
 
   const refreshSeq = useRef(0)
 
@@ -121,6 +155,14 @@ export function MissionDetail() {
   const canResume = resumableStatuses.has(mission.status)
   const canCancel = !terminalPhases.has(mission.phase)
 
+  const { turns, processingMs } = turnStats(events)
+  // A live mission's elapsed span runs to now, not its last updated_at
+  // (which only moves on a state transition, not while a turn is
+  // in-flight) — otherwise "Elapsed" would understate a mission stuck
+  // mid-turn.
+  const elapsedEnd = terminalPhases.has(mission.phase) ? mission.updated_at : new Date().toISOString()
+  const elapsedMs = new Date(elapsedEnd).getTime() - new Date(mission.created_at).getTime()
+
   // pause_message never carries real content (the state machine clears
   // it on every transition — see store.go's ApplyTransition comment);
   // the actual detail only lives in the mission.paused event itself,
@@ -181,14 +223,40 @@ export function MissionDetail() {
   }
 
   const decidePermission = async (decision: 'once' | 'session' | 'deny') => {
+    const permissionID = pendingPermission
     try {
       await answerMissionPermission(id, decision)
+      if (permissionID) setAnsweredPermission({ id: permissionID, decision })
     } catch (err) {
       toast.error('Could not answer permission request', { description: errText(err) })
     } finally {
       refresh()
     }
   }
+
+  // Cross-tab/refresh fallback: this tab may not have the optimistic
+  // answeredPermission state (a fresh load, or the decision happened
+  // in another tab) but the events list already fetched can still show
+  // the answer — the latest permission_answered event arriving after
+  // the latest permission_requested event means the currently pending
+  // id has, in fact, already been decided.
+  const answeredFromEvents = (() => {
+    if (!pendingPermission) return false
+    let lastRequestedSeq = -1
+    let lastAnsweredSeq = -1
+    for (const e of events) {
+      if (e.kind === 'mission.permission_requested') lastRequestedSeq = e.seq
+      if (e.kind === 'mission.permission_answered') lastAnsweredSeq = e.seq
+    }
+    return lastRequestedSeq >= 0 && lastAnsweredSeq > lastRequestedSeq
+  })()
+
+  const answeredDecision: 'once' | 'session' | 'deny' | 'unknown' | undefined =
+    answeredPermission && answeredPermission.id === pendingPermission
+      ? answeredPermission.decision
+      : answeredFromEvents
+        ? 'unknown'
+        : undefined
 
   return (
     <div className="mx-auto w-full max-w-full space-y-6 px-8 py-6">
@@ -206,6 +274,7 @@ export function MissionDetail() {
           args={mission.pending_permission_args}
           danger={mission.pending_permission_danger}
           rationale={mission.pending_permission_rationale}
+          answeredDecision={answeredDecision}
           onDecide={(d) => void decidePermission(d)}
         />
       )}
@@ -218,12 +287,14 @@ export function MissionDetail() {
               <span className="capitalize">{mission.kind}</span>
               <span>{mission.phase}</span>
               <span>{mission.status.replace(/_/g, ' ')}</span>
-              {!terminalPhases.has(mission.phase) && (
+              {!terminalPhases.has(mission.phase) && mission.iteration > 0 && (
+                <span>Retries {mission.iteration}</span>
+              )}
+              {mission.budget_amount != null && (
                 <span>
-                  iteration {mission.iteration + 1}/{mission.max_iterations}
+                  budget {mission.budget_currency ?? 'USD'} {mission.budget_amount}
                 </span>
               )}
-              {mission.budget_usd != null && <span>budget ${mission.budget_usd}</span>}
             </div>
             {mission.branch && (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -262,6 +333,11 @@ export function MissionDetail() {
             )}
           </div>
         </div>
+        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+          <span>{turns} turn{turns === 1 ? '' : 's'}</span>
+          <span>Processing {formatDuration(processingMs)}</span>
+          <span>Elapsed {formatDuration(elapsedMs)}</span>
+        </div>
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -287,13 +363,35 @@ export function MissionDetail() {
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Spend</h2>
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
-            <span className="text-foreground">${usage.cost_usd.toFixed(4)}</span>
+            {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
+              Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => (
+                <span key={currency} className="text-foreground" title="Converted from the billed amount(s) below using a stored exchange rate.">
+                  {currency} {cost.toFixed(4)}
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">
+                    ({Object.entries(usage.cost_by_currency).map(([c, v]) => `${c} ${v.toFixed(4)}`).join(', ')} billed)
+                  </span>
+                </span>
+              ))
+            ) : (
+              Object.entries(usage.cost_by_currency).map(([currency, cost]) => (
+                <span key={currency} className="text-foreground">
+                  {currency} {cost.toFixed(4)}
+                </span>
+              ))
+            )}
             <span>{usage.requests} model calls</span>
             <span>
               {usage.input_tokens.toLocaleString()} in / {usage.output_tokens.toLocaleString()} out
             </span>
-            {mission.budget_usd != null && mission.budget_usd > 0 && (
-              <span>{Math.round((usage.cost_usd / mission.budget_usd) * 100)}% of budget</span>
+            {mission.budget_amount != null && mission.budget_amount > 0 && (
+              <span>
+                {Math.round(
+                  ((usage.cost_by_currency[mission.budget_currency ?? 'USD'] ?? 0) /
+                    mission.budget_amount) *
+                    100,
+                )}
+                % of budget
+              </span>
             )}
             {usage.unpriced_requests > 0 && (
               <span title="Some calls have no configured price; their cost is not included.">
@@ -322,17 +420,17 @@ export function MissionDetail() {
         <PlanSection units={mission.spec?.units ?? []} />
       </section>
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold tracking-tight">Progress</h2>
-        <ProgressSection notes={mission.progress} />
-      </section>
-
       {mission.workspace && (
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
           <ArtifactsSection missionId={id} phase={mission.phase} workspace={mission.workspace} />
         </section>
       )}
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold tracking-tight">Progress</h2>
+        <ProgressSection notes={mission.progress} />
+      </section>
 
       <section>
         <h2 className="mb-2 text-sm font-semibold tracking-tight">Timeline</h2>

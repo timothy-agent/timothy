@@ -130,7 +130,7 @@ beforeEach(() => {
   vi.mocked(missionEvents).mockResolvedValue(events)
   vi.mocked(missionUsage).mockResolvedValue({
     mission_id: 'm1',
-    cost_usd: 0,
+    cost_by_currency: {},
     input_tokens: 0,
     output_tokens: 0,
     requests: 0,
@@ -145,10 +145,10 @@ beforeEach(() => {
 
 describe('MissionDetail spend', () => {
   it('shows cost, calls, tokens, and budget share once usage exists', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_usd: 2 })
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 2, budget_currency: 'USD' })
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
-      cost_usd: 0.5,
+      cost_by_currency: { USD: 0.5 },
       input_tokens: 120_000,
       output_tokens: 8_000,
       requests: 7,
@@ -157,7 +157,7 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     expect(await screen.findByText('Spend')).toBeTruthy()
-    expect(screen.getByText('$0.5000')).toBeTruthy()
+    expect(screen.getByText('USD 0.5000')).toBeTruthy()
     expect(screen.getByText('7 model calls')).toBeTruthy()
     expect(screen.getByText('120,000 in / 8,000 out')).toBeTruthy()
     expect(screen.getByText('25% of budget')).toBeTruthy()
@@ -169,6 +169,92 @@ describe('MissionDetail spend', () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText('Spend')).toBeNull()
+  })
+
+  it('shows the converted total as primary with the billed amount(s) secondary', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 8 },
+      converted_cost_by_currency: { EUR: 6.88 },
+      rate_as_of: '2026-07-20',
+      input_tokens: 100,
+      output_tokens: 50,
+      requests: 3,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    expect(await screen.findByText('Spend')).toBeTruthy()
+    expect(screen.getByText('EUR 6.8800')).toBeTruthy()
+    expect(screen.getByText('(USD 8.0000 billed)')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail retries/turns/processing/elapsed', () => {
+  it('omits Retries when iteration is zero', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, iteration: 0 })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText(/Retries/)).toBeNull()
+  })
+
+  it('shows Retries N when iteration is greater than zero', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, iteration: 3 })
+    renderPage()
+    expect(await screen.findByText('Retries 3')).toBeTruthy()
+  })
+
+  it('counts turns and sums processing time from mission.turn events', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.turn',
+        payload: { phase: 'execute', duration_ms: 30_000, ok: true },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 6,
+        kind: 'mission.turn',
+        payload: { phase: 'execute', duration_ms: 17_500, ok: true },
+        provenance: 'live',
+        created_at: '2026-01-01T00:05:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('2 turns')).toBeTruthy()
+    expect(screen.getByText('Processing 47.5s')).toBeTruthy()
+  })
+
+  it('uses singular "turn" for exactly one mission.turn event', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.turn',
+        payload: { phase: 'execute', duration_ms: 1000, ok: true },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('1 turn')).toBeTruthy()
+  })
+
+  it('computes Elapsed from created_at to updated_at for a terminal mission', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'done',
+      status: 'done',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:01:21Z',
+    })
+    renderPage()
+    expect(await screen.findByText('Elapsed 1m 21s')).toBeTruthy()
   })
 })
 
@@ -195,6 +281,11 @@ describe('MissionDetail', () => {
       pending_permission_danger: 'destructive',
       pending_permission_rationale: 'deletes files',
     })
+    // Fresh pending permission with no answered event of its own yet —
+    // the shared `events` fixture's trailing permission_answered event
+    // belongs to an earlier, unrelated cycle and must not be mistaken
+    // for an answer to THIS one.
+    vi.mocked(missionEvents).mockResolvedValue([])
     renderPage()
     expect(await screen.findByText('shell')).toBeTruthy()
     expect(screen.getByText('destructive')).toBeTruthy()
@@ -202,6 +293,96 @@ describe('MissionDetail', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalledWith('m1', 'once'))
+  })
+
+  it('replaces the buttons with an answered status right after a click, and a new pending permission is actionable again', async () => {
+    const sub = captureSubscribe()
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_permission: 'perm-1',
+      pending_permission_tool: 'shell',
+      pending_permission_args: '{"command":"rm -rf /tmp/x"}',
+      pending_permission_danger: 'destructive',
+      pending_permission_rationale: 'deletes files',
+    })
+    vi.mocked(missionEvents).mockResolvedValue([])
+    renderPage()
+    expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+    await waitFor(() => expect(answerMissionPermission).toHaveBeenCalledWith('m1', 'once'))
+    expect(await screen.findByText('Approved — command running…')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull()
+
+    // The refresh triggered by decidePermission still reports the SAME
+    // pending_permission id (the tool call hasn't finished executing
+    // yet) — the answered state must persist across it rather than
+    // flashing back to actionable.
+    await Promise.resolve()
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
+
+    // A different pending_permission id arriving later (a fresh ask)
+    // must render as a brand new actionable card — refetched via the
+    // same signal path every other refresh in this page uses, not a
+    // second mount.
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_permission: 'perm-2',
+      pending_permission_tool: 'gmail_send',
+      pending_permission_rationale: 'sends an email',
+    })
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+    expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
+    expect(screen.queryByText('Approved — command running…')).toBeNull()
+  })
+
+  it('reverts to actionable and shows an error toast when the decision POST fails', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_permission: 'perm-1',
+      pending_permission_tool: 'shell',
+      pending_permission_rationale: 'deletes files',
+    })
+    vi.mocked(missionEvents).mockResolvedValue([])
+    vi.mocked(answerMissionPermission).mockRejectedValue(new Error('not found'))
+    renderPage()
+    expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+    await waitFor(() => expect(answerMissionPermission).toHaveBeenCalled())
+    expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
+    expect(screen.queryByText('Approved — command running…')).toBeNull()
+  })
+
+  it('treats a still-pending permission as answered when the events already show a later permission_answered', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_permission: 'perm-1',
+      pending_permission_tool: 'shell',
+      pending_permission_rationale: 'deletes files',
+    })
+    vi.mocked(missionEvents).mockResolvedValue([
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.permission_requested',
+        payload: { tool: 'shell' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.permission_answered',
+        payload: { tool: 'shell', decision: 'once' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:01:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('Answered — waiting for the worker to continue…')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
   })
 
   it('plays an alert sound only on the transition into a permission block, not on later refetches', async () => {

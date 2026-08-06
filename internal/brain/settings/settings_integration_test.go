@@ -173,3 +173,34 @@ func TestRuntimeValueSettings(t *testing.T) {
 		t.Fatal("cleared allowlist must admit everything")
 	}
 }
+
+// TestDefaultCurrencySetting exercises the allowed-list validation on
+// ValueDefaultCurrency: a valid code (any case) is accepted and
+// normalized to uppercase, an unknown code is rejected, and clearing
+// back to empty falls through DefaultCurrency's "USD" fallback.
+func TestDefaultCurrencySetting(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if got := s.DefaultCurrency(ctx); got != "USD" {
+		t.Fatalf("DefaultCurrency default = %q, want USD", got)
+	}
+
+	if err := s.SetValue(ctx, ValueDefaultCurrency, "XYZ"); err == nil {
+		t.Fatal("unknown currency code accepted")
+	}
+
+	if err := s.SetValue(ctx, ValueDefaultCurrency, "eur"); err != nil {
+		t.Fatalf("SetValue lowercase valid code: %v", err)
+	}
+	if got := s.DefaultCurrency(ctx); got != "EUR" {
+		t.Fatalf("DefaultCurrency after set = %q, want EUR (normalized to uppercase)", got)
+	}
+
+	if err := s.SetValue(ctx, ValueDefaultCurrency, ""); err != nil {
+		t.Fatalf("SetValue clear: %v", err)
+	}
+	if got := s.DefaultCurrency(ctx); got != "USD" {
+		t.Fatalf("DefaultCurrency after clear = %q, want USD", got)
+	}
+}

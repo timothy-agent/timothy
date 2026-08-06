@@ -112,6 +112,27 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 	var matchedRules []string
 	if tool == "shell" {
 		danger, matchedRules = ClassifyCommand(subject)
+		// D-050: an opaque command (interpreter -c/-e, command
+		// substitution, eval, ...) is unclassifiable to the lexical
+		// scorer, not proven destructive — outside a sandbox the safe
+		// default is still to ask, but a session with a REGISTERED
+		// SANDBOX (a mission's per-mission Docker container; see
+		// SandboxGrantTool) already confines whatever the opaque command
+		// turns out to do to resource-capped, workspace-only execution.
+		// The container is the actual confinement boundary there, not
+		// this classifier's ability to read the command — so opacity
+		// alone no longer forces a human prompt for that session, and
+		// the command reclassifies to safe and falls through to the
+		// mission's own standing grant (AutoApproveSafe's "shell" grant)
+		// exactly like any other safe command. Chat sessions never
+		// register a sandbox, so this never changes chat's behavior.
+		// Explicit destructive patterns (rm -rf, git push, chmod -R,
+		// ...) are NOT opaque and are untouched by this branch — they
+		// keep going through sandboxAllows' narrower, path-scoped
+		// downgrade below, sandboxed or not.
+		if danger == DangerDestructive && IsOpaqueRationale(matchedRules) && p.sandboxFor(ctx, sessionID) != "" {
+			danger, matchedRules = DangerSafe, nil
+		}
 		if danger == DangerDestructive && !p.sandboxAllows(ctx, sessionID, subject, matchedRules) {
 			// Destructive commands are never auto-approved, no matter
 			// what the allowlists say — UNLESS the session has a

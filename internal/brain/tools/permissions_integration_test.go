@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,5 +147,108 @@ func TestResolveProjectAllowlistAllows(t *testing.T) {
 	}
 	if res.Decision != DecisionAsk || res.Danger != DangerDestructive {
 		t.Fatalf("res = %+v, want ask despite allowlist", res)
+	}
+}
+
+// TestResolveSandboxOpaqueWithGrantAllows is D-050's core case: a
+// session with a registered sandbox (a mission's per-mission Docker
+// container) AND a standing "shell" grant (AutoApproveSafe) runs an
+// opaque command — interpreter -c inline code — without a human
+// prompt. The reviewer-parks-on-python3--c friction this decision
+// exists to remove. This is also the D-039 unattended-mission case
+// (requirement 8): loop.Agent's resolveAndRun only consults
+// Request.Unattended inside the DecisionAsk branch — a DecisionAllow
+// result (this test) reaches execution unconditionally, schedule-fired
+// or not, so a schedule-fired mission with this same grant/sandbox
+// combination gains the identical capability with no further wiring.
+func TestResolveSandboxOpaqueWithGrantAllows(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	if err := p.Grant(t.Context(), sid, SandboxGrantTool, "/workspace/mission-1", time.Hour); err != nil {
+		t.Fatalf("Grant sandbox: %v", err)
+	}
+	if err := p.Grant(t.Context(), sid, "shell", "*", time.Hour); err != nil {
+		t.Fatalf("Grant shell: %v", err)
+	}
+
+	res, err := p.Resolve(t.Context(), sid, "shell", shellCall("python3 -c 'print(1)'"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Decision != DecisionAllow {
+		t.Fatalf("res = %+v, want allow (opaque-in-sandbox relaxes to safe, grant covers it)", res)
+	}
+	if res.Danger != DangerSafe {
+		t.Fatalf("res.Danger = %v, want safe once reclassified", res.Danger)
+	}
+}
+
+// TestResolveSandboxOpaqueWithoutGrantAsks is requirement 3: the
+// relaxation reclassifies the command to safe, but safe still needs a
+// standing grant to skip the prompt — a mission created with
+// auto_approve_safe=false (no "shell" grant registered) still asks on
+// an opaque command even though its session has a registered sandbox.
+func TestResolveSandboxOpaqueWithoutGrantAsks(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	if err := p.Grant(t.Context(), sid, SandboxGrantTool, "/workspace/mission-1", time.Hour); err != nil {
+		t.Fatalf("Grant sandbox: %v", err)
+	}
+
+	res, err := p.Resolve(t.Context(), sid, "shell", shellCall("python3 -c 'print(1)'"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Decision != DecisionAsk {
+		t.Fatalf("res = %+v, want ask — no standing grant despite the sandbox", res)
+	}
+}
+
+// TestResolveSandboxExplicitDestructiveStillAsks is requirement 2: the
+// relaxation is opaque-only. An explicit destructive pattern (rm -rf)
+// is not opaque, so a registered sandbox plus a standing "shell" grant
+// does NOT let it skip the prompt the way an opaque command now can —
+// it still goes through sandboxAllows' narrower, path-scoped downgrade,
+// and rm -rf's target here is not path-confined to the sandbox root.
+func TestResolveSandboxExplicitDestructiveStillAsks(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	if err := p.Grant(t.Context(), sid, SandboxGrantTool, "/workspace/mission-1", time.Hour); err != nil {
+		t.Fatalf("Grant sandbox: %v", err)
+	}
+	if err := p.Grant(t.Context(), sid, "shell", "*", time.Hour); err != nil {
+		t.Fatalf("Grant shell: %v", err)
+	}
+
+	res, err := p.Resolve(t.Context(), sid, "shell", shellCall("git push origin main"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Decision != DecisionAsk || res.Danger != DangerDestructive {
+		t.Fatalf("res = %+v, want ask+destructive — git-push is not opaque and not file-scoped", res)
+	}
+}
+
+// TestResolveSandboxOpaqueGuardStillDenies is requirement 4: the
+// relaxation only ever affects the ask/allow decision downstream of
+// the policy guard, which runs first in Resolve regardless of any
+// sandbox registration — an opaque command naming a guarded path is
+// still a hard deny, sandbox or not.
+func TestResolveSandboxOpaqueGuardStillDenies(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	if err := p.Grant(t.Context(), sid, SandboxGrantTool, "/workspace/mission-1", time.Hour); err != nil {
+		t.Fatalf("Grant sandbox: %v", err)
+	}
+	if err := p.Grant(t.Context(), sid, "shell", "*", time.Hour); err != nil {
+		t.Fatalf("Grant shell: %v", err)
+	}
+
+	res, err := p.Resolve(t.Context(), sid, "shell", shellCall("python3 -c \"open('/etc/passwd').read()\""))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Decision != DecisionDeny || !strings.Contains(res.Rationale, "policy guard") {
+		t.Fatalf("res = %+v, want hard deny (system dirs guard)", res)
 	}
 }

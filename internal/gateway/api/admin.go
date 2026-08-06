@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/admin"
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 )
 
@@ -217,10 +218,10 @@ func (h *adminAPI) setRouteRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPI) patchBudget(w http.ResponseWriter, r *http.Request) {
-	var patch map[string]*float64
+	var patch map[string]*ledger.BudgetLimit
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil || len(patch) == 0 {
 		jsonError(w, http.StatusBadRequest, "bad_request",
-			"body must map budget scopes (day, month) to USD limits or null")
+			"body must map budget scopes (day, month) to {amount, currency} limits or null")
 		return
 	}
 	if err := h.adm.PatchBudget(r.Context(), patch); err != nil {
