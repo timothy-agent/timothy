@@ -400,11 +400,13 @@ func ClassifyOverGateway(gw Gateway) agents.Classify {
 			return "", fmt.Errorf("chat: classify: summarize role is unbound")
 		}
 		events, err := gw.Stream(ctx, gwclient.StreamRequest{
-			Route:     route,
-			Purpose:   "agent_dispatch",
-			System:    "Answer with only what is requested — no prose, no explanation.",
-			Messages:  []provider.Message{{Role: "user", Content: prompt}},
-			MaxTokens: 20,
+			Route:    route,
+			Purpose:  "agent_dispatch",
+			System:   "Answer with only what is requested — no prose, no explanation.",
+			Messages: []provider.Message{{Role: "user", Content: prompt}},
+			// MaxTokens includes a thinking model's reasoning tokens; 512
+			// leaves room to think before the one-word answer.
+			MaxTokens: 512,
 		})
 		if err != nil {
 			return "", err

@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -13,7 +16,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -51,7 +54,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -99,7 +102,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -107,5 +110,128 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	m.ServeHTTP(w, req)
 	if w.Code != 400 {
 		t.Fatalf("DELETE against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
+	}
+}
+
+// TestClassifyKind exercises classifyKind's parsing and its bias to
+// "coding" for anything short of an unambiguous "general" reply —
+// nil classify, a classify error, and a garbage reply must all land on
+// the cheap side of the error (see classifyKind's doc comment).
+func TestClassifyKind(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		classify func(ctx context.Context, prompt string) (string, error)
+		want     string
+	}{
+		{"nil classify defaults to coding", nil, "coding"},
+		{
+			"unambiguous general reply", func(context.Context, string) (string, error) {
+				return "General", nil
+			}, "general",
+		},
+		{
+			"unambiguous coding reply", func(context.Context, string) (string, error) {
+				return "coding", nil
+			}, "coding",
+		},
+		{
+			"garbage reply defaults to coding", func(context.Context, string) (string, error) {
+				return "banana", nil
+			}, "coding",
+		},
+		{
+			"reply mentioning both words defaults to coding", func(context.Context, string) (string, error) {
+				return "coding, not general", nil
+			}, "coding",
+		},
+		{
+			"empty reply defaults to coding", func(context.Context, string) (string, error) {
+				return "", nil
+			}, "coding",
+		},
+		{
+			"classify error defaults to coding", func(context.Context, string) (string, error) {
+				return "", errors.New("gateway down")
+			}, "coding",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyKind(context.Background(), tc.classify, "some goal")
+			if got != tc.want {
+				t.Fatalf("classifyKind() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMissionsClassifyEndpoint covers POST /v1/missions/classify: the
+// happy path returning the classifier's verdict, and the empty-goal
+// 400 — this endpoint has no store/driver dependency, so it can be
+// tested end to end without Postgres.
+func TestMissionsClassifyEndpoint(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	classify := func(context.Context, string) (string, error) { return "general", nil }
+	m := mux(a)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify)
+
+	call := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	if code, body := call(`{"goal":"write a report on Q3 sales"}`); code != http.StatusOK {
+		t.Fatalf("classify with a goal = %d %s, want 200", code, body)
+	} else if !strings.Contains(body, `"kind":"general"`) {
+		t.Fatalf("classify body = %s, want kind general", body)
+	}
+
+	if code, _ := call(`{"goal":""}`); code != http.StatusBadRequest {
+		t.Fatalf("classify with an empty goal = %d, want 400", code)
+	}
+}
+
+// TestMissionsCreateKindOptional confirms an omitted kind no longer
+// 400s: it reaches classifyKind (defaulting to "coding" with no
+// classify wired) and then the degraded store, which 500s — proving
+// validation accepted the empty kind rather than rejecting it. An
+// explicit kind is still validated and honored exactly as before.
+func TestMissionsCreateKindOptional(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil)
+
+	call := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	// failMission's default branch maps any unrecognized driver error
+	// (here, the degraded pool's connection failure) to 400 — the SAME
+	// status an invalid kind gets, so the assertion that matters is
+	// which body comes back, not the status code alone: a body without
+	// "kind must be" proves the request passed kind validation and
+	// failed downstream instead.
+	if code, body := call(`{"goal":"do something"}`); code != http.StatusBadRequest || strings.Contains(body, "kind must be") {
+		t.Fatalf("create with omitted kind = %d %s, want 400 from the degraded driver, not kind validation", code, body)
+	}
+	if code, body := call(`{"goal":"do something","kind":"general"}`); code != http.StatusBadRequest || strings.Contains(body, "kind must be") {
+		t.Fatalf("create with explicit kind = %d %s, want 400 from the degraded driver, not kind validation", code, body)
+	}
+	if code, body := call(`{"goal":"do something","kind":"bogus"}`); code != http.StatusBadRequest || !strings.Contains(body, "kind must be") {
+		t.Fatalf("create with an invalid kind = %d %s, want 400 from kind validation", code, body)
 	}
 }

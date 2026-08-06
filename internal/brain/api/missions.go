@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -26,13 +27,14 @@ import (
 // route bound to the "default" system role (D-049) — an agent's empty
 // route means "the default chain," but the gateway's /v1/stream
 // requires a real, non-empty route name.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
+	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
 	handle("DELETE /v1/missions/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("GET /v1/missions/{id}/events", a.auth(http.HandlerFunc(h.events)))
@@ -62,6 +64,11 @@ type missionAPI struct {
 	// for missions); nil or an unbound role fall back to "" and the
 	// gateway's own no_route error, same as an unconfigured route.
 	routeForRole func(context.Context, string) string
+	// classify resolves an omitted create request's kind from its goal
+	// (classifyKind below) and backs the /v1/missions/classify preview
+	// endpoint; nil (no gateway wiring) makes every omitted kind default
+	// straight to "coding", same as any classify error.
+	classify agents.Classify
 	// perms answers a mission's pending_permission — the same
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
@@ -119,7 +126,12 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 }
 
 type createMissionRequest struct {
-	Goal        string `json:"goal"`
+	Goal string `json:"goal"`
+	// Kind is optional: an empty value is classified from Goal (see
+	// classifyKind) rather than rejected — the web UI's chip preview
+	// resolves it before submit, but any other caller (a script, a
+	// future integration) can still just send a goal and let the
+	// server decide.
 	Kind        string `json:"kind"`
 	AgentID     string `json:"agent_id"`
 	Route       string `json:"route"`
@@ -158,9 +170,11 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Kind {
-	case "coding", "research", "scheduled":
+	case "":
+		req.Kind = classifyKind(r.Context(), h.classify, req.Goal)
+	case "coding", "general":
 	default:
-		jsonError(w, http.StatusBadRequest, "bad_request", `kind must be "coding", "research", or "scheduled"`)
+		jsonError(w, http.StatusBadRequest, "bad_request", `kind must be "coding" or "general"`)
 		return
 	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
@@ -220,6 +234,52 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+
+// classifyKind decides how a mission's work happens when the create
+// request omits kind. Biased hard toward "coding" on anything short of
+// an unambiguous "general" reply: a coding goal misread as general
+// loses branch/diff/rollback safety (the worse failure), while a
+// general goal misread as coding only wastes an empty worktree — so
+// every ambiguous or failed classification lands on the cheap side of
+// the error. nil classify (no gateway wiring) takes the same default.
+func classifyKind(ctx context.Context, classify agents.Classify, goal string) string {
+	if classify == nil {
+		return "coding"
+	}
+	prompt := "Decide how this mission's work happens. Answer with exactly one word.\n" +
+		"coding — the goal requires creating or modifying code, scripts, or configuration in a project/repository.\n" +
+		"general — everything else (documents, analysis, data gathering, operations).\n\n" +
+		"Goal: " + goal
+	reply, err := classify(ctx, prompt)
+	if err != nil {
+		return "coding"
+	}
+	reply = strings.ToLower(reply)
+	// "general" wins only when "coding" is absent from the reply.
+	if strings.Contains(reply, "general") && !strings.Contains(reply, "coding") {
+		return "general"
+	}
+	return "coding"
+}
+
+// classifyGoal serves POST /v1/missions/classify: the same
+// classification create() falls back to when kind is omitted, exposed
+// standalone so the web UI's chip preview can show a mission's inferred
+// kind before submit without actually creating anything.
+func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Goal string `json:"goal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if req.Goal == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"kind": classifyKind(r.Context(), h.classify, req.Goal)})
 }
 
 func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {
