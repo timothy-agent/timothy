@@ -5,11 +5,11 @@ import type { ChatEvent } from '../api/types'
 import {
   ActivityLine,
   ActivityPanel,
-  formatDuration,
   prettyArgs,
   summarizeTools,
   totalDuration,
 } from './Activity'
+import { formatDuration } from '../lib/format'
 import { Sheet } from './ui/sheet'
 
 afterEach(cleanup)

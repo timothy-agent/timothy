@@ -294,6 +294,59 @@ describe('fromTranscript', () => {
     })
   })
 
+  it('carries cost/currency on replay, matching the live meta event shape', () => {
+    // Replay path: server projection's cost/currency on the assistant item.
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'assistant',
+        blocks: [{ type: 'text', text: 'done' }],
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        cost: 0.0042,
+        currency: 'USD',
+        created_at: at,
+      },
+    ])
+    expect(items[0]).toMatchObject({
+      role: 'assistant',
+      meta: { provider: 'zai-glm', model: 'glm-4.7', cost: 0.0042, currency: 'USD' },
+    })
+
+    // Live path: the same fields, folded from the terminal meta event,
+    // must land in the same shape on AssistantState.
+    const events: ChatEvent[] = [
+      { type: 'chunk', text: 'done' },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        cost: 0.0042,
+        currency: 'USD',
+      },
+    ]
+    const live = events.reduce(applyEvent, emptyAssistant())
+    expect(live.meta).toMatchObject({ provider: 'zai-glm', model: 'glm-4.7', cost: 0.0042, currency: 'USD' })
+  })
+
+  it('omits cost on replay when the turn has no price (unpriced model)', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'assistant',
+        blocks: [{ type: 'text', text: 'done' }],
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        created_at: at,
+      },
+    ])
+    if (items[0].role === 'assistant') {
+      expect(items[0].meta?.cost).toBeUndefined()
+      expect(items[0].meta?.currency).toBeUndefined()
+    }
+  })
+
   it('never surfaces a resolved ask — the server projection already drops it', () => {
     // The server never emits a `permission` item for an id that has a
     // matching permission_resolved event, so replay has nothing to

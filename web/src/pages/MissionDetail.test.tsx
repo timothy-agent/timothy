@@ -18,11 +18,8 @@ vi.mock('../api/client', () => ({
   answerMissionPermission: vi.fn(),
   listMissionFiles: vi.fn(),
   listSchedules: vi.fn(),
-  pushMission: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
-  secretStatus: vi.fn(),
-  listConnectors: vi.fn(),
 }))
 
 import {
@@ -30,13 +27,11 @@ import {
   cancelMission,
   deleteMission,
   getMission,
-  listConnectors,
   listMissionFiles,
   listSchedules,
   missionEvents,
   missionUsage,
   resumeMission,
-  secretStatus,
 } from '../api/client'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
@@ -139,8 +134,6 @@ beforeEach(() => {
   })
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
   vi.mocked(listSchedules).mockResolvedValue([])
-  vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
-  vi.mocked(listConnectors).mockResolvedValue([])
 })
 
 describe('MissionDetail spend', () => {
@@ -156,19 +149,37 @@ describe('MissionDetail spend', () => {
       models: [{ provider: 'GLM (Z.ai)', model: 'glm-5.2', requests: 7, last_used: '2026-01-01T00:00:00Z' }],
     })
     renderPage()
-    expect(await screen.findByText('Spend')).toBeTruthy()
-    expect(screen.getByText('USD 0.5000')).toBeTruthy()
-    expect(screen.getByText('7 model calls')).toBeTruthy()
-    expect(screen.getByText('120,000 in / 8,000 out')).toBeTruthy()
+    expect(await screen.findByText('USD 0.5000')).toBeTruthy()
+    expect(screen.getByText('7 calls')).toBeTruthy()
+    expect(screen.getByText('120.0k→8.0k tok')).toBeTruthy()
     expect(screen.getByText('25% of budget')).toBeTruthy()
     expect(screen.getByText('glm-5.2')).toBeTruthy()
     expect(screen.getByText('2 unpriced calls')).toBeTruthy()
+    expect(screen.getByText('glm-5.2').closest('span')?.querySelector('svg use')).toHaveAttribute(
+      'href',
+      '#plogo-zai',
+    )
   })
 
-  it('hides the section while the mission has no ledger rows', async () => {
+  it('omits the provider brand mark for an unrecognized provider name', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [{ provider: 'my-custom-endpoint', model: 'whatever', requests: 7, last_used: '2026-01-01T00:00:00Z' }],
+    })
+    renderPage()
+    expect(await screen.findByText('whatever')).toBeTruthy()
+    expect(screen.getByText('whatever').closest('span')?.querySelector('svg use')).not.toBeInTheDocument()
+  })
+
+  it('hides the cost pills while the mission has no ledger rows', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Spend')).toBeNull()
+    expect(screen.queryByText(/calls$/)).toBeNull()
   })
 
   it('shows the converted total as primary with the billed amount(s) secondary', async () => {
@@ -184,9 +195,8 @@ describe('MissionDetail spend', () => {
       models: [],
     })
     renderPage()
-    expect(await screen.findByText('Spend')).toBeTruthy()
-    expect(screen.getByText('EUR 6.8800')).toBeTruthy()
-    expect(screen.getByText('(USD 8.0000 billed)')).toBeTruthy()
+    expect(await screen.findByText('EUR 6.88')).toBeTruthy()
+    expect(screen.getByTitle(/USD 8\.00/)).toBeTruthy()
   })
 })
 
@@ -226,7 +236,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
     ])
     renderPage()
     expect(await screen.findByText('2 turns')).toBeTruthy()
-    expect(screen.getByText('Processing 47.5s')).toBeTruthy()
+    expect(screen.getByText('proc 47.5s')).toBeTruthy()
   })
 
   it('uses singular "turn" for exactly one mission.turn event', async () => {
@@ -254,7 +264,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
       updated_at: '2026-01-01T00:01:21Z',
     })
     renderPage()
-    expect(await screen.findByText('Elapsed 1m 21s')).toBeTruthy()
+    expect(await screen.findByText('total 1m 21s')).toBeTruthy()
   })
 })
 
@@ -509,26 +519,6 @@ describe('MissionDetail', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteMission).toHaveBeenCalledWith('m1'))
     await screen.findByText('Missions list')
-  })
-
-  it('shows the push branch button for a coding mission with a branch', async () => {
-    renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
-  })
-
-  it('hides the push branch button for a non-coding mission', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, kind: 'research' })
-    renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
-  })
-
-  it('hides the push branch button when the mission has no branch', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, branch: undefined })
-    renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
   })
 
   it('ignores a signal for a different mission id', async () => {

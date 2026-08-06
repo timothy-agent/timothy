@@ -14,10 +14,12 @@ import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { fetchAttachmentBlob } from '../api/client'
 import type { ImageRef } from '../api/types'
-import { ActivityLine, formatDuration } from './Activity'
+import { ActivityLine } from './Activity'
+import { ModelBadge } from './ModelBadge'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import type { AssistantState } from '../lib/chat'
+import { compact, formatDuration, money } from '../lib/format'
 import { cn } from '../lib/utils'
 import 'highlight.js/styles/github-dark.css'
 
@@ -334,11 +336,27 @@ export function AssistantMessage({
   onShowActivity?: () => void
 }) {
   const tokens = msg.meta?.usage
-    ? `${msg.meta.usage.input_tokens}→${msg.meta.usage.output_tokens} tok`
+    ? `${compact(msg.meta.usage.input_tokens)}→${compact(msg.meta.usage.output_tokens)} tok`
     : null
   // Absent on turns persisted before duration tracking shipped — the
   // pill simply doesn't render rather than showing a guessed 0.
   const duration = msg.meta?.durationMs !== undefined ? formatDuration(msg.meta.durationMs) : null
+  // null/undefined when the gateway had no price for the serving model
+  // (D-013: unknown price is never guessed) — the pill simply omits.
+  // When brain converted the billed cost into the user's display
+  // currency, that converted figure is the pill's primary text and the
+  // billed amount rides the title attr (mission page pattern) —
+  // otherwise the pill just shows the billed amount as before.
+  const billedCost =
+    msg.meta?.cost != null ? money(msg.meta.cost, msg.meta.currency || 'USD') : null
+  const cost =
+    msg.meta?.convertedCost != null && msg.meta.convertedCurrency
+      ? money(msg.meta.convertedCost, msg.meta.convertedCurrency)
+      : billedCost
+  const costTitle =
+    msg.meta?.convertedCost != null && msg.meta.convertedCurrency && billedCost
+      ? `Converted from the billed amount (${billedCost}) using a stored exchange rate.`
+      : undefined
   // Citations only split out once the answer is done streaming: a
   // partial "## Sources" heading mid-stream would otherwise flicker
   // the body text as more of it arrives.
@@ -398,12 +416,16 @@ export function AssistantMessage({
         <div className="flex items-center gap-1.5">
           {msg.meta?.provider && (
             <div className="flex gap-1.5" data-testid="meta-badge">
-              <Badge variant="secondary">{msg.meta.provider}</Badge>
-              <Badge variant="secondary">{msg.meta.model}</Badge>
+              <ModelBadge provider={msg.meta.provider} model={msg.meta.model ?? ''} />
               {tokens && <Badge variant="secondary">{tokens}</Badge>}
               {duration && (
                 <Badge variant="secondary" data-testid="duration-badge">
                   {duration}
+                </Badge>
+              )}
+              {cost && (
+                <Badge variant="secondary" data-testid="cost-badge" title={costTitle}>
+                  {cost}
                 </Badge>
               )}
             </div>

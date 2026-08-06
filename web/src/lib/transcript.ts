@@ -107,7 +107,17 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           permissions,
           streaming: false,
           meta: item.provider
-            ? { provider: item.provider, model: item.model, usage: item.usage, durationMs: item.duration_ms }
+            ? {
+                provider: item.provider,
+                model: item.model,
+                usage: item.usage,
+                durationMs: item.duration_ms,
+                cost: item.cost,
+                currency: item.currency,
+                convertedCost: item.converted_cost,
+                convertedCurrency: item.converted_currency,
+                rateAsOf: item.rate_as_of,
+              }
             : undefined,
         })
         break

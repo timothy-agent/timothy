@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { formatDuration } from '../components/Activity'
 import { StackedBarChart } from '../components/charts/StackedBarChart'
 import { MultiLineChart } from '../components/charts/MultiLineChart'
 import { LatencyBars } from '../components/charts/LatencyBars'
@@ -25,6 +24,7 @@ import type {
   UsageSummary,
 } from '../api/types'
 import { estimateUnpriced, totalEstimate } from '../lib/costEstimate'
+import { compact, formatDuration, money } from '../lib/format'
 
 const ranges = [
   { key: 'today', label: 'Today', days: 0, bucket: 'hour' as const },
@@ -39,14 +39,6 @@ function rangeDates(key: string): { from: Date; to: Date; bucket: 'hour' | 'day'
   if (r.days === 0) from.setHours(0, 0, 0, 0)
   else from.setDate(from.getDate() - r.days)
   return { from, to, bucket: r.bucket }
-}
-
-// money labels an amount with its billing currency code rather than
-// assuming "$"/USD — the ledger itself never converts (D-013): this
-// always renders the amount exactly as recorded.
-function money(v: number, currency = 'USD'): string {
-  if (v === 0) return `${currency} 0`
-  return v >= 1 ? `${currency} ${v.toFixed(2)}` : `${currency} ${v.toFixed(4)}`
 }
 
 // ConvertedRow is the shape brain's usage decorator adds to a
@@ -76,12 +68,6 @@ function primaryMoney(row: ConvertedRow, amount: number): string {
 function secondaryMoney(row: ConvertedRow, amount: number): string | undefined {
   if (row.converted_amount == null || !row.converted_currency) return undefined
   return money(amount, row.currency)
-}
-
-function compact(v: number): string {
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
-  return String(v)
 }
 
 interface Loaded {

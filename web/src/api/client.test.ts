@@ -10,7 +10,6 @@ import {
   listProviders,
   listSessions,
   patchBudget,
-  pushMission,
   usageBudget,
 } from './client'
 import type { ChatEvent } from './types'
@@ -274,23 +273,6 @@ describe('mission artifacts and push', () => {
     const r = await listMissionFiles('m1')
 
     expect(r).toEqual({ files: [], truncated: false })
-  })
-
-  it('pushes a mission branch with the credential ref in the body', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
-    const body = { branch: 'mission/x', remote_host: 'github.com' }
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const r = await pushMission('m1', 'ref-x')
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/v1/missions/m1/push')
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(init.body as string)).toEqual({ credential_ref: 'ref-x' })
-    expect(r).toEqual(body)
   })
 
   it('downloads a mission file, encoding each path segment and saving via a blob link', async () => {

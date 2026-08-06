@@ -1008,16 +1008,6 @@ export async function downloadMissionArchive(id: string): Promise<void> {
   return fetchBlobDownload(`/v1/missions/${id}/archive`, `mission-${id.slice(0, 8)}.zip`)
 }
 
-export async function pushMission(
-  id: string,
-  credentialRef: string,
-): Promise<{ branch: string; remote_host: string }> {
-  return request<{ branch: string; remote_host: string }>(`/v1/missions/${id}/push`, {
-    method: 'POST',
-    body: JSON.stringify({ credential_ref: credentialRef }),
-  })
-}
-
 // --- schedules (recurring cron triggers that fire mission templates) ---
 
 export interface CreateScheduleInput {

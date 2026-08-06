@@ -67,7 +67,7 @@ describe('AssistantMessage', () => {
     expect(notices[1]).toHaveTextContent('incomplete')
   })
 
-  it('shows provider, model, and token badge from meta', () => {
+  it('shows model and token badge from meta, without a redundant standalone provider pill', () => {
     const msg = play([
       { type: 'chunk', text: 'hi' },
       {
@@ -81,9 +81,74 @@ describe('AssistantMessage', () => {
     render(<AssistantMessage msg={msg} />)
 
     const badge = screen.getByTestId('meta-badge')
-    expect(badge).toHaveTextContent('zai-glm')
+    expect(badge).not.toHaveTextContent('zai-glm')
     expect(badge).toHaveTextContent('glm-4.7')
     expect(badge).toHaveTextContent('11→204 tok')
+  })
+
+  it('formats large token counts in k/M notation', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'anthropic-main',
+        model: 'claude-opus-4',
+        usage: { input_tokens: 12_400, output_tokens: 1_200_000 },
+      },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByTestId('meta-badge')).toHaveTextContent('12.4k→1.2M tok')
+  })
+
+  it('shows the provider brand mark for a recognized provider name', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'zai-glm', model: 'glm-4.7' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByTestId('meta-badge').querySelector('svg use')).toHaveAttribute(
+      'href',
+      '#plogo-zai',
+    )
+  })
+
+  it('omits the provider brand mark for an unrecognized provider name', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'my-custom-endpoint', model: 'whatever' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByTestId('meta-badge').querySelector('svg use')).not.toBeInTheDocument()
+  })
+
+  it('resolves "GLM (Z.ai)" to the zai preset via adjacent-segment join', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'GLM (Z.ai)', model: 'glm-4.7' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByTestId('meta-badge').querySelector('svg use')).toHaveAttribute(
+      'href',
+      '#plogo-zai',
+    )
+  })
+
+  it('resolves "AWS Bedrock" to the more specific bedrock preset, not the generic aws one', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'AWS Bedrock', model: 'amazon.nova-lite-v1:0' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByTestId('meta-badge').querySelector('svg use')).toHaveAttribute(
+      'href',
+      '#plogo-bedrock',
+    )
   })
 
   it('renders errors as errors', () => {
@@ -359,7 +424,7 @@ describe('duration badge', () => {
     render(<AssistantMessage msg={msg} />)
 
     const badge = screen.getByTestId('meta-badge')
-    expect(badge).toHaveTextContent('zai-glm')
+    expect(badge).not.toHaveTextContent('zai-glm')
     expect(badge).toHaveTextContent('glm-4.7')
     expect(badge).toHaveTextContent('11→204 tok')
     expect(screen.getByTestId('duration-badge')).toHaveTextContent('1m 21s')
@@ -381,6 +446,81 @@ describe('duration badge', () => {
     ])
     render(<AssistantMessage msg={msg} />)
     expect(screen.queryByTestId('duration-badge')).not.toBeInTheDocument()
+  })
+})
+
+describe('cost badge', () => {
+  it('renders a cost pill using the billed currency', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        cost: 0.0123,
+        currency: 'USD',
+      },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.getByTestId('cost-badge')).toHaveTextContent('USD 0.0123')
+  })
+
+  it('omits the cost pill when cost is null (unpriced model)', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'zai-glm', model: 'glm-4.7', cost: null },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.queryByTestId('cost-badge')).not.toBeInTheDocument()
+  })
+
+  it('omits the cost pill when cost is absent entirely', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      { type: 'meta', session_id: 's', provider: 'zai-glm', model: 'glm-4.7' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.queryByTestId('cost-badge')).not.toBeInTheDocument()
+  })
+
+  it('shows the converted amount as the primary pill text, billed amount in the title', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        cost: 0.0123,
+        currency: 'USD',
+        converted_cost: 0.0106,
+        converted_currency: 'EUR',
+        rate_as_of: '2026-07-20',
+      },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    const badge = screen.getByTestId('cost-badge')
+    expect(badge).toHaveTextContent('EUR 0.0106')
+    expect(badge).toHaveAttribute('title', expect.stringContaining('USD 0.0123'))
+  })
+
+  it('falls back to the billed amount with no title when no conversion is present', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hi' },
+      {
+        type: 'meta',
+        session_id: 's',
+        provider: 'zai-glm',
+        model: 'glm-4.7',
+        cost: 0.0123,
+        currency: 'USD',
+      },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    const badge = screen.getByTestId('cost-badge')
+    expect(badge).toHaveTextContent('USD 0.0123')
+    expect(badge).not.toHaveAttribute('title')
   })
 })
 

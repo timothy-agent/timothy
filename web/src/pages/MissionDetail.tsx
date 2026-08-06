@@ -18,10 +18,8 @@ import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ProgressSection } from '../components/missions/ProgressSection'
-import { PushBranchDialog } from '../components/missions/PushBranchDialog'
 import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import {
   Dialog,
@@ -30,11 +28,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
-import { formatDuration } from '../components/Activity'
+import { ModelBadge } from '../components/ModelBadge'
+import { Badge } from '../components/ui/badge'
 import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
+import { compact, formatDuration, money } from '../lib/format'
 
 function formatDate(v?: string): string {
   if (!v) return 'N/A'
@@ -71,7 +71,6 @@ export function MissionDetail() {
   const [usage, setUsage] = useState<MissionUsage | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [busy, setBusy] = useState(false)
-  const [pushOpen, setPushOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   // answeredPermission tracks the pending_permission id the user just
   // decided on, so the card stops being actionable immediately — the
@@ -311,11 +310,6 @@ export function MissionDetail() {
             )}
           </div>
           <div className="flex shrink-0 gap-2">
-            {mission.kind === 'coding' && mission.branch && (
-              <Button variant="outline" onClick={() => setPushOpen(true)}>
-                Push branch
-              </Button>
-            )}
             {canResume && (
               <Button variant="outline" disabled={busy} onClick={() => void resume()}>
                 Resume
@@ -333,10 +327,79 @@ export function MissionDetail() {
             )}
           </div>
         </div>
-        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
-          <span>{turns} turn{turns === 1 ? '' : 's'}</span>
-          <span>Processing {formatDuration(processingMs)}</span>
-          <span>Elapsed {formatDuration(elapsedMs)}</span>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {usage &&
+            usage.requests > 0 &&
+            usage.models.map((m) => (
+              <ModelBadge
+                key={`${m.provider}:${m.model}`}
+                provider={m.provider}
+                model={m.model}
+                title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
+              />
+            ))}
+          {usage && usage.requests > 0 && (
+            <Badge variant="secondary">
+              {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
+            </Badge>
+          )}
+          <Badge variant="secondary" title="Time spent actively processing">
+            proc {formatDuration(processingMs)}
+          </Badge>
+          <Badge variant="secondary" title="Wall-clock time since the mission started">
+            total {formatDuration(elapsedMs)}
+          </Badge>
+          {usage && usage.requests > 0 && (
+            <>
+              {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
+                Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => (
+                  <Badge
+                    key={currency}
+                    variant="secondary"
+                    title={`Converted from the billed amount(s) (${Object.entries(usage.cost_by_currency)
+                      .map(([c, v]) => money(v, c))
+                      .join(', ')}) using a stored exchange rate.`}
+                  >
+                    {money(cost, currency)}
+                  </Badge>
+                ))
+              ) : (
+                Object.entries(usage.cost_by_currency).map(([currency, cost]) => (
+                  <Badge key={currency} variant="secondary">
+                    {money(cost, currency)}
+                  </Badge>
+                ))
+              )}
+            </>
+          )}
+          <Badge variant="secondary">
+            {turns} turn{turns === 1 ? '' : 's'}
+          </Badge>
+          {usage && usage.requests > 0 && (
+            <>
+              <Badge variant="secondary">
+                {usage.requests} call{usage.requests === 1 ? '' : 's'}
+              </Badge>
+              {usage.unpriced_requests > 0 && (
+                <Badge
+                  variant="secondary"
+                  title="Some calls have no configured price; their cost is not included."
+                >
+                  {usage.unpriced_requests} unpriced call{usage.unpriced_requests === 1 ? '' : 's'}
+                </Badge>
+              )}
+              {mission.budget_amount != null && mission.budget_amount > 0 && (
+                <Badge variant="secondary">
+                  {Math.round(
+                    ((usage.cost_by_currency[mission.budget_currency ?? 'USD'] ?? 0) /
+                      mission.budget_amount) *
+                      100,
+                  )}
+                  % of budget
+                </Badge>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -358,62 +421,6 @@ export function MissionDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {usage && usage.requests > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Spend</h2>
-          <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
-            {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
-              Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => (
-                <span key={currency} className="text-foreground" title="Converted from the billed amount(s) below using a stored exchange rate.">
-                  {currency} {cost.toFixed(4)}
-                  <span className="ml-1 text-xs font-normal text-muted-foreground">
-                    ({Object.entries(usage.cost_by_currency).map(([c, v]) => `${c} ${v.toFixed(4)}`).join(', ')} billed)
-                  </span>
-                </span>
-              ))
-            ) : (
-              Object.entries(usage.cost_by_currency).map(([currency, cost]) => (
-                <span key={currency} className="text-foreground">
-                  {currency} {cost.toFixed(4)}
-                </span>
-              ))
-            )}
-            <span>{usage.requests} model calls</span>
-            <span>
-              {usage.input_tokens.toLocaleString()} in / {usage.output_tokens.toLocaleString()} out
-            </span>
-            {mission.budget_amount != null && mission.budget_amount > 0 && (
-              <span>
-                {Math.round(
-                  ((usage.cost_by_currency[mission.budget_currency ?? 'USD'] ?? 0) /
-                    mission.budget_amount) *
-                    100,
-                )}
-                % of budget
-              </span>
-            )}
-            {usage.unpriced_requests > 0 && (
-              <span title="Some calls have no configured price; their cost is not included.">
-                {usage.unpriced_requests} unpriced call{usage.unpriced_requests === 1 ? '' : 's'}
-              </span>
-            )}
-          </div>
-          {usage.models.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {usage.models.map((m) => (
-                <Badge
-                  key={`${m.provider}:${m.model}`}
-                  variant="secondary"
-                  title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
-                >
-                  {m.model}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
 
       <section>
         <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
@@ -443,13 +450,6 @@ export function MissionDetail() {
           <ResultSection evidence={mission.last_evidence} />
         </section>
       )}
-
-      <PushBranchDialog
-        missionId={id}
-        open={pushOpen}
-        onOpenChange={setPushOpen}
-        onPushed={refresh}
-      />
     </div>
   )
 }

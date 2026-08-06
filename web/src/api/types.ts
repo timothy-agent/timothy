@@ -77,6 +77,19 @@ export interface MetaEvent {
   usage?: Usage
   ledger_id?: string
   duration_ms?: number
+  // cost is null/absent when the gateway had no price for the serving
+  // model — unknown price is never guessed (D-013); currency is blank
+  // in that case too.
+  cost?: number | null
+  currency?: string
+  // converted_cost/converted_currency/rate_as_of mirror ConvertedMoney
+  // below: cost converted into the user's default_currency setting at
+  // emit time, present only when it differs from currency and brain
+  // had a usable stored fx rate. cost/currency above always stay the
+  // billed truth (D-013); these are purely additive display fields.
+  converted_cost?: number
+  converted_currency?: string
+  rate_as_of?: string
 }
 
 export type ChatEvent = StreamEvent | MetaEvent
@@ -144,6 +157,16 @@ export interface TranscriptItem {
   model?: string
   usage?: Usage
   duration_ms?: number
+  // cost is null/absent when the gateway had no price for the serving
+  // model — unknown price is never guessed (D-013); currency is blank
+  // in that case too.
+  cost?: number | null
+  currency?: string
+  // converted_cost/converted_currency/rate_as_of: same additive trio as
+  // MetaEvent above, added by the server projection at serve time.
+  converted_cost?: number
+  converted_currency?: string
+  rate_as_of?: string
   created_at: string
 }
 

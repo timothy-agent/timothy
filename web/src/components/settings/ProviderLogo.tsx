@@ -1,4 +1,4 @@
-import type { ProviderPreset } from './presets'
+import { providerPresets, type ProviderPreset } from './presets'
 
 // Official provider marks (lobehub icon set, monochrome variants),
 // rendered white on the preset's brand color. LogoSprite mounts once
@@ -78,5 +78,49 @@ export function ProviderLogo({
         <use href={`#plogo-${preset.logo}`} />
       </svg>
     </span>
+  )
+}
+
+// presetForProviderName finds a preset from a chat message's provider
+// name — an arbitrary user-chosen slug (e.g. "zai-glm", "GLM (Z.ai)"),
+// not a preset id (D-034 provider rows are user-named; the driver
+// isn't carried on the chat SSE payload, see gateway router.Attempt).
+// Matches loosely against segments split on non-alphanumerics: a
+// preset id matching one whole segment ("zai-glm" -> "zai"), or the
+// join of two ADJACENT segments ("GLM (Z.ai)" -> "z"+"ai" -> "zai") —
+// covers a preset name that itself splits on punctuation. Deliberately
+// no substring-of-the-whole-name matching (false positives, e.g. "aws"
+// inside an unrelated word). When more than one preset matches, the
+// longest id wins so a specific preset (bedrock) beats a shorter
+// generic one that happens to also match (aws) on the same name.
+// Returns undefined — never the 'custom' fallback — so callers can
+// render no icon rather than a meaningless dashed glyph.
+export function presetForProviderName(name: string | undefined): ProviderPreset | undefined {
+  if (!name) return undefined
+  const parts = name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  const pairs = parts.slice(0, -1).map((p, i) => p + parts[i + 1])
+  const matches = providerPresets.filter(
+    (p) => p.id !== 'custom' && (parts.includes(p.id) || pairs.includes(p.id)),
+  )
+  if (matches.length === 0) return undefined
+  return matches.reduce((best, p) => (p.id.length > best.id.length ? p : best))
+}
+
+// ProviderMark renders a preset's brand mark alone, in the current
+// text color, sized to sit inline with small metadata text (badges,
+// captions) — the tile treatment ProviderLogo uses elsewhere would be
+// too heavy at that scale. Renders nothing for an unmatched provider.
+export function ProviderMark({
+  preset,
+  className = 'size-3.5',
+}: {
+  preset: ProviderPreset | undefined
+  className?: string
+}) {
+  if (!preset?.logo) return null
+  return (
+    <svg className={`${className} shrink-0 fill-current`} aria-hidden="true">
+      <use href={`#plogo-${preset.logo}`} />
+    </svg>
   )
 }
