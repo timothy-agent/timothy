@@ -118,7 +118,7 @@ jobs:
         run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - id: sha
         run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: fromJSON(needs.diff.outputs[matrix.name])
       # Always set up buildx: the copy-forward step below (unchanged
       # images) also needs it for `docker buildx imagetools create`.
