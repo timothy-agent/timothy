@@ -4,8 +4,8 @@
 # the coding-specific harness contract — worktree provisioned, LLM
 # review actually ran (coding never skips review), harness-verified
 # artifact present in the worktree, zero human permission parks. The
-# research canary (canary-mission.sh) cannot catch regressions in the
-# git/worktree/review path; this one exists for exactly that.
+# general-mission canary (canary-mission.sh) cannot catch regressions in
+# the git/worktree/review path; this one exists for exactly that.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

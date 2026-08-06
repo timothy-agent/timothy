@@ -21,7 +21,7 @@ func TestScheduleCRUD(t *testing.T) {
 
 	id, err := store.CreateSchedule(ctx, Schedule{
 		Name: name, Cron: "0 7 * * *",
-		MissionTemplate: MissionTemplate{Goal: marker + "check topics", Kind: "research"},
+		MissionTemplate: MissionTemplate{Goal: marker + "check topics", Kind: "general"},
 		Enabled:         true,
 	})
 	if err != nil {
@@ -100,12 +100,12 @@ func TestScheduleDeleteBlockedByReferencingMission(t *testing.T) {
 
 	id, err := store.CreateSchedule(ctx, Schedule{
 		Name: slugMarker + "-in-use", Cron: "0 7 * * *",
-		MissionTemplate: MissionTemplate{Goal: marker + "referenced", Kind: "research"},
+		MissionTemplate: MissionTemplate{Goal: marker + "referenced", Kind: "general"},
 	})
 	if err != nil {
 		t.Fatalf("CreateSchedule: %v", err)
 	}
-	missionID, err := store.Create(ctx, Mission{Goal: marker + "referencing mission", Kind: "research"})
+	missionID, err := store.Create(ctx, Mission{Goal: marker + "referencing mission", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create mission: %v", err)
 	}

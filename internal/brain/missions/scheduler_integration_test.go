@@ -17,7 +17,7 @@ func createTestSchedule(t *testing.T, store *Store, name, cronExpr string) strin
 	}
 	var id string
 	err = db.QueryRow(context.Background(), `INSERT INTO schedules (name, cron, mission_template)
-		VALUES ($1, $2, $3) RETURNING id`, name, cronExpr, `{"goal":"`+marker+`scheduled run","kind":"research"}`).Scan(&id)
+		VALUES ($1, $2, $3) RETURNING id`, name, cronExpr, `{"goal":"`+marker+`scheduled run","kind":"general"}`).Scan(&id)
 	if err != nil {
 		t.Fatalf("create schedule: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestSchedulerLiveQueueDedup(t *testing.T) {
 	}
 
 	// Pre-seed an ACTIVE mission already tied to this schedule.
-	missionID, err := store.Create(ctx, Mission{Goal: marker + "already active", Kind: "research"})
+	missionID, err := store.Create(ctx, Mission{Goal: marker + "already active", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

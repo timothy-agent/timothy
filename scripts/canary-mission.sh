@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canary mission: runs one golden research mission end-to-end against
+# Canary mission: runs one golden general mission end-to-end against
 # the live stack and asserts the harness contract holds — done within
 # the iteration budget, zero human permission parks, artifacts verified
 # by the harness. Run after every harness change (make canary) so
@@ -45,7 +45,7 @@ auth=(-H "Authorization: Bearer ${TIMOTHY_API_TOKEN}" -H "Content-Type: applicat
 
 echo "canary: creating mission against ${BASE_URL}"
 create_resp="$(curl -sf "${auth[@]}" -X POST "${BASE_URL}/v1/missions" \
-  -d "{\"goal\": \"${GOAL}\", \"kind\": \"research\"}")"
+  -d "{\"goal\": \"${GOAL}\", \"kind\": \"general\"}")"
 id="$(echo "${create_resp}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "canary: mission ${id}"
 

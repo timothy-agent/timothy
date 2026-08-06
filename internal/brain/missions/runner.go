@@ -53,8 +53,15 @@ type Runner interface {
 	RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error)
 
 	// PlanSession runs the planning turn that produces a Spec (the list
-	// of PlanUnits) from the mission's goal and research-phase findings.
-	PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error)
+	// of PlanUnits) from the mission's goal and explore-phase findings.
+	PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error)
+
+	// ExploreSession runs the explore turn: a tool-using session that
+	// explores the workspace and (via base tools) the web, ending with an
+	// explore_notes sentinel call. Exploration is advisory — a turn that
+	// never produces the sentinel degrades to the raw turn text rather
+	// than failing the phase.
+	ExploreSession(ctx context.Context, m Mission) (string, error)
 }
 
 // agentStream is the narrow slice of *loop.Agent nativeRunner actually
@@ -177,6 +184,24 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 const sandboxShellMaxTimeout = 15 * time.Minute
 
 func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
+	shell := r.missionShell(m)
+	if shell == nil {
+		return nil
+	}
+	return []*tools.Tool{
+		shell,
+		builtin.WriteFile(builtin.WriteFileConfig{Root: m.WorkRoot()}),
+	}
+}
+
+// missionShell builds the turn-scoped shell tool rooted in the
+// mission's own directory, routed through the mission's sandbox
+// container — shared by missionTools (worker/reviewer, paired with
+// write_file) and ExploreSession (shell only, read-only exploration:
+// the execute phase does the actual work, so explore never gets
+// write_file). Returns nil when the mission has no work root yet
+// (WorkRoot's Workspace/Worktree both empty).
+func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 	root := m.WorkRoot()
 	if root == "" {
 		return nil
@@ -206,10 +231,7 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 			return result, nil
 		},
 	}
-	return []*tools.Tool{
-		builtin.Shell(shellCfg),
-		builtin.WriteFile(builtin.WriteFileConfig{Root: root}),
-	}
+	return builtin.Shell(shellCfg)
 }
 
 // shellOutputCap mirrors builtin.Shell's own output cap — the sandbox
@@ -440,6 +462,81 @@ func (r *nativeRunner) tryParseVerdict(args json.RawMessage) (WorkerVerdict, boo
 	return v, true
 }
 
+// ExploreSession runs the mission's explore turn: explore the goal
+// before planning commits to a shape. Unlike RunWorker's sentinel
+// ladder, a missing explore_notes call never fails the phase — the
+// findings are advisory input to the planner, not a gate on progress,
+// so the ladder's last resort is the raw turn text rather than a forced
+// failure.
+func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
+	system := "You are exploring one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only — do not create or modify files; the execute phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one explore_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + execEnvironmentNote()
+	user := "Goal: " + NeutralizeSlot(m.Goal)
+
+	extra := []*tools.Tool{ExploreNotesTool()}
+	if shell := r.missionShell(m); shell != nil {
+		extra = append(extra, shell)
+	}
+	req := loop.Request{
+		SessionID:  m.SessionID,
+		Route:      m.Route,
+		Agent:      "mission-explorer",
+		MissionID:  m.ID,
+		System:     system,
+		Messages:   []provider.Message{{Role: "user", Content: user}},
+		ExtraTools: extra,
+		Unattended: m.ScheduleID != "",
+	}
+
+	text, args, err := r.runTurn(ctx, req, exploreNotesToolName)
+	if err != nil {
+		return "", err
+	}
+	if notes, ok := tryParseFindings(args); ok {
+		return notes, nil
+	}
+
+	// One recovery re-run, same ladder shape as RunWorker/PlanSession.
+	recoverReq := req
+	recoverReq.Messages = append(append([]provider.Message{}, req.Messages...),
+		provider.Message{Role: "assistant", Content: text},
+		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one explore_notes tool call containing your findings."},
+	)
+	recoverText, recoverArgs, err := r.runTurn(ctx, recoverReq, exploreNotesToolName)
+	if err != nil {
+		return "", err
+	}
+	if notes, ok := tryParseFindings(recoverArgs); ok {
+		return notes, nil
+	}
+
+	// Neither turn produced a tool call: check for a text-form sentinel
+	// before giving up on structured output entirely.
+	combined := text + "\n" + recoverText
+	if raw, ok := extractTextSentinel(combined, exploreNotesToolName); ok {
+		if notes, ok := tryParseFindings(raw); ok {
+			return notes, nil
+		}
+	}
+
+	// Advisory phase: never a forced failure. The raw turn text is still
+	// useful context for the planner even with no structured findings.
+	r.log.Warn("mission explore ended without an explore_notes call; using raw turn text", "mission_id", m.ID)
+	return strings.TrimSpace(combined), nil
+}
+
+// tryParseFindings reports whether args decodes to a non-empty findings
+// string.
+func tryParseFindings(args json.RawMessage) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	findings, err := parseExploreFindings(args)
+	if err != nil || findings == "" {
+		return "", false
+	}
+	return findings, true
+}
+
 // RunReview judges the packet: the mission's goal and plan, the
 // harness-read artifact contents (never the worker's description of
 // them), the baseline diff when one exists, and the worker's evidence
@@ -566,17 +663,17 @@ func renderReviewContent(p ReviewPacket) string {
 }
 
 // PlanSession runs the planning turn that produces a Spec from the
-// mission's goal and research-phase findings. The plan is forced
+// mission's goal and explore-phase findings. The plan is forced
 // through the submit_plan tool call (mirroring RunWorker/RunReview's
 // sentinel ladder) rather than asked for as bare JSON prose — a model
 // free to preface its reply with prose was the root cause of a real
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
-func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error) {
+func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
 	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. artifacts lists the workspace-relative file(s) the unit must produce — the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote()
 	user := "Goal: " + NeutralizeSlot(m.Goal)
-	if researchNotes != "" {
-		user += "\n\nResearch findings:\n" + NeutralizeSlot(researchNotes)
+	if exploreNotes != "" {
+		user += "\n\nExploration findings:\n" + NeutralizeSlot(exploreNotes)
 	}
 	req := loop.Request{
 		SessionID: m.SessionID,

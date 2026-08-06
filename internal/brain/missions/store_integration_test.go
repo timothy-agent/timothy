@@ -89,7 +89,7 @@ func TestMissionCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "crud", Kind: "research", Route: "default"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "crud", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -97,8 +97,8 @@ func TestMissionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.Phase != PhaseResearch || m.Status != StatusIdle || m.MaxIterations != 8 {
-		t.Fatalf("Get = %+v, want default research/idle/8", m)
+	if m.Phase != PhaseExplore || m.Status != StatusIdle || m.MaxIterations != 8 {
+		t.Fatalf("Get = %+v, want default explore/idle/8", m)
 	}
 
 	list, err := s.List(ctx, ListFilter{})
@@ -133,12 +133,12 @@ func TestMissionDelete(t *testing.T) {
 		t.Fatalf("Delete of a nonexistent id = %v, want ErrNotFound", err)
 	}
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "delete-live", Kind: "research"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "delete-live", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := s.Delete(ctx, id); !errors.Is(err, ErrNotTerminal) {
-		t.Fatalf("Delete of a live (research/idle) mission = %v, want ErrNotTerminal", err)
+		t.Fatalf("Delete of a live (explore/idle) mission = %v, want ErrNotTerminal", err)
 	}
 
 	if err := s.AppendEvent(ctx, id, "mission.progress", map[string]any{"note": "hi"}); err != nil {
@@ -175,7 +175,7 @@ func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 	ctx := t.Context()
 
 	id, err := s.Create(ctx, Mission{
-		Goal: marker + "overlay", Kind: "research", Route: "default",
+		Goal: marker + "overlay", Kind: "general", Route: "default",
 		PromptOverlay: "You are a careful senior engineer.",
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 
 	// Absent means "no agent overlay" (the general agent, e.g.) — must
 	// stay empty, not some driver default.
-	id2, err := s.Create(ctx, Mission{Goal: marker + "no-overlay", Kind: "research", Route: "default"})
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-overlay", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestSetAndClearPendingPermission(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "permission", Kind: "research", Route: "default"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "permission", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestAppendProgress(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "progress", Kind: "research", Route: "default"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "progress", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestApplyTransitionAndEvents(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "transition", Kind: "research"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "transition", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "cancel-parked", Kind: "research"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "cancel-parked", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestAppendEventSeqMonotonic(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "seq", Kind: "research"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "seq", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 	}
 	ids := make([]string, total)
 	for i := range ids {
-		id, err := s.Create(ctx, Mission{Goal: marker + "slot", Kind: "research"})
+		id, err := s.Create(ctx, Mission{Goal: marker + "slot", Kind: "general"})
 		if err != nil {
 			t.Fatalf("Create[%d]: %v", i, err)
 		}
@@ -537,7 +537,7 @@ func TestReconcileTerminalIdempotency(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "reconcile", Kind: "research"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "reconcile", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -596,11 +596,11 @@ func TestRecoverWorking(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	idleID, err := s.Create(ctx, Mission{Goal: marker + "recover-idle", Kind: "research"})
+	idleID, err := s.Create(ctx, Mission{Goal: marker + "recover-idle", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create idle: %v", err)
 	}
-	workingID, err := s.Create(ctx, Mission{Goal: marker + "recover-working", Kind: "research"})
+	workingID, err := s.Create(ctx, Mission{Goal: marker + "recover-working", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create working: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestRecoverStaleWorking(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	freshID, err := s.Create(ctx, Mission{Goal: marker + "stale-fresh", Kind: "research"})
+	freshID, err := s.Create(ctx, Mission{Goal: marker + "stale-fresh", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create fresh: %v", err)
 	}
@@ -636,7 +636,7 @@ func TestRecoverStaleWorking(t *testing.T) {
 		t.Fatalf("ApplyTransition fresh: %v", err)
 	}
 
-	staleID, err := s.Create(ctx, Mission{Goal: marker + "stale-old", Kind: "research"})
+	staleID, err := s.Create(ctx, Mission{Goal: marker + "stale-old", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create stale: %v", err)
 	}

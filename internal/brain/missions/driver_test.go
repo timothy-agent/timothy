@@ -138,6 +138,15 @@ func (f *fakeStore) SetLastEvidence(ctx context.Context, id, evidence string) er
 	return nil
 }
 
+func (f *fakeStore) SetExploreNotes(ctx context.Context, id, notes string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.ExploreNotes = notes
+	f.missions[id] = m
+	return nil
+}
+
 func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -169,6 +178,15 @@ type scriptedRunner struct {
 	reviewIdx      int
 	plans          []Spec
 	planIdx        int
+	// planExploreNotes records the exploreNotes argument PlanSession
+	// was called with, one entry per call — lets a test assert the plan
+	// phase actually received what the explore phase stored.
+	planExploreNotes []string
+	// exploreNotes scripts ExploreSession's return, one entry consumed
+	// per call (same one-behind-repeat pattern as plans/workerVerdicts).
+	exploreNotes []string
+	exploreIdx   int
+	exploreErr   error
 }
 
 func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
@@ -194,12 +212,27 @@ func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet Review
 	return v, &GatekeeperState{}, nil
 }
 
-func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error) {
+func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
+	r.planExploreNotes = append(r.planExploreNotes, exploreNotes)
 	s := r.plans[r.planIdx]
 	if r.planIdx < len(r.plans)-1 {
 		r.planIdx++
 	}
 	return s, nil
+}
+
+func (r *scriptedRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
+	if r.exploreErr != nil {
+		return "", r.exploreErr
+	}
+	if len(r.exploreNotes) == 0 {
+		return "", nil
+	}
+	notes := r.exploreNotes[r.exploreIdx]
+	if r.exploreIdx < len(r.exploreNotes)-1 {
+		r.exploreIdx++
+	}
+	return notes, nil
 }
 
 // fakeSandboxExec runs command via /bin/sh -c directly in workdir —
@@ -253,7 +286,7 @@ func driveN(t *testing.T, d *Driver, id string, n int) {
 
 func TestDriverHappyPathToDone(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseResearch, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -261,7 +294,7 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	}
 	d := testDriver(store, runner)
 
-	// research -> plan -> execute -> review -> done: 4 Advance calls.
+	// explore -> plan -> execute -> review -> done: 4 Advance calls.
 	driveN(t, d, "m1", 4)
 
 	m, _ := store.Get(context.Background(), "m1")
@@ -273,6 +306,114 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	}
 }
 
+// TestDriverExploreStoresNotesAndAdvances confirms the explore phase
+// stores ExploreSession's findings on the mission, emits
+// mission.explore_complete, and advances to plan.
+func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		exploreNotes: []string{"no prior implementation exists; goal is self-contained"},
+		plans:         []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhasePlan {
+		t.Fatalf("mission phase after explore = %q, want plan", m.Phase)
+	}
+	if m.ExploreNotes != "no prior implementation exists; goal is self-contained" {
+		t.Fatalf("mission.ExploreNotes = %q, want the explore findings persisted", m.ExploreNotes)
+	}
+	events := store.events["m1"]
+	found := false
+	for _, ev := range events {
+		if ev.Kind == "mission.explore_complete" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("events = %+v, want a mission.explore_complete event", events)
+	}
+}
+
+// TestDriverExploreTruncatesLongNotes confirms exploreNotesCap bounds
+// what gets stored — the findings feed straight into the plan phase's
+// prompt, so unbounded notes would blow out that turn's context.
+func TestDriverExploreTruncatesLongNotes(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	long := strings.Repeat("x", exploreNotesCap+500)
+	runner := &scriptedRunner{
+		exploreNotes: []string{long},
+		plans:         []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if len(m.ExploreNotes) > exploreNotesCap+len("…") {
+		t.Fatalf("mission.ExploreNotes length = %d, want capped near %d", len(m.ExploreNotes), exploreNotesCap)
+	}
+}
+
+// TestDriverExploreErrorRoutesToWorkerFailed confirms an ExploreSession
+// error (infra/stream failure, not a missing-sentinel degrade — that
+// path never returns an error) maps to InputWorkerFailed, the same
+// backoff/pause machinery a worker/plan infra failure already takes —
+// explore has no phase-specific error input of its own.
+func TestDriverExploreErrorRoutesToWorkerFailed(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{exploreErr: fmt.Errorf("gateway unreachable")}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseExplore {
+		t.Fatalf("mission phase after explore error = %q, want it to stay in explore (retry-eligible)", m.Phase)
+	}
+	if m.ConsecutiveFailures == 0 {
+		t.Fatalf("mission.ConsecutiveFailures = %d, want the failure counted", m.ConsecutiveFailures)
+	}
+}
+
+// TestDriverPlanReceivesStoredExploreNotes confirms runPlan reads
+// m.ExploreNotes from the FRESH Get at the top of the plan phase's own
+// Advance call (a separate call from the explore phase's), not some
+// stale in-memory value from the explore turn.
+func TestDriverPlanReceivesStoredExploreNotes(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		exploreNotes: []string{"found a reusable config loader in internal/platform/config"},
+		plans:         []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+	}
+	d := testDriver(store, runner)
+
+	// First Advance: explore phase.
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance[explore]: %v", err)
+	}
+	// Second Advance: plan phase, a SEPARATE call with its own fresh Get.
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance[plan]: %v", err)
+	}
+	if len(runner.planExploreNotes) != 1 {
+		t.Fatalf("PlanSession call count = %d, want exactly one", len(runner.planExploreNotes))
+	}
+	if runner.planExploreNotes[0] != "found a reusable config loader in internal/platform/config" {
+		t.Fatalf("PlanSession exploreNotes arg = %q, want the notes stored by the explore phase", runner.planExploreNotes[0])
+	}
+}
+
 // TestDriverExecuteRecordsHandoffOverRawText confirms that when the
 // worker's mission_status call carries a handoff note, the harness
 // records THAT as the progress note for the next session, not the
@@ -281,7 +422,7 @@ func TestDriverHappyPathToDone(t *testing.T) {
 // summary.
 func TestDriverExecuteRecordsHandoffOverRawText(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "hit a wall", Handoff: "half the migration is done; finish the token refresh path next"}},
 		workerText:     "raw turn text nobody should see in progress",
@@ -305,7 +446,7 @@ func TestDriverExecuteRecordsHandoffOverRawText(t *testing.T) {
 // handoff: the raw turn text is still what gets recorded.
 func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "hit a wall"}},
 		workerText:     "raw turn text",
@@ -326,7 +467,7 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 
 func TestDriverBackoffPauseAfterThreeFailures(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerErr: fmt.Errorf("gateway unavailable")}
 	d := testDriver(store, runner)
 
@@ -344,7 +485,7 @@ func TestDriverBackoffPauseAfterThreeFailures(t *testing.T) {
 // triggers the backoff brake, unlike a Runner-level failure.
 func TestDriverWorkerRetryDoesNotCountTowardBackoff(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "still working on it"}}}
 	d := testDriver(store, runner)
 
@@ -362,7 +503,7 @@ func TestDriverWorkerRetryDoesNotCountTowardBackoff(t *testing.T) {
 func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
 		Spec: Spec{Units: []PlanUnit{{Title: "u1"}}},
 	})
 	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
@@ -400,7 +541,7 @@ func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
 func TestDriverBudgetPause(t *testing.T) {
 	store := newFakeStore()
 	budget := 1.0
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "USD"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "USD"})
 	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 1.5}}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 	d := testDriver(store, runner)
@@ -422,7 +563,7 @@ func TestDriverBudgetPause(t *testing.T) {
 func TestDriverBudgetPauseMixedCurrency(t *testing.T) {
 	store := newFakeStore()
 	budget := 100.0
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "USD"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "USD"})
 	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"EUR": 0.01}}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 	d := testDriver(store, runner)
@@ -444,7 +585,7 @@ func TestDriverBudgetPauseMixedCurrency(t *testing.T) {
 func TestDriverBudgetConvertsOtherCurrencySpendWhenRateAvailable(t *testing.T) {
 	store := newFakeStore()
 	budget := 10.0
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
 	// 8 USD spend; 1 USD = 0.86 EUR -> 6.88 EUR, under the 10 EUR budget.
 	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 8}}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
@@ -467,7 +608,7 @@ func TestDriverBudgetConvertsOtherCurrencySpendWhenRateAvailable(t *testing.T) {
 func TestDriverBudgetPausesWhenConvertedSpendReachesLimit(t *testing.T) {
 	store := newFakeStore()
 	budget := 5.0
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
 	// 8 USD spend; 1 USD = 0.86 EUR -> 6.88 EUR, over the 5 EUR budget.
 	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 8}}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
@@ -491,7 +632,7 @@ func TestDriverBudgetPausesWhenConvertedSpendReachesLimit(t *testing.T) {
 func TestDriverBudgetPauseMixedCurrencyWhenRateMissing(t *testing.T) {
 	store := newFakeStore()
 	budget := 100.0
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, BudgetAmount: &budget, BudgetCurrency: "EUR"})
 	store.spend["m1"] = MissionSpend{ByCurrency: map[string]float64{"USD": 1}}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 	d := testDriver(store, runner)
@@ -517,7 +658,7 @@ func TestDriverBudgetPauseMixedCurrencyWhenRateMissing(t *testing.T) {
 func TestDriverGatekeeperCleanupOnTerminal(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
 		Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
 	})
 	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
@@ -562,8 +703,12 @@ func (r *blockingRunner) RunReview(ctx context.Context, m Mission, packet Review
 	return r.reviewV, &GatekeeperState{}, nil
 }
 
-func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, researchNotes string) (Spec, error) {
+func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
 	return r.planSpec, nil
+}
+
+func (r *blockingRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
+	return "", nil
 }
 
 // TestDriverDriveIsSerializedPerMission reproduces a real bug: the
@@ -577,7 +722,7 @@ func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, researchNot
 func TestDriverDriveIsSerializedPerMission(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
 		Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
 	})
 	runner := &blockingRunner{
@@ -623,7 +768,7 @@ func TestDriverDriveIsSerializedPerMission(t *testing.T) {
 func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
 		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md", VerifyCmd: "test -f /nonexistent-verify-target"}}},
 	})
 	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
@@ -651,7 +796,7 @@ func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 
 func TestDriverBlockedParksForInput(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "which env?"}}}
 	d := testDriver(store, runner)
 
@@ -693,7 +838,7 @@ func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true})
+	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -715,7 +860,7 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}); err != nil {
+	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if len(granter.calls) != 0 {
@@ -739,7 +884,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 	})
 
 	id, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "research", AgentID: "briefing-agent",
+		Goal: "test", Kind: "general", AgentID: "briefing-agent",
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false,
 	})
 	if err != nil {
@@ -774,7 +919,7 @@ func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	})
 
 	if _, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "research", AutoApproveSafe: false,
+		Goal: "test", Kind: "general", AutoApproveSafe: false,
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -795,7 +940,7 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	// A bare row, exactly as createFromTemplate leaves it: no
 	// SessionID, no Workspace/Worktree.
 	store.put("m1", Mission{
-		ID: "m1", Goal: "scheduled run", Kind: "research",
+		ID: "m1", Goal: "scheduled run", Kind: "general",
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true,
 	})
 	granter := &fakeGranter{}
@@ -835,7 +980,7 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 func TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking,
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking,
 		MaxIterations: 8, SessionID: "already-provisioned-session", Workspace: "/already/provisioned",
 	})
 	granter := &fakeGranter{}
@@ -910,7 +1055,7 @@ func TestDriverSkipsReviewWhenHarnessChecksPass(t *testing.T) {
 	}
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking,
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
 		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}}}},
 	})
@@ -931,7 +1076,7 @@ func TestDriverSkipsReviewWhenHarnessChecksPass(t *testing.T) {
 func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking,
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(),
 		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
 	})
@@ -1014,7 +1159,7 @@ func TestDriverEscalatesRepeatedRework(t *testing.T) {
 	fp := GapFingerprint(findings)
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "research", Phase: PhaseReview, Status: StatusWorking,
+		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(), LastGapFingerprint: fp, StallCount: 1,
 		Spec: Spec{Units: []PlanUnit{{Title: "write summary"}}},
 	})
@@ -1042,7 +1187,7 @@ func TestDriverEscalatesRepeatedRework(t *testing.T) {
 // MaxIterations instead of grinding through the whole budget.
 func TestDriverForcedRetriesStallInsteadOfBurningIterations(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 12})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 12})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
 		{Outcome: "retry", Analysis: "the worker did not report a status; treated as a failed attempt", Forced: true},
 	}}
@@ -1067,7 +1212,7 @@ func TestDriverForcedRetriesStallInsteadOfBurningIterations(t *testing.T) {
 // worker_failed rounds toward backoff.
 func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "research", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: amazon.nova-lite-v1:0", ErrModelFloor)}
 	d := testDriver(store, runner)
 

@@ -86,7 +86,7 @@ down:
 logs:
 	$(COMPOSE) logs -f
 
-# Golden-mission regression gate: runs one research mission end-to-end
+# Golden-mission regression gate: runs one explore mission end-to-end
 # against the live stack and asserts it completes unattended (no parks,
 # harness-verified artifacts, bounded turns). Needs the stack up.
 canary:

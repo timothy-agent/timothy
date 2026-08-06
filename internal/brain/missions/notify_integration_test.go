@@ -17,7 +17,7 @@ func TestOnTransitionWritesNotificationOnActionableTransition(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-1", Kind: "research"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-1", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestOnTransitionSilentOnNonActionable(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-2", Kind: "research"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-2", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSendOncePerMissionDedupes(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-3", Kind: "research"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-3", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-4", Kind: "research"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-4", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestMarkRead(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-5", Kind: "research"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-5", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

@@ -48,7 +48,7 @@ const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, p
 	escalation_route, prompt_overlay,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
-	schedule_id, session_id, created_at, updated_at`
+	explore_notes, schedule_id, session_id, created_at, updated_at`
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
@@ -64,7 +64,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.EscalationRoute, &m.PromptOverlay,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
-		&scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.ExploreNotes, &scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
 	if agentID != nil {
@@ -105,7 +105,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	return m, nil
 }
 
-// Create inserts a mission row in phase=research, status=idle.
+// Create inserts a mission row in phase=explore, status=idle.
 func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -351,6 +351,21 @@ func (s *Store) SetLastEvidence(ctx context.Context, id, evidence string) error 
 	if _, err := db.Exec(ctx, `UPDATE missions SET last_evidence = $2, updated_at = now() WHERE id = $1`,
 		id, evidence); err != nil {
 		return fmt.Errorf("missions set last evidence: %w", err)
+	}
+	return nil
+}
+
+// SetExploreNotes stores the explore phase's findings for the
+// planner. Like SetLastEvidence it bypasses the state machine: written
+// mid-phase, not at an Advance boundary.
+func (s *Store) SetExploreNotes(ctx context.Context, id, notes string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set explore notes: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET explore_notes = $2, updated_at = now() WHERE id = $1`,
+		id, notes); err != nil {
+		return fmt.Errorf("missions set explore notes: %w", err)
 	}
 	return nil
 }

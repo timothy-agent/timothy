@@ -86,8 +86,8 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseMixedCurrency, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
 		},
 		{
-			name:  "phase_complete advances research to plan",
-			state: StepState{Phase: PhaseResearch, Status: StatusWorking, Iteration: 2, ConsecutiveFailures: 1},
+			name:  "phase_complete advances explore to plan",
+			state: StepState{Phase: PhaseExplore, Status: StatusWorking, Iteration: 2, ConsecutiveFailures: 1},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle},
@@ -306,7 +306,7 @@ func TestStepMixedCurrencyPauseDetail(t *testing.T) {
 }
 
 func TestParsePhase(t *testing.T) {
-	valid := []Phase{PhaseResearch, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed}
+	valid := []Phase{PhaseExplore, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed}
 	for _, p := range valid {
 		if got, ok := parsePhase(string(p)); !ok || got != p {
 			t.Fatalf("parsePhase(%q) = %q, %v; want %q, true", p, got, ok, p)
@@ -339,7 +339,7 @@ func TestPhaseTerminal(t *testing.T) {
 			t.Fatalf("%q.Terminal() = false, want true", p)
 		}
 	}
-	nonTerminal := []Phase{PhaseResearch, PhasePlan, PhaseExecute, PhaseReview}
+	nonTerminal := []Phase{PhaseExplore, PhasePlan, PhaseExecute, PhaseReview}
 	for _, p := range nonTerminal {
 		if p.Terminal() {
 			t.Fatalf("%q.Terminal() = true, want false", p)

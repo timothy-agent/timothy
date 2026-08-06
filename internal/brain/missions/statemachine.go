@@ -4,16 +4,16 @@ package missions
 type Phase string
 
 const (
-	PhaseResearch Phase = "research"
-	PhasePlan     Phase = "plan"
-	PhaseExecute  Phase = "execute"
-	PhaseReview   Phase = "review"
-	PhaseDone     Phase = "done"
-	PhaseFailed   Phase = "failed"
+	PhaseExplore Phase = "explore"
+	PhasePlan    Phase = "plan"
+	PhaseExecute Phase = "execute"
+	PhaseReview  Phase = "review"
+	PhaseDone    Phase = "done"
+	PhaseFailed  Phase = "failed"
 )
 
 // phaseOrder is the fixed pipeline a mission advances through.
-var phaseOrder = []Phase{PhaseResearch, PhasePlan, PhaseExecute, PhaseReview}
+var phaseOrder = []Phase{PhaseExplore, PhasePlan, PhaseExecute, PhaseReview}
 
 // Terminal reports whether phase ends the mission.
 func (p Phase) Terminal() bool {
@@ -39,7 +39,7 @@ func nextPhase(p Phase) (Phase, bool) {
 // fail to load it at all).
 func parsePhase(raw string) (Phase, bool) {
 	switch Phase(raw) {
-	case PhaseResearch, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed:
+	case PhaseExplore, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed:
 		return Phase(raw), true
 	default:
 		return "", false
@@ -278,7 +278,7 @@ func stepResume(s StepState) Transition {
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.resumed"}}}
 }
 
-// stepPhaseComplete advances research/plan to the next fixed phase.
+// stepPhaseComplete advances explore/plan to the next fixed phase.
 // execute's completion goes through review (a worker verdict of DONE
 // requests review, it doesn't itself complete the phase — the driver
 // routes DONE into a review round, whose outcome arrives as

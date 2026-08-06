@@ -11,9 +11,9 @@
 CREATE TABLE IF NOT EXISTS missions (
     id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     goal                  text NOT NULL,
-    kind                  text NOT NULL CHECK (kind IN ('coding', 'research', 'scheduled')),
+    kind                  text NOT NULL CHECK (kind IN ('coding', 'general')),
     agent_id              uuid REFERENCES agents(id),
-    phase                 text NOT NULL DEFAULT 'research',
+    phase                 text NOT NULL DEFAULT 'explore',
     status                text NOT NULL DEFAULT 'idle',
     pause_reason          text NOT NULL DEFAULT '',
     pause_message         text NOT NULL DEFAULT '',
@@ -73,13 +73,17 @@ CREATE TABLE IF NOT EXISTS missions (
     -- classified commands still always ask, unaffected by this column
     -- or any grant.
     auto_approve_safe     boolean NOT NULL DEFAULT true,
-    -- The reviewer judges the baseline git diff, but a research/
-    -- scheduled mission never touches tracked files -- its diff is
+    -- The reviewer judges the baseline git diff, but a general
+    -- mission never touches tracked files -- its diff is
     -- always empty, so the reviewer previously had zero evidence to
     -- judge and rejected every round. This carries the worker's own
     -- mission_status evidence text forward from execute to review,
     -- alongside (not instead of) the diff for coding missions.
-    last_evidence         text NOT NULL DEFAULT ''
+    last_evidence         text NOT NULL DEFAULT '',
+    -- The explore phase's findings, carried into the plan phase's
+    -- prompt (internal/brain/missions/driver.go's runPlan) so the
+    -- planner sees what exploration turned up, not just the bare goal.
+    explore_notes         text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

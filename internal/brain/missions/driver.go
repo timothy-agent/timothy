@@ -73,6 +73,7 @@ type driverStore interface {
 	SetSession(ctx context.Context, id, sessionID string) error
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
+	SetExploreNotes(ctx context.Context, id, notes string) error
 	AppendProgress(ctx context.Context, id, note string) error
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
 }
@@ -590,8 +591,8 @@ func isLastUnit(spec Spec) bool {
 // review verdict, planner output).
 func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	switch m.Phase {
-	case PhaseResearch:
-		return d.runResearch(ctx, m)
+	case PhaseExplore:
+		return d.runExplore(ctx, m)
 	case PhasePlan:
 		return d.runPlan(ctx, m)
 	case PhaseExecute:
@@ -603,16 +604,33 @@ func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	}
 }
 
-// runResearch is a placeholder single-turn phase in Phase 1: it
-// completes immediately, carrying no findings forward beyond what the
-// plan phase's own packet re-derives from the goal. A real research
-// loop (multi-turn, tool-using) is out of scope for this milestone.
-func (d *Driver) runResearch(ctx context.Context, m Mission) (StepInput, error) {
+// exploreNotesCap bounds how much of the explore turn's findings get
+// stored and fed into the plan phase's prompt — the findings feed
+// straight into the planner's prompt, and unbounded notes would blow
+// out that turn's context.
+const exploreNotesCap = 8000
+
+// runExplore runs one explore turn: a tool-using session that
+// explores the goal before planning commits to a shape. The findings
+// are stored on the mission (SetExploreNotes) so the plan phase's own
+// (separate) Advance call reads them back via a fresh Get.
+func (d *Driver) runExplore(ctx context.Context, m Mission) (StepInput, error) {
+	notes, err := d.runner.ExploreSession(ctx, m)
+	if err != nil {
+		return StepInput{}, err
+	}
+	notes = truncate(notes, exploreNotesCap)
+	if err := d.store.SetExploreNotes(ctx, m.ID, notes); err != nil {
+		return StepInput{}, fmt.Errorf("driver: store explore notes: %w", err)
+	}
+	if err := d.store.AppendEvent(ctx, m.ID, "mission.explore_complete", map[string]any{"chars": len(notes)}); err != nil {
+		d.log.Warn("driver: record explore complete failed", "mission_id", m.ID, "error", err)
+	}
 	return StepInput{Input: InputPhaseComplete}, nil
 }
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
-	spec, err := d.runner.PlanSession(ctx, m, "")
+	spec, err := d.runner.PlanSession(ctx, m, m.ExploreNotes)
 	if err != nil {
 		return StepInput{}, err
 	}

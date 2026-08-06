@@ -344,7 +344,7 @@ func TestRunReviewRecoversWhenVerdictMissingThenPresent(t *testing.T) {
 // recovery turn instead of erroring the round out.
 func TestRunReviewFallsBackToTextSentinel(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{textEvent("Looking at this closely, I think it holds up.")}, // no tool call
+		{textEvent("Looking at this closely, I think it holds up.")},   // no tool call
 		{textEvent(`Confirmed. <review_verdict decision="approve"/>`)}, // recovery: still text-only
 	}}
 	r := newTestRunner(agent)
@@ -928,6 +928,132 @@ func TestRunWorkerReportsPermissionDenied(t *testing.T) {
 // infra error — previously it returned a clean empty verdict, which
 // the caller read as a missing sentinel and burned a recovery re-run
 // plus a forced retry for one silent infra failure.
+// TestExploreSessionSentinelPresent mirrors TestRunWorkerSentinelPresent:
+// an explore_notes call on the first turn is trusted directly, no
+// recovery needed.
+func TestExploreSessionSentinelPresent(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("looked around"), toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation; goal is self-contained"}`)},
+	}}
+	r := newTestRunner(agent)
+	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	if err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	if notes != "no prior implementation; goal is self-contained" {
+		t.Fatalf("ExploreSession notes = %q", notes)
+	}
+	if agent.call != 1 {
+		t.Fatalf("expected exactly one turn when the sentinel is present, got %d", agent.call)
+	}
+}
+
+// TestExploreSessionRecoversWhenSentinelMissingThenPresent mirrors
+// RunWorker's recovery ladder: a missing sentinel on the first turn
+// gets one recovery re-run before the sentinel is trusted.
+func TestExploreSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("still exploring")}, // no sentinel
+		{textEvent("done exploring"), toolEndEvent(exploreNotesToolName, `{"findings":"found a reusable config loader"}`)},
+	}}
+	r := newTestRunner(agent)
+	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	if err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	if notes != "found a reusable config loader" {
+		t.Fatalf("ExploreSession notes = %q", notes)
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+}
+
+// TestExploreSessionFallsBackToTextSentinel covers a explore turn
+// that expresses explore_notes as text (XML-ish tag), never as a tool
+// call — same fallback RunWorker/RunReview already rely on.
+func TestExploreSessionFallsBackToTextSentinel(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("no tool call here")},
+		{textEvent(`Done. <explore_notes findings="the goal needs no exploration; it is self-contained"/>`)},
+	}}
+	r := newTestRunner(agent)
+	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	if err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	if notes != "the goal needs no exploration; it is self-contained" {
+		t.Fatalf("ExploreSession notes via text fallback = %q", notes)
+	}
+}
+
+// TestExploreSessionFallsBackToRawText is the advisory-phase contract:
+// when NEITHER turn produces an explore_notes call in any form, the raw
+// turn text becomes the notes — never an error, since explore findings
+// are advisory input to the planner, not a gate on mission progress.
+func TestExploreSessionFallsBackToRawText(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{textEvent("Looked at the workspace, nothing notable.")},
+		{textEvent("Confirmed, nothing else to add.")},
+	}}
+	r := newTestRunner(agent)
+	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	if err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	want := "Looked at the workspace, nothing notable.\nConfirmed, nothing else to add."
+	if notes != want {
+		t.Fatalf("ExploreSession fallback notes = %q, want %q", notes, want)
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+}
+
+// TestExploreSessionStreamErrorPropagates confirms an infra-level
+// stream error (not a missing sentinel) is a real error, distinct from
+// the advisory "no sentinel, use raw text" fallback path.
+func TestExploreSessionStreamErrorPropagates(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		{Type: stream.EventError, Err: &stream.StreamError{Message: "connection lost"}},
+	}}}
+	r := newTestRunner(agent)
+	if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err == nil {
+		t.Fatal("ExploreSession: expected the stream error to propagate")
+	}
+}
+
+// TestExploreSessionGetsShellButNotWriteFile confirms the explore
+// turn's ExtraTools include a mission-scoped shell (for read-only
+// exploration) but never write_file — the execute phase does the
+// actual work, explore must not create or modify files.
+func TestExploreSessionGetsShellButNotWriteFile(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"nothing notable"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "test", Workspace: "/workspace/missions/m1"}
+	if _, err := r.ExploreSession(context.Background(), m); err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	var names []string
+	for _, tool := range agent.requests[0].ExtraTools {
+		names = append(names, tool.Name)
+	}
+	if !slices.Contains(names, "shell") {
+		t.Fatalf("explore ExtraTools = %v, want a mission-scoped shell", names)
+	}
+	if slices.Contains(names, "write_file") {
+		t.Fatalf("explore ExtraTools = %v, must not include write_file", names)
+	}
+	if !slices.Contains(names, exploreNotesToolName) {
+		t.Fatalf("explore ExtraTools = %v, want the explore_notes sentinel", names)
+	}
+	if agent.requests[0].ToolAllow != nil {
+		t.Fatalf("explore ToolAllow = %v, want nil so base tools (web_search/web_fetch) stay available", agent.requests[0].ToolAllow)
+	}
+}
+
 func TestRunTurnBareCloseIsError(t *testing.T) {
 	agent := &scriptedAgent{rawClose: true, batches: [][]stream.StreamEvent{{
 		textEvent("partial work"),

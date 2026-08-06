@@ -92,6 +92,100 @@ func TestParseWorkerVerdictDecodesHandoff(t *testing.T) {
 	}
 }
 
+func TestParseExploreFindings(t *testing.T) {
+	findings, err := parseExploreFindings([]byte(`{"findings":"no prior implementation exists; goal is self-contained"}`))
+	if err != nil {
+		t.Fatalf("parseExploreFindings: %v", err)
+	}
+	if findings != "no prior implementation exists; goal is self-contained" {
+		t.Fatalf("parseExploreFindings = %q", findings)
+	}
+}
+
+// TestParseExploreFindingsCaseInsensitiveKey confirms encoding/json's
+// default case-insensitive field matching applies here too (same as
+// parseWorkerVerdict) — a model that emits "Findings" instead of
+// "findings" still decodes.
+func TestParseExploreFindingsCaseInsensitiveKey(t *testing.T) {
+	findings, err := parseExploreFindings([]byte(`{"Findings":"found an existing config loader to reuse"}`))
+	if err != nil {
+		t.Fatalf("parseExploreFindings: %v", err)
+	}
+	if findings != "found an existing config loader to reuse" {
+		t.Fatalf("parseExploreFindings = %q", findings)
+	}
+}
+
+func TestParseExploreFindingsEmpty(t *testing.T) {
+	findings, err := parseExploreFindings([]byte(`{"findings":""}`))
+	if err != nil {
+		t.Fatalf("parseExploreFindings: %v", err)
+	}
+	if findings != "" {
+		t.Fatalf("parseExploreFindings = %q, want empty", findings)
+	}
+}
+
+func TestParseExploreFindingsMalformed(t *testing.T) {
+	if _, err := parseExploreFindings([]byte(`not json`)); err == nil {
+		t.Fatal("parseExploreFindings accepted malformed JSON")
+	}
+}
+
+// TestExtractTextSentinelExploreNotes covers explore_notes' text-form
+// fallback — its discriminator (findings) is free text, not a fixed
+// enum, so a plain non-empty check gates validity instead of enum
+// membership.
+func TestExtractTextSentinelExploreNotes(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		wantOK  bool
+		wantVal string
+	}{
+		{
+			name:    "XML form",
+			text:    `<explore_notes findings="no existing implementation; goal is self-contained"/>`,
+			wantOK:  true,
+			wantVal: "no existing implementation; goal is self-contained",
+		},
+		{
+			name:    "token+JSON form",
+			text:    "explore_notes\n{\"findings\": \"found a reusable config loader in internal/platform/config\"}",
+			wantOK:  true,
+			wantVal: "found a reusable config loader in internal/platform/config",
+		},
+		{
+			name:   "empty findings value is not a match",
+			text:   `<explore_notes findings=""/>`,
+			wantOK: false,
+		},
+		{
+			name:   "no explore_notes mention at all",
+			text:   "I looked around but found nothing worth noting.",
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, ok := extractTextSentinel(tc.text, exploreNotesToolName)
+			if ok != tc.wantOK {
+				t.Fatalf("extractTextSentinel(%q) ok = %v, want %v", tc.text, ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			findings, err := parseExploreFindings(raw)
+			if err != nil {
+				t.Fatalf("parseExploreFindings: %v", err)
+			}
+			if findings != tc.wantVal {
+				t.Fatalf("findings = %q, want %q", findings, tc.wantVal)
+			}
+		})
+	}
+}
+
 // TestExtractTextSentinel covers the observed real-world failure
 // shapes: GLM-5.2 workers emitting an XML-ish self-closing tag,
 // qwen3:30b workers emitting a bare tool-name token followed by a JSON

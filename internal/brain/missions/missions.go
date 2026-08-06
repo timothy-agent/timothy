@@ -1,6 +1,6 @@
 // Package missions implements Phase 1 of the mission engine: an
 // agent-driven, long-running unit of work that walks a fixed phase
-// pipeline (research -> plan -> execute -> review -> done|failed)
+// pipeline (explore -> plan -> execute -> review -> done|failed)
 // under a pure state machine, executed by native (in-process) model
 // turns via loop.Agent. Delegated CLI executors (claude/codex
 // subprocess shelling) are explicitly out of scope for this phase.
@@ -16,7 +16,7 @@ import (
 type Mission struct {
 	ID      string `json:"id"`
 	Goal    string `json:"goal"`
-	Kind    string `json:"kind"` // coding | research | scheduled
+	Kind    string `json:"kind"` // coding | general
 	AgentID string `json:"agent_id,omitempty"`
 	// PromptOverlay is a snapshot of the creating agent's overlay text
 	// at create time — see 0010_missions.sql for why this isn't a live
@@ -34,10 +34,13 @@ type Mission struct {
 	Progress      []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's
 	// evidence text — carried from execute into review so a
-	// research/scheduled mission (whose baseline diff is always empty,
+	// general mission (whose baseline diff is always empty,
 	// having touched no tracked files) still gives the reviewer
 	// something real to judge instead of nothing.
-	LastEvidence        string   `json:"last_evidence,omitempty"`
+	LastEvidence string `json:"last_evidence,omitempty"`
+	// ExploreNotes is the explore phase's findings, carried forward
+	// into the plan phase's prompt (see runner.go's PlanSession).
+	ExploreNotes        string   `json:"explore_notes,omitempty"`
 	Iteration           int      `json:"iteration"`
 	MaxIterations       int      `json:"max_iterations"`
 	ConsecutiveFailures int      `json:"consecutive_failures"`

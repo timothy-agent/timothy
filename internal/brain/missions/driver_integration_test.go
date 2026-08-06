@@ -15,7 +15,7 @@ import (
 )
 
 // TestDriverEndToEndCodingMission is M2's exit criterion: one mission
-// driven fully through research -> plan -> execute -> review -> done
+// driven fully through explore -> plan -> execute -> review -> done
 // against a real Postgres Store and a real git Workspace, with a
 // SCRIPTED FAKE Runner standing in for the model (no live model call,
 // no gateway dependency).
@@ -70,7 +70,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 		t.Fatalf("git commit: %v: %s", err, out)
 	}
 
-	// research -> plan -> execute -> review -> done: drive to
+	// explore -> plan -> execute -> review -> done: drive to
 	// completion (bounded, so a design bug can't hang the test suite).
 	for i := 0; i < 10; i++ {
 		cont, err := d.Advance(ctx, id)
@@ -124,7 +124,7 @@ func TestDriverLazilyProvisionsBareSchedulerStyleMission(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	id, err := store.Create(ctx, Mission{
-		Goal: marker + "lazy provisioning", Kind: "research", Route: "default", ReviewRoute: "default",
+		Goal: marker + "lazy provisioning", Kind: "general", Route: "default", ReviewRoute: "default",
 		AutoApproveSafe: true,
 	})
 	if err != nil {
