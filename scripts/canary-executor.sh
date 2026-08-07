@@ -17,7 +17,7 @@ BASE_URL="${CANARY_BASE_URL:-http://localhost:${BRAIN_PORT:-8300}}"
 TIMEOUT_SECS="${CANARY_TIMEOUT:-900}"
 FIXTURE=/workspace/canary-exec-fixture
 ROUTE_NAME="canary-executor"
-EXECUTOR_MODEL="${CANARY_EXECUTOR_MODEL:-claude-haiku-4-5-20251001}"
+EXECUTOR_MODEL_FALLBACK="claude-haiku-4-5-20251001"
 
 # A different goal every run, with a random suffix on top of that: two
 # canary scripts (this one and canary-coding.sh) must never collide on
@@ -61,23 +61,29 @@ auth=(-H "Authorization: Bearer ${TIMOTHY_API_TOKEN}" -H "Content-Type: applicat
 # wire-incompatible.
 echo "canary-executor: discovering a wire-compatible provider"
 providers_resp="$(curl -sf "${auth[@]}" "${BASE_URL}/v1/admin/providers")"
-provider_id="$(PROVIDERS_JSON="${providers_resp}" python3 <<'PY'
+provider_line="$(PROVIDERS_JSON="${providers_resp}" python3 <<'PY'
 import json, os
 data = json.loads(os.environ["PROVIDERS_JSON"])
 for p in data.get("providers", []):
-    if not p.get("enabled"):
+    if not p.get("enabled") or p.get("kind") == "cli":
         continue
     opts = p.get("options") or {}
     if p.get("driver") == "anthropic" or opts.get("anthropic_base_url"):
-        print(p["id"])
+        print(p["id"], p.get("default_model") or "")
         break
 PY
 )"
+provider_id="${provider_line%% *}"
+provider_default_model="${provider_line#* }"
 if [[ -z "${provider_id}" ]]; then
   echo "canary-executor: FAIL — no enabled provider with driver=anthropic or options.anthropic_base_url set; configure one in Settings first" >&2
   exit 2
 fi
-echo "canary-executor: using provider ${provider_id}"
+# The chain entry also serves explore/plan/review natively, so the
+# model must be one the provider actually hosts — its own default,
+# unless the operator overrides.
+MODEL="${CANARY_EXECUTOR_MODEL:-${provider_default_model:-${EXECUTOR_MODEL_FALLBACK}}}"
+echo "canary-executor: using provider ${provider_id} model ${MODEL}"
 
 # --- 2. ensure the canary-executor route exists, then pin its chain ---
 routes_resp="$(curl -sf "${auth[@]}" "${BASE_URL}/v1/admin/routes")"
@@ -103,7 +109,7 @@ fi
 # an executor break — the assertions below demand executor.spawned and
 # exactly one executor.result, so a native-served execute phase still
 # fails the canary loudly.
-chain_json="$(PROVIDER_ID="${provider_id}" MODEL="${EXECUTOR_MODEL}" python3 <<'PY'
+chain_json="$(PROVIDER_ID="${provider_id}" MODEL="${MODEL}" python3 <<'PY'
 import json, os
 pid, model = os.environ["PROVIDER_ID"], os.environ["MODEL"]
 print(json.dumps([
