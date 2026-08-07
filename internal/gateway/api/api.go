@@ -51,6 +51,7 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 	srv.Handle("POST /v1/embed", http.HandlerFunc(a.handleEmbed))
 	srv.Handle("GET /v1/providers", http.HandlerFunc(a.handleProviders))
 	srv.Handle("GET /v1/routes/roles", http.HandlerFunc(a.handleRoleRoutes))
+	srv.Handle("GET /v1/routes/{name}/resolve", http.HandlerFunc(a.handleResolveRoute))
 	srv.Handle("POST /internal/reload", http.HandlerFunc(a.handleReload))
 }
 
@@ -532,6 +533,54 @@ func (a *API) handleRoleRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"roles": roles})
+}
+
+// resolveRouteEntry is one chain entry as returned by
+// /v1/routes/{name}/resolve. credential_ref is always a NAME, never a
+// resolved secret value (D-051) — brain resolves it itself when
+// spawning a harness executor.
+type resolveRouteEntry struct {
+	ProviderID    string `json:"provider_id"`
+	ProviderName  string `json:"provider_name,omitempty"`
+	Driver        string `json:"driver,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Model         string `json:"model"`
+	Harness       string `json:"harness,omitempty"`
+	CredentialRef string `json:"credential_ref,omitempty"`
+	BaseURL       string `json:"base_url,omitempty"`
+	Usable        bool   `json:"usable"`
+	SkipReason    string `json:"skip_reason,omitempty"`
+}
+
+// handleResolveRoute reports a route's ordered chain with enough
+// provider metadata for brain's missions harness to dispatch each entry
+// native-vs-delegated (D-051): harness == "" entries are chat-gated
+// exactly as chat serving would gate them; harness != "" entries are
+// judged by the executor rule instead (router.ResolveRoute keeps the
+// two axes separate). Same trust plane as /v1/stream — no auth, never
+// leaves the compose network.
+func (a *API) handleResolveRoute(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	snap := a.store.Snapshot()
+	if snap == nil {
+		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
+		return
+	}
+	resolved, ok := snap.ResolveRoute(name)
+	if !ok {
+		jsonError(w, http.StatusNotFound, "not_found", fmt.Sprintf("route %q not found", name))
+		return
+	}
+	entries := make([]resolveRouteEntry, len(resolved))
+	for i, e := range resolved {
+		entries[i] = resolveRouteEntry{
+			ProviderID: e.ProviderID, ProviderName: e.ProviderName,
+			Driver: e.Driver, Kind: e.Kind, Model: e.Model, Harness: e.Harness,
+			CredentialRef: e.CredentialRef, BaseURL: e.BaseURL,
+			Usable: e.Usable, SkipReason: e.SkipReason,
+		}
+	}
+	writeJSON(w, map[string]any{"route": name, "entries": entries})
 }
 
 func (a *API) handleReload(w http.ResponseWriter, r *http.Request) {

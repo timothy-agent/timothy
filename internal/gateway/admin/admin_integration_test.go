@@ -319,13 +319,56 @@ func TestValidationRefusesSecretsAndUnknowns(t *testing.T) {
 		{Name: adminMarker + "v1", Kind: "api", Driver: "openaicompat",
 			CredentialRef: "sk-abc def with spaces"}, // secret-looking
 		{Name: adminMarker + "v2", Kind: "api", Driver: "made-up"},
-		{Name: adminMarker + "v3", Kind: "cli", Driver: "openaicompat"}, // cli later phase
+		{Name: adminMarker + "v3", Kind: "cli", Driver: "openaicompat"}, // openaicompat is not a known cli driver
 		{Name: "", Kind: "api", Driver: "openaicompat"},
 	}
 	for _, p := range cases {
 		if _, err := adm.Create(ctx, p); err == nil {
 			t.Fatalf("Create(%+v) succeeded, want validation error", p)
 		}
+	}
+}
+
+// TestDeleteGuardMatchesHarnessChainEntry confirms the jsonb
+// containment check in Delete (chain @> [{"provider_id": id}]) still
+// matches a chain entry that carries extra fields — model and, since
+// D-051, harness. jsonb array containment tests each stored element as
+// a superset of the probe object, so an entry with harness present is
+// still found; this pins that behavior rather than assuming it.
+func TestDeleteGuardMatchesHarnessChainEntry(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "harnessdel", Kind: "cli", Driver: "claude-cli",
+		CredentialRef: "subscription",
+		Options:       map[string]string{"anthropic_base_url": "http://localhost:9999"},
+		Enabled:       true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	route := adminMarker + "harnessroute"
+	_, err = db.Exec(ctx, `INSERT INTO routes (name, chain, enabled)
+		VALUES ($1, jsonb_build_array(jsonb_build_object(
+			'provider_id', $2::text, 'model', 'claude-sonnet-4', 'harness', 'claude-cli')), true)
+		ON CONFLICT (name) DO UPDATE SET chain = EXCLUDED.chain, enabled = true`,
+		route, id)
+	if err != nil {
+		t.Fatalf("seed harness route: %v", err)
+	}
+
+	if err := adm.Delete(ctx, id); err == nil || !strings.Contains(err.Error(), "referenced") {
+		t.Fatalf("Delete with harness entry referencing it = %v, want in-use refusal", err)
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE routes SET enabled = false WHERE name = $1`, route); err != nil {
+		t.Fatalf("disable harness route: %v", err)
+	}
+	if err := adm.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete after disabling harness route: %v", err)
 	}
 }
 
@@ -371,6 +414,60 @@ func TestRoutePatchValidatesProviderRefs(t *testing.T) {
 			}
 			return
 		}
+	}
+	t.Fatal("route missing")
+}
+
+// TestRoutePatchValidatesHarnessEntries covers D-051's PatchRoute gate:
+// a chain entry naming an unknown harness or a wire-incompatible
+// provider must refuse; a valid claude-cli entry against an
+// anthropic-driver row is accepted.
+func TestRoutePatchValidatesHarnessEntries(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+
+	anthropicID, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "harness-anthropic", Kind: "api", Driver: "anthropic",
+		DefaultModel: "sonnet", CredentialRef: "SOME_ENV_NAME", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Create anthropic: %v", err)
+	}
+	incompatID, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "harness-incompat", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "m1", CredentialRef: "SOME_ENV_NAME",
+	})
+	if err != nil {
+		t.Fatalf("Create incompatible: %v", err)
+	}
+	cat := seedRoute(t, pool, adminMarker+"harnesspatch", anthropicID)
+
+	unknown := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet", Harness: "codex-cli-unreleased"}}
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &unknown}); err == nil {
+		t.Fatal("unknown harness must refuse")
+	}
+
+	incompat := []router.ChainEntry{{ProviderID: incompatID, Model: "m1", Harness: "claude-cli"}}
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &incompat}); err == nil {
+		t.Fatal("wire-incompatible provider must refuse")
+	}
+
+	valid := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet", Harness: "claude-cli"}}
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &valid}); err != nil {
+		t.Fatalf("valid harness entry: %v", err)
+	}
+	routes, err := adm.Routes(ctx)
+	if err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	for _, r := range routes {
+		if r.Name != cat {
+			continue
+		}
+		if len(r.Chain) != 1 || r.Chain[0].Harness != "claude-cli" {
+			t.Fatalf("chain = %+v, want harness claude-cli", r.Chain)
+		}
+		return
 	}
 	t.Fatal("route missing")
 }

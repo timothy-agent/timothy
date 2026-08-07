@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +198,80 @@ func TestModelWindows(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("gateway hits = %d, want 1 (TTL memo)", hits)
+	}
+}
+
+func TestResolveRoute(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/routes/coding/resolve" {
+			http.NotFound(w, r)
+			return
+		}
+		hits++
+		_, _ = fmt.Fprint(w, `{"route":"coding","entries":[
+			{"provider_id":"p1","provider_name":"anthropic","driver":"anthropic","kind":"api",
+			 "model":"sonnet","usable":true},
+			{"provider_id":"p2","provider_name":"claude-sub","driver":"claude-cli","kind":"cli",
+			 "model":"claude-sonnet-4","harness":"claude-cli","credential_ref":"subscription",
+			 "base_url":"http://localhost:9999","usable":true}
+		]}`)
+	})
+
+	resolved, err := c.ResolveRoute(t.Context(), "coding")
+	if err != nil {
+		t.Fatalf("ResolveRoute: %v", err)
+	}
+	if resolved.Route != "coding" || len(resolved.Entries) != 2 {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+	api := resolved.Entries[0]
+	if api.Harness != "" || !api.Usable {
+		t.Fatalf("api entry = %+v", api)
+	}
+	exec := resolved.Entries[1]
+	if exec.Harness != "claude-cli" || exec.CredentialRef != "subscription" || exec.BaseURL != "http://localhost:9999" {
+		t.Fatalf("executor entry = %+v", exec)
+	}
+
+	// A second read inside the TTL serves from the memo.
+	if _, err := c.ResolveRoute(t.Context(), "coding"); err != nil {
+		t.Fatalf("ResolveRoute (cached): %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("gateway hits = %d, want 1 (TTL memo)", hits)
+	}
+}
+
+func TestResolveRouteCachesPerRouteName(t *testing.T) {
+	t.Parallel()
+	hits := map[string]int{}
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		route := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/routes/"), "/resolve")
+		hits[route]++
+		_, _ = fmt.Fprintf(w, `{"route":%q,"entries":[]}`, route)
+	})
+
+	if _, err := c.ResolveRoute(t.Context(), "coding"); err != nil {
+		t.Fatalf("ResolveRoute(coding): %v", err)
+	}
+	if _, err := c.ResolveRoute(t.Context(), "mini"); err != nil {
+		t.Fatalf("ResolveRoute(mini): %v", err)
+	}
+	if hits["coding"] != 1 || hits["mini"] != 1 {
+		t.Fatalf("hits = %+v, want one each", hits)
+	}
+}
+
+func TestResolveRouteNotFound(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
+	})
+
+	if _, err := c.ResolveRoute(t.Context(), "no-such-route"); err == nil {
+		t.Fatal("ResolveRoute() = nil error for 404 gateway response")
 	}
 }
 

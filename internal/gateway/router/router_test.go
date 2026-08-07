@@ -829,3 +829,180 @@ func TestStickyPrefersChainMemberOnly(t *testing.T) {
 		t.Fatalf("sticky outside the chain changed order: %+v", attempts)
 	}
 }
+
+// harnessSnapshot builds a chat route with one harness (mission-only)
+// entry mixed into an otherwise normal chain, plus a subscription-auth
+// row with no chat driver at all — the shape a claude-cli executor
+// entry actually takes (D-051).
+func harnessSnapshot(t *testing.T) *Snapshot {
+	t.Helper()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+			DefaultModel: "sonnet", CredentialRef: "A_KEY", Enabled: true},
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true, AnthropicBaseURL: "http://localhost:9999"},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "sonnet"},
+			{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	return snap
+}
+
+func TestResolveSkipsHarnessEntryForChat(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+
+	attempts, err := snap.Resolve("coding", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := attemptNames(attempts); got != "anthropic/sonnet" {
+		t.Fatalf("attempts = %s, want harness entry excluded", got)
+	}
+}
+
+func TestResolveStickyOnHarnessEntryNotHonored(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+
+	// A sticky pointing at the harness entry must never be served to
+	// chat — entryGateHarness rejects it the same as any other chain
+	// member, falling through to the plain chat entry.
+	attempts, err := snap.Resolve("coding", "", Sticky{ProviderName: "claude-sub", Model: "claude-sonnet-4"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := attemptNames(attempts); got != "anthropic/sonnet" {
+		t.Fatalf("attempts = %s, want sticky-on-harness ignored", got)
+	}
+}
+
+func TestResolveDetailMarksHarnessEntryUnusable(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+
+	detail := snap.ResolveDetail("coding")
+	if len(detail) != 2 {
+		t.Fatalf("detail len = %d, want 2", len(detail))
+	}
+	harnessEntry := detail[1]
+	if harnessEntry.Usable {
+		t.Fatalf("harness entry usable for chat: %+v", harnessEntry)
+	}
+	if harnessEntry.SkipReason != "harness executor (mission-only)" {
+		t.Fatalf("skip reason = %q", harnessEntry.SkipReason)
+	}
+}
+
+func TestResolveRouteMixedChain(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+
+	entries, ok := snap.ResolveRoute("coding")
+	if !ok {
+		t.Fatalf("ResolveRoute: route not found")
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
+	}
+	api := entries[0]
+	if api.Harness != "" || !api.Usable || api.SkipReason != "" {
+		t.Fatalf("api entry = %+v", api)
+	}
+	if api.BaseURL != "" {
+		t.Fatalf("api entry base_url = %q, want provider's own (empty here)", api.BaseURL)
+	}
+
+	exec := entries[1]
+	if exec.Harness != "claude-cli" || !exec.Usable || exec.SkipReason != "" {
+		t.Fatalf("executor entry = %+v, want usable claude-cli", exec)
+	}
+	if exec.CredentialRef != "subscription" {
+		t.Fatalf("executor credential_ref = %q, want a name only", exec.CredentialRef)
+	}
+	if exec.BaseURL != "http://localhost:9999" {
+		t.Fatalf("executor base_url = %q, want anthropic_base_url surfaced", exec.BaseURL)
+	}
+}
+
+func TestResolveRouteHarnessOnly(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true, AnthropicBaseURL: "http://localhost:9999"},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	entries, ok := snap.ResolveRoute("coding-exec")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if !entries[0].Usable {
+		t.Fatalf("entry = %+v, want usable", entries[0])
+	}
+}
+
+func TestResolveRouteUnknownHarness(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			// Simulates stale/hand-edited stored data naming a harness the
+			// gateway no longer (or not yet) recognizes.
+			{ProviderID: "p2", Model: "m", Harness: "codex-cli"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	entries, ok := snap.ResolveRoute("coding-exec")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[0].Usable || entries[0].SkipReason != "unknown harness" {
+		t.Fatalf("entry = %+v, want unknown harness", entries[0])
+	}
+}
+
+func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		// openaicompat driver, no anthropic_base_url set: claude-cli
+		// cannot speak this provider's wire format.
+		{ID: "p2", Name: "grok-sub", Kind: "cli", Driver: "openaicompat",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p2", Model: "m", Harness: "claude-cli"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	entries, ok := snap.ResolveRoute("coding-exec")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[0].Usable || !strings.Contains(entries[0].SkipReason, "wire-incompatible") {
+		t.Fatalf("entry = %+v, want wire-incompatible", entries[0])
+	}
+}
+
+func TestResolveRouteUnknownRoute(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+	if _, ok := snap.ResolveRoute("no-such-route"); ok {
+		t.Fatalf("ResolveRoute: want ok=false for unknown route")
+	}
+}

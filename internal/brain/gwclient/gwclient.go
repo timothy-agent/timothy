@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -42,6 +43,12 @@ type StreamRequest struct {
 // read couldn't observe anything newer.
 const windowsTTL = 30 * time.Second
 
+// resolveTTL memoizes ResolveRoute per route name — shorter than
+// windowsTTL because missions dispatch on this result (D-051): a
+// stale native-vs-delegated read is a worse failure mode than the
+// harness case's occasional extra gateway hit.
+const resolveTTL = 15 * time.Second
+
 // Client talks to one gateway base URL.
 type Client struct {
 	baseURL string
@@ -52,6 +59,13 @@ type Client struct {
 	windowsExp time.Time
 	roles      map[string]string
 	rolesExp   time.Time
+	resolved   map[string]resolveCacheEntry
+}
+
+// resolveCacheEntry is one route's memoized ResolveRoute result.
+type resolveCacheEntry struct {
+	route *ResolvedRoute
+	exp   time.Time
 }
 
 func New(baseURL string) *Client {
@@ -156,6 +170,75 @@ func (c *Client) RouteForRole(ctx context.Context, role string) (string, bool, e
 	c.mu.Unlock()
 	name, ok := out.Roles[role]
 	return name, ok, nil
+}
+
+// ResolvedRouteEntry is one chain entry as reported by the gateway's
+// resolve endpoint (D-051). Harness == "" is native API serving;
+// otherwise it names the delegated CLI executor (e.g. "claude-cli")
+// missions dispatches to instead of streaming through the gateway.
+// CredentialRef is a NAME, never a resolved secret value — missions
+// resolves it itself when spawning the executor.
+type ResolvedRouteEntry struct {
+	ProviderID    string `json:"provider_id"`
+	ProviderName  string `json:"provider_name"`
+	Driver        string `json:"driver"`
+	Kind          string `json:"kind"`
+	Model         string `json:"model"`
+	Harness       string `json:"harness"`
+	CredentialRef string `json:"credential_ref"`
+	BaseURL       string `json:"base_url"`
+	Usable        bool   `json:"usable"`
+	SkipReason    string `json:"skip_reason"`
+}
+
+// ResolvedRoute is a route's ordered chain, each entry annotated with
+// the gate appropriate to its own axis — the chat gate for harness ==
+// "" entries, the executor rule otherwise (router.ResolveRoute keeps
+// them separate; a harness entry is never usable by the chat gate).
+type ResolvedRoute struct {
+	Route   string               `json:"route"`
+	Entries []ResolvedRouteEntry `json:"entries"`
+}
+
+// ResolveRoute fetches route's ordered chain with provider metadata so
+// missions can dispatch each entry native-vs-delegated and spawn a CLI
+// executor for a harness entry (D-051). Memoized per route name for
+// resolveTTL, shorter than ModelWindows/RouteForRole's TTL since
+// missions dispatch directly on this result.
+func (c *Client) ResolveRoute(ctx context.Context, name string) (*ResolvedRoute, error) {
+	c.mu.Lock()
+	if entry, ok := c.resolved[name]; ok && time.Now().Before(entry.exp) {
+		c.mu.Unlock()
+		return entry.route, nil
+	}
+	c.mu.Unlock()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/v1/routes/"+url.PathEscape(name)+"/resolve", nil)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out ResolvedRoute
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("gwclient: decode resolve: %w", err)
+	}
+
+	c.mu.Lock()
+	if c.resolved == nil {
+		c.resolved = map[string]resolveCacheEntry{}
+	}
+	c.resolved[name] = resolveCacheEntry{route: &out, exp: time.Now().Add(resolveTTL)}
+	c.mu.Unlock()
+	return &out, nil
 }
 
 // Embed returns one vector per input text via the gateway's

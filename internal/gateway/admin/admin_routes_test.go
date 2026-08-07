@@ -108,6 +108,48 @@ func TestResolvedForRouteSkipsAllUnusable(t *testing.T) {
 	}
 }
 
+// TestResolvedForRouteSurfacesHarnessAndKind covers D-051: the admin
+// routes response must carry a harness entry's harness name and its
+// provider's kind so the web editor can render an executor badge,
+// while a harness entry itself is still unusable for chat (the chat
+// gate, not the executor gate, is what ResolveDetail/resolvedForRoute
+// use).
+func TestResolvedForRouteSurfacesHarnessAndKind(t *testing.T) {
+	t.Parallel()
+	provRows := []router.ProviderRow{
+		{ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+			DefaultModel: "sonnet", CredentialRef: "A_KEY", Enabled: true},
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true, AnthropicBaseURL: "http://localhost:9999"},
+	}
+	routeRows := []router.RouteRow{{Name: "r", Enabled: true, Chain: []router.ChainEntry{
+		{ProviderID: "p1", Model: "sonnet"},
+		{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+	}}}
+	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	resolved, serving := resolvedForRoute(snap, "r")
+	if len(resolved) != 2 {
+		t.Fatalf("resolved len = %d, want 2", len(resolved))
+	}
+	api, exec := resolved[0], resolved[1]
+	if api.Harness != "" || api.ProviderKind != "api" || !api.Usable {
+		t.Fatalf("api entry = %+v", api)
+	}
+	if exec.Harness != "claude-cli" || exec.ProviderKind != "cli" {
+		t.Fatalf("executor entry = %+v", exec)
+	}
+	// The chat gate (what resolvedForRoute uses) always rejects a
+	// harness entry — only the resolve endpoint's executor gate can mark
+	// it usable.
+	if exec.Usable || exec.SkipReason != "harness executor (mission-only)" {
+		t.Fatalf("executor entry usable for chat: %+v", exec)
+	}
+	if serving == nil || serving.ProviderID != "p1" {
+		t.Fatalf("serving = %+v, want the chat-usable entry", serving)
+	}
+}
+
 func TestResolvedForRouteUnknownRoute(t *testing.T) {
 	t.Parallel()
 	snap := routesSnapshot(t, "ordered")

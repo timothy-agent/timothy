@@ -47,6 +47,92 @@ func TestValidateProviderRejectsInvalidRequestTimeout(t *testing.T) {
 	}
 }
 
+// TestValidateProviderCLIKind covers D-051's kind='cli' branch: a
+// mission-only executor provider validates driver name + wire
+// compatibility instead of the chat drivers whitelist, and never
+// requires a chat-serving base_url.
+func TestValidateProviderCLIKind(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		p       Provider
+		wantErr string
+	}{
+		{
+			name:    "claude-cli driver requires anthropic_base_url",
+			p:       Provider{Name: "p", Kind: "cli", Driver: "claude-cli"},
+			wantErr: "anthropic_base_url",
+		},
+		{
+			name: "claude-cli driver with anthropic_base_url passes",
+			p: Provider{Name: "p", Kind: "cli", Driver: "claude-cli",
+				Options: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
+		},
+		{
+			name:    "unknown cli driver rejected",
+			p:       Provider{Name: "p", Kind: "cli", Driver: "made-up"},
+			wantErr: "unknown cli driver",
+		},
+		{
+			name:    "unknown kind rejected",
+			p:       Provider{Name: "p", Kind: "made-up", Driver: "anthropic"},
+			wantErr: "kind must be api or cli",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateProvider(tt.p)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateProvider: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateHarnessWireFormat mirrors router.executorUsable's wire
+// check (D-051) — admin must reject exactly what the resolve endpoint
+// would later mark wire-incompatible, never something looser.
+func TestValidateHarnessWireFormat(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		harness string
+		driver  string
+		opts    map[string]string
+		wantErr string
+	}{
+		{name: "anthropic driver satisfies claude-cli", harness: "claude-cli", driver: "anthropic"},
+		{name: "anthropic_base_url satisfies claude-cli", harness: "claude-cli", driver: "claude-cli",
+			opts: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
+		{name: "neither rejected", harness: "claude-cli", driver: "claude-cli", wantErr: "requires driver"},
+		{name: "openaicompat without base_url rejected", harness: "claude-cli", driver: "openaicompat", wantErr: "requires driver"},
+		{name: "unknown harness has no rule", harness: "codex-cli", driver: "openaicompat"},
+		{name: "empty harness has no rule", harness: "", driver: "openaicompat"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateHarnessWireFormat(tt.harness, tt.driver, tt.opts)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateHarnessWireFormat: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestProbeTimeout(t *testing.T) {
 	t.Parallel()
 	if got := probeTimeout(nil); got != testTimeout {

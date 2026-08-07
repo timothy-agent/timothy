@@ -178,15 +178,17 @@ func (s *Store) Load(ctx context.Context) error {
 // fails at the AWS SDK when used.
 func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	var opts struct {
-		ReasoningEffort string `json:"reasoning_effort"`
-		RequestTimeout  string `json:"request_timeout"`
-		Region          string `json:"region"`
+		ReasoningEffort  string `json:"reasoning_effort"`
+		RequestTimeout   string `json:"request_timeout"`
+		Region           string `json:"region"`
+		AnthropicBaseURL string `json:"anthropic_base_url"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
 	}
 	row.ReasoningEffort = opts.ReasoningEffort
 	row.Region = opts.Region
+	row.AnthropicBaseURL = opts.AnthropicBaseURL
 	if opts.RequestTimeout != "" {
 		d, err := time.ParseDuration(opts.RequestTimeout)
 		if err != nil {

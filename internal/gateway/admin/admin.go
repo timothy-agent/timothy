@@ -29,9 +29,18 @@ type pgxQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// drivers whitelists what the gateway can actually construct. CLI
-// drivers arrive in a later phase; the panel shows them disabled.
+// drivers whitelists what the gateway can actually construct a chat
+// driver for — kind='api' rows only. kind='cli' rows (D-051) validate
+// against cliDrivers instead: they're mission-only executor providers
+// the gateway never builds a chat driver for at all.
 var drivers = map[string]bool{"anthropic": true, "openaicompat": true, "bedrock": true}
+
+// cliDrivers whitelists driver names valid on a kind='cli' provider
+// row — one per known harness (router.KnownHarnesses), plus
+// "codex-cli" pre-registered for the harness arriving later. These
+// never go through provider.Build; only their name and wire-format
+// compatibility are validated here (D-051).
+var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true}
 
 // credentialRefPattern accepts names and paths (env var names, Vault
 // paths, AWS profile names) and rejects anything that could be a
@@ -231,20 +240,49 @@ func validateProvider(p Provider) error {
 	if p.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if p.Kind != "api" && p.Kind != "cli" {
+	switch p.Kind {
+	case "api":
+		if !drivers[p.Driver] {
+			return fmt.Errorf("unknown driver %q", p.Driver)
+		}
+	case "cli":
+		// D-051: kind='cli' rows are mission-only executor providers
+		// (e.g. subscription-auth) — no chat driver is ever built for
+		// them, so they skip every chat-only check below (credential_ref
+		// shape aside) and validate driver name + wire compatibility
+		// instead.
+		if !cliDrivers[p.Driver] {
+			return fmt.Errorf("unknown cli driver %q", p.Driver)
+		}
+		if err := validateHarnessWireFormat(p.Driver, p.Driver, p.Options); err != nil {
+			return fmt.Errorf("kind=cli provider: %w", err)
+		}
+	default:
 		return fmt.Errorf("kind must be api or cli")
-	}
-	if p.Kind == "cli" {
-		return fmt.Errorf("cli providers arrive in a later phase")
-	}
-	if !drivers[p.Driver] {
-		return fmt.Errorf("unknown driver %q", p.Driver)
 	}
 	if !credentialRefPattern.MatchString(p.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path (env var, Vault path, AWS profile), never a secret value")
 	}
 	if _, err := parseRequestTimeout(p.Options); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateHarnessWireFormat checks that a provider row can actually
+// speak the wire protocol harness requires (D-051), mirroring
+// router.executorUsable's wire check exactly so admin can never write
+// a chain entry the resolve endpoint would then mark
+// wire-incompatible: claude-cli requires either driver=="anthropic" or
+// options.anthropic_base_url pointing at an Anthropic-compatible
+// endpoint (e.g. a subscription-auth row whose own driver is
+// "claude-cli", never built into a chat client).
+func validateHarnessWireFormat(harness, driver string, opts map[string]string) error {
+	switch harness {
+	case "claude-cli":
+		if driver != "anthropic" && opts["anthropic_base_url"] == "" {
+			return fmt.Errorf("harness %q requires driver \"anthropic\" or options.anthropic_base_url", harness)
+		}
 	}
 	return nil
 }
@@ -552,6 +590,8 @@ type Route struct {
 type RouteEntryStatus struct {
 	ProviderID    string   `json:"provider_id"`
 	ProviderName  string   `json:"provider_name,omitempty"`
+	ProviderKind  string   `json:"provider_kind,omitempty"`
+	Harness       string   `json:"harness,omitempty"`
 	Model         string   `json:"model"`
 	Usable        bool     `json:"usable"`
 	SkipReason    string   `json:"skip_reason,omitempty"`
@@ -584,6 +624,8 @@ func resolvedForRoute(snap *router.Snapshot, name string) ([]RouteEntryStatus, *
 		out[i] = RouteEntryStatus{
 			ProviderID:    d.Entry.ProviderID,
 			ProviderName:  d.ProviderName,
+			ProviderKind:  d.ProviderKind,
+			Harness:       d.Entry.Harness,
 			Model:         d.Model,
 			Usable:        d.Usable,
 			SkipReason:    d.SkipReason,
@@ -685,12 +727,29 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 		// Every entry must reference an existing provider — a typo'd id
 		// becomes a silent skip at resolve time otherwise. FOR UPDATE
 		// locks the referenced provider row against a concurrent Delete
-		// racing to remove it after this check passes.
+		// racing to remove it after this check passes. A harness entry
+		// (D-051) additionally validates against router.KnownHarnesses
+		// and its provider's own wire compatibility, mirroring
+		// validateHarnessWireFormat's rule for the row itself.
 		for _, e := range *patch.Chain {
-			var found string
-			err := tx.QueryRow(ctx, `SELECT id FROM providers WHERE id = $1 FOR UPDATE`, e.ProviderID).Scan(&found)
+			var driver string
+			var opts []byte
+			err := tx.QueryRow(ctx, `SELECT driver, options FROM providers WHERE id = $1 FOR UPDATE`, e.ProviderID).Scan(&driver, &opts)
 			if err != nil {
 				return fmt.Errorf("chain entry references unknown provider %s", e.ProviderID)
+			}
+			if e.Harness == "" {
+				continue
+			}
+			if !router.KnownHarnesses[e.Harness] {
+				return fmt.Errorf("chain entry harness %q is not a known harness", e.Harness)
+			}
+			var optMap map[string]string
+			if err := json.Unmarshal(opts, &optMap); err != nil {
+				return fmt.Errorf("chain entry provider %s: options: %w", e.ProviderID, err)
+			}
+			if err := validateHarnessWireFormat(e.Harness, driver, optMap); err != nil {
+				return fmt.Errorf("chain entry provider %s: %w", e.ProviderID, err)
 			}
 		}
 		after.Chain = *patch.Chain
