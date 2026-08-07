@@ -27,6 +27,7 @@ import {
 const summary: UsageSummary = {
   currency: 'USD',
   cost: 2.5,
+  notional_cost: 0,
   input_tokens: 1000,
   output_tokens: 500,
   cache_read_tokens: 0,
@@ -106,6 +107,20 @@ describe('Analytics spend tile', () => {
   })
 })
 
+describe('Analytics notional annotation', () => {
+  it('shows the notional annotation beside the spend tile when a notional amount exists', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, notional_cost: 0.42 }])
+    renderPage()
+    expect(await screen.findByText('+USD 0.4200 notional')).toBeInTheDocument()
+  })
+
+  it('omits the notional annotation when notional_cost is zero', async () => {
+    renderPage() // default `summary` fixture carries notional_cost: 0
+    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/notional/)).toBeNull()
+  })
+})
+
 describe('Analytics converted spend display', () => {
   it('shows the converted amount as primary with the billed amount secondary', async () => {
     vi.mocked(usageSummary).mockResolvedValue([
@@ -152,6 +167,7 @@ describe('Analytics unpriced usage', () => {
         group: 'gpt-5.6-sol',
         currency: 'USD',
         cost: 0,
+        notional_cost: 0,
         input_tokens: 1_000_000,
         output_tokens: 100_000,
         requests: 4,
@@ -177,6 +193,7 @@ const providerPoint: UsagePoint = {
   group: 'openai',
   currency: 'USD',
   cost: 1.5,
+  notional_cost: 0,
   input_tokens: 100,
   output_tokens: 50,
   requests: 3,
@@ -246,6 +263,7 @@ describe('Analytics zero-cost exclusion', () => {
     group: 'local-llama',
     currency: 'USD',
     cost: 0,
+    notional_cost: 0,
     input_tokens: 5_000,
     output_tokens: 2_000,
     requests: 2,

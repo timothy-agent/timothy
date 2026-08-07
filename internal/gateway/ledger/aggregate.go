@@ -36,16 +36,21 @@ var groups = map[string]string{
 const notTest = `purpose IS DISTINCT FROM 'test'`
 
 // Summary is the header-tile answer: totals for a range, in one
-// currency. Unpriced fields count rows where cost is NULL (D-013:
-// unknown price is recorded as NULL, never guessed) — without them,
-// unpriced usage is invisible because SUM(cost) silently treats NULL
-// as free. A range spanning more than one billing currency comes back
-// as multiple Summary rows (one per currency) from SummaryByCurrency —
-// summing across them would mix currencies, which this package never
-// does.
+// currency. Cost excludes notional rows (subscription/oauth_token
+// executor runs, D-051) via FILTER (WHERE NOT notional) — same as the
+// mission aggregator — so it stays the range's true bill; NotionalCost
+// carries what that excluded spend would have cost at metered API
+// prices, same currency as Cost, never folded into it. Unpriced fields
+// count rows where cost is NULL (D-013: unknown price is recorded as
+// NULL, never guessed) — without them, unpriced usage is invisible
+// because SUM(cost) silently treats NULL as free. A range spanning more
+// than one billing currency comes back as multiple Summary rows (one
+// per currency) from SummaryByCurrency — summing across them would mix
+// currencies, which this package never does.
 type Summary struct {
 	Currency             string  `json:"currency"`
 	Cost                 float64 `json:"cost"`
+	NotionalCost         float64 `json:"notional_cost"`
 	InputTokens          int64   `json:"input_tokens"`
 	OutputTokens         int64   `json:"output_tokens"`
 	CacheReadTokens      int64   `json:"cache_read_tokens"`
@@ -65,7 +70,8 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 		return nil, fmt.Errorf("usage summary: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT currency,
-			COALESCE(SUM(cost), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE notional), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
@@ -83,7 +89,7 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 	out := []Summary{}
 	for rows.Next() {
 		var s Summary
-		if err := rows.Scan(&s.Currency, &s.Cost, &s.InputTokens, &s.OutputTokens,
+		if err := rows.Scan(&s.Currency, &s.Cost, &s.NotionalCost, &s.InputTokens, &s.OutputTokens,
 			&s.CacheReadTokens, &s.CacheWriteTokens, &s.Requests, &s.Errors,
 			&s.UnpricedRequests, &s.UnpricedInputTokens, &s.UnpricedOutputTokens); err != nil {
 			return nil, fmt.Errorf("usage summary: %w", err)
@@ -94,15 +100,18 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 }
 
 // SeriesPoint is one (time bucket, group, currency) cell of a stacked
-// chart. Unpriced token sums (rows where cost is NULL) let the
-// dashboard estimate what unpriced usage would cost from its advisory
-// catalog — the estimate stays client-side, the server never guesses
-// (D-013).
+// chart. Cost excludes notional rows (FILTER (WHERE NOT notional), same
+// as Summary); NotionalCost carries that excluded spend's metered-price
+// equivalent, same currency, never folded into Cost. Unpriced token sums
+// (rows where cost is NULL) let the dashboard estimate what unpriced
+// usage would cost from its advisory catalog — the estimate stays
+// client-side, the server never guesses (D-013).
 type SeriesPoint struct {
 	Bucket               time.Time `json:"bucket"`
 	Group                string    `json:"group"`
 	Currency             string    `json:"currency"`
 	Cost                 float64   `json:"cost"`
+	NotionalCost         float64   `json:"notional_cost"`
 	InputTokens          int64     `json:"input_tokens"`
 	OutputTokens         int64     `json:"output_tokens"`
 	Requests             int64     `json:"requests"`
@@ -129,7 +138,8 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 	}
 	rows, err := db.Query(ctx, `SELECT
 			date_trunc('`+b+`', ts) AS bucket, `+col+`, currency,
-			COALESCE(SUM(cost), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE notional), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
 			COALESCE(SUM(input_tokens) FILTER (WHERE cost IS NULL), 0),
@@ -145,7 +155,7 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 	out := []SeriesPoint{}
 	for rows.Next() {
 		var p SeriesPoint
-		if err := rows.Scan(&p.Bucket, &p.Group, &p.Currency, &p.Cost,
+		if err := rows.Scan(&p.Bucket, &p.Group, &p.Currency, &p.Cost, &p.NotionalCost,
 			&p.InputTokens, &p.OutputTokens, &p.Requests, &p.Errors,
 			&p.UnpricedInputTokens, &p.UnpricedOutputTokens); err != nil {
 			return nil, fmt.Errorf("usage series: %w", err)
@@ -172,7 +182,9 @@ type GroupTotal struct {
 
 // Totals returns one row per group (and currency) summed over the
 // whole range — Series without the time bucket, for tables/rankings
-// rather than time-series charts.
+// rather than time-series charts. Cost excludes notional rows (FILTER
+// (WHERE NOT notional), same as Summary/Series) so a group's ranking
+// reflects real spend only.
 func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy string) ([]GroupTotal, error) {
 	col, ok := groups[groupBy]
 	if !ok {
@@ -183,7 +195,7 @@ func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy str
 		return nil, fmt.Errorf("usage totals: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT `+col+`, currency,
-			COALESCE(SUM(cost), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COUNT(*),
 			COALESCE(SUM(input_tokens) FILTER (WHERE cost IS NULL), 0),
@@ -351,6 +363,10 @@ type SessionUsage struct {
 	Requests     int64   `json:"requests"`
 }
 
+// TopSessions ranks sessions by real spend only — Cost excludes
+// notional rows (FILTER (WHERE NOT notional), same as
+// Summary/Series/Totals), so a subscription-billed executor run never
+// inflates a session into the top-spend table.
 func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit int) ([]SessionUsage, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
@@ -360,7 +376,7 @@ func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit 
 		return nil, fmt.Errorf("usage sessions: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT session_id, currency,
-			COALESCE(SUM(cost), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*)
 		FROM cost_ledger
 		WHERE ts >= $1 AND ts < $2 AND session_id IS NOT NULL AND `+notTest+`

@@ -296,10 +296,19 @@ export function Analytics() {
     range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : 'Spend this month'
   const spendHint = range === 'today' ? budgetHint(budget?.day) : range === '30d' ? budgetHint(budget?.month) : undefined
   const spendOriginal = s ? secondaryMoney(s, s.cost) : undefined
+  // notionalAnnotation is the muted "+X <CUR> notional" note beside the
+  // spend tile's value — the metered-price equivalent of subscription/
+  // oauth_token executor runs (D-051), excluded from billed spend and
+  // shown separately so it's visible without inflating the total.
+  // Always the summary row's OWN currency, no fx conversion (this is
+  // an annotation, not a second headline figure). Omitted entirely when
+  // zero.
+  const notionalAnnotation = s && s.notional_cost > 0 ? `+${money(s.notional_cost, s.currency)} notional` : undefined
   const tiles = [
     {
       label: spendLabel,
       value: s ? primaryMoney(s, s.cost) : 'N/A',
+      annotation: notionalAnnotation,
       hint: spendOriginal ? `${spendOriginal} billed` : spendHint,
     },
     {
@@ -381,7 +390,17 @@ export function Analytics() {
           {tiles.map((t) => (
             <div key={t.label} className="rounded-xl border border-border p-4">
               <div className="text-xs text-muted-foreground">{t.label}</div>
-              <div className="mt-1.5 text-2xl font-semibold tracking-tight">{t.value}</div>
+              <div className="mt-1.5 text-2xl font-semibold tracking-tight">
+                {t.value}
+                {'annotation' in t && t.annotation && (
+                  <span
+                    className="ml-1.5 text-xs font-normal text-muted-foreground"
+                    title="Subscription-billed executor spend, at metered API prices — not billed, excluded from the total."
+                  >
+                    {t.annotation}
+                  </span>
+                )}
+              </div>
               {t.hint && <div className="mt-0.5 text-xs text-muted-foreground">{t.hint}</div>}
             </div>
           ))}

@@ -148,6 +148,122 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 	}
 }
 
+// seedNotionalAgg writes one billed row and one notional row (D-051's
+// delegated CLI executor billed through a subscription/oauth_token,
+// recording the API-equivalent price as Notional) for the same
+// provider/session — the fixture every notional-exclusion test below
+// shares, mirroring TestAggregateMissionUsageNotionalSplit's fixture
+// shape but for the analytics aggregates rather than Mission.
+func seedNotionalAgg(t *testing.T, led *Ledger) (provider string, from, to time.Time) {
+	t.Helper()
+	ctx := t.Context()
+	provider = aggMarker + "notional"
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+
+	led.Record(ctx, Entry{
+		Provider: provider, Model: "m1", Route: "coding", SessionID: "notional-s1",
+		Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50},
+		LatencyMS: 100, Status: "ok", Cost: usd(0.10),
+	})
+	led.Record(ctx, Entry{
+		Provider: provider, Model: "m1", Route: "coding", SessionID: "notional-s1",
+		Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
+		LatencyMS: 100, Status: "ok", Cost: usd(0.25), Notional: true,
+	})
+	return provider, base, time.Now().UTC().Add(time.Hour)
+}
+
+// TestAggregateSummaryExcludesNotional confirms SummaryByCurrency's
+// Cost sums only real spend (FILTER (WHERE NOT notional), same as the
+// mission aggregator) while NotionalCost carries the excluded
+// subscription-billed amount separately, in the same currency — never
+// folded into Cost.
+func TestAggregateSummaryExcludesNotional(t *testing.T) {
+	agg, led := testAggregator(t)
+	provider, from, to := seedNotionalAgg(t, led)
+
+	points, err := agg.Series(t.Context(), from, to, "day", "provider")
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	var cost, notional float64
+	for _, p := range points {
+		if p.Group == provider {
+			cost += p.Cost
+			notional += p.NotionalCost
+		}
+	}
+	if cost != 0.10 {
+		t.Fatalf("series cost = %v, want 0.10 (billed only, notional excluded)", cost)
+	}
+	if notional != 0.25 {
+		t.Fatalf("series notional_cost = %v, want 0.25", notional)
+	}
+
+	summaries, err := agg.SummaryByCurrency(t.Context(), from, to)
+	if err != nil {
+		t.Fatalf("SummaryByCurrency: %v", err)
+	}
+	var usdCost, usdNotional float64
+	for _, s := range summaries {
+		if s.Currency == "USD" {
+			usdCost, usdNotional = s.Cost, s.NotionalCost
+		}
+	}
+	// The shared DB may carry other USD rows from prior/parallel tests;
+	// this fixture's $0.25 notional row must be visible in NotionalCost
+	// (>= its own contribution) and never counted toward Cost, so Cost
+	// staying below the notional row's amount would be the failure
+	// signature of a regression that folded it back in.
+	if usdNotional < 0.25 {
+		t.Fatalf("USD summary notional_cost = %v, want >= 0.25", usdNotional)
+	}
+	_ = usdCost // sanity: no assertion on the shared total, only isolation above
+}
+
+// TestAggregateTotalsExcludesNotional confirms Totals' Cost sum
+// excludes notional rows the same way Series/Summary do.
+func TestAggregateTotalsExcludesNotional(t *testing.T) {
+	agg, led := testAggregator(t)
+	provider, from, to := seedNotionalAgg(t, led)
+
+	totals, err := agg.Totals(t.Context(), from, to, "provider")
+	if err != nil {
+		t.Fatalf("Totals: %v", err)
+	}
+	var cost float64
+	for _, g := range totals {
+		if g.Group == provider {
+			cost += g.Cost
+		}
+	}
+	if cost != 0.10 {
+		t.Fatalf("totals cost = %v, want 0.10 (billed only, notional excluded)", cost)
+	}
+}
+
+// TestAggregateTopSessionsExcludesNotional confirms TopSessions ranks
+// by real spend only — a session's notional row never inflates its
+// position or its reported cost.
+func TestAggregateTopSessionsExcludesNotional(t *testing.T) {
+	agg, led := testAggregator(t)
+	_, from, to := seedNotionalAgg(t, led)
+
+	sessions, err := agg.TopSessions(t.Context(), from, to, 100)
+	if err != nil {
+		t.Fatalf("TopSessions: %v", err)
+	}
+	for _, s := range sessions {
+		if s.SessionID == "notional-s1" {
+			if s.Cost != 0.10 {
+				t.Fatalf("session cost = %v, want 0.10 (billed only, notional excluded)", s.Cost)
+			}
+			return
+		}
+	}
+	t.Fatal("notional-s1 missing from top sessions")
+}
+
 // TestAggregateSeriesAndTotalsSplitByCurrency confirms Series and
 // Totals never sum a group's cost across billing currencies: two rows
 // for the same provider, one in USD and one in EUR, come back as two

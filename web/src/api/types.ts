@@ -252,6 +252,10 @@ export interface ConvertedMoney {
 export interface UsageSummary extends ConvertedMoney {
   currency: string
   cost: number
+  // notional_cost is the metered-price equivalent of spend billed
+  // through a subscription/oauth_token executor (D-051) — real spend
+  // was $0, excluded from cost, never folded into it.
+  notional_cost: number
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
@@ -268,6 +272,8 @@ export interface UsagePoint extends ConvertedMoney {
   group: string
   currency: string
   cost: number
+  // notional_cost mirrors UsageSummary's field — excluded from cost.
+  notional_cost: number
   input_tokens: number
   output_tokens: number
   requests: number

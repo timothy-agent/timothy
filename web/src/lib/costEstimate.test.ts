@@ -8,6 +8,7 @@ function point(overrides: Partial<UsagePoint>): UsagePoint {
     group: 'gpt-5.6-sol',
     currency: 'USD',
     cost: 0,
+    notional_cost: 0,
     input_tokens: 0,
     output_tokens: 0,
     requests: 1,
