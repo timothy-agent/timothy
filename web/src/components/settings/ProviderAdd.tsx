@@ -24,11 +24,11 @@ function refFor(preset: ProviderPreset, name: string): string {
   return slug ? `${slug}_API_KEY` : ''
 }
 
-// cliAuthModes are the credential shapes a kind='cli' provider row can
-// take (D-051/D-054): a subscription OAuth token, a metered API key,
-// or the shared-volume subscription login with no credential input at
-// all.
-type CliAuthMode = 'oauth' | 'api_key' | 'subscription'
+// AnthropicAuthMode is the Anthropic preset's auth picker (D-051,
+// folded into the single Anthropic preset): the plain metered API key
+// (default, today's kind=api flow, unchanged) or a Claude subscription
+// OAuth token, which creates a kind='cli' row instead.
+type AnthropicAuthMode = 'api_key' | 'oauth'
 
 // ProviderAdd is its own page (not a dialog): connecting a provider is
 // a create action, and validation runs a real one-token completion
@@ -56,7 +56,7 @@ export function ProviderAdd() {
   const [test, setTest] = useState<TestResult | null>(null)
   const [tested, setTested] = useState(false)
   const [existing, setExisting] = useState<AdminProvider[]>([])
-  const [cliAuthMode, setCliAuthMode] = useState<CliAuthMode>('oauth')
+  const [anthropicAuth, setAnthropicAuth] = useState<AnthropicAuthMode>('api_key')
 
   useEffect(() => {
     listProviders().then(setExisting, () => undefined)
@@ -77,7 +77,7 @@ export function ProviderAdd() {
     setKeyError(null)
     setTest(null)
     setTested(false)
-    setCliAuthMode('oauth')
+    setAnthropicAuth('api_key')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
 
@@ -118,7 +118,10 @@ export function ProviderAdd() {
   if (!preset) return <Navigate to="/settings/providers" replace />
 
   const isBedrock = preset.driver === 'bedrock'
-  const isCli = preset.kind === 'cli'
+  const isAnthropic = preset.id === 'anthropic'
+  // isCli: the subscription-token auth mode creates a kind='cli' row
+  // (D-051) instead of the plain kind='api' key flow.
+  const isCli = isAnthropic && anthropicAuth === 'oauth'
   const wantsKey = preset.requiresKey
 
   // Bedrock always splits into access key id / secret access key —
@@ -142,55 +145,38 @@ export function ProviderAdd() {
     setKeyError(null)
   }
 
-  // cliCredentialRef is the literal "subscription" for the shared-volume
-  // login mode (D-054's state-volume fallback), or the configured ref
-  // for a stored token/API key.
-  const cliCredentialRef = cliAuthMode === 'subscription' ? 'subscription' : ref.trim()
-
-  // submitCli validates the pasted credential's prefix against the
-  // chosen auth mode, stores it (unless it's the volume-login mode,
-  // which carries no credential), and creates the kind='cli' row.
-  // No probe: no chat driver exists for these rows (D-051), so there is
-  // nothing to test against.
+  // submitCli validates the pasted subscription token's prefix, stores
+  // it, and creates the kind='cli' row. No probe: no chat driver exists
+  // for these rows (D-051), so there is nothing to test against.
   const submitCli = async () => {
     if (!name.trim()) {
       toast.error('Name required', { description: 'Give this provider a unique name before adding.' })
       return
     }
-    if (cliAuthMode !== 'subscription') {
-      const trimmedKey = stripPaste(key)
-      const isOauthToken = trimmedKey.startsWith('sk-ant-oat')
-      if (!trimmedKey) {
-        setKeyError(
-          cliAuthMode === 'oauth' ? 'A subscription token is required.' : 'An API key is required.',
-        )
-        return
-      }
-      if (cliAuthMode === 'oauth' && !isOauthToken) {
-        setKeyError('Subscription tokens start with sk-ant-oat. Run `claude setup-token` to generate one.')
-        return
-      }
-      if (cliAuthMode === 'api_key' && isOauthToken) {
-        setKeyError('This looks like a subscription token — use "Subscription token" instead.')
-        return
-      }
-      if (!ref.trim()) {
-        setKeyError('a credential reference name is required to store it')
-        return
-      }
+    const trimmedKey = stripPaste(key)
+    const isOauthToken = trimmedKey.startsWith('sk-ant-oat')
+    if (!trimmedKey) {
+      setKeyError('A subscription token is required.')
+      return
+    }
+    if (!isOauthToken) {
+      setKeyError('Subscription tokens start with sk-ant-oat. Run `claude setup-token` to generate one.')
+      return
+    }
+    if (!ref.trim()) {
+      setKeyError('a credential reference name is required to store it')
+      return
     }
     setKeyError(null)
     setBusy(true)
     try {
-      if (cliAuthMode !== 'subscription') {
-        await setSecret(ref.trim(), stripPaste(key))
-      }
+      await setSecret(ref.trim(), trimmedKey)
       await createProvider({
         name: name.trim(),
         kind: 'cli',
-        driver: preset.driver,
+        driver: 'claude-cli',
         base_url: '',
-        credential_ref: cliCredentialRef,
+        credential_ref: ref.trim(),
         headers: {},
         enabled: true,
       })
@@ -210,6 +196,10 @@ export function ProviderAdd() {
           ? 'An access key ID and secret access key are required to test this provider.'
           : 'An API key is required to test this provider.',
       )
+      return
+    }
+    if (isAnthropic && anthropicAuth === 'api_key' && stripPaste(key).startsWith('sk-ant-oat')) {
+      setKeyError('This looks like a subscription token — use "Subscription token" instead.')
       return
     }
     if (!name.trim()) {
@@ -303,80 +293,78 @@ export function ProviderAdd() {
           />
         </Field>
 
+        {isAnthropic && (
+          <Field label="Auth">
+            <Select
+              value={anthropicAuth}
+              onValueChange={(v) => {
+                setAnthropicAuth(v as AnthropicAuthMode)
+                setKey('')
+                invalidate()
+              }}
+            >
+              <SelectTrigger className="mt-1.5 h-10 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="api_key">API key</SelectItem>
+                <SelectItem value="oauth">Subscription token</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              {anthropicAuth === 'api_key' ? (
+                'Create an API key in the Anthropic Console (console.anthropic.com → API keys) and paste it here.'
+              ) : (
+                <>
+                  Uses your Claude Pro/Max subscription. On any machine with Claude Code installed, run{' '}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">claude setup-token</code>,
+                  approve in the browser, and paste the generated token (starts with{' '}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">sk-ant-oat…</code>). The
+                  token is long-lived (~1 year).
+                </>
+              )}
+            </p>
+          </Field>
+        )}
+
         {isCli && (
           <div className="grid gap-5">
-            <Field label="Authentication">
-              <Select
-                value={cliAuthMode}
-                onValueChange={(v) => {
-                  setCliAuthMode(v as CliAuthMode)
-                  setKey('')
-                  invalidate()
-                }}
-              >
-                <SelectTrigger className="mt-1.5 h-10 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="oauth">Subscription token</SelectItem>
-                  <SelectItem value="api_key">API key</SelectItem>
-                  <SelectItem value="subscription">Subscription login (shared volume)</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-
-            {cliAuthMode !== 'subscription' && (
-              <div>
-                <Field label={cliAuthMode === 'oauth' ? 'Subscription token' : 'API key'}>
-                  <Input
-                    type="password"
-                    value={key}
-                    onChange={(e) => {
-                      setKey(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder={cliAuthMode === 'oauth' ? 'sk-ant-oat…' : 'sk-ant-…'}
-                    className="mt-1.5 h-10"
-                    autoComplete="off"
-                    aria-invalid={keyError != null}
-                  />
-                </Field>
-                {keyError && (
-                  <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
-                    <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
-                    {keyError}
-                  </p>
-                )}
-                {!keyError && (
-                  <p className="mt-1.5 text-sm text-muted-foreground">
-                    {cliAuthMode === 'oauth'
-                      ? 'Run `claude setup-token` on any machine with the claude CLI and paste the token.'
-                      : secretDestination(defaultBackend, ref)}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {cliAuthMode === 'subscription' && (
-              <p className="text-sm text-muted-foreground">
-                Login happens via a one-off container command documented in deploy/docker-compose.yml.
-              </p>
-            )}
-
-            {cliAuthMode !== 'subscription' && (
-              <Field label="Credential reference">
+            <div>
+              <Field label="Subscription token">
                 <Input
-                  value={ref}
+                  type="password"
+                  value={key}
                   onChange={(e) => {
-                    setRef(e.target.value)
-                    setRefEdited(true)
+                    setKey(e.target.value)
                     invalidate()
                   }}
-                  placeholder="name (e.g. CLAUDE_CODE_TOKEN)"
+                  placeholder="sk-ant-oat…"
                   className="mt-1.5 h-10"
+                  autoComplete="off"
+                  aria-invalid={keyError != null}
                 />
               </Field>
-            )}
+              {keyError && (
+                <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                  <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                  {keyError}
+                </p>
+              )}
+              {!keyError && <p className="mt-1.5 text-sm text-muted-foreground">{secretDestination(defaultBackend, ref)}</p>}
+            </div>
+
+            <Field label="Credential reference">
+              <Input
+                value={ref}
+                onChange={(e) => {
+                  setRef(e.target.value)
+                  setRefEdited(true)
+                  invalidate()
+                }}
+                placeholder="name (e.g. CLAUDE_CODE_TOKEN)"
+                className="mt-1.5 h-10"
+              />
+            </Field>
           </div>
         )}
 

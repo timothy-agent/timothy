@@ -57,7 +57,7 @@ beforeEach(() => {
 })
 
 describe('ProvidersList cli row rendering', () => {
-  it('shows a neutral "cli" badge instead of a healthy/unhealthy dot', async () => {
+  it('shows a neutral "subscription" badge instead of a healthy/unhealthy dot', async () => {
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     vi.mocked(providersHealth).mockResolvedValue([
       { name: 'Claude Code', enabled: true, healthy: false } as ProviderHealth,
@@ -65,7 +65,7 @@ describe('ProvidersList cli row rendering', () => {
     renderPage()
 
     await screen.findByText('Claude Code')
-    expect(screen.getByText('cli')).toBeInTheDocument()
+    expect(screen.getByText('subscription')).toBeInTheDocument()
     expect(screen.queryByText('credential missing')).not.toBeInTheDocument()
     expect(screen.queryByText('healthy')).not.toBeInTheDocument()
   })

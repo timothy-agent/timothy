@@ -123,7 +123,7 @@ function ProviderCard({
             {isCli ? (
               <>
                 <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
-                cli
+                subscription
               </>
             ) : (
               <>

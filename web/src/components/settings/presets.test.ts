@@ -48,8 +48,8 @@ describe('matchPreset', () => {
     expect(matchPreset(p).id).toBe('anthropic')
   })
 
-  it('matches the claude-code preset for a kind=cli row regardless of base_url', () => {
+  it('matches the anthropic preset for a kind=cli row regardless of base_url', () => {
     const p = provider({ kind: 'cli', driver: 'claude-cli', base_url: '' })
-    expect(matchPreset(p).id).toBe('claude-code')
+    expect(matchPreset(p).id).toBe('anthropic')
   })
 })
