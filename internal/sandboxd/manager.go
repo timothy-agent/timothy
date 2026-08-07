@@ -36,6 +36,20 @@ const (
 	containerNamePrefix = "timothy-sandbox-"
 	missionLabel        = "timothy.mission"
 
+	// stateVolumeMetaPath is where sandboxd itself mounts the executor
+	// auth-state volume (deploy/docker-compose.yml) purely so it can
+	// self-inspect and learn the volume's real name/spec — D-054,
+	// mirroring how workspaceMountPath is resolved via resolveMount
+	// against brain's own container. sandboxd never reads/writes
+	// through this mount itself.
+	stateVolumeMetaPath = "/statevols/claude"
+
+	// executorStateMountPath is where the resolved state volume is
+	// mounted, rw, in every mission container — the headless claude
+	// CLI's subscription-auth state lives here, shared across a
+	// mission's container restarts and across missions.
+	executorStateMountPath = "/home/sandbox/.claude"
+
 	// sandboxMemoryBytes / sandboxNanoCPUs / sandboxPidsLimit cap one
 	// mission's blast radius: model-authored commands, unlike
 	// harness-authored git ops, must never be able to exhaust the host.
@@ -92,6 +106,13 @@ type Manager struct {
 	// erroring (see NewManager).
 	workspaceMount mount.Mount
 
+	// stateMount is D-054's executor auth-state volume, resolved the
+	// same self-inspection way as workspaceMount but optional: an
+	// operator who never configured it (API-key-only auth) still gets
+	// working mission containers, just without persistent executor
+	// state. Zero value (Source == "") means absent.
+	stateMount mount.Mount
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
 }
@@ -117,7 +138,15 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: resolve workspace mount: %w", err)
 	}
-	return &Manager{cli: cli, image: image, log: log, workspaceMount: wm, locks: map[string]*sync.Mutex{}}, nil
+	// D-054: the state volume is optional — an operator running
+	// API-key-only auth need not configure it. Absent is not an error;
+	// createContainer simply omits the mount and mission containers keep
+	// working without persistent executor state.
+	sm, err := resolveMount(ctx, cli, stateVolumeMetaPath, executorStateMountPath)
+	if err != nil {
+		log.Info("sandbox: executor state volume not configured, mission containers will run without it", "error", err)
+	}
+	return &Manager{cli: cli, image: image, log: log, workspaceMount: wm, stateMount: sm, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // resolveWorkspaceMount inspects the calling container (brain) for its
@@ -126,6 +155,16 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 // in the missions DB resolve identically on both sides with zero
 // translation.
 func resolveWorkspaceMount(ctx context.Context, cli *client.Client) (mount.Mount, error) {
+	return resolveMount(ctx, cli, workspaceMountPath, workspaceMountPath)
+}
+
+// resolveMount inspects the calling container (sandboxd itself) for a
+// mount at selfDestination and returns an equivalent mount.Mount
+// targeting containerTarget for sandbox containers to use — same
+// volume (or bind source), so it is never hardcoded to a
+// compose-prefixed volume name (a wrong name would silently
+// auto-create an empty volume instead of erroring).
+func resolveMount(ctx context.Context, cli *client.Client, selfDestination, containerTarget string) (mount.Mount, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return mount.Mount{}, fmt.Errorf("read own hostname: %w", err)
@@ -135,15 +174,15 @@ func resolveWorkspaceMount(ctx context.Context, cli *client.Client) (mount.Mount
 		return mount.Mount{}, fmt.Errorf("inspect own container %s: %w", hostname, err)
 	}
 	for _, m := range self.Container.Mounts {
-		if m.Destination != workspaceMountPath {
+		if m.Destination != selfDestination {
 			continue
 		}
 		if m.Type == mount.TypeBind {
-			return mount.Mount{Type: mount.TypeBind, Source: m.Source, Target: workspaceMountPath}, nil
+			return mount.Mount{Type: mount.TypeBind, Source: m.Source, Target: containerTarget}, nil
 		}
-		return mount.Mount{Type: mount.TypeVolume, Source: m.Name, Target: workspaceMountPath}, nil
+		return mount.Mount{Type: mount.TypeVolume, Source: m.Name, Target: containerTarget}, nil
 	}
-	return mount.Mount{}, fmt.Errorf("own container has no mount at %s", workspaceMountPath)
+	return mount.Mount{}, fmt.Errorf("own container has no mount at %s", selfDestination)
 }
 
 // Ping reports whether the Docker daemon is reachable — the sandbox
@@ -243,14 +282,21 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name string) (
 		Image: m.image,
 		// PATH/HOME only — deliberately NOT os.Environ(): the whole point
 		// of the sandbox is that a model-authored command never sees
-		// brain's DATABASE_URL/TIMOTHY_MASTER_KEY/API tokens.
+		// brain's DATABASE_URL/TIMOTHY_MASTER_KEY/API tokens. Anything
+		// beyond this (e.g. an executor's ANTHROPIC_* credentials) is
+		// injected per-exec against the D-053 allowlist (api.go), never
+		// baked into the container itself.
 		Env:    []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/home/sandbox"},
 		User:   sandboxUser,
 		Cmd:    []string{"sleep", "infinity"},
 		Labels: map[string]string{missionLabel: missionID},
 	}
+	mounts := []mount.Mount{m.workspaceMount}
+	if m.stateMount.Source != "" {
+		mounts = append(mounts, m.stateMount)
+	}
 	hostCfg := &container.HostConfig{
-		Mounts: []mount.Mount{m.workspaceMount},
+		Mounts: mounts,
 		// Init (tini) reaps zombie processes: `sleep infinity` as PID 1
 		// does not, and `timeout` killing a shell whose backgrounded
 		// grandchildren reparent to PID 1 would otherwise accumulate
@@ -294,6 +340,15 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name string) (
 // builtin.Shell's contract: a command that ran and exited non-zero is
 // reported via exitCode, not err).
 func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+	return m.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
+}
+
+// ExecEnv is Exec plus per-exec environment variables (D-053) — env
+// must already be allowlist-validated by the caller (sandboxd's HTTP
+// layer); this method trusts it and passes it straight to Docker's
+// ExecCreate. Existing Exec callers are unaffected: they route through
+// here with env == nil.
+func (m *Manager) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
 	containerID, err := m.ensureContainer(ctx, missionID)
 	if err != nil {
 		return 0, err
@@ -306,8 +361,13 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 	cctx, cancel := context.WithTimeout(ctx, timeout+execClientSlack)
 	defer cancel()
 
+	execEnv := make([]string, 0, len(env))
+	for k, v := range env {
+		execEnv = append(execEnv, k+"="+v)
+	}
 	execCfg := client.ExecCreateOptions{
 		Cmd:          []string{"timeout", "-k", strconv.Itoa(execGraceKillSeconds), strconv.Itoa(secs), "/bin/sh", "-c", command},
+		Env:          execEnv,
 		WorkingDir:   workdir,
 		TTY:          false,
 		AttachStdout: true,

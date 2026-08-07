@@ -6,13 +6,27 @@
 # exec target (created once per mission, `sleep infinity` as PID 1
 # under tini via --init at runtime, reused across a mission's turns),
 # not a service — no ENTRYPOINT beyond that.
+FROM node:24.18.0-slim AS node-dist
+
 FROM debian:stable-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip \
-    nodejs npm \
     git bash curl jq make ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Node from the pinned official image, not debian's nodejs 20 package:
+# @anthropic-ai/claude-code requires node >=22. Copying /usr/local
+# brings node, npm, and corepack onto PATH with no pipe-to-shell setup.
+COPY --from=node-dist /usr/local/bin /usr/local/bin
+COPY --from=node-dist /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+# Headless claude CLI for delegated coding executors, detached inside
+# this container. Installed while still root, to the root-owned global
+# prefix (/usr/local) rather than the runtime NPM_CONFIG_PREFIX below —
+# that prefix is per-user (/home/sandbox) and not writable at this
+# build stage — so it lands on PATH for uid 65534 too.
+RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @anthropic-ai/claude-code@2.1.223
 
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in

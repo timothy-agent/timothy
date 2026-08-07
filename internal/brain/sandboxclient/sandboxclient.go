@@ -40,9 +40,10 @@ func New(baseURL string) *Client {
 }
 
 type execRequest struct {
-	Workdir        string `json:"workdir"`
-	Command        string `json:"command"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Workdir        string            `json:"workdir"`
+	Command        string            `json:"command"`
+	TimeoutSeconds int               `json:"timeout_seconds"`
+	Env            map[string]string `json:"env,omitempty"`
 }
 
 // Exec matches the missions package's sandboxExec function type: runs
@@ -52,8 +53,17 @@ type execRequest struct {
 // sandboxd.Manager.Exec's own contract (a command that ran and exited
 // non-zero is reported via exitCode, not err).
 func (c *Client) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	return c.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
+}
+
+// ExecEnv is Exec plus per-exec environment variables (D-053) —
+// sandboxd validates env against its own allowlist server-side; this
+// client passes it through unmodified. Existing Exec callers are
+// unaffected: they route through here with env == nil, which the
+// json:"omitempty" tag drops from the wire request entirely.
+func (c *Client) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (int, error) {
 	body, err := json.Marshal(execRequest{
-		Workdir: workdir, Command: command, TimeoutSeconds: int(timeout / time.Second),
+		Workdir: workdir, Command: command, TimeoutSeconds: int(timeout / time.Second), Env: env,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("sandboxclient: marshal: %w", err)

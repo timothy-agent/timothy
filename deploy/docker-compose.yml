@@ -177,6 +177,16 @@ services:
       # or writes mission files through this mount. A container's own
       # replicated mount is unaffected by the ro flag here.
       - workspace:/workspace:ro
+      # D-054: executor auth-state (headless claude CLI's subscription
+      # login), same metadata-only self-inspection pattern as workspace
+      # above — resolveMount reads this mount's spec, then replicates it
+      # rw at /home/sandbox/.claude in every mission container. Optional:
+      # missions using API-key auth (ANTHROPIC_API_KEY via per-exec env,
+      # D-053) work fine without ever populating this volume.
+      #
+      # One-off subscription login, run once after `make sandbox-image`:
+      #   docker run --rm -it -v timothy_executor-claude-state:/home/sandbox/.claude timothy-sandbox:latest claude /login
+      - executor-claude-state:/statevols/claude
       # The socket this service exists to hold instead of brain.
       # group_add grants its group inside the container; Docker
       # Desktop's socket is group 0 (root), Linux hosts typically use a
@@ -295,6 +305,10 @@ volumes:
   web_node_modules:
   workspace:
   attachments:
+  # D-054: headless claude CLI's subscription auth state, shared across
+  # mission containers — see the sandboxd service comment above for the
+  # one-off login command.
+  executor-claude-state:
 
 networks:
   timothy:

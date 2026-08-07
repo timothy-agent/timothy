@@ -239,6 +239,112 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 	}
 }
 
+// TestResolveMountStateVolume confirms resolveMount generalizes to
+// D-054's state-volume lookup (keyed on stateVolumeMetaPath) the same
+// way it already resolves the workspace mount.
+func TestResolveMountStateVolume(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, container.InspectResponse{
+			ID: "self",
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "timothy_executor-claude-state", Destination: stateVolumeMetaPath},
+			},
+		})
+	})
+
+	m, err := resolveMount(context.Background(), cli, stateVolumeMetaPath, executorStateMountPath)
+	if err != nil {
+		t.Fatalf("resolveMount: %v", err)
+	}
+	if m.Source != "timothy_executor-claude-state" || m.Target != executorStateMountPath {
+		t.Fatalf("mount = %+v, want source=timothy_executor-claude-state target=%s", m, executorStateMountPath)
+	}
+}
+
+// TestCreateContainerIncludesStateMountWhenPresent confirms a
+// configured state mount is added (rw) to every mission container.
+func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
+	var gotMounts []mount.Mount
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read create body: %v", err)
+			}
+			var cfg struct {
+				HostConfig container.HostConfig
+			}
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			gotMounts = cfg.HostConfig.Mounts
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+	mgr.stateMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_executor-claude-state", Target: executorStateMountPath}
+
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1"); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+	if len(gotMounts) != 2 {
+		t.Fatalf("create body: Mounts = %+v, want 2 (workspace + state)", gotMounts)
+	}
+	found := false
+	for _, m := range gotMounts {
+		if m.Target == executorStateMountPath && m.Source == "timothy_executor-claude-state" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("create body: Mounts = %+v, want one at %s", gotMounts, executorStateMountPath)
+	}
+}
+
+// TestCreateContainerOmitsStateMountWhenAbsent confirms a container is
+// still created successfully (no state mount) when the operator hasn't
+// configured the volume — missions on API-key auth must keep working.
+func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
+	var gotMounts []mount.Mount
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read create body: %v", err)
+			}
+			var cfg struct {
+				HostConfig container.HostConfig
+			}
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			gotMounts = cfg.HostConfig.Mounts
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+	// mgr.stateMount left zero-value: not configured.
+
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1"); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+	if len(gotMounts) != 1 || gotMounts[0].Target != workspaceMountPath {
+		t.Fatalf("create body: Mounts = %+v, want exactly [workspace]", gotMounts)
+	}
+}
+
 func TestNewManagerEmptyImageErrors(t *testing.T) {
 	mgr, err := NewManager(context.Background(), "", nil)
 	if err == nil {

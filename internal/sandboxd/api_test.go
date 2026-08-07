@@ -46,7 +46,7 @@ func TestHandleExecInvalidMissionID(t *testing.T) {
 		"not-a-uuid",
 		"../../etc/passwd",
 		"alpine:latest",
-		"a1b2c3d4-e5f6-4789-a012-b34c56d78e9", // one char short
+		"a1b2c3d4-e5f6-4789-a012-b34c56d78e9",  // one char short
 		"A1B2C3D4-E5F6-4789-A012-B34C56D78E9F", // uppercase not accepted
 	}
 	for _, id := range cases {
@@ -87,6 +87,81 @@ func TestHandleExecWorkdirEscape(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("workdir=%q: status = %d, want 400", wd, rec.Code)
 		}
+	}
+}
+
+// TestValidExecEnv covers D-053's allowlist: accept known names within
+// the size cap, reject an unknown name or an oversized value.
+func TestValidExecEnv(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantOK  bool
+		badName string
+	}{
+		{name: "nil env", env: nil, wantOK: true},
+		{name: "empty env", env: map[string]string{}, wantOK: true},
+		{
+			name: "all allowlisted",
+			env: map[string]string{
+				"ANTHROPIC_API_KEY":    "sk-test",
+				"ANTHROPIC_BASE_URL":   "https://api.anthropic.com",
+				"ANTHROPIC_MODEL":      "claude-x",
+				"ANTHROPIC_AUTH_TOKEN": "tok",
+				"NO_COLOR":             "1",
+				"TERM":                 "xterm",
+			},
+			wantOK: true,
+		},
+		{
+			name:    "unknown name rejected",
+			env:     map[string]string{"AWS_SECRET_ACCESS_KEY": "x"},
+			wantOK:  false,
+			badName: "AWS_SECRET_ACCESS_KEY",
+		},
+		{
+			name:    "oversized value rejected",
+			env:     map[string]string{"ANTHROPIC_API_KEY": strings.Repeat("a", execEnvMaxValueLen+1)},
+			wantOK:  false,
+			badName: "ANTHROPIC_API_KEY",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			badName, ok := validExecEnv(tc.env)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !ok && badName != tc.badName {
+				t.Errorf("badName = %q, want %q", badName, tc.badName)
+			}
+		})
+	}
+}
+
+// TestHandleExecUnknownEnvNameRejected confirms the HTTP layer rejects
+// a disallowed env name with 400 before ever reaching the daemon, and
+// that the offending name (never the value) appears in the response.
+func TestHandleExecUnknownEnvNameRejected(t *testing.T) {
+	t.Parallel()
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected daemon call for env that should 400 before ensureContainer: %s %s", r.Method, r.URL.Path)
+	})
+	mgr := newTestManager(cli)
+
+	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5,"env":{"AWS_SECRET_ACCESS_KEY":"leaked-value"}}`
+	rec := httptest.NewRecorder()
+	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "leaked-value") {
+		t.Errorf("response body = %q, must never echo the rejected env value", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "AWS_SECRET_ACCESS_KEY") {
+		t.Errorf("response body = %q, want it to name the offending env var", rec.Body.String())
 	}
 }
 
@@ -168,6 +243,111 @@ func TestHandleExecTimeoutClampVisibleInArgv(t *testing.T) {
 	secs := gotCmd[3]
 	if secs != "900" {
 		t.Errorf("clamped timeout seconds = %q, want 900 (execMaxTimeout)", secs)
+	}
+}
+
+// TestHandleExecEnvReachesExecCreate confirms an allowlisted env
+// request field arrives at Docker's ExecCreate as "K=V" entries — the
+// D-053 path from HTTP request to the daemon call.
+func TestHandleExecEnvReachesExecCreate(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var gotEnv []string
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json"):
+			writeJSON(t, w, http.StatusOK, []container.Summary{})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "timothy-sandbox-") && strings.HasSuffix(r.URL.Path, "/json"):
+			writeJSON(t, w, http.StatusOK, container.InspectResponse{
+				ID: "c1", State: &container.State{Running: true},
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/exec"):
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read exec create body: %v", err)
+			}
+			var req container.ExecCreateRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal exec create body: %v", err)
+			}
+			mu.Lock()
+			gotEnv = req.Env
+			mu.Unlock()
+			writeJSON(t, w, http.StatusCreated, common.IDResponse{ID: "exec1"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			http.Error(w, "attach not supported by fake daemon", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+
+	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5,"env":{"ANTHROPIC_API_KEY":"sk-test"}}`
+	rec := httptest.NewRecorder()
+	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := "ANTHROPIC_API_KEY=sk-test"
+	found := false
+	for _, e := range gotEnv {
+		if e == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ExecCreate env = %v, want it to contain %q", gotEnv, want)
+	}
+}
+
+// TestHandleExecNoEnvOmitsExecEnv confirms existing exec behavior is
+// unchanged when the request omits env entirely — no env entries reach
+// ExecCreate.
+func TestHandleExecNoEnvOmitsExecEnv(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var gotEnv []string
+	envSet := false
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json"):
+			writeJSON(t, w, http.StatusOK, []container.Summary{})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "timothy-sandbox-") && strings.HasSuffix(r.URL.Path, "/json"):
+			writeJSON(t, w, http.StatusOK, container.InspectResponse{
+				ID: "c1", State: &container.State{Running: true},
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/exec"):
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read exec create body: %v", err)
+			}
+			var req container.ExecCreateRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal exec create body: %v", err)
+			}
+			mu.Lock()
+			gotEnv, envSet = req.Env, true
+			mu.Unlock()
+			writeJSON(t, w, http.StatusCreated, common.IDResponse{ID: "exec1"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			http.Error(w, "attach not supported by fake daemon", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+
+	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5}`
+	rec := httptest.NewRecorder()
+	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !envSet {
+		t.Fatal("ExecCreate was never called")
+	}
+	if len(gotEnv) != 0 {
+		t.Errorf("ExecCreate env = %v, want empty when the request omits env", gotEnv)
 	}
 }
 
