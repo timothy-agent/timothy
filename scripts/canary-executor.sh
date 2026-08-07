@@ -242,7 +242,10 @@ echo "canary-executor: PASS"
 # have already aborted the script on any failure) — a failed mission is
 # left in place for debugging. The route itself is left configured
 # (idempotent ensure handles the next run); only the mission and
-# fixture are torn down, mirroring canary-coding.sh.
+# fixture are torn down, mirroring canary-coding.sh. DELETE requires a
+# terminal mission, so cancel first — a 409 on an already-finished
+# mission is expected and ignored.
+curl -s -o /dev/null -X POST "${auth[@]}" "${BASE_URL}/v1/missions/${id}/cancel" || true
 if curl -sf -X DELETE "${auth[@]}" "${BASE_URL}/v1/missions/${id}"; then
   echo "canary-executor: cleaned up mission ${id}"
 else

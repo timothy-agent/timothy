@@ -145,7 +145,10 @@ echo "canary-coding: PASS"
 # Cleanup only runs once every check above has passed (set -e would
 # have already aborted the script on any failure) — a failed mission is
 # left in place for debugging. Tolerated as best-effort: a cleanup
-# failure must never flip this PASS to a FAIL.
+# failure must never flip this PASS to a FAIL. DELETE requires a
+# terminal mission, so cancel first — a 409 on an already-finished
+# mission is expected and ignored.
+curl -s -o /dev/null -X POST "${auth[@]}" "${BASE_URL}/v1/missions/${id}/cancel" || true
 if curl -sf -X DELETE "${auth[@]}" "${BASE_URL}/v1/missions/${id}"; then
   echo "canary-coding: cleaned up mission ${id}"
 else
