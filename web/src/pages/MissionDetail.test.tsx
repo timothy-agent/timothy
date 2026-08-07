@@ -153,9 +153,9 @@ describe('MissionDetail spend', () => {
     expect(screen.getByText('7 calls')).toBeTruthy()
     expect(screen.getByText('120.0k→8.0k tok')).toBeTruthy()
     expect(screen.getByText('25% of budget')).toBeTruthy()
-    expect(screen.getByText('glm-5.2')).toBeTruthy()
+    expect(screen.getByText('brain · glm-5.2')).toBeTruthy()
     expect(screen.getByText('2 unpriced calls')).toBeTruthy()
-    expect(screen.getByText('glm-5.2').closest('span')?.querySelector('svg use')).toHaveAttribute(
+    expect(screen.getByText('brain · glm-5.2').closest('span')?.querySelector('svg use')).toHaveAttribute(
       'href',
       '#plogo-zai',
     )
@@ -172,8 +172,8 @@ describe('MissionDetail spend', () => {
       models: [{ provider: 'my-custom-endpoint', model: 'whatever', requests: 7, last_used: '2026-01-01T00:00:00Z' }],
     })
     renderPage()
-    expect(await screen.findByText('whatever')).toBeTruthy()
-    expect(screen.getByText('whatever').closest('span')?.querySelector('svg use')).not.toBeInTheDocument()
+    expect(await screen.findByText('brain · whatever')).toBeTruthy()
+    expect(screen.getByText('brain · whatever').closest('span')?.querySelector('svg use')).not.toBeInTheDocument()
   })
 
   it('hides the cost pills while the mission has no ledger rows', async () => {
@@ -197,6 +197,40 @@ describe('MissionDetail spend', () => {
     renderPage()
     expect(await screen.findByText('EUR 6.88')).toBeTruthy()
     expect(screen.getByTitle(/USD 8\.00/)).toBeTruthy()
+  })
+
+  it('adds a brain/harness breakdown to the billed pill tooltip when both incurred cost', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 1.32 },
+      billed_brain_by_currency: { USD: 1.11 },
+      billed_harness_by_currency: { USD: 0.21 },
+      input_tokens: 100,
+      output_tokens: 50,
+      requests: 3,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    const pill = await screen.findByText('USD 1.32')
+    expect(pill.closest('span')).toHaveAttribute('title', 'brain USD 1.11 · harness USD 0.2100')
+  })
+
+  it('omits the brain/harness breakdown when the mission is single-source', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 1.11 },
+      billed_brain_by_currency: { USD: 1.11 },
+      billed_harness_by_currency: {},
+      input_tokens: 100,
+      output_tokens: 50,
+      requests: 3,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    const pill = await screen.findByText('USD 1.11')
+    expect(pill.closest('span')).not.toHaveAttribute('title')
   })
 })
 
@@ -268,8 +302,8 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
   })
 })
 
-describe('MissionDetail executor pill', () => {
-  it('shows the executor pill with provider/model when an executor.spawned event exists', async () => {
+describe('MissionDetail harness pill', () => {
+  it('shows the harness pill with display name/model, provider in the tooltip, when an executor.spawned event exists', async () => {
     vi.mocked(missionEvents).mockResolvedValue([
       ...events,
       {
@@ -282,13 +316,14 @@ describe('MissionDetail executor pill', () => {
       },
     ])
     renderPage()
-    expect(await screen.findByText('executor: Anthropic/sonnet')).toBeTruthy()
+    const pill = await screen.findByText('Claude Code · sonnet')
+    expect(pill.closest('span')).toHaveAttribute('title', expect.stringContaining('Anthropic'))
   })
 
-  it('omits the executor pill when no executor.spawned event exists', async () => {
+  it('omits the harness pill when no executor.spawned event exists', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.queryByText(/^executor:/)).toBeNull()
+    expect(screen.queryByText(/Claude Code/)).toBeNull()
   })
 })
 

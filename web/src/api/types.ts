@@ -302,12 +302,27 @@ export interface ModelUsed {
 
 export interface MissionUsage {
   mission_id: string
+  // cost_by_currency is billed spend only — notional (subscription-
+  // billed) rows are excluded, so this is the mission's true bill.
+  // Equals billed_brain_by_currency + billed_harness_by_currency.
   cost_by_currency: Record<string, number>
   // converted_cost_by_currency mirrors cost_by_currency, converted into
   // default_currency, present only when at least one entry had a
   // usable stored fx rate — an entry with no rate is simply omitted,
   // so this map's total can be a floor, not the whole bill.
   converted_cost_by_currency?: Record<string, number>
+  // billed_brain_by_currency/billed_harness_by_currency split billed
+  // spend by who incurred it: the delegated CLI executor's own rows
+  // (harness, D-051) vs everything else the missions engine billed
+  // directly (brain: explore/plan/worker/review).
+  billed_brain_by_currency?: Record<string, number>
+  billed_harness_by_currency?: Record<string, number>
+  // notional_cost_by_currency is the API-equivalent price of rows
+  // billed through a subscription/oauth_token executor (D-051) —
+  // real spend was $0, this is what the same work would have cost
+  // metered.
+  notional_cost_by_currency?: Record<string, number>
+  converted_notional_cost_by_currency?: Record<string, number>
   rate_as_of?: string
   input_tokens: number
   output_tokens: number

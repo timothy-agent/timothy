@@ -30,7 +30,7 @@ var buckets = map[string]string{"hour": "hour", "day": "day", "week": "week"}
 var groups = map[string]string{
 	"provider": "provider",
 	"model":    "model",
-	"route": "route",
+	"route":    "route",
 }
 
 const notTest = `purpose IS DISTINCT FROM 'test'`
@@ -213,15 +213,25 @@ func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy str
 // out per currency (CostByCurrency) rather than summed into one
 // number: a mission that switched providers mid-run can carry spend in
 // more than one billing currency, and this package never sums across
-// currencies.
+// currencies. CostByCurrency is billed spend only (notional excluded)
+// and equals BilledBrainByCurrency + BilledHarnessByCurrency;
+// NotionalCostByCurrency holds the API-equivalent price of rows billed
+// through a subscription/oauth_token instead (D-051's delegated CLI
+// executor) — a mission's true bill is CostByCurrency alone.
+// BilledHarnessByCurrency is the delegated CLI executor's own billed
+// rows (purpose='executor'); BilledBrainByCurrency is every other
+// billed turn the missions engine ran (explore/plan/worker/review).
 type MissionUsage struct {
-	MissionID        string             `json:"mission_id"`
-	CostByCurrency   map[string]float64 `json:"cost_by_currency"`
-	InputTokens      int64              `json:"input_tokens"`
-	OutputTokens     int64              `json:"output_tokens"`
-	Requests         int64              `json:"requests"`
-	UnpricedRequests int64              `json:"unpriced_requests"`
-	Models           []ModelUsed        `json:"models"`
+	MissionID               string             `json:"mission_id"`
+	CostByCurrency          map[string]float64 `json:"cost_by_currency"`
+	BilledBrainByCurrency   map[string]float64 `json:"billed_brain_by_currency"`
+	BilledHarnessByCurrency map[string]float64 `json:"billed_harness_by_currency"`
+	NotionalCostByCurrency  map[string]float64 `json:"notional_cost_by_currency"`
+	InputTokens             int64              `json:"input_tokens"`
+	OutputTokens            int64              `json:"output_tokens"`
+	Requests                int64              `json:"requests"`
+	UnpricedRequests        int64              `json:"unpriced_requests"`
+	Models                  []ModelUsed        `json:"models"`
 }
 
 // ModelUsed is one provider/model pair actually invoked for a mission
@@ -240,7 +250,13 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	if err != nil {
 		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
 	}
-	m := MissionUsage{MissionID: missionID, CostByCurrency: map[string]float64{}}
+	m := MissionUsage{
+		MissionID:               missionID,
+		CostByCurrency:          map[string]float64{},
+		BilledBrainByCurrency:   map[string]float64{},
+		BilledHarnessByCurrency: map[string]float64{},
+		NotionalCostByCurrency:  map[string]float64{},
+	}
 	err = db.QueryRow(ctx, `SELECT
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE cost IS NULL)
@@ -250,7 +266,14 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	if err != nil {
 		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
 	}
-	costRows, err := db.Query(ctx, `SELECT currency, COALESCE(SUM(cost), 0)
+	// brain = every billed turn the missions engine ran directly
+	// (explore/plan/worker/review); harness = the delegated CLI
+	// executor's own billed rows (purpose='executor', D-051).
+	costRows, err := db.Query(ctx, `SELECT currency,
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional AND purpose = 'executor'), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT notional AND purpose IS DISTINCT FROM 'executor'), 0),
+			COALESCE(SUM(cost) FILTER (WHERE notional), 0)
 		FROM cost_ledger
 		WHERE mission_id = $1 AND `+notTest+`
 		GROUP BY currency`, missionID)
@@ -259,12 +282,23 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	}
 	for costRows.Next() {
 		var currency string
-		var cost float64
-		if err := costRows.Scan(&currency, &cost); err != nil {
+		var billed, harness, brain, notional float64
+		if err := costRows.Scan(&currency, &billed, &harness, &brain, &notional); err != nil {
 			costRows.Close()
 			return MissionUsage{}, fmt.Errorf("usage mission: cost by currency: %w", err)
 		}
-		m.CostByCurrency[currency] = cost
+		if billed != 0 {
+			m.CostByCurrency[currency] = billed
+		}
+		if brain != 0 {
+			m.BilledBrainByCurrency[currency] = brain
+		}
+		if harness != 0 {
+			m.BilledHarnessByCurrency[currency] = harness
+		}
+		if notional != 0 {
+			m.NotionalCostByCurrency[currency] = notional
+		}
 	}
 	if err := costRows.Err(); err != nil {
 		costRows.Close()

@@ -30,12 +30,32 @@ import {
   DialogTitle,
 } from '../components/ui/dialog'
 import { ModelBadge } from '../components/ModelBadge'
+import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
 import { Badge } from '../components/ui/badge'
 import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
 import { compact, formatDuration, money } from '../lib/format'
+
+// brainHarnessBreakdown formats "brain $x · harness $y" for the billed
+// cost pill's tooltip — only when both parts are non-zero across all
+// currencies; a single-source mission (all brain, or all harness)
+// keeps a clean pill with no extra tooltip line needed.
+function brainHarnessBreakdown(usage: MissionUsage): string | null {
+  const brain = usage.billed_brain_by_currency ?? {}
+  const harness = usage.billed_harness_by_currency ?? {}
+  const brainTotal = Object.values(brain).reduce((sum, v) => sum + v, 0)
+  const harnessTotal = Object.values(harness).reduce((sum, v) => sum + v, 0)
+  if (brainTotal === 0 || harnessTotal === 0) return null
+  const brainStr = Object.entries(brain)
+    .map(([c, v]) => money(v, c))
+    .join(', ')
+  const harnessStr = Object.entries(harness)
+    .map(([c, v]) => money(v, c))
+    .join(', ')
+  return `brain ${brainStr} · harness ${harnessStr}`
+}
 
 function formatDate(v?: string): string {
   if (!v) return 'N/A'
@@ -83,14 +103,30 @@ function latestExecutorProgress(events: MissionEvent[]): { turns: number; tool_c
 // the stats row can name the delegated CLI that actually ran the work
 // — unlike the native session's model pill, this is a fact about what
 // ran and stays shown once the mission is terminal.
-function latestExecutorSpawn(events: MissionEvent[]): { provider: string; model: string } | null {
+function latestExecutorSpawn(
+  events: MissionEvent[],
+): { harness: string; provider: string; model: string } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].kind === 'executor.spawned') {
-      const { provider, model } = events[i].payload as { provider: string; model: string }
-      return { provider, model }
+      const { harness, provider, model } = events[i].payload as {
+        harness: string
+        provider: string
+        model: string
+      }
+      return { harness, provider, model }
     }
   }
   return null
+}
+
+// harnessDisplayName maps a registered harness id to the label shown
+// in the pill — mirrors MissionForm's executorChoices labels.
+const harnessDisplayNames: Record<string, string> = {
+  'claude-cli': 'Claude Code',
+}
+
+function harnessDisplayName(harness: string): string {
+  return harnessDisplayNames[harness] ?? harness
 }
 
 export function MissionDetail() {
@@ -372,16 +408,18 @@ export function MissionDetail() {
               <ModelBadge
                 key={`${m.provider}:${m.model}`}
                 provider={m.provider}
-                model={m.model}
+                model={`brain · ${m.model}`}
                 title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
               />
             ))}
           {executorSpawn && (
-            <ModelBadge
-              provider={executorSpawn.provider}
-              model={`executor: ${executorSpawn.provider}/${executorSpawn.model}`}
-              title="Delegated CLI executor that ran this mission's coding work"
-            />
+            <Badge
+              variant="secondary"
+              title={`Delegated CLI executor that ran this mission's coding work, via ${executorSpawn.provider}`}
+            >
+              <ClaudeCodeIcon />
+              {harnessDisplayName(executorSpawn.harness)} · {executorSpawn.model}
+            </Badge>
           )}
           {usage && usage.requests > 0 && (
             <Badge variant="secondary">
@@ -397,24 +435,59 @@ export function MissionDetail() {
           {usage && usage.requests > 0 && (
             <>
               {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
-                Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => (
-                  <Badge
-                    key={currency}
-                    variant="secondary"
-                    title={`Converted from the billed amount(s) (${Object.entries(usage.cost_by_currency)
-                      .map(([c, v]) => money(v, c))
-                      .join(', ')}) using a stored exchange rate.`}
-                  >
-                    {money(cost, currency)}
-                  </Badge>
-                ))
+                Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => {
+                  const breakdown = brainHarnessBreakdown(usage)
+                  const converted = `Converted from the billed amount(s) (${Object.entries(usage.cost_by_currency)
+                    .map(([c, v]) => money(v, c))
+                    .join(', ')}) using a stored exchange rate.`
+                  return (
+                    <Badge
+                      key={currency}
+                      variant="secondary"
+                      title={breakdown ? `${converted} ${breakdown}` : converted}
+                    >
+                      {money(cost, currency)}
+                    </Badge>
+                  )
+                })
               ) : (
-                Object.entries(usage.cost_by_currency).map(([currency, cost]) => (
-                  <Badge key={currency} variant="secondary">
-                    {money(cost, currency)}
-                  </Badge>
-                ))
+                Object.entries(usage.cost_by_currency).map(([currency, cost]) => {
+                  const breakdown = brainHarnessBreakdown(usage)
+                  return (
+                    <Badge key={currency} variant="secondary" title={breakdown ?? undefined}>
+                      {money(cost, currency)}
+                    </Badge>
+                  )
+                })
               )}
+              {usage.notional_cost_by_currency &&
+                Object.keys(usage.notional_cost_by_currency).length > 0 &&
+                (usage.converted_notional_cost_by_currency &&
+                Object.keys(usage.converted_notional_cost_by_currency).length > 0
+                  ? Object.entries(usage.converted_notional_cost_by_currency).map(([currency, cost]) => (
+                      <Badge
+                        key={`notional-${currency}`}
+                        variant="outline"
+                        className="text-muted-foreground"
+                        title={`API-equivalent price of work billed through a subscription/oauth executor, not actually charged (${Object.entries(
+                          usage.notional_cost_by_currency ?? {},
+                        )
+                          .map(([c, v]) => money(v, c))
+                          .join(', ')}).`}
+                      >
+                        ≈{money(cost, currency)} subscription (not billed)
+                      </Badge>
+                    ))
+                  : Object.entries(usage.notional_cost_by_currency).map(([currency, cost]) => (
+                      <Badge
+                        key={`notional-${currency}`}
+                        variant="outline"
+                        className="text-muted-foreground"
+                        title="API-equivalent price of work billed through a subscription/oauth executor, not actually charged."
+                      >
+                        ≈{money(cost, currency)} subscription (not billed)
+                      </Badge>
+                    )))}
             </>
           )}
           <Badge variant="secondary">

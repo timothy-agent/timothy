@@ -131,6 +131,34 @@ func TestDecorateUsageResponseMissionUsageCostByCurrency(t *testing.T) {
 	}
 }
 
+func TestDecorateUsageResponseMissionUsageNotionalCostByCurrency(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	rates := map[string]fxrates.Rate{"EUR": {Value: 0.86, AsOf: asOf}}
+	// notional_cost_by_currency gets the same decoration as
+	// cost_by_currency, under its own converted_ key — both left
+	// byte-for-byte unchanged, only a parallel converted map is added.
+	body := `{"mission_id":"m1","cost_by_currency":{"USD":10},"notional_cost_by_currency":{"USD":5}}`
+	out := DecorateUsageResponse([]byte(body), "EUR", rates)
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded["notional_cost_by_currency"].(map[string]any)["USD"].(float64) != 5 {
+		t.Fatalf("notional_cost_by_currency = %+v, want USD unchanged at 5", decoded["notional_cost_by_currency"])
+	}
+	converted, ok := decoded["converted_notional_cost_by_currency"].(map[string]any)
+	if !ok {
+		t.Fatalf("decoded = %+v, want a converted_notional_cost_by_currency map", decoded)
+	}
+	if got := converted["EUR"].(float64); got < 4 || got > 5 {
+		t.Fatalf("converted_notional_cost_by_currency[EUR] = %v, want ~4.3", got)
+	}
+	if decoded["converted_cost_by_currency"].(map[string]any)["EUR"].(float64) < 8 {
+		t.Fatalf("converted_cost_by_currency should still be decorated too: %+v", decoded)
+	}
+}
+
 func TestDecorateUsageResponseMissionUsageUnconvertibleCurrencyOmitted(t *testing.T) {
 	t.Parallel()
 	rates := map[string]fxrates.Rate{} // no stored rates at all

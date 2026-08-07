@@ -190,6 +190,42 @@ describe('MissionForm — kind chip', () => {
   })
 })
 
+describe('MissionForm — executor select placement', () => {
+  it('shows the executor select in the main form body for a coding mission, without expanding Advanced', async () => {
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+
+    expect(screen.getByLabelText('Executor')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Hide advanced options' })).toBeNull()
+  })
+
+  it('omits the executor select for a general mission', async () => {
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Executor')).toBeNull()
+  })
+
+  it('submits the picked executor for a coding mission', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm5' })
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByLabelText('Executor'))
+    fireEvent.click(await screen.findByText('Claude Code'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ harness: 'claude-cli' })),
+    )
+  })
+})
+
 describe('MissionForm — create mode, repeat on schedule', () => {
   it('submits a schedule with the slugified default name, preset cron, and general kind', async () => {
     vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })

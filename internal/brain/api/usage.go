@@ -42,9 +42,9 @@ func DecorateUsageResponse(body []byte, target string, rates map[string]fxrates.
 // and a "currency" string — Summary, SeriesPoint, GroupTotal,
 // SessionUsage, and BudgetWindow's nested limit all share this exact
 // shape, so one structural match covers every one of them. MissionUsage's
-// cost_by_currency is a currency-keyed map instead ({"USD": 1.5}, no
-// per-entry currency field to match against) and gets its own small
-// special case in decorateObject.
+// cost_by_currency/notional_cost_by_currency are currency-keyed maps
+// instead ({"USD": 1.5}, no per-entry currency field to match against)
+// and get their own small special case in decorateObject.
 func decorateAny(v any, target string, rates map[string]fxrates.Rate) {
 	switch node := v.(type) {
 	case map[string]any:
@@ -65,14 +65,19 @@ func decorateAny(v any, target string, rates map[string]fxrates.Rate) {
 // {amount,currency} object) needs its own decoration path.
 const costByCurrencyKey = "cost_by_currency"
 
-// decorateCostByCurrency adds a parallel "converted_cost_by_currency"
-// map next to MissionUsage's cost_by_currency, converting every entry
-// into target and summing what converts — entries with no usable rate
-// are simply omitted from the converted map (never guessed), so a
-// caller comparing len() against the original map can tell some entry
-// didn't convert.
-func decorateCostByCurrency(obj map[string]any, target string, rates map[string]fxrates.Rate) {
-	raw, ok := obj[costByCurrencyKey].(map[string]any)
+// notionalCostByCurrencyKey is MissionUsage's sibling field for spend
+// billed through a subscription/oauth_token executor (D-051) — same
+// currency-keyed map shape, decorated the same way.
+const notionalCostByCurrencyKey = "notional_cost_by_currency"
+
+// decorateCostByCurrency adds a parallel "converted_"+convertedKey
+// map next to the given currency-keyed cost map, converting every
+// entry into target and summing what converts — entries with no
+// usable rate are simply omitted from the converted map (never
+// guessed), so a caller comparing len() against the original map can
+// tell some entry didn't convert.
+func decorateCostByCurrency(obj map[string]any, key string, target string, rates map[string]fxrates.Rate) {
+	raw, ok := obj[key].(map[string]any)
 	if !ok || len(raw) == 0 {
 		return
 	}
@@ -95,7 +100,7 @@ func decorateCostByCurrency(obj map[string]any, target string, rates map[string]
 	if len(converted) == 0 {
 		return
 	}
-	obj["converted_cost_by_currency"] = converted
+	obj["converted_"+key] = converted
 	if asOf != "" {
 		obj["rate_as_of"] = asOf
 	}
@@ -103,7 +108,10 @@ func decorateCostByCurrency(obj map[string]any, target string, rates map[string]
 
 func decorateObject(obj map[string]any, target string, rates map[string]fxrates.Rate) {
 	if _, ok := obj[costByCurrencyKey]; ok {
-		decorateCostByCurrency(obj, target, rates)
+		decorateCostByCurrency(obj, costByCurrencyKey, target, rates)
+	}
+	if _, ok := obj[notionalCostByCurrencyKey]; ok {
+		decorateCostByCurrency(obj, notionalCostByCurrencyKey, target, rates)
 	}
 	currency, _ := obj["currency"].(string)
 	if currency == "" || currency == target {

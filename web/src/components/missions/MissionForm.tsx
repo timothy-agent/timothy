@@ -539,6 +539,49 @@ export function MissionForm({
           </div>
         )}
 
+        {kind === 'coding' && (
+          <div className="space-y-1.5">
+            <Label htmlFor="mission-executor">Executor</Label>
+            <Select
+              value={harness || EXECUTOR_DEFAULT}
+              onValueChange={(v) => setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
+            >
+              <SelectTrigger id="mission-executor" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {executorChoices.map((c) => {
+                  const opt = executorOptions?.find((o) => o.harness === c.value)
+                  const disabled = !!opt && !opt.usable
+                  return (
+                    <SelectItem
+                      key={c.value}
+                      value={c.value}
+                      disabled={disabled}
+                      title={disabled ? opt?.reason : undefined}
+                    >
+                      {c.label}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+            {(() => {
+              // executorOptions is keyed by real registered harness
+              // names only — "Default"/"Native" never have a match,
+              // so the preview only ever renders for a concretely
+              // selected harness (e.g. "claude-cli").
+              const selected = executorOptions?.find((o) => o.harness === harness)
+              if (!selected?.usable) return null
+              return (
+                <p className="text-xs text-muted-foreground">
+                  runs via {selected.provider_name}/{selected.model}
+                </p>
+              )
+            })()}
+          </div>
+        )}
+
         <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
           <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
             {showAdvanced ? 'Hide advanced options' : 'Show advanced options'}
@@ -601,48 +644,6 @@ export function MissionForm({
                   </Select>
                 )}
               </div>
-              {kind === 'coding' && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="mission-executor">Executor</Label>
-                  <Select
-                    value={harness || EXECUTOR_DEFAULT}
-                    onValueChange={(v) => setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
-                  >
-                    <SelectTrigger id="mission-executor" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {executorChoices.map((c) => {
-                        const opt = executorOptions?.find((o) => o.harness === c.value)
-                        const disabled = !!opt && !opt.usable
-                        return (
-                          <SelectItem
-                            key={c.value}
-                            value={c.value}
-                            disabled={disabled}
-                            title={disabled ? opt?.reason : undefined}
-                          >
-                            {c.label}
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectContent>
-                  </Select>
-                  {(() => {
-                    // executorOptions is keyed by real registered harness
-                    // names only — "Default"/"Native" never have a match,
-                    // so the preview only ever renders for a concretely
-                    // selected harness (e.g. "claude-cli").
-                    const selected = executorOptions?.find((o) => o.harness === harness)
-                    if (!selected?.usable) return null
-                    return (
-                      <p className="text-xs text-muted-foreground">
-                        runs via {selected.provider_name}/{selected.model}
-                      </p>
-                    )
-                  })()}
-                </div>
-              )}
               {mode === 'create' && !repeat && (
                 <div className="space-y-1.5">
                   <Label htmlFor="mission-escalation-route">Escalation route</Label>
