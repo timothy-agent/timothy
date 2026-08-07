@@ -39,6 +39,15 @@ func TestGuardSubject(t *testing.T) {
 		{name: "html closing tag", command: `echo "</head>" >> summary.md`},
 		{name: "html tag no quotes", command: "printf '<html>\\n</html>'"},
 		{name: "redirect outside workspace", command: "cat file 2>&1 >/etc/passwd", blocked: "outside the workspace"},
+
+		{name: "quoted regex leading slash", command: "awk '/^#{1,6}/ {print}' README.md"},
+		{name: "quoted regex alternation", command: "grep -E '^(foo|bar)$' /workspace/file"},
+		{name: "quoted sed pattern", command: "sed 's/^#//' notes.md"},
+		{name: "quoted secret path still denied", command: "cat '/etc/passwd'", blocked: "system dirs"},
+		{name: "quoted plain path still denied", command: "cat '/Users/someone/x'", blocked: "outside the workspace"},
+		{name: "quoted brace path exempt", command: "cat '/tmp/{a,b}'"},
+		{name: "unquoted brace path denied", command: "cat /tmp/{a,b}", blocked: "outside the workspace"},
+		{name: "quoted metachars relative redirect", command: `echo "^foo$" > out.md`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

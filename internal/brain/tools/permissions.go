@@ -383,7 +383,17 @@ func guardSubject(root, tool, subject string) string {
 		}
 	}
 	if root != "" {
-		for _, tok := range CommandTokens(subject) {
+		for _, qt := range commandTokensQuoted(subject) {
+			tok := qt.text
+			// A quoted token can't shell-expand (brace, glob-via-regex
+			// chars), so a regex/pattern argument like '/^#{1,6}/' or
+			// '/tmp/{a,b}' looks path-like but never resolves to a real
+			// path — skip it. Unquoted, the same text is still live
+			// shell syntax (e.g. /x/{a,b} brace-expands to real paths)
+			// and must stay checked.
+			if qt.quoted && strings.ContainsAny(tok, "^$[]{}\\+|") {
+				continue
+			}
 			// A parent-directory reference in any path-like token can
 			// climb out of the workspace once the shell resolves it —
 			// the lexical check below can't see where it lands, so a
@@ -417,18 +427,39 @@ func pathWithin(root, p string) bool {
 // absolute paths. It intentionally over-matches: a false hit returns
 // corrective feedback, and the model retries with workspace paths.
 func CommandTokens(command string) []string {
+	qts := commandTokensQuoted(command)
+	out := make([]string, 0, len(qts))
+	for _, qt := range qts {
+		out = append(out, qt.text)
+	}
+	return out
+}
+
+// quotedToken is a command token plus whether it was single- or
+// double-quoted in the original command — quoting suppresses shell
+// expansion, which guardSubject uses to tell a real path from a
+// pattern argument (see commandTokensQuoted).
+type quotedToken struct {
+	text   string
+	quoted bool
+}
+
+// commandTokensQuoted is CommandTokens plus per-token quoting info.
+func commandTokensQuoted(command string) []quotedToken {
 	// '=' splits too, so --output=/abs/path exposes its path part.
 	fields := strings.Fields(strings.ReplaceAll(command, "=", " "))
-	out := make([]string, 0, len(fields))
+	out := make([]quotedToken, 0, len(fields))
 	for _, f := range fields {
 		// Redirect/fd syntax (>, <, 2>) only ever prefixes a path, never
 		// trails it — trimming from both ends would also strip a
 		// literal "<tag>" down to "/tag", a false absolute-path hit.
 		f = strings.TrimLeft(f, "<>0123456789")
-		f = strings.Trim(f, `'";|&()`)
-		if f != "" {
-			out = append(out, f)
+		trimmed := strings.Trim(f, `'";|&()`)
+		if trimmed == "" {
+			continue
 		}
+		quoted := (strings.HasPrefix(f, "'") || strings.HasPrefix(f, `"`)) && trimmed != f
+		out = append(out, quotedToken{text: trimmed, quoted: quoted})
 	}
 	return out
 }
