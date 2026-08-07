@@ -843,11 +843,13 @@ func (r *delegatedRunner) recordEventForce(ctx context.Context, missionID, kind 
 }
 
 // recordLedger writes one cost_ledger row at the run's terminal point
-// (D-055). Cost rides ONLY on AuthAPIKey — AuthSubscription and
-// AuthOAuthToken are both billed on the user's existing subscription
-// with no marginal per-call cost, so any total_cost_usd the CLI itself
-// reports there is not a real cost and must not be recorded as one
-// (D-013's cost-honesty invariant).
+// (D-055). AuthAPIKey cost is real marginal spend (Notional=false).
+// AuthSubscription and AuthOAuthToken are billed on the user's existing
+// subscription with no marginal per-call cost, but the CLI still
+// reports the API-equivalent price for its usage — operator decision
+// amends D-013's original NULL-unless-api-key rule: that figure is
+// recorded as-is with Notional=true, so subscription/oauth runs count
+// toward the budget brake instead of staying invisible to it.
 func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool) {
 	if r.ledger == nil {
 		return
@@ -866,9 +868,8 @@ func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwc
 			InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens),
 			CacheReadTokens: int(usage.CacheReadTokens), CacheWriteTokens: int(usage.CacheWriteTokens),
 		}
-		if authMode == executor.AuthAPIKey {
-			e.Cost = usage.CostUSD
-		}
+		e.Cost = usage.CostUSD
+		e.Notional = authMode != executor.AuthAPIKey
 	}
 	r.ledger.Record(ctx, e)
 }

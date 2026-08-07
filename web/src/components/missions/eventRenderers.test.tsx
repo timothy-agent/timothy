@@ -39,6 +39,29 @@ describe('executor.result rendering', () => {
   it('shows the billed cost when cost_usd is a number', () => {
     render(<div>{renderEvent(event(resultPayload(0.1234), 'executor.result'))}</div>)
     expect(screen.getByText(/\$0\.1234/)).toBeInTheDocument()
+    expect(screen.queryByText(/not billed/)).not.toBeInTheDocument()
+  })
+
+  it('flags a subscription-auth run as notional when cost_usd is a number', () => {
+    const spawn = event(
+      { harness: 'claude-cli', provider: 'anthropic', model: 'sonnet', auth_mode: 'subscription', run_id: 'r1' },
+      'executor.spawned',
+      1,
+    )
+    const result = event(resultPayload(0.2534), 'executor.result', 2)
+    render(<div>{renderEvent(result, [spawn, result])}</div>)
+    expect(screen.getByText(/\$0\.2534 · subscription \(not billed\)/)).toBeInTheDocument()
+  })
+
+  it('flags an oauth_token-auth run as notional when cost_usd is a number', () => {
+    const spawn = event(
+      { harness: 'claude-cli', provider: 'anthropic', model: 'sonnet', auth_mode: 'oauth_token', run_id: 'r1' },
+      'executor.spawned',
+      1,
+    )
+    const result = event(resultPayload(0.2534), 'executor.result', 2)
+    render(<div>{renderEvent(result, [spawn, result])}</div>)
+    expect(screen.getByText(/\$0\.2534 · subscription \(not billed\)/)).toBeInTheDocument()
   })
 
   it('shows subscription untracked cost when cost_usd is null and the spawn was subscription auth', () => {

@@ -126,13 +126,18 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
 }
 
-// formatExecutorCost renders executor.result's usage.cost_usd:
-// non-null is the billed truth ($x.xxxx, never guessed — D-013);
-// null with a preceding subscription or oauth_token spawn means cost is
-// genuinely untracked (both ride the user's existing subscription, no
-// per-call price), distinct from a null we simply failed to attribute.
+// formatExecutorCost renders executor.result's usage.cost_usd. Present
+// + subscription/oauth_token auth is the CLI-reported API-equivalent
+// price, notional (not actually billed) — flagged so it's never
+// mistaken for real marginal spend. Present + api_key is the billed
+// truth ($x.xxxx, never guessed — D-013). Absent + subscription auth
+// means cost is genuinely untracked (older run, before this CLI
+// reported it); absent otherwise is unreported.
 function formatExecutorCost(costUsd: number | null | undefined, subscriptionAuth?: boolean): string {
-  if (typeof costUsd === 'number') return `$${costUsd.toFixed(4)}`
+  if (typeof costUsd === 'number') {
+    const amount = `$${costUsd.toFixed(4)}`
+    return subscriptionAuth ? `${amount} · subscription (not billed)` : amount
+  }
   return subscriptionAuth ? 'subscription — cost untracked' : 'cost unreported'
 }
 
@@ -160,7 +165,9 @@ export function renderEvent(event: MissionEvent, allEvents: MissionEvent[] = [ev
 }
 
 function renderExecutorResult(event: MissionEvent, allEvents: MissionEvent[]): ReactNode {
-  const { status, duration_ms, exit_code, denials, usage } = event.payload as ExecutorResultPayload
+  // denials/usage are omitted from the payload when empty — never
+  // assume presence, a TypeError here blanks the whole detail page.
+  const { status, duration_ms, exit_code, denials = [], usage } = event.payload as ExecutorResultPayload
   const spawn = [...allEvents]
     .slice(0, allEvents.indexOf(event))
     .reverse()
@@ -170,7 +177,7 @@ function renderExecutorResult(event: MissionEvent, allEvents: MissionEvent[]): R
   return (
     <span>
       Executor finished: {status} · {formatDuration(duration_ms)} · exit {exit_code} ·{' '}
-      {usage.input_tokens}→{usage.output_tokens} tok · {formatExecutorCost(usage.cost_usd, subscriptionAuth)}
+      {usage ? `${usage.input_tokens}→${usage.output_tokens} tok · ${formatExecutorCost(usage.cost_usd, subscriptionAuth)}` : 'no usage reported'}
       {denials.length > 0 && <span className="text-amber-400"> · denials: {denials.join(', ')}</span>}
     </span>
   )

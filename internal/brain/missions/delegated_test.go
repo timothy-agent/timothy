@@ -469,8 +469,11 @@ func TestDelegatedRunWorker_HappyPath(t *testing.T) {
 	if len(led.entries) != 1 {
 		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
 	}
-	if led.entries[0].Cost != nil {
-		t.Fatalf("subscription entry Cost = %v, want nil (D-013)", *led.entries[0].Cost)
+	if led.entries[0].Cost == nil {
+		t.Fatal("subscription entry Cost = nil, want the CLI-reported notional cost")
+	}
+	if !led.entries[0].Notional {
+		t.Fatal("subscription entry Notional = false, want true (subscription-billed, not real marginal spend)")
 	}
 	if led.entries[0].Purpose != "executor" || led.entries[0].Agent != "mission-worker" {
 		t.Fatalf("ledger entry purpose/agent = %q/%q, want executor/mission-worker", led.entries[0].Purpose, led.entries[0].Agent)
@@ -757,6 +760,9 @@ func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {
 	if led.entries[0].Cost == nil {
 		t.Fatalf("api_key entry Cost = nil, want a recorded (possibly zero) figure")
 	}
+	if led.entries[0].Notional {
+		t.Fatal("api_key entry Notional = true, want false (real marginal spend)")
+	}
 }
 
 // --- scenario 8: oauth-token mode -----------------------------------------
@@ -801,8 +807,11 @@ func TestDelegatedRunWorker_OAuthTokenMode_EnvSetAndCostSuppressed(t *testing.T)
 	if len(led.entries) != 1 {
 		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
 	}
-	if led.entries[0].Cost != nil {
-		t.Fatalf("oauth_token entry Cost = %v, want nil (D-013 — subscription-billed)", *led.entries[0].Cost)
+	if led.entries[0].Cost == nil {
+		t.Fatal("oauth_token entry Cost = nil, want the CLI-reported notional cost")
+	}
+	if !led.entries[0].Notional {
+		t.Fatal("oauth_token entry Notional = false, want true (subscription-billed, not real marginal spend)")
 	}
 }
 

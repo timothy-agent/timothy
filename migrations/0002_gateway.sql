@@ -75,7 +75,12 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     -- distill, auto-title, and compaction summaries all ride cheap
     -- routes, so the route alone cannot separate internal calls from
     -- user chat.
-    purpose            text
+    purpose            text,
+    -- True when cost is the CLI-reported API-equivalent price for a
+    -- subscription/oauth-billed delegated executor run: a real figure,
+    -- but not actual marginal spend (D-013 amended by operator
+    -- decision — tracked so subscription runs aren't budget-invisible).
+    notional           boolean NOT NULL DEFAULT false
 );
 
 CREATE INDEX IF NOT EXISTS cost_ledger_ts_idx ON cost_ledger (ts);
