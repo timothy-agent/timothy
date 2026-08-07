@@ -64,7 +64,8 @@ const scoredRoute: AdminRoute = {
   serving: { provider_id: 'p2', model: 'grok-4' },
 }
 
-function renderRoute(name: string) {
+function renderRoute(name: string, override?: AdminRoute) {
+  if (override) vi.mocked(listRoutes).mockResolvedValue([override, scoredRoute])
   return render(
     <MemoryRouter initialEntries={[`/settings/routes/${name}`]}>
       <Routes>
@@ -80,6 +81,8 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue([orderedRoute, scoredRoute])
   vi.mocked(listProviders).mockResolvedValue(providers)
   vi.mocked(patchRoute).mockResolvedValue(undefined)
+  // jsdom lacks scrollIntoView; Radix Select calls it on open.
+  Element.prototype.scrollIntoView = vi.fn()
 })
 
 describe('RouteEdit ordered pipeline', () => {
@@ -167,6 +170,39 @@ describe('RouteEdit ordered pipeline', () => {
         chain: [{ provider_id: 'p1', model: 'sonnet' }],
       }),
     )
+  })
+})
+
+describe('RouteEdit harness', () => {
+  it('shows a harness badge on a resolved chain entry with harness set', async () => {
+    renderRoute('default', {
+      ...orderedRoute,
+      resolved: [
+        { ...orderedRoute.resolved![0], harness: 'claude-cli' },
+        orderedRoute.resolved![1],
+      ],
+    })
+    const cards = await screen.findAllByTestId('pipeline-card')
+    expect(cards[0]).toHaveTextContent('claude-cli')
+    expect(cards[1]).not.toHaveTextContent('claude-cli')
+  })
+
+  it('disables Claude Code in the harness picker for a wire-incompatible provider', async () => {
+    renderRoute('default')
+    await screen.findByTestId('pipeline')
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(screen.getByRole('option', { name: 'grok' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Harness' }))
+    expect(screen.getByRole('option', { name: 'Claude Code' })).toHaveAttribute('data-disabled')
+  })
+
+  it('leaves Claude Code enabled for an anthropic-driver provider', async () => {
+    renderRoute('default')
+    await screen.findByTestId('pipeline')
+    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(screen.getByRole('option', { name: 'anthropic' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Harness' }))
+    expect(screen.getByRole('option', { name: 'Claude Code' })).not.toHaveAttribute('data-disabled')
   })
 })
 

@@ -386,12 +386,22 @@ export interface AdminProvider {
   credential_ref: string
   headers: Record<string, string>
   enabled: boolean
-  options?: { reasoning_effort?: string; request_timeout?: string; region?: string }
+  options?: {
+    reasoning_effort?: string
+    request_timeout?: string
+    region?: string
+    anthropic_base_url?: string
+  }
 }
 
 export interface ChainEntry {
   provider_id: string
   model: string
+  // harness names a delegated mission executor this entry dispatches
+  // to instead of serving chat directly (D-051) — "" (or absent) is
+  // the native API-serving axis, "claude-cli" the only known harness
+  // so far. See router.KnownHarnesses.
+  harness?: string
 }
 
 // RouteEntryStatus is the router's live view of one chain entry: the
@@ -401,6 +411,10 @@ export interface ChainEntry {
 export interface RouteEntryStatus {
   provider_id: string
   provider_name?: string
+  // provider_kind is 'api' | 'cli' — 'cli' rows are mission-only
+  // executor providers (D-051), never built into a chat client.
+  provider_kind?: string
+  harness?: string
   model: string
   usable: boolean
   skip_reason?: string
@@ -552,6 +566,59 @@ export interface MissionEvent {
   provenance: string
   fingerprint?: string
   created_at: string
+}
+
+// ExecutorUsage is executor.result's token/cost usage block. cost_usd
+// is null when the run authenticated via a subscription (no per-call
+// price) rather than metered API billing — never a guessed 0 (D-013).
+export interface ExecutorUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read?: number
+  cache_write?: number
+  cost_usd?: number | null
+}
+
+// Payloads for the delegated coding-CLI executor's mission_events
+// (D-051, brain's missions harness). Timeline rendering keys off
+// event.kind, these types just name the shapes for that rendering.
+export interface ExecutorSpawnedPayload {
+  harness: string
+  provider: string
+  model: string
+  auth_mode: string
+  run_id: string
+}
+
+export interface ExecutorProgressPayload {
+  run_id: string
+  byte_offset: number
+  turns: number
+  tool_calls: number
+}
+
+export interface ExecutorResultPayload {
+  status: string
+  is_error: boolean
+  duration_ms: number
+  exit_code: number
+  parse: string
+  denials: string[]
+  usage: ExecutorUsage
+}
+
+export interface ExecutorDiedPayload {
+  reason: string
+  exit_code?: number
+  stderr_tail?: string
+}
+
+export interface ExecutorIdleKilledPayload {
+  idle_s: number
+}
+
+export interface ExecutorAuthFailedPayload {
+  harness: string
 }
 
 // MissionFile is one entry of a mission workspace's file listing

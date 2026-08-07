@@ -12,7 +12,14 @@ import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './Fullsc
 // events arriving from the poll loop.
 const followThresholdPx = 48
 
+// executor.progress fires on every byte the delegated CLI executor
+// writes — rendering one row per event would flood the timeline, so
+// it's excluded here; MissionDetail's phase header shows the latest
+// one instead as a lightweight live indicator.
+const rowKind = (e: MissionEvent) => e.kind !== 'executor.progress'
+
 export function TimelineSection({ events }: { events: MissionEvent[] }) {
+  const rows = events.filter(rowKind)
   const containerRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
   const { fullscreen, toggle, close } = useFullscreenPanel()
@@ -22,7 +29,7 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
     if (el && wasAtBottomRef.current) {
       el.scrollTop = el.scrollHeight
     }
-  }, [events])
+  }, [rows])
 
   const handleScroll = () => {
     const el = containerRef.current
@@ -52,7 +59,7 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
     >
       <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
         <span className="text-xs text-muted-foreground">
-          {events.length} event{events.length === 1 ? '' : 's'}
+          {rows.length} event{rows.length === 1 ? '' : 's'}
         </span>
         <div className="flex gap-1">
           <Button variant="ghost" size="icon-xs" title="Scroll to top" onClick={scrollToTop}>
@@ -73,16 +80,16 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
             : 'h-80 overflow-y-auto bg-zinc-950 px-3 py-2 font-mono text-xs dark:bg-black'
         }
       >
-        {events.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="text-zinc-500">No events yet.</p>
         ) : (
           <ol className="space-y-1">
-            {events.map((e) => (
+            {rows.map((e) => (
               <li key={e.seq} className="flex gap-3 text-zinc-300">
                 <span className="w-24 shrink-0 whitespace-nowrap text-zinc-500">
                   {new Date(e.created_at).toLocaleTimeString()}
                 </span>
-                <span className="flex-1 break-words">{renderEvent(e)}</span>
+                <span className="flex-1 break-words">{renderEvent(e, rows)}</span>
               </li>
             ))}
           </ol>

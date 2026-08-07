@@ -64,6 +64,21 @@ function turnStats(events: MissionEvent[]): { turns: number; processingMs: numbe
 const resumableStatuses = new Set(['paused', 'waiting_for_input'])
 const terminalPhases = new Set(['done', 'failed'])
 
+// latestExecutorProgress finds the most recent executor.progress event
+// so the phase header can show a lightweight live indicator — these
+// events fire on every byte the delegated CLI executor writes, far too
+// often to render as individual Timeline rows (TimelineSection drops
+// them), so only the latest one is surfaced here.
+function latestExecutorProgress(events: MissionEvent[]): { turns: number; tool_calls: number } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind === 'executor.progress') {
+      const { turns, tool_calls } = events[i].payload as { turns: number; tool_calls: number }
+      return { turns, tool_calls }
+    }
+  }
+  return null
+}
+
 export function MissionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -156,6 +171,7 @@ export function MissionDetail() {
   const canCancel = !terminalPhases.has(mission.phase)
 
   const { turns, processingMs } = turnStats(events)
+  const executorActivity = terminalPhases.has(mission.phase) ? null : latestExecutorProgress(events)
   // A live mission's elapsed span runs to now, not its last updated_at
   // (which only moves on a state transition, not while a turn is
   // in-flight) — otherwise "Elapsed" would understate a mission stuck
@@ -287,6 +303,12 @@ export function MissionDetail() {
               <span className="capitalize">{mission.kind}</span>
               <span>{mission.phase}</span>
               <span>{mission.status.replace(/_/g, ' ')}</span>
+              {executorActivity && (
+                <span>
+                  activity: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
+                  {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
+                </span>
+              )}
               {!terminalPhases.has(mission.phase) && mission.iteration > 0 && (
                 <span>Retries {mission.iteration}</span>
               )}

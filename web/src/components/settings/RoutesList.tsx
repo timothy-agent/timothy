@@ -206,6 +206,14 @@ export function RoutesList() {
                     {r.chain.map((c, i) => (
                       <li key={`${c.provider_id}-${c.model}-${i}`} className="truncate">
                         {i + 1}. {nameOf(c.provider_id)} / <span className="font-mono">{c.model}</span>
+                        {c.harness && (
+                          <span
+                            className="ml-1.5 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-semibold text-brand-soft-foreground"
+                            title={`Delegated to ${c.harness}`}
+                          >
+                            {c.harness}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ol>
