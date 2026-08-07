@@ -281,18 +281,20 @@ func parseOffset(command string) int {
 	return n
 }
 
+// parseBoundary recovers the boundary marker from a poll command by its
+// stable prefix rather than the printf syntax around it — the marker
+// rides as a quoted printf argument, not as the format string.
 func parseBoundary(command string) string {
-	const marker = "printf '"
-	i := strings.Index(command, marker)
+	i := strings.Index(command, pollBoundaryPrefix)
 	if i == -1 {
 		return ""
 	}
-	rest := command[i+len(marker):]
-	j := strings.Index(rest, `\n`)
+	rest := command[i:]
+	j := strings.Index(rest[len(pollBoundaryPrefix):], "---")
 	if j == -1 {
 		return ""
 	}
-	return rest[:j]
+	return rest[:len(pollBoundaryPrefix)+j+3]
 }
 
 // fakeEventSink records every AppendEvent call in order.
@@ -444,6 +446,12 @@ func TestDelegatedRunWorker_HappyPath(t *testing.T) {
 	}
 	if events.count("executor.result") != 1 {
 		t.Fatalf("executor.result count = %d, want 1", events.count("executor.result"))
+	}
+	result, _ := events.last("executor.result")
+	var resultPayload map[string]any
+	_ = json.Unmarshal(result.Payload, &resultPayload)
+	if resultPayload["status"] != "DONE" {
+		t.Fatalf("executor.result status = %v, want parsed DONE, never raw result text", resultPayload["status"])
 	}
 	spawned, _ := events.last("executor.spawned")
 	var spawnedPayload map[string]any
@@ -811,6 +819,47 @@ func shRoundTrip(quoted string) (string, error) {
 }
 
 // --- quote escaper ----------------------------------------------------------
+
+// TestBuildPollCmdRealShell runs the composed poll command through a real
+// /bin/sh against an on-disk run dir — the fake sandbox re-implements the
+// poll semantics, so only a real shell catches syntax the fake forgives
+// (a dash-leading printf format was rejected as an illegal option by
+// dash's builtin and broke every live poll before this test existed).
+func TestBuildPollCmdRealShell(t *testing.T) {
+	rdir := t.TempDir()
+	line := `{"type":"system","subtype":"init"}` + "\n"
+	if err := os.WriteFile(filepath.Join(rdir, "run.ndjson"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rdir, "exit_code"), []byte("0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rdir, "pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, boundary := buildPollCmd(rdir, "cafe0123beef", 0)
+	out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput() //nolint:gosec // G204: executing the composed command is the point of the test.
+	if err != nil {
+		// The trailing `kill -0` legitimately exits nonzero for a dead
+		// pid; only treat a shell-level failure (no output) as fatal.
+		if len(out) == 0 {
+			t.Fatalf("poll command failed: %v", err)
+		}
+	}
+	chunk, exitCode, hasExit, alive, perr := parsePollOutput(out, boundary)
+	if perr != nil {
+		t.Fatalf("parsePollOutput: %v (raw %q)", perr, out)
+	}
+	if string(chunk) != line {
+		t.Fatalf("chunk = %q, want %q", chunk, line)
+	}
+	if !hasExit || exitCode != 0 {
+		t.Fatalf("exit = (%v,%d), want (true,0)", hasExit, exitCode)
+	}
+	if alive {
+		t.Fatal("pid 999999 should not be alive")
+	}
+}
 
 // TestBuildLaunchCmdRealShell runs the composed launch command through a
 // real /bin/sh (needs setsid, present in the containerized test image) and

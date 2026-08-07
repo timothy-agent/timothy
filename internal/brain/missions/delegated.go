@@ -269,6 +269,18 @@ var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":
 // reports.
 const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met — the harness independently verifies your artifacts and verify_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes."
 
+// delegatedAllowTools/delegatedDenyTools are the delegated worker's
+// static tool surface, passed as the CLI's own allow/deny flags at
+// spawn (never interactive). The per-mission sandbox container is the
+// real boundary (D-050's rationale), so file editing, search, and
+// shell are allowed outright; git push and the web tools are denied to
+// match the native worker's surface — pushes stay human, and native
+// workers have no web tools either.
+var (
+	delegatedAllowTools = []string{"Read", "Glob", "Grep", "Edit", "Write", "MultiEdit", "Bash", "TodoWrite"}
+	delegatedDenyTools  = []string{"Bash(git push:*)", "WebFetch", "WebSearch"}
+)
+
 // runDelegated executes the D-052 protocol for one chain entry: resolve
 // credentials, build the invocation, launch detached, poll to
 // completion (or resume an in-flight run from a prior process
@@ -301,6 +313,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		PromptPath:   filepath.Join(rdir, "prompt.md"),
 		SystemAppend: system,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
+		AllowTools:   delegatedAllowTools, DenyTools: delegatedDenyTools,
 		ResultSchema: resultSchemaJSON, RunBudget: r.runBudget,
 	}
 	inv, err := adapter.BuildInvocation(spec)
@@ -522,16 +535,26 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 // could ever contain by chance.
 const pollBoundaryPrefix = "---TIMOTHY-RUN-"
 
+// buildPollCmd composes one poll exec's command and the boundary marker
+// it emits between tail content and status lines. The boundary rides as
+// a printf ARGUMENT ('%s\n' format), never as the format itself: dash's
+// printf builtin rejects a format string with a leading dash as an
+// illegal option.
+func buildPollCmd(rdir, runID string, offset int64) (cmd, boundary string) {
+	boundary = pollBoundaryPrefix + runID + "---"
+	cmd = fmt.Sprintf(
+		`cd %s && tail -c +%d run.ndjson | head -c %d; printf '%%s\n' %s; [ -f exit_code ] && printf 'EXITCODE:%%s\n' "$(cat exit_code)"; kill -0 "$(cat pid)" 2>/dev/null && printf 'ALIVE\n'`,
+		shQuote(rdir), offset+1, tailChunkCap, shQuote(boundary),
+	)
+	return cmd, boundary
+}
+
 // pollOnce runs one poll exec: tails run.ndjson from offset (capped at
 // tailChunkCap), then a boundary marker, then EXITCODE:/ALIVE status —
 // all in ONE exec so the exit_code/pid reads are consistent with the
 // tail snapshot they describe.
 func (r *delegatedRunner) pollOnce(ctx context.Context, missionID, workRoot, rdir, runID string, offset int64) (chunk []byte, exitCode int, hasExit bool, alive bool, err error) {
-	boundary := pollBoundaryPrefix + runID + "---"
-	cmd := fmt.Sprintf(
-		`cd %s && tail -c +%d run.ndjson | head -c %d; printf '%s\n'; [ -f exit_code ] && printf 'EXITCODE:%%s\n' "$(cat exit_code)"; kill -0 "$(cat pid)" 2>/dev/null && printf 'ALIVE\n'`,
-		shQuote(rdir), offset+1, tailChunkCap, boundary,
-	)
+	cmd, boundary := buildPollCmd(rdir, runID, offset)
 	var out bytes.Buffer
 	_, execErr := r.sandboxExec(ctx, missionID, workRoot, cmd, nil, pollTimeout, &out)
 	if execErr != nil {
@@ -638,7 +661,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 		}
 	}
 
-	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind)
+	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome))
 	r.recordLedger(ctx, m, entry, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "")
 	if st.resultEvent.Err != "" {
 		if isAuthFailure(st.resultEvent.Err) {
@@ -743,10 +766,13 @@ func (r *delegatedRunner) recordProgressThrottled(ctx context.Context, missionID
 	})
 }
 
-// recordResult writes the terminal executor.result event.
-func (r *delegatedRunner) recordResult(ctx context.Context, missionID string, st *pollState, start time.Time, exitCode int, ev executor.Event, parseKind string) {
+// recordResult writes the terminal executor.result event. status is
+// the PARSED verdict (DONE/RETRY/BLOCKED), never the raw result text —
+// the raw text mirrors the whole structured-output JSON and belongs in
+// the transcript, not an event field the UI and canary key on.
+func (r *delegatedRunner) recordResult(ctx context.Context, missionID string, st *pollState, start time.Time, exitCode int, ev executor.Event, parseKind, status string) {
 	payload := map[string]any{
-		"status": ev.Text, "is_error": ev.Err != "",
+		"status": status, "is_error": ev.Err != "",
 		"duration_ms": time.Since(start).Milliseconds(),
 		"exit_code":   exitCode, "parse": parseKind,
 	}

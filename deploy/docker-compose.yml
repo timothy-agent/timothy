@@ -184,7 +184,12 @@ services:
       # missions using API-key auth (ANTHROPIC_API_KEY via per-exec env,
       # D-053) work fine without ever populating this volume.
       #
-      # One-off subscription login, run once after `make sandbox-image`:
+      # One-off subscription login, run once after `make sandbox-image`.
+      # The chown comes first because compose initializes this volume
+      # through the metadata mount below (distroless, path absent from
+      # the image), which leaves a fresh volume root-owned while the
+      # CLI runs as 65534:
+      #   docker run --rm -u 0 -v timothy_executor-claude-state:/s timothy-sandbox:latest chown 65534:65534 /s
       #   docker run --rm -it -v timothy_executor-claude-state:/home/sandbox/.claude timothy-sandbox:latest claude /login
       - executor-claude-state:/statevols/claude
       # The socket this service exists to hold instead of brain.

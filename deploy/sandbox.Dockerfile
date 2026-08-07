@@ -32,7 +32,11 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @anthropic-ai/claude-code@2.1.22
 # write the shared workspace volume as the same owner. Debian's built-in
 # nobody has HOME=/nonexistent, which breaks pip/npm; give it a real,
 # writable home instead.
-RUN mkdir -p /home/sandbox && chown 65534:65534 /home/sandbox
+# .claude is pre-created and owned by the sandbox uid so the
+# executor-claude-state named volume inherits that ownership on first
+# use — an empty named volume otherwise mounts root-owned and the CLI
+# cannot write its own state (D-054).
+RUN mkdir -p /home/sandbox/.claude && chown -R 65534:65534 /home/sandbox
 ENV HOME=/home/sandbox
 # Debian's system python3 is PEP 668 externally-managed; without this,
 # `pip install` (even --user) refuses to run for a model-authored command

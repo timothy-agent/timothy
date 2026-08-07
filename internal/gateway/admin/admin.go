@@ -700,6 +700,25 @@ type RoutePatch struct {
 
 var validStrategies = map[string]bool{"ordered": true, "auto": true, "price": true, "latency": true}
 
+// validateChainHasNativeSibling rejects a non-empty chain composed
+// entirely of harness entries (D-051): missions stream their explore/
+// plan/review phases natively over the same route, so at least one
+// native entry must exist alongside any harness entry.
+func validateChainHasNativeSibling(chain []router.ChainEntry) error {
+	hasHarness, hasNative := false, false
+	for _, e := range chain {
+		if e.Harness == "" {
+			hasNative = true
+		} else {
+			hasHarness = true
+		}
+	}
+	if hasHarness && !hasNative {
+		return fmt.Errorf("chain with harness entries needs at least one native entry: explore/plan/review phases stream natively over this route")
+	}
+	return nil
+}
+
 func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) error {
 	db, err := a.db.Get()
 	if err != nil {
@@ -751,6 +770,14 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 			if err := validateHarnessWireFormat(e.Harness, driver, optMap); err != nil {
 				return fmt.Errorf("chain entry provider %s: %w", e.ProviderID, err)
 			}
+		}
+		// Harness entries serve only a mission's execute phase; explore,
+		// plan, and review always stream natively through this same
+		// route, so a chain with harness entries but no native entry is
+		// unusable by construction — reject it here instead of letting
+		// the mission park on no_route at runtime.
+		if err := validateChainHasNativeSibling(*patch.Chain); err != nil {
+			return err
 		}
 		after.Chain = *patch.Chain
 	}

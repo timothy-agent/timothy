@@ -452,9 +452,19 @@ func TestRoutePatchValidatesHarnessEntries(t *testing.T) {
 		t.Fatal("wire-incompatible provider must refuse")
 	}
 
-	valid := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet", Harness: "claude-cli"}}
+	// Harness-only chains are unusable by construction — explore/plan/
+	// review stream natively over the same route — and must refuse.
+	harnessOnly := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet", Harness: "claude-cli"}}
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &harnessOnly}); err == nil {
+		t.Fatal("harness-only chain must refuse: no native entry to serve explore/plan/review")
+	}
+
+	valid := []router.ChainEntry{
+		{ProviderID: anthropicID, Model: "sonnet", Harness: "claude-cli"},
+		{ProviderID: anthropicID, Model: "sonnet"},
+	}
 	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &valid}); err != nil {
-		t.Fatalf("valid harness entry: %v", err)
+		t.Fatalf("valid harness entry with native sibling: %v", err)
 	}
 	routes, err := adm.Routes(ctx)
 	if err != nil {
@@ -464,8 +474,8 @@ func TestRoutePatchValidatesHarnessEntries(t *testing.T) {
 		if r.Name != cat {
 			continue
 		}
-		if len(r.Chain) != 1 || r.Chain[0].Harness != "claude-cli" {
-			t.Fatalf("chain = %+v, want harness claude-cli", r.Chain)
+		if len(r.Chain) != 2 || r.Chain[0].Harness != "claude-cli" || r.Chain[1].Harness != "" {
+			t.Fatalf("chain = %+v, want harness claude-cli leading a native sibling", r.Chain)
 		}
 		return
 	}

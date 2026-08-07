@@ -9,7 +9,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown sandboxd dev canary canary-coding sandbox-image
+	brain gateway memoryd web markitdown sandboxd dev canary canary-coding canary-executor sandbox-image
 
 build:
 	$(GO_RUN) go build ./...
@@ -98,6 +98,15 @@ canary:
 # without it.
 canary-coding:
 	./scripts/canary-coding.sh
+
+# Regression gate for the delegated-executor (D-052) path: pins a
+# canary-executor route to a single claude-cli chain entry, no
+# fallback, so a broken executor fails loudly instead of silently
+# passing via native failover. Needs the stack up, a wire-compatible
+# provider configured (driver=anthropic or options.anthropic_base_url),
+# and the sandbox image built with the claude CLI (`make sandbox-image`).
+canary-executor:
+	./scripts/canary-executor.sh
 
 # Builds the per-mission sandbox image (python3/node/git/bash — see
 # deploy/sandbox.Dockerfile). Not a compose service: sandboxes are
