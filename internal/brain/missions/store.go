@@ -49,7 +49,7 @@ const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, p
 	escalation_route, prompt_overlay,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
-	explore_notes, replan_used, schedule_id, session_id, created_at, updated_at`
+	explore_notes, replan_used, schedule_id, session_id, harness, created_at, updated_at`
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
@@ -65,7 +65,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.EscalationRoute, &m.PromptOverlay,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
-		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
 	if agentID != nil {
@@ -122,9 +122,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		budgetCurrency = "USD"
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, $13) RETURNING id`,
-		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe,
+			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, $13, $14) RETURNING id`,
+		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

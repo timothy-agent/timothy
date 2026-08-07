@@ -204,3 +204,33 @@ func TestDefaultCurrencySetting(t *testing.T) {
 		t.Fatalf("DefaultCurrency after clear = %q, want USD", got)
 	}
 }
+
+// TestCodingExecutorSetting covers D-051: an unknown harness is
+// rejected, "native" normalizes to "" on write, a registered harness
+// (claude-cli) round-trips, and the default is "" (native).
+func TestCodingExecutorSetting(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if got := s.CodingExecutor(ctx); got != "" {
+		t.Fatalf("CodingExecutor default = %q, want empty (native)", got)
+	}
+
+	if err := s.SetValue(ctx, ValueCodingExecutor, "codex-cli-unregistered"); err == nil {
+		t.Fatal("unknown harness accepted")
+	}
+
+	if err := s.SetValue(ctx, ValueCodingExecutor, "claude-cli"); err != nil {
+		t.Fatalf("SetValue claude-cli: %v", err)
+	}
+	if got := s.CodingExecutor(ctx); got != "claude-cli" {
+		t.Fatalf("CodingExecutor after set = %q, want claude-cli", got)
+	}
+
+	if err := s.SetValue(ctx, ValueCodingExecutor, "native"); err != nil {
+		t.Fatalf("SetValue native: %v", err)
+	}
+	if got := s.CodingExecutor(ctx); got != "" {
+		t.Fatalf("CodingExecutor after native = %q, want empty (native normalizes to \"\")", got)
+	}
+}

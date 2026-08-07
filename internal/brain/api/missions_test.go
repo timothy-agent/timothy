@@ -17,7 +17,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -55,7 +55,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -103,7 +103,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -111,6 +111,71 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	m.ServeHTTP(w, req)
 	if w.Code != 400 {
 		t.Fatalf("DELETE against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
+	}
+}
+
+// TestMissionsCreateValidatesHarness covers D-051's create() gate:
+// harness is only valid on kind=coding, "native" normalizes to "" (the
+// stored value), an unknown harness 400s, and a coding request that
+// omits harness picks up the settings-configured default via the seam
+// — all BEFORE the store is ever reached. A request that fails this
+// validation never reaches Driver.Create; the two "passed validation"
+// cases below reach it against a degraded pool, which surfaces as
+// failMission's generic 400 too (see TestMissionsDeleteReachesStore) —
+// distinguished instead by asserting the codingExecutorDefault seam was
+// (or wasn't) invoked, the one observable difference at this layer.
+func TestMissionsCreateValidatesHarness(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+
+	post := func(codingExecutorDefault func(context.Context) string, body string) int {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := post(nil, `{"goal":"g","kind":"general","harness":"claude-cli"}`); code != 400 {
+		t.Fatalf("harness on kind=general = %d, want 400", code)
+	}
+	if code := post(nil, `{"goal":"g","kind":"coding","harness":"not-a-real-harness"}`); code != 400 {
+		t.Fatalf("unknown harness = %d, want 400", code)
+	}
+	// "native" normalizes to "" and passes validation, reaching the
+	// (degraded) store — same generic 400 failMission maps every
+	// unrecognized store error to.
+	if code := post(nil, `{"goal":"g","kind":"coding","harness":"native"}`); code != 400 {
+		t.Fatalf("harness=native = %d, want 400 (passed validation, reached degraded store)", code)
+	}
+	// A registered harness on kind=coding passes validation too.
+	if code := post(nil, `{"goal":"g","kind":"coding","harness":"claude-cli"}`); code != 400 {
+		t.Fatalf("harness=claude-cli = %d, want 400 (passed validation, reached degraded store)", code)
+	}
+	// Omitted harness on kind=coding applies the settings default via
+	// the seam.
+	defaultCalled := false
+	defaulted := func(context.Context) string { defaultCalled = true; return "claude-cli" }
+	if code := post(defaulted, `{"goal":"g","kind":"coding"}`); code != 400 {
+		t.Fatalf("omitted harness with a settings default = %d, want 400 (passed validation)", code)
+	}
+	if !defaultCalled {
+		t.Fatal("codingExecutorDefault seam not invoked for a kind=coding request with omitted harness")
+	}
+	// Omitted harness on kind=general never calls the default seam at
+	// all; general missions must stay native regardless of the setting.
+	generalCalled := false
+	trackedDefault := func(context.Context) string { generalCalled = true; return "claude-cli" }
+	if code := post(trackedDefault, `{"goal":"g","kind":"general"}`); code != 400 {
+		t.Fatalf("general with omitted harness = %d, want 400 (reached degraded store)", code)
+	}
+	if generalCalled {
+		t.Fatal("codingExecutorDefault seam invoked for a kind=general request")
 	}
 }
 
@@ -177,7 +242,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	classify := func(context.Context, string) (string, error) { return "general", nil }
 	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
@@ -210,7 +275,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -233,7 +298,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
@@ -265,7 +330,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))

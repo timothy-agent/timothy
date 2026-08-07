@@ -249,13 +249,13 @@ func validateProvider(p Provider) error {
 		// D-051: kind='cli' rows are mission-only executor providers
 		// (e.g. subscription-auth) — no chat driver is ever built for
 		// them, so they skip every chat-only check below (credential_ref
-		// shape aside) and validate driver name + wire compatibility
-		// instead.
+		// shape aside). Inherently wire-compatible: the CLI talks to its
+		// vendor's own default endpoint under subscription/oauth
+		// credentials, never a third-party anthropic-compatible one, so
+		// validateHarnessWireFormat (which governs a kind='api' row
+		// repurposed as an executor entry) does not apply here.
 		if !cliDrivers[p.Driver] {
 			return fmt.Errorf("unknown cli driver %q", p.Driver)
-		}
-		if err := validateHarnessWireFormat(p.Driver, p.Driver, p.Options); err != nil {
-			return fmt.Errorf("kind=cli provider: %w", err)
 		}
 	default:
 		return fmt.Errorf("kind must be api or cli")
@@ -269,14 +269,14 @@ func validateProvider(p Provider) error {
 	return nil
 }
 
-// validateHarnessWireFormat checks that a provider row can actually
-// speak the wire protocol harness requires (D-051), mirroring
+// validateHarnessWireFormat checks that a kind='api' provider row can
+// actually speak the wire protocol harness requires (D-051), mirroring
 // router.executorUsable's wire check exactly so admin can never write
-// a chain entry the resolve endpoint would then mark
-// wire-incompatible: claude-cli requires either driver=="anthropic" or
+// a provider the resolve endpoint would then mark wire-incompatible:
+// claude-cli requires either driver=="anthropic" or
 // options.anthropic_base_url pointing at an Anthropic-compatible
-// endpoint (e.g. a subscription-auth row whose own driver is
-// "claude-cli", never built into a chat client).
+// endpoint. Never called for kind='cli' rows — those are inherently
+// wire-compatible (D-051, see validateProvider's "cli" case).
 func validateHarnessWireFormat(harness, driver string, opts map[string]string) error {
 	switch harness {
 	case "claude-cli":
@@ -591,7 +591,6 @@ type RouteEntryStatus struct {
 	ProviderID    string   `json:"provider_id"`
 	ProviderName  string   `json:"provider_name,omitempty"`
 	ProviderKind  string   `json:"provider_kind,omitempty"`
-	Harness       string   `json:"harness,omitempty"`
 	Model         string   `json:"model"`
 	Usable        bool     `json:"usable"`
 	SkipReason    string   `json:"skip_reason,omitempty"`
@@ -625,7 +624,6 @@ func resolvedForRoute(snap *router.Snapshot, name string) ([]RouteEntryStatus, *
 			ProviderID:    d.Entry.ProviderID,
 			ProviderName:  d.ProviderName,
 			ProviderKind:  d.ProviderKind,
-			Harness:       d.Entry.Harness,
 			Model:         d.Model,
 			Usable:        d.Usable,
 			SkipReason:    d.SkipReason,
@@ -691,33 +689,18 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 }
 
 // RoutePatch reorders/replaces a route's chain, changes its strategy,
-// and/or flips it.
+// and/or flips it. Chain is raw JSON, not []router.ChainEntry directly:
+// PatchRoute decodes it itself so it can also detect (and reject) a
+// legacy "harness" key on an entry — harness selection moved to the
+// mission column (D-051), and json.Unmarshal would otherwise silently
+// drop that key into a plain {provider_id, model} entry.
 type RoutePatch struct {
-	Chain    *[]router.ChainEntry `json:"chain"`
-	Strategy *string              `json:"strategy"`
-	Enabled  *bool                `json:"enabled"`
+	Chain    *json.RawMessage `json:"chain"`
+	Strategy *string          `json:"strategy"`
+	Enabled  *bool            `json:"enabled"`
 }
 
 var validStrategies = map[string]bool{"ordered": true, "auto": true, "price": true, "latency": true}
-
-// validateChainHasNativeSibling rejects a non-empty chain composed
-// entirely of harness entries (D-051): missions stream their explore/
-// plan/review phases natively over the same route, so at least one
-// native entry must exist alongside any harness entry.
-func validateChainHasNativeSibling(chain []router.ChainEntry) error {
-	hasHarness, hasNative := false, false
-	for _, e := range chain {
-		if e.Harness == "" {
-			hasNative = true
-		} else {
-			hasHarness = true
-		}
-	}
-	if hasHarness && !hasNative {
-		return fmt.Errorf("chain with harness entries needs at least one native entry: explore/plan/review phases stream natively over this route")
-	}
-	return nil
-}
 
 func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) error {
 	db, err := a.db.Get()
@@ -743,43 +726,36 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 
 	after := before
 	if patch.Chain != nil {
+		// harnessProbe catches a legacy or mistaken "harness" key on any
+		// entry: harness selection moved to the mission column (D-051),
+		// so a chain entry is pure {provider_id, model} again — reject
+		// the write explicitly rather than silently dropping the key
+		// (router.ChainEntry has no Harness field to decode it into).
+		var harnessProbe []struct {
+			Harness string `json:"harness"`
+		}
+		if err := json.Unmarshal(*patch.Chain, &harnessProbe); err != nil {
+			return fmt.Errorf("chain: %w", err)
+		}
+		for _, e := range harnessProbe {
+			if e.Harness != "" {
+				return fmt.Errorf("chain entry harness %q rejected: harness moved to mission, not the route chain", e.Harness)
+			}
+		}
+		var chain []router.ChainEntry
+		if err := json.Unmarshal(*patch.Chain, &chain); err != nil {
+			return fmt.Errorf("chain: %w", err)
+		}
 		// Every entry must reference an existing provider — a typo'd id
 		// becomes a silent skip at resolve time otherwise. FOR UPDATE
 		// locks the referenced provider row against a concurrent Delete
-		// racing to remove it after this check passes. A harness entry
-		// (D-051) additionally validates against router.KnownHarnesses
-		// and its provider's own wire compatibility, mirroring
-		// validateHarnessWireFormat's rule for the row itself.
-		for _, e := range *patch.Chain {
-			var driver string
-			var opts []byte
-			err := tx.QueryRow(ctx, `SELECT driver, options FROM providers WHERE id = $1 FOR UPDATE`, e.ProviderID).Scan(&driver, &opts)
-			if err != nil {
+		// racing to remove it after this check passes.
+		for _, e := range chain {
+			if err := tx.QueryRow(ctx, `SELECT 1 FROM providers WHERE id = $1 FOR UPDATE`, e.ProviderID).Scan(new(int)); err != nil {
 				return fmt.Errorf("chain entry references unknown provider %s", e.ProviderID)
 			}
-			if e.Harness == "" {
-				continue
-			}
-			if !router.KnownHarnesses[e.Harness] {
-				return fmt.Errorf("chain entry harness %q is not a known harness", e.Harness)
-			}
-			var optMap map[string]string
-			if err := json.Unmarshal(opts, &optMap); err != nil {
-				return fmt.Errorf("chain entry provider %s: options: %w", e.ProviderID, err)
-			}
-			if err := validateHarnessWireFormat(e.Harness, driver, optMap); err != nil {
-				return fmt.Errorf("chain entry provider %s: %w", e.ProviderID, err)
-			}
 		}
-		// Harness entries serve only a mission's execute phase; explore,
-		// plan, and review always stream natively through this same
-		// route, so a chain with harness entries but no native entry is
-		// unusable by construction — reject it here instead of letting
-		// the mission park on no_route at runtime.
-		if err := validateChainHasNativeSibling(*patch.Chain); err != nil {
-			return err
-		}
-		after.Chain = *patch.Chain
+		after.Chain = chain
 	}
 	if patch.Strategy != nil {
 		if !validStrategies[*patch.Strategy] {

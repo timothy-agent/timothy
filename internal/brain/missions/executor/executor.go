@@ -7,6 +7,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -172,4 +173,14 @@ func Register(a Adapter) {
 func Lookup(harness string) (Adapter, bool) {
 	a, ok := registry[harness]
 	return a, ok
+}
+
+// Registered returns every registered harness name, sorted.
+func Registered() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

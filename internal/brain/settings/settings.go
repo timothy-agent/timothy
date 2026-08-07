@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -53,12 +54,17 @@ const (
 	// default to when the caller doesn't specify one; empty defers to
 	// "USD" via DefaultCurrency below.
 	ValueDefaultCurrency = "default_currency"
+	// ValueCodingExecutor names the harness a coding mission's create
+	// request defaults to when it doesn't specify one (D-051); "" (the
+	// default) means native. Never applies to kind=general missions.
+	ValueCodingExecutor = "coding_executor"
 )
 
 var knownValueKeys = map[string]bool{
 	ValueTokenBudget: true, ValueSkillsAllowlist: true,
 	ValueGitAuthorName: true, ValueGitAuthorEmail: true,
 	ValueSensitiveToolRoute: true, ValueDefaultCurrency: true,
+	ValueCodingExecutor: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -146,6 +152,12 @@ func (s *Store) DefaultCurrency(ctx context.Context) string {
 		return v
 	}
 	return "USD"
+}
+
+// CodingExecutor returns the configured default harness for a coding
+// mission's create request, "" (native) when unset.
+func (s *Store) CodingExecutor(ctx context.Context) string {
+	return s.Value(ctx, ValueCodingExecutor)
 }
 
 // SkillAllowed reports whether the allowlist admits a pack name;
@@ -248,6 +260,13 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 		value = strings.ToUpper(value)
 		if !allowedCurrencies[value] {
 			return fmt.Errorf("%s: unsupported currency code %q", key, value)
+		}
+	}
+	if key == ValueCodingExecutor && value != "" {
+		if value == "native" {
+			value = ""
+		} else if _, ok := executor.Lookup(value); !ok {
+			return fmt.Errorf("%s: unknown harness %q", key, value)
 		}
 	}
 	return s.write(ctx, key, s.Value(ctx, key), value)

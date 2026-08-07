@@ -730,9 +730,9 @@ func TestProvidersListingNeverLeaksSecrets(t *testing.T) {
 }
 
 // resolveSnapshot builds a "coding" route mixing a plain chat entry
-// with a claude-cli harness entry pointing at a subscription-auth
-// kind='cli' row (D-051's shape), plus a chat-only route for the
-// harness-absent case.
+// with a subscription-auth kind='cli' row (D-051's shape — harness is
+// no longer a chain field; the executor axis is selected by the
+// resolve endpoint's ?harness= query param instead).
 func resolveSnapshot(t *testing.T) *router.Snapshot {
 	t.Helper()
 	rows := []router.ProviderRow{
@@ -745,25 +745,29 @@ func resolveSnapshot(t *testing.T) *router.Snapshot {
 	routes := []router.RouteRow{
 		{Name: "coding", Enabled: true, Chain: []router.ChainEntry{
 			{ProviderID: "p1", Model: "sonnet"},
-			{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
 	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
 	return snap
 }
 
-func resolveReq(name string) *http.Request {
-	req := httptest.NewRequest(http.MethodGet, "/v1/routes/"+name+"/resolve", nil)
+func resolveReq(name, harness string) *http.Request {
+	url := "/v1/routes/" + name + "/resolve"
+	if harness != "" {
+		url += "?harness=" + harness
+	}
+	req := httptest.NewRequest(http.MethodGet, url, nil)
 	req.SetPathValue("name", name)
 	return req
 }
 
-func TestResolveRouteMixedChain(t *testing.T) {
+func TestResolveRouteChatAxisDefault(t *testing.T) {
 	t.Parallel()
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding"))
+	a.handleResolveRoute(w, resolveReq("coding", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -779,21 +783,51 @@ func TestResolveRouteMixedChain(t *testing.T) {
 		t.Fatalf("out = %+v", out)
 	}
 	api := out.Entries[0]
-	if api.Harness != "" || !api.Usable || api.SkipReason != "" {
+	if !api.Usable || api.SkipReason != "" {
 		t.Fatalf("api entry = %+v", api)
 	}
+	// kind='cli' row has no chat driver built for it at all.
+	if out.Entries[1].Usable {
+		t.Fatalf("cli-kind entry usable on chat axis: %+v", out.Entries[1])
+	}
+	if strings.Contains(w.Body.String(), `"sk"`) {
+		t.Fatalf("resolved secret leaked into resolve response: %s", w.Body.String())
+	}
+}
+
+func TestResolveRouteExecutorAxis(t *testing.T) {
+	t.Parallel()
+	a, _ := newAPI(resolveSnapshot(t))
+
+	w := httptest.NewRecorder()
+	a.handleResolveRoute(w, resolveReq("coding", "claude-cli"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var out struct {
+		Route   string              `json:"route"`
+		Entries []resolveRouteEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Entries) != 2 {
+		t.Fatalf("out = %+v", out)
+	}
 	exec := out.Entries[1]
-	if exec.Harness != "claude-cli" || !exec.Usable || exec.SkipReason != "" {
+	if !exec.Usable || exec.SkipReason != "" {
 		t.Fatalf("executor entry = %+v", exec)
 	}
 	if exec.CredentialRef != "subscription" {
 		t.Fatalf("credential_ref = %q, want name only", exec.CredentialRef)
 	}
-	if exec.BaseURL != "http://localhost:9999" {
-		t.Fatalf("base_url = %q, want anthropic_base_url surfaced", exec.BaseURL)
-	}
-	if strings.Contains(w.Body.String(), "sk") {
-		t.Fatalf("resolved secret leaked into resolve response: %s", w.Body.String())
+	// A kind='cli' row never gets the anthropic_base_url override
+	// (bugfix): it spawns its own CLI against the vendor's default
+	// endpoint under subscription/oauth credentials, and BuildInvocation
+	// rejects any BaseURL under those auth modes.
+	if exec.BaseURL != "" {
+		t.Fatalf("base_url = %q, want empty for a kind='cli' row", exec.BaseURL)
 	}
 }
 
@@ -805,14 +839,14 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 	}
 	routes := []router.RouteRow{
 		{Name: "coding-exec", Enabled: true, Chain: []router.ChainEntry{
-			{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
 	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
 	a, _ := newAPI(snap)
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding-exec"))
+	a.handleResolveRoute(w, resolveReq("coding-exec", "claude-cli"))
 	var out struct {
 		Entries []resolveRouteEntry `json:"entries"`
 	}
@@ -824,47 +858,33 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 	}
 }
 
-func TestResolveRouteUnknownHarnessInStoredData(t *testing.T) {
+func TestResolveRouteUnknownHarnessParamRejected(t *testing.T) {
 	t.Parallel()
-	rows := []router.ProviderRow{
-		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
-			CredentialRef: "subscription", Enabled: true},
-	}
-	routes := []router.RouteRow{
-		{Name: "coding-exec", Enabled: true, Chain: []router.ChainEntry{
-			{ProviderID: "p2", Model: "m", Harness: "codex-cli"},
-		}},
-	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
-	a, _ := newAPI(snap)
+	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding-exec"))
-	var out struct {
-		Entries []resolveRouteEntry `json:"entries"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &out)
-	if len(out.Entries) != 1 || out.Entries[0].Usable || out.Entries[0].SkipReason != "unknown harness" {
-		t.Fatalf("entries = %+v", out.Entries)
+	a.handleResolveRoute(w, resolveReq("coding", "codex-cli"))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 for unknown harness param", w.Code)
 	}
 }
 
 func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 	t.Parallel()
 	rows := []router.ProviderRow{
-		{ID: "p2", Name: "grok-sub", Kind: "cli", Driver: "openaicompat",
+		{ID: "p2", Name: "grok-sub", Kind: "api", Driver: "openaicompat",
 			CredentialRef: "subscription", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "coding-exec", Enabled: true, Chain: []router.ChainEntry{
-			{ProviderID: "p2", Model: "m", Harness: "claude-cli"},
+			{ProviderID: "p2", Model: "m"},
 		}},
 	}
 	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
 	a, _ := newAPI(snap)
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding-exec"))
+	a.handleResolveRoute(w, resolveReq("coding-exec", "claude-cli"))
 	var out struct {
 		Entries []resolveRouteEntry `json:"entries"`
 	}
@@ -879,7 +899,7 @@ func TestResolveRouteNotFound(t *testing.T) {
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("no-such-route"))
+	a.handleResolveRoute(w, resolveReq("no-such-route", ""))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("code = %d, want 404", w.Code)
 	}
@@ -890,7 +910,7 @@ func TestResolveRouteConfigUnavailable(t *testing.T) {
 	a, _ := newAPI(nil)
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding"))
+	a.handleResolveRoute(w, resolveReq("coding", ""))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code = %d, want 503", w.Code)
 	}

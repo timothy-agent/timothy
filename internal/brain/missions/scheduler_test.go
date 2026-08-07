@@ -94,10 +94,12 @@ func TestResolveTemplateDefaults(t *testing.T) {
 		name        string
 		template    MissionTemplate
 		resolve     AgentResolver
+		codingExec  func(context.Context) string
 		wantRoute   string
 		wantReview  string
 		wantBudget  *float64
 		wantOverlay string
+		wantHarness string
 	}{
 		{
 			name:       "nil resolver falls back to the default role's route",
@@ -105,6 +107,33 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			resolve:    nil,
 			wantRoute:  "default",
 			wantReview: "default",
+		},
+		{
+			name:        "coding template with no harness applies the settings default",
+			template:    MissionTemplate{Goal: "g", Kind: "coding", AgentID: "a1"},
+			resolve:     nil,
+			codingExec:  func(context.Context) string { return "claude-cli" },
+			wantRoute:   "default",
+			wantReview:  "default",
+			wantHarness: "claude-cli",
+		},
+		{
+			name:        "coding template's own harness is never overwritten",
+			template:    MissionTemplate{Goal: "g", Kind: "coding", AgentID: "a1", Harness: "claude-cli"},
+			resolve:     nil,
+			codingExec:  func(context.Context) string { return "" },
+			wantRoute:   "default",
+			wantReview:  "default",
+			wantHarness: "claude-cli",
+		},
+		{
+			name:        "general template never applies the coding executor default",
+			template:    MissionTemplate{Goal: "g", Kind: "general", AgentID: "a1"},
+			resolve:     nil,
+			codingExec:  func(context.Context) string { return "claude-cli" },
+			wantRoute:   "default",
+			wantReview:  "default",
+			wantHarness: "",
 		},
 		{
 			name:     "unresolved agent id falls back to the default role's route",
@@ -141,7 +170,7 @@ func TestResolveTemplateDefaults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			routeForRole := func(context.Context, string) string { return "default" }
-			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole)
+			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, tc.codingExec)
 			if got.Route != tc.wantRoute {
 				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
 			}
@@ -155,6 +184,9 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			}
 			if overlay != tc.wantOverlay {
 				t.Errorf("overlay = %q, want %q", overlay, tc.wantOverlay)
+			}
+			if got.Harness != tc.wantHarness {
+				t.Errorf("Harness = %q, want %q", got.Harness, tc.wantHarness)
 			}
 		})
 	}

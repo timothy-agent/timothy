@@ -53,14 +53,19 @@ type Schedule struct {
 // MissionTemplate is applied verbatim as a new mission's initial
 // columns each time its schedule fires.
 type MissionTemplate struct {
-	Goal          string   `json:"goal"`
-	Kind          string   `json:"kind"`
-	AgentID       string   `json:"agent_id"`
-	Route         string   `json:"route"`
-	ReviewRoute   string   `json:"review_route"`
-	MaxIterations   int      `json:"max_iterations"`
-	BudgetAmount    *float64 `json:"budget_amount,omitempty"`
-	BudgetCurrency  string   `json:"budget_currency,omitempty"`
+	Goal           string   `json:"goal"`
+	Kind           string   `json:"kind"`
+	AgentID        string   `json:"agent_id"`
+	Route          string   `json:"route"`
+	ReviewRoute    string   `json:"review_route"`
+	MaxIterations  int      `json:"max_iterations"`
+	BudgetAmount   *float64 `json:"budget_amount,omitempty"`
+	BudgetCurrency string   `json:"budget_currency,omitempty"`
+	// Harness selects the execution strategy for a coding mission's
+	// worker turns (D-051); empty applies the settings default at fire
+	// time via resolveTemplateDefaults, same precedence as create()'s
+	// own handling of an omitted request field.
+	Harness string `json:"harness,omitempty"`
 	// AutoApproveSafe defaults true for a scheduled mission, same as
 	// api/missions.go's create handler — a mission fired unattended
 	// needs the same standing shell approval a UI-created one gets by
@@ -98,27 +103,30 @@ type AgentResolver func(ctx context.Context, agentID string) (AgentDefaults, boo
 // platform/migrate.go idiom rather than introducing a second
 // scheduling paradigm).
 type Scheduler struct {
-	db           *pgpool.Pool
-	missions     *Store
-	resolve      AgentResolver
-	enabled      func(ctx context.Context) bool
-	routeForRole func(context.Context, string) string
-	log          *slog.Logger
+	db                    *pgpool.Pool
+	missions              *Store
+	resolve               AgentResolver
+	enabled               func(ctx context.Context) bool
+	routeForRole          func(context.Context, string) string
+	codingExecutorDefault func(context.Context) string
+	log                   *slog.Logger
 }
 
 // NewScheduler wires the scheduler with the agent resolver
 // createFromTemplate uses to fill in missing route/review_route/
 // budget/prompt_overlay at fire time, the scheduler_enabled feature
-// switch (D-032) that tick checks first, and routeForRole (D-049) for
+// switch (D-032) that tick checks first, routeForRole (D-049) for
 // the "default" system role's route when an agent's own route is also
-// empty — nil-safe on all three: a nil resolve leaves an unresolved
-// AgentID's fields at whatever the template already specified, a nil
-// enabled defaults every tick to enabled (degrade open, since a
-// config-read hiccup pausing every schedule silently would be worse
-// than one that keeps firing), and a nil/unbound routeForRole leaves
-// the route "".
-func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, log *slog.Logger) *Scheduler {
-	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, log: log}
+// empty, and codingExecutorDefault (D-051) for a coding template that
+// omits harness — nil-safe on all four: a nil resolve leaves an
+// unresolved AgentID's fields at whatever the template already
+// specified, a nil enabled defaults every tick to enabled (degrade
+// open, since a config-read hiccup pausing every schedule silently
+// would be worse than one that keeps firing), a nil/unbound
+// routeForRole leaves the route "", and a nil codingExecutorDefault
+// leaves harness at whatever the template specified (native if empty).
+func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, codingExecutorDefault func(context.Context) string, log *slog.Logger) *Scheduler {
+	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, codingExecutorDefault: codingExecutorDefault, log: log}
 }
 
 // Run ticks forever until ctx is done. Double-fire protection across
@@ -355,17 +363,17 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // lazily the first time Advance/Drive touches it (see driver.go's
 // ensureProvisioned).
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole)
+	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.codingExecutorDefault)
 	spec, _ := json.Marshal(Spec{})
 	budgetCurrency := t.BudgetCurrency
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute,
-		promptOverlay, t.AutoApproveSafe, spec, sc.ID)
+		promptOverlay, t.AutoApproveSafe, spec, sc.ID, t.Harness)
 	return err
 }
 
@@ -374,10 +382,12 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 // a real pgx.Tx: an empty route/review_route/budget is filled from the
 // resolved agent's current defaults (nil-safe — a nil resolve, or one
 // that reports ok=false, leaves the template exactly as given except
-// for the final default-role fallback), and the resolved agent's
-// prompt overlay is returned separately since MissionTemplate itself
-// carries no such field.
-func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string) (MissionTemplate, string) {
+// for the final default-role fallback), the resolved agent's prompt
+// overlay is returned separately since MissionTemplate itself carries
+// no such field, and a coding template that omits harness gets the
+// settings default (D-051) — mirrors api/missions.go create()'s own
+// precedence so a scheduler-fired mission inherits it too.
+func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, codingExecutorDefault func(context.Context) string) (MissionTemplate, string) {
 	promptOverlay := ""
 	if resolve != nil {
 		if defaults, ok := resolve(ctx, t.AgentID); ok {
@@ -402,6 +412,9 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 	}
 	if t.ReviewRoute == "" {
 		t.ReviewRoute = defaultRoute
+	}
+	if t.Kind == "coding" && t.Harness == "" && codingExecutorDefault != nil {
+		t.Harness = codingExecutorDefault(ctx)
 	}
 	return t, promptOverlay
 }

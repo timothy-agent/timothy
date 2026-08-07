@@ -173,39 +173,6 @@ describe('RouteEdit ordered pipeline', () => {
   })
 })
 
-describe('RouteEdit harness', () => {
-  it('shows a harness badge on a resolved chain entry with harness set', async () => {
-    renderRoute('default', {
-      ...orderedRoute,
-      resolved: [
-        { ...orderedRoute.resolved![0], harness: 'claude-cli' },
-        orderedRoute.resolved![1],
-      ],
-    })
-    const cards = await screen.findAllByTestId('pipeline-card')
-    expect(cards[0]).toHaveTextContent('claude-cli')
-    expect(cards[1]).not.toHaveTextContent('claude-cli')
-  })
-
-  it('disables Claude Code in the harness picker for a wire-incompatible provider', async () => {
-    renderRoute('default')
-    await screen.findByTestId('pipeline')
-    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
-    fireEvent.click(screen.getByRole('option', { name: 'grok' }))
-    fireEvent.click(screen.getByRole('combobox', { name: 'Harness' }))
-    expect(screen.getByRole('option', { name: 'Claude Code' })).toHaveAttribute('data-disabled')
-  })
-
-  it('leaves Claude Code enabled for an anthropic-driver provider', async () => {
-    renderRoute('default')
-    await screen.findByTestId('pipeline')
-    fireEvent.click(screen.getByRole('combobox', { name: 'Provider' }))
-    fireEvent.click(screen.getByRole('option', { name: 'anthropic' }))
-    fireEvent.click(screen.getByRole('combobox', { name: 'Harness' }))
-    expect(screen.getByRole('option', { name: 'Claude Code' })).not.toHaveAttribute('data-disabled')
-  })
-})
-
 describe('RouteEdit scored pipeline', () => {
   it('renders the resolved order with score bars and no reorder controls', async () => {
     renderRoute('summarize')

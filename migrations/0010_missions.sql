@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- agent lookup later without risking a surprise prompt change
     -- mid-mission if the agent row is edited while the mission runs.
     prompt_overlay        text NOT NULL DEFAULT '',
+    -- Harness snapshots the operator's execution-strategy choice for a
+    -- coding mission's worker turns at create time, never re-read from
+    -- settings at dispatch. "" is native; "claude-cli" (etc) names a
+    -- registered delegated executor (internal/brain/missions/executor).
+    harness               text NOT NULL DEFAULT '',
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
     -- a real session_id uuid FK -- a mission has no chat session of its

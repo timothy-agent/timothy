@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Delegated-executor canary: configures a "canary-executor" route whose
-# chain leads with a claude-cli harness entry (plus the mandatory native
-# sibling that serves explore/plan/review), runs one coding mission
-# against it end-to-end, and asserts the D-052 executor protocol's own
-# contract — executor.spawned/executor.result events actually fire, the
-# CLI subprocess produced real usage, and the mission still went through
-# LLM review and harness verification like any other coding mission.
-# A native-served execute phase cannot quietly pass: the assertions
-# demand executor.spawned and exactly one executor.result, so this
-# canary fails loudly the moment the executor path itself breaks.
+# Delegated-executor canary: configures a "canary-executor" route with
+# a single native provider/model chain entry, creates a coding mission
+# against it with harness=claude-cli (D-051: harness is a mission
+# column, not a chain entry), and asserts the D-052 executor protocol's
+# own contract — executor.spawned/executor.result events actually fire,
+# the CLI subprocess produced real usage, and the mission still went
+# through LLM review and harness verification like any other coding
+# mission. A native-served execute phase cannot quietly pass: the
+# assertions demand executor.spawned and exactly one executor.result,
+# so this canary fails loudly the moment the executor path itself breaks.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -56,8 +56,9 @@ auth=(-H "Authorization: Bearer ${TIMOTHY_API_TOKEN}" -H "Content-Type: applicat
 #
 # claude-cli's wire contract (D-051, validateHarnessWireFormat) accepts
 # a provider whose driver=="anthropic" or whose options carry
-# anthropic_base_url — mirrored here exactly so this never configures a
-# chain entry the gateway's own admin PATCH would then reject.
+# anthropic_base_url — mirrored here exactly so this never resolves the
+# executor axis to a provider the gateway would then mark
+# wire-incompatible.
 echo "canary-executor: discovering a wire-compatible provider"
 providers_resp="$(curl -sf "${auth[@]}" "${BASE_URL}/v1/admin/providers")"
 provider_id="$(PROVIDERS_JSON="${providers_resp}" python3 <<'PY'
@@ -95,18 +96,17 @@ else
   echo "canary-executor: route ${ROUTE_NAME} already exists"
 fi
 
-# The chain needs a native sibling: explore/plan/review phases stream
-# natively over this same route (harness entries serve only execute),
-# and the gateway rejects a harness-only chain outright. Silent
-# fail-over to native during execute cannot mask an executor break —
-# the assertions below demand executor.spawned and exactly one
-# executor.result, so a native-served execute phase still fails the
-# canary loudly.
+# A single native chain entry (D-051 rework: harness is no longer a
+# chain field). explore/plan/review always stream natively over this
+# same route; execute alone dispatches to the harness named on the
+# mission itself. Silent fail-over to native during execute cannot mask
+# an executor break — the assertions below demand executor.spawned and
+# exactly one executor.result, so a native-served execute phase still
+# fails the canary loudly.
 chain_json="$(PROVIDER_ID="${provider_id}" MODEL="${EXECUTOR_MODEL}" python3 <<'PY'
 import json, os
 pid, model = os.environ["PROVIDER_ID"], os.environ["MODEL"]
 print(json.dumps([
-    {"provider_id": pid, "model": model, "harness": "claude-cli"},
     {"provider_id": pid, "model": model},
 ]))
 PY
@@ -129,7 +129,7 @@ echo "canary-executor: seeding fixture repo at ${FIXTURE} (inside brain)"
 # --- 4. create the mission and poll it (same handling as canary-coding.sh) ---
 echo "canary-executor: creating mission against ${BASE_URL}"
 create_resp="$(curl -sf "${auth[@]}" -X POST "${BASE_URL}/v1/missions" \
-  -d "{\"goal\": \"${GOAL}\", \"kind\": \"coding\", \"repo_path\": \"${FIXTURE}\", \"route\": \"${ROUTE_NAME}\"}")"
+  -d "{\"goal\": \"${GOAL}\", \"kind\": \"coding\", \"repo_path\": \"${FIXTURE}\", \"route\": \"${ROUTE_NAME}\", \"harness\": \"claude-cli\"}")"
 id="$(echo "${create_resp}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "canary-executor: mission ${id}"
 

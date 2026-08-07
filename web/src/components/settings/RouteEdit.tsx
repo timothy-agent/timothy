@@ -150,18 +150,6 @@ export function RouteEdit() {
 // picker to free-text entry — declared model ids never collide with it.
 const customModel = '·custom·'
 
-// harnessWireOK mirrors the gateway's validateHarnessWireFormat for
-// claude-cli (D-051): driver "anthropic", or any driver with
-// options.anthropic_base_url set (a subscription-auth cli row talking
-// the Anthropic wire format). Kept in sync with
-// internal/gateway/admin/admin.go's validateHarnessWireFormat — the
-// server is the actual authority and rejects the rest with its own
-// error surfaced through the existing error path.
-function harnessWireOK(provider?: AdminProvider): boolean {
-  if (!provider) return false
-  return provider.driver === 'anthropic' || !!provider.options?.anthropic_base_url
-}
-
 function AddChainEntry({
   providers,
   onAdd,
@@ -172,11 +160,9 @@ function AddChainEntry({
   const [providerID, setProviderID] = useState('')
   const [model, setModel] = useState('')
   const [manual, setManual] = useState(false)
-  const [harness, setHarness] = useState('')
 
   const selected = providers.find((x) => x.id === providerID)
   const declared = selected?.models.map((m) => m.id) ?? []
-  const claudeCliDisabled = !harnessWireOK(selected)
 
   return (
     <Field label="Add a provider to this chain">
@@ -234,32 +220,12 @@ function AddChainEntry({
             </SelectContent>
           </Select>
         )}
-        <Select value={harness || 'native'} onValueChange={(v) => setHarness(v === 'native' ? '' : v)}>
-          <SelectTrigger className="h-10 w-36" aria-label="Harness">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="native">Native</SelectItem>
-            <SelectItem
-              value="claude-cli"
-              disabled={claudeCliDisabled}
-              title={
-                claudeCliDisabled
-                  ? 'This provider cannot speak the Anthropic wire format claude-cli requires'
-                  : undefined
-              }
-            >
-              Claude Code
-            </SelectItem>
-          </SelectContent>
-        </Select>
         <Button
           variant="outline"
           disabled={!providerID || !model}
           onClick={() => {
-            onAdd({ provider_id: providerID, model, ...(harness ? { harness } : {}) })
+            onAdd({ provider_id: providerID, model })
             setModel('')
-            setHarness('')
           }}
         >
           Add

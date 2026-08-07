@@ -851,6 +851,30 @@ export interface CreateMissionInput {
   budget_amount?: number
   budget_currency?: string
   auto_approve_safe?: boolean
+  // harness names the delegated coding-CLI executor a coding mission
+  // runs under — omit (or "") to apply the settings default,
+  // "native" to force the built-in agent loop. Only valid when
+  // kind === 'coding'.
+  harness?: string
+}
+
+// ExecutorOption is one registered harness's usability on a given
+// route (GET /v1/missions/executor-options) — usable ones carry the
+// provider/model they'd resolve to, unusable ones a reason why not.
+export interface ExecutorOption {
+  harness: string
+  usable: boolean
+  provider_name?: string
+  model?: string
+  reason?: string
+}
+
+export async function getMissionExecutorOptions(route?: string): Promise<ExecutorOption[]> {
+  const qs = route ? `?route=${encodeURIComponent(route)}` : ''
+  const { options } = await request<{ options: ExecutorOption[] }>(
+    `/v1/missions/executor-options${qs}`,
+  )
+  return options ?? []
 }
 
 // listMissions returns every mission by default; opts narrows to one

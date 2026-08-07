@@ -830,10 +830,11 @@ func TestStickyPrefersChainMemberOnly(t *testing.T) {
 	}
 }
 
-// harnessSnapshot builds a chat route with one harness (mission-only)
-// entry mixed into an otherwise normal chain, plus a subscription-auth
-// row with no chat driver at all — the shape a claude-cli executor
-// entry actually takes (D-051).
+// harnessSnapshot builds a chat route whose chain is pure
+// {provider_id, model} entries (D-051 rework — harness is no longer a
+// chain field), plus a subscription-auth row with no chat driver at
+// all — the shape a claude-cli executor entry actually takes when
+// ResolveRoute is called with a harness.
 func harnessSnapshot(t *testing.T) *Snapshot {
 	t.Helper()
 	provRows := []ProviderRow{
@@ -845,64 +846,22 @@ func harnessSnapshot(t *testing.T) *Snapshot {
 	routeRows := []RouteRow{
 		{Name: "coding", Enabled: true, Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "sonnet"},
-			{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 	return snap
 }
 
-func TestResolveSkipsHarnessEntryForChat(t *testing.T) {
+func TestResolveRouteMixedChainNativeAxis(t *testing.T) {
 	t.Parallel()
 	snap := harnessSnapshot(t)
 
-	attempts, err := snap.Resolve("coding", "", Sticky{})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got := attemptNames(attempts); got != "anthropic/sonnet" {
-		t.Fatalf("attempts = %s, want harness entry excluded", got)
-	}
-}
-
-func TestResolveStickyOnHarnessEntryNotHonored(t *testing.T) {
-	t.Parallel()
-	snap := harnessSnapshot(t)
-
-	// A sticky pointing at the harness entry must never be served to
-	// chat — entryGateHarness rejects it the same as any other chain
-	// member, falling through to the plain chat entry.
-	attempts, err := snap.Resolve("coding", "", Sticky{ProviderName: "claude-sub", Model: "claude-sonnet-4"})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got := attemptNames(attempts); got != "anthropic/sonnet" {
-		t.Fatalf("attempts = %s, want sticky-on-harness ignored", got)
-	}
-}
-
-func TestResolveDetailMarksHarnessEntryUnusable(t *testing.T) {
-	t.Parallel()
-	snap := harnessSnapshot(t)
-
-	detail := snap.ResolveDetail("coding")
-	if len(detail) != 2 {
-		t.Fatalf("detail len = %d, want 2", len(detail))
-	}
-	harnessEntry := detail[1]
-	if harnessEntry.Usable {
-		t.Fatalf("harness entry usable for chat: %+v", harnessEntry)
-	}
-	if harnessEntry.SkipReason != "harness executor (mission-only)" {
-		t.Fatalf("skip reason = %q", harnessEntry.SkipReason)
-	}
-}
-
-func TestResolveRouteMixedChain(t *testing.T) {
-	t.Parallel()
-	snap := harnessSnapshot(t)
-
-	entries, ok := snap.ResolveRoute("coding")
+	// harness == "" evaluates every entry on the chat axis: the
+	// subscription-auth row (kind='cli', no chat driver built) is
+	// correctly unusable for chat, not because of any harness field but
+	// because it's not in the chat registry at all.
+	entries, ok := snap.ResolveRoute("coding", "")
 	if !ok {
 		t.Fatalf("ResolveRoute: route not found")
 	}
@@ -910,22 +869,41 @@ func TestResolveRouteMixedChain(t *testing.T) {
 		t.Fatalf("entries len = %d, want 2", len(entries))
 	}
 	api := entries[0]
-	if api.Harness != "" || !api.Usable || api.SkipReason != "" {
+	if !api.Usable || api.SkipReason != "" {
 		t.Fatalf("api entry = %+v", api)
 	}
-	if api.BaseURL != "" {
-		t.Fatalf("api entry base_url = %q, want provider's own (empty here)", api.BaseURL)
+	if entries[1].Usable {
+		t.Fatalf("cli-kind entry usable on the chat axis: %+v", entries[1])
 	}
+}
 
+func TestResolveRouteMixedChainExecutorAxis(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+
+	// harness != "" evaluates every entry on the executor axis instead:
+	// the plain api/anthropic row is now unusable (no credential
+	// resolution issue — executorUsable just applies a different rule),
+	// the subscription row is usable.
+	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	if !ok {
+		t.Fatalf("ResolveRoute: route not found")
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
+	}
 	exec := entries[1]
-	if exec.Harness != "claude-cli" || !exec.Usable || exec.SkipReason != "" {
+	if !exec.Usable || exec.SkipReason != "" {
 		t.Fatalf("executor entry = %+v, want usable claude-cli", exec)
 	}
 	if exec.CredentialRef != "subscription" {
 		t.Fatalf("executor credential_ref = %q, want a name only", exec.CredentialRef)
 	}
-	if exec.BaseURL != "http://localhost:9999" {
-		t.Fatalf("executor base_url = %q, want anthropic_base_url surfaced", exec.BaseURL)
+	// A kind='cli' row never gets the anthropic_base_url override
+	// (bugfix): it spawns its own CLI against the vendor's default
+	// endpoint under subscription/oauth credentials.
+	if exec.BaseURL != "" {
+		t.Fatalf("executor base_url = %q, want empty for a kind='cli' row", exec.BaseURL)
 	}
 }
 
@@ -937,12 +915,12 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 	}
 	routeRows := []RouteRow{
 		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
-			{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
-	entries, ok := snap.ResolveRoute("coding-exec")
+	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -951,46 +929,33 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 	}
 }
 
-func TestResolveRouteUnknownHarness(t *testing.T) {
+func TestResolveRouteUnknownHarnessParam(t *testing.T) {
 	t.Parallel()
-	provRows := []ProviderRow{
-		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
-			CredentialRef: "subscription", Enabled: true},
-	}
-	routeRows := []RouteRow{
-		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
-			// Simulates stale/hand-edited stored data naming a harness the
-			// gateway no longer (or not yet) recognizes.
-			{ProviderID: "p2", Model: "m", Harness: "codex-cli"},
-		}},
-	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-
-	entries, ok := snap.ResolveRoute("coding-exec")
-	if !ok || len(entries) != 1 {
-		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
-	}
-	if entries[0].Usable || entries[0].SkipReason != "unknown harness" {
-		t.Fatalf("entry = %+v, want unknown harness", entries[0])
+	snap := harnessSnapshot(t)
+	// An unknown harness name in the query param itself is a hard
+	// "route not found" — the caller (gateway API layer) turns this
+	// into a 400, distinct from an existing route with an unusable entry.
+	if _, ok := snap.ResolveRoute("coding", "codex-cli"); ok {
+		t.Fatalf("ResolveRoute: want ok=false for unknown harness param")
 	}
 }
 
 func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
-		// openaicompat driver, no anthropic_base_url set: claude-cli
-		// cannot speak this provider's wire format.
-		{ID: "p2", Name: "grok-sub", Kind: "cli", Driver: "openaicompat",
+		// kind='api', openaicompat driver, no anthropic_base_url set:
+		// claude-cli cannot speak this provider's wire format.
+		{ID: "p2", Name: "grok-sub", Kind: "api", Driver: "openaicompat",
 			CredentialRef: "subscription", Enabled: true},
 	}
 	routeRows := []RouteRow{
 		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
-			{ProviderID: "p2", Model: "m", Harness: "claude-cli"},
+			{ProviderID: "p2", Model: "m"},
 		}},
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
-	entries, ok := snap.ResolveRoute("coding-exec")
+	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -999,10 +964,39 @@ func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 	}
 }
 
+func TestResolveRouteCLIKindInherentlyWireCompatible(t *testing.T) {
+	t.Parallel()
+	// A kind='cli' row with no anthropic_base_url set must still resolve
+	// usable on the executor axis: it spawns claude-cli against the
+	// vendor's own default endpoint under subscription/oauth
+	// credentials, never a third-party anthropic-compatible one.
+	provRows := []ProviderRow{
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p2", Model: "m"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if !entries[0].Usable || entries[0].SkipReason != "" {
+		t.Fatalf("entry = %+v, want usable with no skip reason", entries[0])
+	}
+	if entries[0].BaseURL != "" {
+		t.Fatalf("entry base_url = %q, want empty for a kind='cli' row", entries[0].BaseURL)
+	}
+}
+
 func TestResolveRouteUnknownRoute(t *testing.T) {
 	t.Parallel()
 	snap := harnessSnapshot(t)
-	if _, ok := snap.ResolveRoute("no-such-route"); ok {
+	if _, ok := snap.ResolveRoute("no-such-route", ""); ok {
 		t.Fatalf("ResolveRoute: want ok=false for unknown route")
 	}
 }

@@ -48,9 +48,13 @@ func TestValidateProviderRejectsInvalidRequestTimeout(t *testing.T) {
 }
 
 // TestValidateProviderCLIKind covers D-051's kind='cli' branch: a
-// mission-only executor provider validates driver name + wire
-// compatibility instead of the chat drivers whitelist, and never
-// requires a chat-serving base_url.
+// mission-only executor provider validates driver name only, never a
+// chat-serving base_url or wire-format compatibility — it's inherently
+// wire-compatible, spawning its own CLI against the vendor's default
+// endpoint under subscription/oauth credentials (bugfix: the wire
+// check that requires anthropic_base_url only applies to a kind='api'
+// row repurposed as an executor entry, never to kind='cli' itself, or
+// no valid subscription/oauth config could ever pass validation).
 func TestValidateProviderCLIKind(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -59,12 +63,11 @@ func TestValidateProviderCLIKind(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "claude-cli driver requires anthropic_base_url",
-			p:       Provider{Name: "p", Kind: "cli", Driver: "claude-cli"},
-			wantErr: "anthropic_base_url",
+			name: "claude-cli driver with no anthropic_base_url passes (subscription/oauth, own default endpoint)",
+			p:    Provider{Name: "p", Kind: "cli", Driver: "claude-cli"},
 		},
 		{
-			name: "claude-cli driver with anthropic_base_url passes",
+			name: "claude-cli driver with anthropic_base_url still passes",
 			p: Provider{Name: "p", Kind: "cli", Driver: "claude-cli",
 				Options: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
 		},

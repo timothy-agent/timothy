@@ -76,12 +76,4 @@ describe('RoutesList serving states', () => {
     renderList()
     expect(await screen.findByText('stats loading…')).toBeInTheDocument()
   })
-
-  it('shows a harness chip on a chain entry with harness set', async () => {
-    vi.mocked(listRoutes).mockResolvedValue([
-      { ...base, chain: [{ provider_id: 'p1', model: 'sonnet', harness: 'claude-cli' }] },
-    ])
-    renderList()
-    expect(await screen.findByText('claude-cli')).toBeInTheDocument()
-  })
 })

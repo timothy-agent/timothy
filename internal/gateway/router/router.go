@@ -71,25 +71,20 @@ type ProviderRow struct {
 	AnthropicBaseURL string
 }
 
-// ChainEntry is one step of a route chain.
+// ChainEntry is one step of a route chain. Harness selection moved to
+// the mission itself (D-051 rework): a chain entry is pure
+// {provider_id, model} again, model routing only.
 type ChainEntry struct {
 	ProviderID string `json:"provider_id"`
 	Model      string `json:"model"`
-	// Harness names a delegated mission executor this entry dispatches
-	// to instead of serving chat directly (D-051): "" is today's native
-	// API serving, "claude-cli" (later "codex-cli") hands the turn to a
-	// CLI subprocess brain's missions harness spawns. entryGate skips
-	// every non-empty Harness entry for chat, so a harness entry can
-	// only ever be reached through the resolve endpoint's executor path.
-	Harness string `json:"harness,omitempty"`
 }
 
-// KnownHarnesses is the single source of truth for valid Harness names —
-// admin validates entries against it, and the resolve endpoint's
-// executor gate rejects anything else as "unknown harness" (D-051).
-// Adapters that actually spawn these CLIs live in brain
-// (internal/brain/missions/executor); the gateway only validates names
-// and wire-format compatibility, never runs a subprocess itself.
+// KnownHarnesses is the single source of truth for valid harness names —
+// the resolve endpoint's executor gate (ResolveRoute) rejects anything
+// else as "unknown harness" (D-051). Adapters that actually spawn these
+// CLIs live in brain (internal/brain/missions/executor); the gateway
+// only validates names and wire-format compatibility, never runs a
+// subprocess itself.
 var KnownHarnesses = map[string]bool{"claude-cli": true}
 
 // harnessWireFormat names the wire protocol each known harness requires
@@ -321,8 +316,8 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 	var skipped []string
 	seen := map[string]bool{} // "name/model" dedupe across hint + sticky + chain
 
-	add := func(row ProviderRow, model, harness, source string) {
-		p, subject, reason := s.entryGateHarness(row, model, required, harness)
+	add := func(row ProviderRow, model, source string) {
+		p, subject, reason := s.entryGate(row, model, required)
 		if reason != "" {
 			skipped = append(skipped, fmt.Sprintf("%s (%s, %s)", subject, reason, source))
 			return
@@ -336,9 +331,9 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 
 	if hint != "" {
 		if row, ok := s.byName[hint]; ok && row.DefaultModel != "" {
-			add(row, row.DefaultModel, "", "hint")
+			add(row, row.DefaultModel, "hint")
 		} else if row, model, ok := s.findModel(hint); ok {
-			add(row, model, "", "hint")
+			add(row, model, "hint")
 		} else {
 			skipped = append(skipped, fmt.Sprintf("hint %q matched nothing", hint))
 		}
@@ -346,14 +341,12 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 
 	// Sticky is a preference, never an expansion: it must already be a
 	// member of this route's chain, so a route change or chain edit
-	// naturally breaks the pin. A stored sticky matching a harness entry
-	// falls out here for free: entryGateHarness rejects any non-empty
-	// Harness before ever reaching the usual checks (D-051).
+	// naturally breaks the pin.
 	if sticky.ProviderName != "" {
 		for _, entry := range s.routes[route] {
 			row, ok := s.rows[entry.ProviderID]
 			if ok && row.Name == sticky.ProviderName && entry.Model == sticky.Model {
-				add(row, entry.Model, entry.Harness, "sticky")
+				add(row, entry.Model, "sticky")
 				break
 			}
 		}
@@ -369,7 +362,7 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 		if model == "" {
 			model = row.DefaultModel
 		}
-		add(row, model, entry.Harness, "chain")
+		add(row, model, "chain")
 	}
 
 	if len(attempts) == 0 {
@@ -383,19 +376,6 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 // usable, or a skip subject ("name", or "name/model" for capability
 // misses) and reason matching the NoRouteError wording.
 func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.Capability) (provider.Provider, string, string) {
-	return s.entryGateHarness(row, model, required, "")
-}
-
-// entryGateHarness is entryGate's harness-aware form: a non-empty entry
-// harness is never usable for chat serving (D-051) — mission-only
-// executor entries must never be silently offered to a chat turn, no
-// matter how the chain is otherwise wired. resolveEntries (the
-// /v1/routes/{name}/resolve handler support) calls this directly so its
-// chat-path rows share the exact same gate Resolve/ResolveDetail use.
-func (s *Snapshot) entryGateHarness(row ProviderRow, model string, required []provider.Capability, harness string) (provider.Provider, string, string) {
-	if harness != "" {
-		return nil, row.Name, "harness executor (mission-only)"
-	}
 	p, inRegistry := s.registry.Get(row.Name)
 	switch {
 	case !row.Enabled:
@@ -499,7 +479,7 @@ func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 				maxTPS = d.TokensPerS
 			}
 		}
-		if _, _, reason := s.entryGateHarness(row, d.Model, required, e.Harness); reason != "" {
+		if _, _, reason := s.entryGate(row, d.Model, required); reason != "" {
 			d.SkipReason = reason
 		} else {
 			d.Usable = true
@@ -558,41 +538,43 @@ func (s *Snapshot) orderedChain(route string) []ChainEntry {
 }
 
 // ResolvedRouteEntry is one chain entry as reported by the resolve
-// endpoint (D-051): unlike ResolvedEntry (the chat scoring path), a
-// harness entry's Usable/SkipReason come from the EXECUTOR rule, never
-// the chat gate — the chat gate marks every harness entry unusable by
-// definition, which would be wrong here. CredentialRef is always a
-// NAME, never resolved to a secret value.
+// endpoint (D-051). CredentialRef is always a NAME, never resolved to a
+// secret value.
 type ResolvedRouteEntry struct {
 	ProviderID    string
 	ProviderName  string
 	Driver        string
 	Kind          string
 	Model         string
-	Harness       string
 	CredentialRef string
 	BaseURL       string
 	Usable        bool
 	SkipReason    string
 }
 
-// ResolveRoute returns route's chain in stored order, each entry
-// annotated with the gate appropriate to its axis (D-051): harness ==
-// "" entries reuse entryGate (the same chat-serving verdict
-// ResolveDetail computes); harness != "" entries are judged by
-// executorUsable instead, since the chat gate would reject them
-// unconditionally. ok is false only when the route itself doesn't
-// exist in the snapshot (disabled or unknown name) — an existing route
-// with zero entries still returns ok true and an empty slice.
-func (s *Snapshot) ResolveRoute(route string) ([]ResolvedRouteEntry, bool) {
+// ResolveRoute returns route's chain in stored order, annotated with
+// the gate appropriate to the requested axis (D-051 rework — harness is
+// now a caller-supplied param, not a per-entry chain field): harness ==
+// "" evaluates every entry with the chat entryGate (the same verdict
+// ResolveDetail computes); harness != "" evaluates every entry with
+// executorUsable instead, since the chat gate would reject a
+// mission-only executor dispatch unconditionally, and applies the
+// anthropic_base_url override for a non-anthropic driver row. ok is
+// false when the route doesn't exist (disabled or unknown name) OR
+// harness is non-empty and unknown — an existing route with zero
+// entries still returns ok true and an empty slice.
+func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bool) {
 	chain, ok := s.routes[route]
 	if !ok {
+		return nil, false
+	}
+	if harness != "" && !KnownHarnesses[harness] {
 		return nil, false
 	}
 	required := []provider.Capability{s.requiredCapability(route)}
 	out := make([]ResolvedRouteEntry, 0, len(chain))
 	for _, e := range chain {
-		re := ResolvedRouteEntry{ProviderID: e.ProviderID, Model: e.Model, Harness: e.Harness}
+		re := ResolvedRouteEntry{ProviderID: e.ProviderID, Model: e.Model}
 		row, found := s.rows[e.ProviderID]
 		if !found {
 			re.SkipReason = "unknown provider id"
@@ -603,24 +585,24 @@ func (s *Snapshot) ResolveRoute(route string) ([]ResolvedRouteEntry, bool) {
 		if re.Model == "" {
 			re.Model = row.DefaultModel
 		}
-		if e.Harness == "" {
-			re.BaseURL = row.BaseURL
+		re.BaseURL = row.BaseURL
+		if harness == "" {
 			if _, _, reason := s.entryGate(row, re.Model, required); reason != "" {
 				re.SkipReason = reason
 			} else {
 				re.Usable = true
 			}
 		} else {
-			re.BaseURL = row.BaseURL
-			// claude-cli injects anthropic_base_url into the spawned
-			// process when the row itself isn't a chat-serving anthropic
-			// driver (e.g. a subscription-auth row with no driver a chat
-			// gate would ever accept) — that's the URL brain needs, not
-			// the row's own (possibly empty) base_url.
-			if row.Driver != "anthropic" && row.AnthropicBaseURL != "" {
+			// The anthropic_base_url override only applies to a kind='api'
+			// row pointed at a third-party anthropic-compatible endpoint —
+			// a kind='cli' row (subscription/oauth-auth) talks to the
+			// vendor's own default endpoint and must keep BaseURL empty, or
+			// BuildInvocation's AuthSubscription/AuthOAuthToken checks
+			// reject the spawn outright (they require no BaseURL at all).
+			if row.Kind != "cli" && row.Driver != "anthropic" && row.AnthropicBaseURL != "" {
 				re.BaseURL = row.AnthropicBaseURL
 			}
-			re.Usable, re.SkipReason = executorUsable(row, e.Harness)
+			re.Usable, re.SkipReason = executorUsable(row, harness)
 		}
 		out = append(out, re)
 	}
@@ -634,7 +616,12 @@ func (s *Snapshot) ResolveRoute(route string) ([]ResolvedRouteEntry, bool) {
 // (registry membership, chat capability) apply. Usable requires the
 // provider row enabled, a recognized harness name, wire-format
 // compatibility for that harness, and a non-empty credential_ref name
-// (the value itself is never resolved here — ref only, D-051).
+// (the value itself is never resolved here — ref only, D-051). A
+// kind='cli' row is inherently wire-compatible: it spawns the harness's
+// own CLI talking to the vendor's own default endpoint under
+// subscription/oauth credentials, never a third-party anthropic-
+// compatible one, so the wire check only applies to kind='api' rows
+// (a chat-serving row repurposed as an executor entry).
 func executorUsable(row ProviderRow, harness string) (bool, string) {
 	if !row.Enabled {
 		return false, "disabled"
@@ -642,10 +629,12 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 	if !KnownHarnesses[harness] {
 		return false, "unknown harness"
 	}
-	wantWire := harnessWireFormat[harness]
-	wireOK := row.Driver == wantWire || (harness == "claude-cli" && row.AnthropicBaseURL != "")
-	if !wireOK {
-		return false, fmt.Sprintf("wire-incompatible: %s requires %s wire format", harness, wantWire)
+	if row.Kind != "cli" {
+		wantWire := harnessWireFormat[harness]
+		wireOK := row.Driver == wantWire || (harness == "claude-cli" && row.AnthropicBaseURL != "")
+		if !wireOK {
+			return false, fmt.Sprintf("wire-incompatible: %s requires %s wire format", harness, wantWire)
+		}
 	}
 	if row.CredentialRef == "" {
 		return false, "credential_ref is required"

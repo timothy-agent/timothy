@@ -11,12 +11,14 @@ vi.mock('../../api/client', () => ({
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
   getSettings: vi.fn(),
+  getMissionExecutorOptions: vi.fn(),
 }))
 
 import {
   classifyMission,
   createMission,
   createSchedule,
+  getMissionExecutorOptions,
   getSettings,
   listAgents,
   listRoutes,
@@ -58,6 +60,7 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue(routes)
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
   vi.mocked(classifyMission).mockResolvedValue({ kind: 'general' })
+  vi.mocked(getMissionExecutorOptions).mockResolvedValue([])
 })
 
 describe('MissionForm — create mode, one-off mission', () => {

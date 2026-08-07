@@ -27,6 +27,19 @@ import (
 
 const adminMarker = "itest-admin-"
 
+// chainJSON marshals a chain literal into the *json.RawMessage
+// RoutePatch.Chain now expects (D-051 rework: PatchRoute decodes it
+// itself so it can also detect a rejected legacy "harness" key).
+func chainJSON(t *testing.T, entries []router.ChainEntry) *json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal chain: %v", err)
+	}
+	raw := json.RawMessage(b)
+	return &raw
+}
+
 func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
@@ -387,12 +400,12 @@ func TestRoutePatchValidatesProviderRefs(t *testing.T) {
 	cat := seedRoute(t, pool, adminMarker+"rp", id)
 
 	bogus := []router.ChainEntry{{ProviderID: "00000000-0000-4000-8000-000000000000", Model: "x"}}
-	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &bogus}); err == nil {
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: chainJSON(t, bogus)}); err == nil {
 		t.Fatal("chain with unknown provider id must refuse")
 	}
 
 	good := []router.ChainEntry{{ProviderID: id, Model: "m2"}, {ProviderID: id, Model: "m1"}}
-	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &good}); err != nil {
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: chainJSON(t, good)}); err != nil {
 		t.Fatalf("valid chain patch: %v", err)
 	}
 	routes, err := adm.Routes(ctx)
@@ -418,11 +431,14 @@ func TestRoutePatchValidatesProviderRefs(t *testing.T) {
 	t.Fatal("route missing")
 }
 
-// TestRoutePatchValidatesHarnessEntries covers D-051's PatchRoute gate:
-// a chain entry naming an unknown harness or a wire-incompatible
-// provider must refuse; a valid claude-cli entry against an
-// anthropic-driver row is accepted.
-func TestRoutePatchValidatesHarnessEntries(t *testing.T) {
+// TestRoutePatchRejectsLegacyHarnessKey covers D-051's rework: harness
+// selection moved to the mission column, so a chain entry is pure
+// {provider_id, model} again. A write carrying a "harness" key
+// (stale UI, hand-edited request, a pre-rework client) must be
+// REJECTED with a clear error, never silently dropped — router.
+// ChainEntry has no Harness field to decode it into, so PatchRoute
+// probes the raw JSON itself to catch this.
+func TestRoutePatchRejectsLegacyHarnessKey(t *testing.T) {
 	adm, _, pool := testAdmin(t)
 	ctx := t.Context()
 
@@ -433,38 +449,18 @@ func TestRoutePatchValidatesHarnessEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create anthropic: %v", err)
 	}
-	incompatID, err := adm.Create(ctx, Provider{
-		Name: adminMarker + "harness-incompat", Kind: "api", Driver: "openaicompat",
-		BaseURL: "https://example.invalid/v1", DefaultModel: "m1", CredentialRef: "SOME_ENV_NAME",
-	})
-	if err != nil {
-		t.Fatalf("Create incompatible: %v", err)
-	}
 	cat := seedRoute(t, pool, adminMarker+"harnesspatch", anthropicID)
 
-	unknown := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet", Harness: "codex-cli-unreleased"}}
-	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &unknown}); err == nil {
-		t.Fatal("unknown harness must refuse")
+	legacy := json.RawMessage(`[{"provider_id":"` + anthropicID + `","model":"sonnet","harness":"claude-cli"}]`)
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &legacy}); err == nil || !strings.Contains(err.Error(), "harness moved to mission") {
+		t.Fatalf("PatchRoute with legacy harness key = %v, want rejection naming the move", err)
 	}
 
-	incompat := []router.ChainEntry{{ProviderID: incompatID, Model: "m1", Harness: "claude-cli"}}
-	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &incompat}); err == nil {
-		t.Fatal("wire-incompatible provider must refuse")
-	}
-
-	// Harness-only chains are unusable by construction — explore/plan/
-	// review stream natively over the same route — and must refuse.
-	harnessOnly := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet", Harness: "claude-cli"}}
-	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &harnessOnly}); err == nil {
-		t.Fatal("harness-only chain must refuse: no native entry to serve explore/plan/review")
-	}
-
-	valid := []router.ChainEntry{
-		{ProviderID: anthropicID, Model: "sonnet", Harness: "claude-cli"},
-		{ProviderID: anthropicID, Model: "sonnet"},
-	}
-	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: &valid}); err != nil {
-		t.Fatalf("valid harness entry with native sibling: %v", err)
+	// A plain {provider_id, model} chain (no harness key at all) still
+	// writes normally.
+	plain := []router.ChainEntry{{ProviderID: anthropicID, Model: "sonnet"}}
+	if err := adm.PatchRoute(ctx, cat, RoutePatch{Chain: chainJSON(t, plain)}); err != nil {
+		t.Fatalf("plain chain patch: %v", err)
 	}
 	routes, err := adm.Routes(ctx)
 	if err != nil {
@@ -474,8 +470,8 @@ func TestRoutePatchValidatesHarnessEntries(t *testing.T) {
 		if r.Name != cat {
 			continue
 		}
-		if len(r.Chain) != 2 || r.Chain[0].Harness != "claude-cli" || r.Chain[1].Harness != "" {
-			t.Fatalf("chain = %+v, want harness claude-cli leading a native sibling", r.Chain)
+		if len(r.Chain) != 1 || r.Chain[0].ProviderID != anthropicID {
+			t.Fatalf("chain = %+v, want the plain entry", r.Chain)
 		}
 		return
 	}

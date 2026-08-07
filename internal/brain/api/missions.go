@@ -15,7 +15,9 @@ import (
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
@@ -27,15 +29,21 @@ import (
 // agent when the create request omits them. routeForRole resolves the
 // route bound to the "default" system role (D-049) — an agent's empty
 // route means "the default chain," but the gateway's /v1/stream
-// requires a real, non-empty route name.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify) {
+// requires a real, non-empty route name. codingExecutorDefault
+// resolves the settings-configured harness default for a coding
+// mission whose request omits one (D-051). resolveExecutorOptions
+// backs GET /v1/missions/executor-options — a thin proxy over
+// gwclient.ResolveRoute so the web UI can preview provider/model
+// pairing before create without duplicating gateway resolve logic.
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error)) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
+	handle("GET /v1/missions/executor-options", a.auth(http.HandlerFunc(h.executorOptions)))
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
 	handle("DELETE /v1/missions/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("GET /v1/missions/{id}/events", a.auth(http.HandlerFunc(h.events)))
@@ -70,6 +78,13 @@ type missionAPI struct {
 	// endpoint; nil (no gateway wiring) makes every omitted kind default
 	// straight to "coding", same as any classify error.
 	classify agents.Classify
+	// codingExecutorDefault resolves settings.ValueCodingExecutor for a
+	// coding mission's create request that omits harness; nil (no
+	// settings wiring) leaves it native.
+	codingExecutorDefault func(context.Context) string
+	// resolveExecutorOptions backs GET /v1/missions/executor-options;
+	// nil (no gateway wiring) makes the endpoint 404.
+	resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
 	// perms answers a mission's pending_permission — the same
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
@@ -147,8 +162,16 @@ type createMissionRequest struct {
 	// directly in create() below. The web UI, not this handler, is
 	// responsible for sending the settings page's configured default
 	// currency when the user hasn't explicitly overridden it — this
-	// keeps the handler simple and stateless w.r.t. settings.
+	// keeps the handler simple and stateless w.r.t. settings, UNLIKE
+	// Harness below: the coding-executor default must apply on every
+	// creation path (including the scheduler, which never goes through
+	// the web UI), so create() reads settings for that one field.
 	BudgetCurrency string `json:"budget_currency"`
+	// Harness selects the execution strategy for a coding mission's
+	// worker turns (D-051): "" applies the settings default,
+	// "native" forces native (stored as ""), anything else must name a
+	// registered harness. Rejected outright on kind=general.
+	Harness string `json:"harness"`
 	// AutoApproveSafe defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
@@ -177,6 +200,23 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", `kind must be "coding" or "general"`)
 		return
+	}
+	if req.Harness == "native" {
+		req.Harness = ""
+	}
+	switch {
+	case req.Kind != "coding" && req.Harness != "":
+		jsonError(w, http.StatusBadRequest, "bad_request", "harness is only valid for kind=coding missions")
+		return
+	case req.Kind == "coding" && req.Harness == "":
+		if h.codingExecutorDefault != nil {
+			req.Harness = h.codingExecutorDefault(r.Context())
+		}
+	case req.Harness != "":
+		if _, ok := executor.Lookup(req.Harness); !ok {
+			jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown harness %q", req.Harness))
+			return
+		}
 	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
@@ -227,7 +267,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
-		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay,
+		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
@@ -281,6 +321,57 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"kind": classifyKind(r.Context(), h.classify, req.Goal)})
+}
+
+// executorOption is one registered harness's live pairing preview for
+// MissionForm's Executor select — the first usable chain entry
+// gwclient.ResolveRoute(route, harness) reports, or Reason explaining
+// why none is.
+type executorOption struct {
+	Harness      string `json:"harness"`
+	Usable       bool   `json:"usable"`
+	ProviderName string `json:"provider_name,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// executorOptions serves GET /v1/missions/executor-options?route=<name>,
+// a thin proxy over the gateway's resolve endpoint (D-051): for every
+// registered harness it reports the first usable chain entry (or why
+// none is) so the web UI can show "runs via provider/model" or disable
+// an incompatible choice before create. route defaults to the
+// "default" system role's route, same fallback create() itself applies.
+func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
+	if h.resolveExecutorOptions == nil {
+		jsonError(w, http.StatusNotFound, "not_found", "executor options are not enabled")
+		return
+	}
+	route := r.URL.Query().Get("route")
+	if route == "" && h.routeForRole != nil {
+		route = h.routeForRole(r.Context(), "default")
+	}
+	harnesses := executor.Registered()
+	options := make([]executorOption, 0, len(harnesses))
+	for _, harness := range harnesses {
+		opt := executorOption{Harness: harness}
+		resolved, err := h.resolveExecutorOptions(r.Context(), route, harness)
+		switch {
+		case err != nil:
+			opt.Reason = err.Error()
+		case resolved == nil || len(resolved.Entries) == 0:
+			opt.Reason = "route has no chain entries"
+		default:
+			opt.Reason = "no usable provider for this route"
+			for _, e := range resolved.Entries {
+				if e.Usable {
+					opt.Usable, opt.ProviderName, opt.Model, opt.Reason = true, e.ProviderName, e.Model, ""
+					break
+				}
+			}
+		}
+		options = append(options, opt)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"options": options})
 }
 
 func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {

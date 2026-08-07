@@ -397,11 +397,6 @@ export interface AdminProvider {
 export interface ChainEntry {
   provider_id: string
   model: string
-  // harness names a delegated mission executor this entry dispatches
-  // to instead of serving chat directly (D-051) — "" (or absent) is
-  // the native API-serving axis, "claude-cli" the only known harness
-  // so far. See router.KnownHarnesses.
-  harness?: string
 }
 
 // RouteEntryStatus is the router's live view of one chain entry: the
@@ -414,7 +409,6 @@ export interface RouteEntryStatus {
   // provider_kind is 'api' | 'cli' — 'cli' rows are mission-only
   // executor providers (D-051), never built into a chat client.
   provider_kind?: string
-  harness?: string
   model: string
   usable: boolean
   skip_reason?: string
@@ -670,6 +664,7 @@ export interface MissionTemplate {
   budget_amount?: number
   budget_currency?: string
   auto_approve_safe?: boolean
+  harness?: string
 }
 
 // Schedule is a recurring cron trigger that fires mission_template

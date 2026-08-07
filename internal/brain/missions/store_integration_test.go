@@ -218,6 +218,40 @@ func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionHarnessRoundTrips covers D-051: harness is a first-class
+// column snapshotted at create time, same shape as PromptOverlay above
+// — "" (native) is the default when a mission omits it.
+func TestMissionHarnessRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "harness", Kind: "coding", Route: "default", Harness: "claude-cli",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Harness != "claude-cli" {
+		t.Fatalf("Harness = %q, want claude-cli", m.Harness)
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-harness", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.Harness != "" {
+		t.Fatalf("Harness = %q, want empty (native) when not set", m2.Harness)
+	}
+}
+
 func TestSetAndClearPendingPermission(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

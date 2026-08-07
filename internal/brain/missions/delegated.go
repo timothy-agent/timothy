@@ -56,7 +56,7 @@ const (
 
 // routeResolver is the narrow seam over gwclient.Client.ResolveRoute —
 // faked in tests so scenarios never need a real gateway.
-type routeResolver func(ctx context.Context, route string) (*gwclient.ResolvedRoute, error)
+type routeResolver func(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error)
 
 // credResolver is the narrow seam over a secret store's Resolve — faked
 // in tests. The literal ref "subscription" never reaches this: it's
@@ -114,12 +114,14 @@ type cooldownKey struct {
 }
 
 // delegatedRunner wraps nativeRunner: explore/plan/review pass through
-// untouched (delegated CLI executors only ever serve worker turns);
-// RunWorker walks the resolved route's chain looking for the first
-// usable, non-cooled entry, dispatching a native entry to native and a
-// harness entry to the D-052 run protocol below. Resolve/lookup/cred
-// failures all fail OPEN to native.RunWorker — a delegated executor is
-// additive capability, never a way for today's native path to break.
+// untouched (delegated CLI executors only ever serve worker turns).
+// RunWorker dispatches on the mission's own Harness column (D-051
+// rework — no longer a per-chain-entry field): m.Harness == "" defers
+// straight to native; otherwise it resolves the worker route on the
+// executor axis and walks the first usable, non-cooled entry into the
+// D-052 run protocol below. Resolve/lookup/cred failures all fail OPEN
+// to native.RunWorker — a delegated executor is additive capability,
+// never a way for today's native path to break.
 type delegatedRunner struct {
 	native Runner
 
@@ -167,15 +169,24 @@ func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet Revie
 	return r.native.RunReview(ctx, m, packet, gatekeeper)
 }
 
-// RunWorker resolves the mission's worker route and walks its chain:
-// the first native (harness=="") entry defers to native.RunWorker
-// (which itself lets the gateway walk any remaining native chain); the
-// first usable harness entry runs the delegated protocol. Any resolve
-// failure, an entirely native chain, or no usable entry at all falls
-// back to native.RunWorker unchanged — today's behavior is always the
-// floor.
+// RunWorker dispatches on m.Harness (D-051 rework): "" defers straight
+// to native.RunWorker (which itself lets the gateway walk any native
+// chain). Otherwise it looks up the adapter and resolves the worker
+// route on the executor axis, walking the first usable, non-cooled
+// entry into the delegated protocol. An unknown harness, a resolve
+// failure, or no usable entry at all falls back to native.RunWorker
+// unchanged — today's behavior is always the floor.
 func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
-	route, err := r.resolveRoute(ctx, workerRoute(m))
+	if m.Harness == "" {
+		return r.native.RunWorker(ctx, m, packet)
+	}
+	adapter, ok := executor.Lookup(m.Harness)
+	if !ok {
+		r.log.Warn("delegated runner: unknown harness; falling back to native", "mission_id", m.ID, "harness", m.Harness)
+		return r.native.RunWorker(ctx, m, packet)
+	}
+
+	route, err := r.resolveRoute(ctx, workerRoute(m), m.Harness)
 	if err != nil || route == nil {
 		if err != nil {
 			r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
@@ -187,15 +198,7 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		if !entry.Usable {
 			continue
 		}
-		if r.cooledDown(entry) {
-			continue
-		}
-		if entry.Harness == "" {
-			return r.native.RunWorker(ctx, m, packet)
-		}
-		adapter, ok := executor.Lookup(entry.Harness)
-		if !ok {
-			r.log.Warn("delegated runner: unknown harness; skipping entry", "mission_id", m.ID, "harness", entry.Harness)
+		if r.cooledDown(m.Harness, entry) {
 			continue
 		}
 		return r.runDelegated(ctx, m, packet, entry, adapter)
@@ -205,20 +208,20 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 
 // cooledDown reports whether entry is in its post-failure cooldown
 // window.
-func (r *delegatedRunner) cooledDown(entry gwclient.ResolvedRouteEntry) bool {
+func (r *delegatedRunner) cooledDown(harness string, entry gwclient.ResolvedRouteEntry) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	exp, ok := r.cooldown[cooldownKey{entry.ProviderID, entry.Model, entry.Harness}]
+	exp, ok := r.cooldown[cooldownKey{entry.ProviderID, entry.Model, harness}]
 	return ok && time.Now().Before(exp)
 }
 
 // coolDown marks entry unusable for cooldownTTL — set on transport
 // death, spawn failure, or auth failure so the NEXT worker turn walks
 // past it instead of retrying the same broken entry immediately.
-func (r *delegatedRunner) coolDown(entry gwclient.ResolvedRouteEntry) {
+func (r *delegatedRunner) coolDown(harness string, entry gwclient.ResolvedRouteEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.cooldown[cooldownKey{entry.ProviderID, entry.Model, entry.Harness}] = time.Now().Add(cooldownTTL)
+	r.cooldown[cooldownKey{entry.ProviderID, entry.Model, harness}] = time.Now().Add(cooldownTTL)
 }
 
 // resolveCredential implements the credential contract: the exact
@@ -300,14 +303,14 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 
 	authMode, apiKey, err := r.resolveCredential(ctx, entry.CredentialRef, adapter.Capabilities())
 	if err != nil {
-		r.coolDown(entry)
-		r.recordAuthFailed(ctx, m.ID, entry.Harness)
+		r.coolDown(m.Harness, entry)
+		r.recordAuthFailed(ctx, m.ID, m.Harness)
 		return WorkerVerdict{}, "", err
 	}
 
 	runID, err := newRunID()
 	if err != nil {
-		r.coolDown(entry)
+		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", err
 	}
 	rdir := runDir(workRoot, runID)
@@ -324,25 +327,25 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	}
 	inv, err := adapter.BuildInvocation(spec)
 	if err != nil {
-		r.coolDown(entry)
+		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: build invocation: %w", err)
 	}
 
 	// 0750/0600 suffice: brain and the sandbox CLI share uid 65534 on
 	// the workspace volume, so owner permissions cover both readers.
 	if err := os.MkdirAll(rdir, 0o750); err != nil {
-		r.coolDown(entry)
+		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: create run dir: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte(user), 0o600); err != nil {
-		r.coolDown(entry)
+		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: write prompt: %w", err)
 	}
 
-	r.recordSpawned(ctx, m.ID, entry, runID, rdir, authMode)
+	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode)
 
 	if err := r.launch(ctx, m.ID, workRoot, rdir, inv); err != nil {
-		r.coolDown(entry)
+		r.coolDown(m.Harness, entry)
 		r.recordDied(ctx, m.ID, "spawn_failed", nil, err.Error())
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: launch: %w", err)
 	}
@@ -363,7 +366,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 		return false, WorkerVerdict{}, "", nil
 	}
 	state, lerr := r.lastRun(ctx, m.ID)
-	if lerr != nil || state == nil || state.Finished || state.Harness != entry.Harness {
+	if lerr != nil || state == nil || state.Finished || state.Harness != m.Harness {
 		return false, WorkerVerdict{}, "", nil
 	}
 
@@ -489,7 +492,7 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 		case <-ctx.Done():
 			r.killRun(context.WithoutCancel(ctx), m.ID, workRoot, rdir)
 			r.recordDied(context.WithoutCancel(ctx), m.ID, "ctx_cancelled", nil, ctx.Err().Error())
-			r.coolDown(entry)
+			r.coolDown(m.Harness, entry)
 			return WorkerVerdict{}, st.textBuf.String(), ctx.Err()
 		case <-ticker.C:
 		}
@@ -529,7 +532,7 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 		if time.Since(st.lastByteMove) > r.idleTimeout {
 			r.killRun(ctx, m.ID, workRoot, rdir)
 			r.recordEvent(ctx, m.ID, st, "executor.idle_killed", map[string]any{"idle_s": int(r.idleTimeout.Seconds())})
-			r.coolDown(entry)
+			r.coolDown(m.Harness, entry)
 			return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: "the executor produced no output for the idle timeout and was killed"}, st.textBuf.String(), nil
 		}
 	}
@@ -671,8 +674,8 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "")
 	if st.resultEvent.Err != "" {
 		if isAuthFailure(st.resultEvent.Err) {
-			r.coolDown(entry)
-			r.recordAuthFailed(ctx, m.ID, entry.Harness)
+			r.coolDown(m.Harness, entry)
+			r.recordAuthFailed(ctx, m.ID, m.Harness)
 			return WorkerVerdict{}, st.textBuf.String(), fmt.Errorf("%w: %s", ErrExecutorAuth, st.resultEvent.Err)
 		}
 	}
@@ -693,15 +696,15 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry g
 	}
 
 	if exitCode != 0 && isAuthFailure(stderrTail) {
-		r.coolDown(entry)
+		r.coolDown(m.Harness, entry)
 		r.recordDied(ctx, m.ID, "auth_failed", &exitCode, stderrTail)
-		r.recordAuthFailed(ctx, m.ID, entry.Harness)
+		r.recordAuthFailed(ctx, m.ID, m.Harness)
 		return WorkerVerdict{}, st.textBuf.String(), fmt.Errorf("%w: %s", ErrExecutorAuth, stderrTail)
 	}
 
 	r.recordDied(ctx, m.ID, "transport_death", &exitCode, stderrTail)
 	r.recordLedger(ctx, m, entry, authMode, nil, start, false)
-	r.coolDown(entry)
+	r.coolDown(m.Harness, entry)
 	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}, st.textBuf.String(), nil
 }
 
@@ -744,12 +747,12 @@ func isAuthFailure(text string) bool {
 // carries the prompt substitution placeholder only ("@PROMPT@"), never
 // the rendered prompt text, and env values are never recorded, only
 // names.
-func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID string, entry gwclient.ResolvedRouteEntry, runID, rdir string, authMode executor.AuthMode) {
+func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID, harness string, entry gwclient.ResolvedRouteEntry, runID, rdir string, authMode executor.AuthMode) {
 	if r.events == nil {
 		return
 	}
 	if err := r.events.AppendEvent(ctx, missionID, "executor.spawned", map[string]any{
-		"harness": entry.Harness, "provider": entry.ProviderName, "model": entry.Model,
+		"harness": harness, "provider": entry.ProviderName, "model": entry.Model,
 		"auth_mode": string(authMode), "run_id": runID, "run_dir": rdir,
 	}); err != nil {
 		r.log.Warn("delegated runner: record spawned failed", "mission_id", missionID, "error", err)

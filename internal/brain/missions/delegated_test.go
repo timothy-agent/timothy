@@ -347,7 +347,7 @@ func (f *fakeLedger) Record(ctx context.Context, e ledger.Entry) {
 }
 
 func scriptedResolver(route *gwclient.ResolvedRoute, err error) routeResolver {
-	return func(ctx context.Context, name string) (*gwclient.ResolvedRoute, error) {
+	return func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
 		return route, err
 	}
 }
@@ -358,15 +358,15 @@ func scriptedCred(key string, err error) credResolver {
 	}
 }
 
-func harnessEntry(harness, credRef string) gwclient.ResolvedRouteEntry {
+// harnessEntry builds a claude-cli executor-axis chain entry (D-051
+// rework: harness is no longer a field on the entry itself — RunWorker
+// now dispatches on the mission's own Harness column and passes it
+// alongside the entry to the cooldown/event helpers).
+func harnessEntry(credRef string) gwclient.ResolvedRouteEntry {
 	return gwclient.ResolvedRouteEntry{
 		ProviderID: "prov-1", ProviderName: "anthropic", Driver: "anthropic",
-		Model: "claude-haiku-4-5-20251001", Harness: harness, CredentialRef: credRef, Usable: true,
+		Model: "claude-haiku-4-5-20251001", CredentialRef: credRef, Usable: true,
 	}
-}
-
-func nativeEntry() gwclient.ResolvedRouteEntry {
-	return gwclient.ResolvedRouteEntry{ProviderID: "prov-2", ProviderName: "bedrock", Model: "nova", Harness: "", Usable: true}
 }
 
 // fakeNative is a minimal Runner recording whether RunWorker was
@@ -410,6 +410,13 @@ func newTestDelegatedRunner(native Runner, resolve routeResolver, cred credResol
 }
 
 func testMission(id, workRoot string) Mission {
+	return Mission{ID: id, Kind: "coding", Workspace: workRoot, Route: "default", Harness: "claude-cli"}
+}
+
+// testNativeMission is testMission with Harness left empty — RunWorker
+// dispatches straight to native for these without ever resolving a
+// route (D-051 rework).
+func testNativeMission(id, workRoot string) Mission {
 	return Mission{ID: id, Kind: "coding", Workspace: workRoot, Route: "default"}
 }
 
@@ -428,7 +435,7 @@ func TestDelegatedRunWorker_HappyPath(t *testing.T) {
 	sandbox.seedExitCode = 0
 	events := &fakeEventSink{}
 	led := &fakeLedger{}
-	entry := harnessEntry("claude-cli", "subscription")
+	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, led)
@@ -478,7 +485,7 @@ func TestDelegatedRunWorker_MissingResult_ForcedRetry(t *testing.T) {
 	sandbox.seedLines = fixture[:len(fixture)-1] // truncate before the result line
 	sandbox.seedExitCode = 1
 	events := &fakeEventSink{}
-	entry := harnessEntry("claude-cli", "subscription")
+	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
@@ -503,7 +510,7 @@ func TestDelegatedRunWorker_IdleHang_KilledAndRetried(t *testing.T) {
 	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")[:1] // one line, then silence
 	sandbox.seedIdle = true
 	events := &fakeEventSink{}
-	entry := harnessEntry("claude-cli", "subscription")
+	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
@@ -529,7 +536,7 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 	sandbox.seedExitCode = 1
 	sandbox.stderrText = "Error: please run /login to authenticate"
 	events := &fakeEventSink{}
-	entry := harnessEntry("claude-cli", "subscription")
+	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
@@ -570,7 +577,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	sandbox.seedChunk = 60
 	sandbox.seedExitCode = 0
 	events := &fakeEventSink{}
-	entry := harnessEntry("claude-cli", "subscription")
+	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
@@ -585,7 +592,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	// gets a chance to run. Simulate that directly: call the same
 	// unexported helpers RunWorker itself would call, stopping after one
 	// poll iteration instead of running the full loop to completion.
-	adapter, _ := executor.Lookup(entry.Harness)
+	adapter, _ := executor.Lookup(m.Harness)
 	handled, _, _, _ := r.attemptResume(context.Background(), m, m.WorkRoot(), entry, adapter)
 	if handled {
 		t.Fatalf("attemptResume handled on a mission with no prior run; want false")
@@ -613,7 +620,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte("prompt"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	r.recordSpawned(context.Background(), m.ID, entry, runID, rdir, authMode)
+	r.recordSpawned(context.Background(), m.ID, m.Harness, entry, runID, rdir, authMode)
 	if err := r.launch(context.Background(), m.ID, m.WorkRoot(), rdir, inv); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -668,20 +675,25 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 
 // --- scenario 6: cooldown failover ---------------------------------------
 
-func TestDelegatedRunWorker_CooldownSkipsToNativeEntry(t *testing.T) {
+// TestDelegatedRunWorker_CooldownSkipsToNativeFallback covers D-051's
+// rework: harness is no longer mixed per-entry into one chain, so once
+// every executor-axis entry is cooled down there is no "next native
+// entry" to walk to within the same resolve result — the floor is
+// native.RunWorker itself, same as an unusable/empty resolve.
+func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
 	sandbox := newFakeSandbox()
 	sandbox.seedLines = nil
 	sandbox.seedExitCode = 1
 	sandbox.stderrText = "some unrelated crash"
 	events := &fakeEventSink{}
-	failing := harnessEntry("claude-cli", "subscription")
+	failing := harnessEntry("subscription")
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
-	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{failing, nativeEntry()}}
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{failing}}
 
 	r := newTestDelegatedRunner(native, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 
-	// First call: the harness entry transport-dies (forced retry, not an
+	// First call: the only entry transport-dies (forced retry, not an
 	// error) and gets cooled down.
 	verdict1, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
 	if err != nil {
@@ -691,13 +703,13 @@ func TestDelegatedRunWorker_CooldownSkipsToNativeEntry(t *testing.T) {
 		t.Fatalf("first verdict = %+v, want retry", verdict1)
 	}
 
-	// Second call: the harness entry is now cooled down, so the walk
-	// falls through to the native entry.
+	// Second call: the entry is now cooled down, so the walk finds
+	// nothing usable and falls back to native.RunWorker.
 	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
 		t.Fatalf("second RunWorker: %v", err)
 	}
 	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1 (cooldown should skip past the failing entry)", native.callCount())
+		t.Fatalf("native call count = %d, want 1 (cooldown should fall back to native)", native.callCount())
 	}
 	if sandbox.launches != 1 {
 		t.Fatalf("sandbox launches = %d, want 1 (second call must not retry the cooled-down entry)", sandbox.launches)
@@ -712,7 +724,7 @@ func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {
 	sandbox.seedExitCode = 0
 	events := &fakeEventSink{}
 	led := &fakeLedger{}
-	entry := harnessEntry("claude-cli", "cred-ref-1")
+	entry := harnessEntry("cred-ref-1")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, led)
@@ -755,7 +767,7 @@ func TestDelegatedRunWorker_OAuthTokenMode_EnvSetAndCostSuppressed(t *testing.T)
 	sandbox.seedExitCode = 0
 	events := &fakeEventSink{}
 	led := &fakeLedger{}
-	entry := harnessEntry("claude-cli", "cred-ref-oauth")
+	entry := harnessEntry("cred-ref-oauth")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-ant-oat-test-token", nil), sandbox, events, nil, led)
@@ -830,14 +842,22 @@ func TestResolveCredential(t *testing.T) {
 
 // --- scenario 8: dispatch --------------------------------------------------
 
-func TestDelegatedRunWorker_Dispatch_AllNativeEntries(t *testing.T) {
+// TestDelegatedRunWorker_Dispatch_EmptyHarnessSkipsResolve covers
+// m.Harness == "" (D-051 rework): RunWorker must defer straight to
+// native without ever calling resolveRoute at all — resolve is only
+// meaningful once a harness names a real executor.
+func TestDelegatedRunWorker_Dispatch_EmptyHarnessSkipsResolve(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
-	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{nativeEntry()}}
+	resolveCalled := false
+	resolve := func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
+		resolveCalled = true
+		return nil, nil
+	}
 	events := &fakeEventSink{}
 	sandbox := newFakeSandbox()
 
-	r := newTestDelegatedRunner(native, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
-	m := testMission("m1", t.TempDir())
+	r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testNativeMission("m1", t.TempDir())
 
 	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
 		t.Fatalf("RunWorker: %v", err)
@@ -845,11 +865,30 @@ func TestDelegatedRunWorker_Dispatch_AllNativeEntries(t *testing.T) {
 	if native.callCount() != 1 {
 		t.Fatalf("native call count = %d, want 1", native.callCount())
 	}
+	if resolveCalled {
+		t.Fatal("resolveRoute called for an empty-harness mission; want it skipped entirely")
+	}
 	if len(events.events) != 0 {
-		t.Fatalf("executor events recorded = %d, want 0 for an all-native chain", len(events.events))
+		t.Fatalf("executor events recorded = %d, want 0 for a native mission", len(events.events))
 	}
 	if sandbox.launches != 0 {
 		t.Fatalf("sandbox launches = %d, want 0", sandbox.launches)
+	}
+}
+
+func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.T) {
+	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
+	sandbox := newFakeSandbox()
+
+	r := newTestDelegatedRunner(native, scriptedResolver(nil, nil), scriptedCred("", nil), sandbox, nil, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.Harness = "codex-cli-unregistered"
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if native.callCount() != 1 {
+		t.Fatalf("native call count = %d, want 1", native.callCount())
 	}
 }
 

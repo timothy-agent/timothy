@@ -70,6 +70,7 @@ export function FeaturesTab() {
       ))}
       {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
       <NotificationSoundCard />
     </div>
   )
@@ -154,6 +155,63 @@ function DefaultCurrencyCard({
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
         New mission budgets default to this currency unless overridden at creation time.
+      </p>
+    </div>
+  )
+}
+
+const CODING_EXECUTOR_NATIVE = '__native__'
+
+// DefaultCodingExecutorCard picks the delegated coding-CLI harness new
+// coding missions default to when the mission itself doesn't specify
+// one — mirrors DefaultCurrencyCard's shape, options are static since
+// there's currently one known harness (claude-cli) besides native.
+function DefaultCodingExecutorCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [executor, setExecutor] = useState(values.coding_executor ?? '')
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ coding_executor: executor })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Default coding executor</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <span>Executor</span>
+          <Select
+            value={executor || CODING_EXECUTOR_NATIVE}
+            onValueChange={(v) => setExecutor(v === CODING_EXECUTOR_NATIVE ? '' : v)}
+          >
+            <SelectTrigger className="h-10 w-56" aria-label="Default coding executor">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={CODING_EXECUTOR_NATIVE}>Native</SelectItem>
+              <SelectItem value="claude-cli">Claude Code</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        New coding missions delegate to this executor unless overridden at creation time.
       </p>
     </div>
   )

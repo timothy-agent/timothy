@@ -51,14 +51,6 @@ export function PipelineCard({
       <div className="flex items-center gap-2.5">
         {provider && <ProviderLogo preset={matchPreset(provider)} className="size-7" />}
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{name}</span>
-        {status?.harness && (
-          <span
-            className="shrink-0 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-semibold text-brand-soft-foreground"
-            title={`Delegated to ${status.harness}`}
-          >
-            {status.harness}
-          </span>
-        )}
         <span
           data-testid="health-dot"
           title={status?.skip_reason}

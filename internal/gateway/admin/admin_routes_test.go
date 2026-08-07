@@ -108,13 +108,14 @@ func TestResolvedForRouteSkipsAllUnusable(t *testing.T) {
 	}
 }
 
-// TestResolvedForRouteSurfacesHarnessAndKind covers D-051: the admin
-// routes response must carry a harness entry's harness name and its
-// provider's kind so the web editor can render an executor badge,
-// while a harness entry itself is still unusable for chat (the chat
-// gate, not the executor gate, is what ResolveDetail/resolvedForRoute
-// use).
-func TestResolvedForRouteSurfacesHarnessAndKind(t *testing.T) {
+// TestResolvedForRouteSurfacesProviderKind covers D-051's remaining
+// admin surface: the routes response still carries a chain entry's
+// provider kind (api vs cli) so the web editor can distinguish them,
+// even though harness selection itself moved off the chain entirely —
+// a kind='cli' row mixed into a chat route is simply unusable for chat
+// (no chat driver is ever built for it), same as any other unhealthy
+// entry.
+func TestResolvedForRouteSurfacesProviderKind(t *testing.T) {
 	t.Parallel()
 	provRows := []router.ProviderRow{
 		{ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
@@ -124,7 +125,7 @@ func TestResolvedForRouteSurfacesHarnessAndKind(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{{Name: "r", Enabled: true, Chain: []router.ChainEntry{
 		{ProviderID: "p1", Model: "sonnet"},
-		{ProviderID: "p2", Model: "claude-sonnet-4", Harness: "claude-cli"},
+		{ProviderID: "p2", Model: "claude-sonnet-4"},
 	}}}
 	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
@@ -133,17 +134,11 @@ func TestResolvedForRouteSurfacesHarnessAndKind(t *testing.T) {
 		t.Fatalf("resolved len = %d, want 2", len(resolved))
 	}
 	api, exec := resolved[0], resolved[1]
-	if api.Harness != "" || api.ProviderKind != "api" || !api.Usable {
+	if api.ProviderKind != "api" || !api.Usable {
 		t.Fatalf("api entry = %+v", api)
 	}
-	if exec.Harness != "claude-cli" || exec.ProviderKind != "cli" {
-		t.Fatalf("executor entry = %+v", exec)
-	}
-	// The chat gate (what resolvedForRoute uses) always rejects a
-	// harness entry — only the resolve endpoint's executor gate can mark
-	// it usable.
-	if exec.Usable || exec.SkipReason != "harness executor (mission-only)" {
-		t.Fatalf("executor entry usable for chat: %+v", exec)
+	if exec.ProviderKind != "cli" || exec.Usable {
+		t.Fatalf("cli-kind entry usable for chat: %+v", exec)
 	}
 	if serving == nil || serving.ProviderID != "p1" {
 		t.Fatalf("serving = %+v, want the chat-usable entry", serving)

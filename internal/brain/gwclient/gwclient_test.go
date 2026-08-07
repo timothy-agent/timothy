@@ -205,38 +205,32 @@ func TestResolveRoute(t *testing.T) {
 	t.Parallel()
 	hits := 0
 	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/routes/coding/resolve" {
+		if r.URL.Path != "/v1/routes/coding/resolve" || r.URL.Query().Get("harness") != "claude-cli" {
 			http.NotFound(w, r)
 			return
 		}
 		hits++
 		_, _ = fmt.Fprint(w, `{"route":"coding","entries":[
-			{"provider_id":"p1","provider_name":"anthropic","driver":"anthropic","kind":"api",
-			 "model":"sonnet","usable":true},
 			{"provider_id":"p2","provider_name":"claude-sub","driver":"claude-cli","kind":"cli",
-			 "model":"claude-sonnet-4","harness":"claude-cli","credential_ref":"subscription",
+			 "model":"claude-sonnet-4","credential_ref":"subscription",
 			 "base_url":"http://localhost:9999","usable":true}
 		]}`)
 	})
 
-	resolved, err := c.ResolveRoute(t.Context(), "coding")
+	resolved, err := c.ResolveRoute(t.Context(), "coding", "claude-cli")
 	if err != nil {
 		t.Fatalf("ResolveRoute: %v", err)
 	}
-	if resolved.Route != "coding" || len(resolved.Entries) != 2 {
+	if resolved.Route != "coding" || len(resolved.Entries) != 1 {
 		t.Fatalf("resolved = %+v", resolved)
 	}
-	api := resolved.Entries[0]
-	if api.Harness != "" || !api.Usable {
-		t.Fatalf("api entry = %+v", api)
-	}
-	exec := resolved.Entries[1]
-	if exec.Harness != "claude-cli" || exec.CredentialRef != "subscription" || exec.BaseURL != "http://localhost:9999" {
+	exec := resolved.Entries[0]
+	if exec.CredentialRef != "subscription" || exec.BaseURL != "http://localhost:9999" || !exec.Usable {
 		t.Fatalf("executor entry = %+v", exec)
 	}
 
 	// A second read inside the TTL serves from the memo.
-	if _, err := c.ResolveRoute(t.Context(), "coding"); err != nil {
+	if _, err := c.ResolveRoute(t.Context(), "coding", "claude-cli"); err != nil {
 		t.Fatalf("ResolveRoute (cached): %v", err)
 	}
 	if hits != 1 {
@@ -244,22 +238,26 @@ func TestResolveRoute(t *testing.T) {
 	}
 }
 
-func TestResolveRouteCachesPerRouteName(t *testing.T) {
+func TestResolveRouteCachesPerRouteNameAndHarness(t *testing.T) {
 	t.Parallel()
 	hits := map[string]int{}
 	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
 		route := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/routes/"), "/resolve")
-		hits[route]++
+		key := route + "\x00" + r.URL.Query().Get("harness")
+		hits[key]++
 		_, _ = fmt.Fprintf(w, `{"route":%q,"entries":[]}`, route) //nolint:gosec // G705: test stub echoing a fixed test path segment as JSON.
 	})
 
-	if _, err := c.ResolveRoute(t.Context(), "coding"); err != nil {
-		t.Fatalf("ResolveRoute(coding): %v", err)
+	if _, err := c.ResolveRoute(t.Context(), "coding", ""); err != nil {
+		t.Fatalf("ResolveRoute(coding, native): %v", err)
 	}
-	if _, err := c.ResolveRoute(t.Context(), "mini"); err != nil {
-		t.Fatalf("ResolveRoute(mini): %v", err)
+	if _, err := c.ResolveRoute(t.Context(), "coding", "claude-cli"); err != nil {
+		t.Fatalf("ResolveRoute(coding, claude-cli): %v", err)
 	}
-	if hits["coding"] != 1 || hits["mini"] != 1 {
+	if _, err := c.ResolveRoute(t.Context(), "mini", ""); err != nil {
+		t.Fatalf("ResolveRoute(mini, native): %v", err)
+	}
+	if hits["coding\x00"] != 1 || hits["coding\x00claude-cli"] != 1 || hits["mini\x00"] != 1 {
 		t.Fatalf("hits = %+v, want one each", hits)
 	}
 }
@@ -270,7 +268,7 @@ func TestResolveRouteNotFound(t *testing.T) {
 		http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
 	})
 
-	if _, err := c.ResolveRoute(t.Context(), "no-such-route"); err == nil {
+	if _, err := c.ResolveRoute(t.Context(), "no-such-route", ""); err == nil {
 		t.Fatal("ResolveRoute() = nil error for 404 gateway response")
 	}
 }

@@ -173,18 +173,16 @@ func (c *Client) RouteForRole(ctx context.Context, role string) (string, bool, e
 }
 
 // ResolvedRouteEntry is one chain entry as reported by the gateway's
-// resolve endpoint (D-051). Harness == "" is native API serving;
-// otherwise it names the delegated CLI executor (e.g. "claude-cli")
-// missions dispatches to instead of streaming through the gateway.
-// CredentialRef is a NAME, never a resolved secret value — missions
-// resolves it itself when spawning the executor.
+// resolve endpoint (D-051 rework: harness is now the caller's ResolveRoute
+// arg, not a per-entry field). CredentialRef is a NAME, never a
+// resolved secret value — missions resolves it itself when spawning
+// the executor.
 type ResolvedRouteEntry struct {
 	ProviderID    string `json:"provider_id"`
 	ProviderName  string `json:"provider_name"`
 	Driver        string `json:"driver"`
 	Kind          string `json:"kind"`
 	Model         string `json:"model"`
-	Harness       string `json:"harness"`
 	CredentialRef string `json:"credential_ref"`
 	BaseURL       string `json:"base_url"`
 	Usable        bool   `json:"usable"`
@@ -192,29 +190,33 @@ type ResolvedRouteEntry struct {
 }
 
 // ResolvedRoute is a route's ordered chain, each entry annotated with
-// the gate appropriate to its own axis — the chat gate for harness ==
-// "" entries, the executor rule otherwise (router.ResolveRoute keeps
-// them separate; a harness entry is never usable by the chat gate).
+// the gate appropriate to the axis ResolveRoute was called with — the
+// chat gate for harness == "", the executor rule otherwise.
 type ResolvedRoute struct {
 	Route   string               `json:"route"`
 	Entries []ResolvedRouteEntry `json:"entries"`
 }
 
 // ResolveRoute fetches route's ordered chain with provider metadata so
-// missions can dispatch each entry native-vs-delegated and spawn a CLI
-// executor for a harness entry (D-051). Memoized per route name for
-// resolveTTL, shorter than ModelWindows/RouteForRole's TTL since
-// missions dispatch directly on this result.
-func (c *Client) ResolveRoute(ctx context.Context, name string) (*ResolvedRoute, error) {
+// missions can dispatch native-vs-delegated and spawn a CLI executor
+// (D-051): harness == "" resolves the chat-serving axis, a known
+// harness name resolves the executor axis for every entry. Memoized per
+// route+harness for resolveTTL, shorter than ModelWindows/RouteForRole's
+// TTL since missions dispatch directly on this result.
+func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*ResolvedRoute, error) {
+	cacheKey := name + "\x00" + harness
 	c.mu.Lock()
-	if entry, ok := c.resolved[name]; ok && time.Now().Before(entry.exp) {
+	if entry, ok := c.resolved[cacheKey]; ok && time.Now().Before(entry.exp) {
 		c.mu.Unlock()
 		return entry.route, nil
 	}
 	c.mu.Unlock()
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.baseURL+"/v1/routes/"+url.PathEscape(name)+"/resolve", nil)
+	reqURL := c.baseURL + "/v1/routes/" + url.PathEscape(name) + "/resolve"
+	if harness != "" {
+		reqURL += "?harness=" + url.QueryEscape(harness)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gwclient: request: %w", err)
 	}
@@ -236,7 +238,7 @@ func (c *Client) ResolveRoute(ctx context.Context, name string) (*ResolvedRoute,
 	if c.resolved == nil {
 		c.resolved = map[string]resolveCacheEntry{}
 	}
-	c.resolved[name] = resolveCacheEntry{route: &out, exp: time.Now().Add(resolveTTL)}
+	c.resolved[cacheKey] = resolveCacheEntry{route: &out, exp: time.Now().Add(resolveTTL)}
 	c.mu.Unlock()
 	return &out, nil
 }
