@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminRoute, Schedule } from '../../api/types'
+import type { AdminRoute, Mission, Schedule } from '../../api/types'
 import { MissionForm } from './MissionForm'
 
 vi.mock('../../api/client', () => ({
@@ -65,7 +65,7 @@ beforeEach(() => {
 
 describe('MissionForm — create mode, one-off mission', () => {
   it('submits a general mission with the entered goal', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm2' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     const onDone = vi.fn()
     render(<MissionForm mode="create" onDone={onDone} onCancel={vi.fn()} />)
 
@@ -85,7 +85,7 @@ describe('MissionForm — create mode, one-off mission', () => {
   })
 
   it('sends auto_approve_safe: false when the toggle is unchecked', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm2' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
@@ -156,7 +156,7 @@ describe('MissionForm — kind chip', () => {
 
   it('submits the mission with the classified kind', async () => {
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding' })
-    vi.mocked(createMission).mockResolvedValue({ id: 'm3' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm3' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
@@ -211,7 +211,7 @@ describe('MissionForm — executor select placement', () => {
   })
 
   it('submits the picked executor for a coding mission', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm5' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm5' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
@@ -246,7 +246,7 @@ describe('MissionForm — environment select', () => {
   })
 
   it('submits the picked environment for a coding mission, and omits it when left on Auto-detect', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm6' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm6' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
@@ -261,7 +261,7 @@ describe('MissionForm — environment select', () => {
   })
 
   it('omits environment from the create payload when left on Auto-detect', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm7' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm7' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
@@ -402,7 +402,7 @@ describe('MissionForm — create mode, repeat on schedule', () => {
   })
 
   it('submits the picked route and review route', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm4' })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm4' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })

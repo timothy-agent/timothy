@@ -1,6 +1,6 @@
-// ClaudeCodeIcon is Anthropic's Claude spark mark (simplified 8-ray
-// starburst), single-color, for the mission detail harness pill.
-// Inline SVG only — CSP forbids fetching an external asset.
+// ClaudeCodeIcon is the official Simple Icons "Claude Code" mark,
+// single-color, for the mission detail harness pill. Inline SVG only —
+// CSP forbids fetching an external asset.
 export function ClaudeCodeIcon({ className = 'size-3.5' }: { className?: string }) {
   return (
     <svg
@@ -9,7 +9,7 @@ export function ClaudeCodeIcon({ className = 'size-3.5' }: { className?: string 
       fill="#D97757"
       aria-hidden="true"
     >
-      <path d="M12 0l1.6 8.4L22 6l-6.4 5.6L24 12l-8.4 1.6L22 22l-6.4-8.4L12 24l-1.6-8.4L2 22l6.4-8.4L0 12l8.4-1.6L2 2l6.4 8.4L12 0z" />
+      <path d="M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z" />
     </svg>
   )
 }

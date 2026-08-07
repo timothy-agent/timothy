@@ -47,8 +47,8 @@ func TestSchedulerNoDoubleFireAcrossInstances(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched1 := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
-	sched2 := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
+	sched1 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched2 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
 
 	now := time.Now()
 	var wg sync.WaitGroup
@@ -95,7 +95,7 @@ func TestSchedulerLiveQueueDedup(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
 	now := time.Now()
 	if err := sched.tick(ctx, now); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -151,7 +151,7 @@ func TestSchedulerDedupSkipSetsPendingFireAndRecordsReason(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSchedulerPendingFireResolvesOnceMissionClears(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
 	// First tick: due, but the mission above is active -> dedup skip,
 	// pending_fire set.
 	if err := sched.tick(ctx, time.Now()); err != nil {
@@ -241,7 +241,7 @@ func TestSchedulerDueAndPendingFiresOnce(t *testing.T) {
 		t.Fatalf("seed pending schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestSchedulerBackfillSkipRecordsReason(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}

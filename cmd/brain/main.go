@@ -539,7 +539,15 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetAgentResolver(resolveAgent)
 
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
-	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, flags.CodingExecutor, log)
+	// routeExists backs DefaultCodingRoute's preference check for a
+	// coding template's route (see api/missions.go's own copy of this
+	// wiring for the create-request path) — false on any resolve error,
+	// never a hard failure.
+	routeExists := func(ctx context.Context, name string) bool {
+		_, err := gwc.ResolveRoute(ctx, name, "")
+		return err == nil
+	}
+	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, routeExists, flags.CodingExecutor, log)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace, hub
 }

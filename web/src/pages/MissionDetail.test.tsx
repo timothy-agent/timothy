@@ -210,7 +210,7 @@ describe('MissionDetail spend', () => {
     expect(screen.queryByText(/calls$/)).toBeNull()
   })
 
-  it('shows the converted total as primary with the billed amount(s) secondary', async () => {
+  it('shows the converted total with no tooltip when there is no notional cost', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 8 },
@@ -223,31 +223,16 @@ describe('MissionDetail spend', () => {
       models: [],
     })
     renderPage()
-    expect(await screen.findByText('EUR 6.88')).toBeTruthy()
     const pill = await screen.findByText('EUR 6.88')
     fireEvent.focus(pill)
-    expect(await screen.findByText(/USD 8\.00/)).toBeTruthy()
+    // No notional cost: the pill has no Tooltip wrapper at all, so
+    // nothing extra renders on focus (in particular, never the billed
+    // USD amount or a brain/harness breakdown — both dropped from the
+    // tooltip).
+    expect(screen.queryByText(/USD|subscription/)).toBeNull()
   })
 
-  it('adds a brain/harness breakdown to the billed pill tooltip when both incurred cost', async () => {
-    vi.mocked(missionUsage).mockResolvedValue({
-      mission_id: 'm1',
-      cost_by_currency: { USD: 1.32 },
-      billed_brain_by_currency: { USD: 1.11 },
-      billed_harness_by_currency: { USD: 0.21 },
-      input_tokens: 100,
-      output_tokens: 50,
-      requests: 3,
-      unpriced_requests: 0,
-      models: [],
-    })
-    renderPage()
-    const pill = await screen.findByText('USD 1.32')
-    fireEvent.focus(pill)
-    expect(await screen.findByText('brain USD 1.11 · harness USD 0.2100')).toBeTruthy()
-  })
-
-  it('omits the brain/harness breakdown tooltip when the mission is single-source', async () => {
+  it('omits the tooltip entirely when the mission has billed cost but no notional cost', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 1.11 },
@@ -262,15 +247,14 @@ describe('MissionDetail spend', () => {
     renderPage()
     const pill = await screen.findByText('USD 1.11')
     fireEvent.focus(pill)
-    // No breakdown/notional lines to show: the pill has no Tooltip
-    // wrapper at all, so nothing renders on focus.
-    expect(screen.queryByText(/brain|harness|subscription/)).toBeNull()
+    expect(screen.queryByText(/subscription/)).toBeNull()
   })
 
-  it('folds the notional subscription line into the billed pill tooltip, after the breakdown', async () => {
+  it('shows only the notional line, in the pill\'s own currency, when a converted notional amount exists', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 0.32 },
+      converted_cost_by_currency: { BDT: 32.1 },
       billed_brain_by_currency: { USD: 0.11 },
       billed_harness_by_currency: { USD: 0.21 },
       notional_cost_by_currency: { USD: 0.94 },
@@ -282,13 +266,16 @@ describe('MissionDetail spend', () => {
       models: [],
     })
     renderPage()
-    const pill = await screen.findByText('USD 0.3200')
+    // The pill displays the converted (BDT) amount; its tooltip must
+    // show the notional line in that SAME currency (BDT), never the
+    // dropped brain/harness breakdown or a different currency's figure.
+    const pill = await screen.findByText('BDT 32.10')
     fireEvent.focus(pill)
-    expect(await screen.findByText('brain USD 0.1100 · harness USD 0.2100')).toBeTruthy()
     expect(await screen.findByText('≈BDT 94.25 subscription (not billed)')).toBeTruthy()
+    expect(screen.queryByText(/brain|harness/)).toBeNull()
   })
 
-  it('shows only the notional tooltip line when the mission is all-harness', async () => {
+  it('shows the notional line in the raw billed currency when no converted notional amount exists', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 0 },

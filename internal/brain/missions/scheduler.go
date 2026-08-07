@@ -113,6 +113,7 @@ type Scheduler struct {
 	resolve               AgentResolver
 	enabled               func(ctx context.Context) bool
 	routeForRole          func(context.Context, string) string
+	routeExists           func(context.Context, string) bool
 	codingExecutorDefault func(context.Context) string
 	log                   *slog.Logger
 }
@@ -122,16 +123,19 @@ type Scheduler struct {
 // budget/prompt_overlay at fire time, the scheduler_enabled feature
 // switch (D-032) that tick checks first, routeForRole (D-049) for
 // the "default" system role's route when an agent's own route is also
-// empty, and codingExecutorDefault (D-051) for a coding template that
-// omits harness — nil-safe on all four: a nil resolve leaves an
-// unresolved AgentID's fields at whatever the template already
-// specified, a nil enabled defaults every tick to enabled (degrade
-// open, since a config-read hiccup pausing every schedule silently
-// would be worse than one that keeps firing), a nil/unbound
-// routeForRole leaves the route "", and a nil codingExecutorDefault
-// leaves harness at whatever the template specified (native if empty).
-func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, codingExecutorDefault func(context.Context) string, log *slog.Logger) *Scheduler {
-	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, codingExecutorDefault: codingExecutorDefault, log: log}
+// empty, routeExists for a coding template's route preferring the
+// operator's "coding" route over "default" when it exists (see
+// DefaultCodingRoute), and codingExecutorDefault (D-051) for a coding
+// template that omits harness — nil-safe on all five: a nil resolve
+// leaves an unresolved AgentID's fields at whatever the template
+// already specified, a nil enabled defaults every tick to enabled
+// (degrade open, since a config-read hiccup pausing every schedule
+// silently would be worse than one that keeps firing), a nil/unbound
+// routeForRole leaves the route "", a nil routeExists skips straight
+// to the default route, and a nil codingExecutorDefault leaves harness
+// at whatever the template specified (native if empty).
+func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string, log *slog.Logger) *Scheduler {
+	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, routeExists: routeExists, codingExecutorDefault: codingExecutorDefault, log: log}
 }
 
 // Run ticks forever until ctx is done. Double-fire protection across
@@ -368,7 +372,7 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // lazily the first time Advance/Drive touches it (see driver.go's
 // ensureProvisioned).
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.codingExecutorDefault)
+	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
 	spec, _ := json.Marshal(Spec{})
 	budgetCurrency := t.BudgetCurrency
 	if budgetCurrency == "" {
@@ -389,10 +393,12 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 // that reports ok=false, leaves the template exactly as given except
 // for the final default-role fallback), the resolved agent's prompt
 // overlay is returned separately since MissionTemplate itself carries
-// no such field, and a coding template that omits harness gets the
-// settings default (D-051) — mirrors api/missions.go create()'s own
-// precedence so a scheduler-fired mission inherits it too.
-func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, codingExecutorDefault func(context.Context) string) (MissionTemplate, string) {
+// no such field, a coding template's still-empty route prefers the
+// operator's "coding" route over "default" when it exists
+// (DefaultCodingRoute), and a coding template that omits harness gets
+// the settings default (D-051) — mirrors api/missions.go create()'s
+// own precedence so a scheduler-fired mission inherits it too.
+func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string) {
 	promptOverlay := ""
 	if resolve != nil {
 		if defaults, ok := resolve(ctx, t.AgentID); ok {
@@ -413,7 +419,11 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 		defaultRoute = routeForRole(ctx, "default")
 	}
 	if t.Route == "" {
-		t.Route = defaultRoute
+		if t.Kind == "coding" {
+			t.Route = DefaultCodingRoute(ctx, routeExists, defaultRoute)
+		} else {
+			t.Route = defaultRoute
+		}
 	}
 	if t.ReviewRoute == "" {
 		t.ReviewRoute = defaultRoute

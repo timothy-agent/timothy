@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -173,5 +174,46 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 	}
 	if len(got.Progress) != 0 {
 		t.Fatalf("progress = %+v, want none (no answer given)", got.Progress)
+	}
+}
+
+// TestMissionsCreateResponseCarriesDetectedEnvironment confirms the
+// POST /v1/missions response reflects the row create() actually
+// persisted — the create() handler resolves an omitted coding
+// mission's environment (D-05x, goal-keyword heuristic) BEFORE
+// building the Mission it hands to Driver.Create, but the original bug
+// was returning only {"id": id}: the detected value was stored (a
+// later GET showed it) yet never reached the create response itself.
+func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
+	store := testMissionStore(t)
+
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"coding"}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	var created missions.Mission
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Environment != "go" {
+		t.Fatalf("create response environment = %q, want %q", created.Environment, "go")
+	}
+
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Environment != created.Environment {
+		t.Fatalf("stored environment = %q, create response = %q, want equal", got.Environment, created.Environment)
 	}
 }

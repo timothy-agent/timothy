@@ -94,6 +94,7 @@ func TestResolveTemplateDefaults(t *testing.T) {
 		name        string
 		template    MissionTemplate
 		resolve     AgentResolver
+		routeExists func(context.Context, string) bool
 		codingExec  func(context.Context) string
 		wantRoute   string
 		wantReview  string
@@ -165,12 +166,46 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			wantReview:  "explicit-review",
 			wantOverlay: "overlay text",
 		},
+		{
+			name:        "coding template with no route prefers the coding route when it exists",
+			template:    MissionTemplate{Goal: "g", Kind: "coding", AgentID: "a1"},
+			resolve:     nil,
+			routeExists: func(context.Context, string) bool { return true },
+			wantRoute:   "coding",
+			wantReview:  "default",
+		},
+		{
+			name:        "coding template with no route falls back to default when coding route is absent",
+			template:    MissionTemplate{Goal: "g", Kind: "coding", AgentID: "a1"},
+			resolve:     nil,
+			routeExists: func(context.Context, string) bool { return false },
+			wantRoute:   "default",
+			wantReview:  "default",
+		},
+		{
+			name:        "coding template's own route is never overwritten by the coding preference",
+			template:    MissionTemplate{Goal: "g", Kind: "coding", AgentID: "a1", Route: "explicit"},
+			resolve:     nil,
+			routeExists: func(context.Context, string) bool { return true },
+			wantRoute:   "explicit",
+			wantReview:  "default",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			routeForRole := func(context.Context, string) string { return "default" }
-			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, tc.codingExec)
+			routeExists := tc.routeExists
+			if tc.template.Kind != "coding" {
+				// A general template must never even consult the coding
+				// preference — proven by a routeExists that panics if
+				// called, not just by asserting the resulting route.
+				routeExists = func(context.Context, string) bool {
+					t.Fatal("routeExists must not be called for a non-coding template")
+					return false
+				}
+			}
+			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, routeExists, tc.codingExec)
 			if got.Route != tc.wantRoute {
 				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
 			}

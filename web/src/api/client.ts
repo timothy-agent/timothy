@@ -897,8 +897,11 @@ export async function listMissions(opts?: {
   return missions ?? []
 }
 
-export async function createMission(input: CreateMissionInput): Promise<{ id: string }> {
-  return request<{ id: string }>('/v1/missions', {
+// createMission returns the full created mission (not just its id) so
+// a server-resolved field decided at create time — e.g. auto-detected
+// environment (D-05x) — is available without a follow-up GET.
+export async function createMission(input: CreateMissionInput): Promise<Mission> {
+  return request<Mission>('/v1/missions', {
     method: 'POST',
     body: JSON.stringify(input),
   })

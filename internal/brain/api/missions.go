@@ -96,6 +96,22 @@ type missionAPI struct {
 	log *slog.Logger
 }
 
+// routeExists reports whether name resolves to a real route via
+// resolveExecutorOptions (gwclient.ResolveRoute's own existence check —
+// a 404/not-found error means no such route) — the seam
+// DefaultCodingRoute uses to prefer the operator's "coding" route over
+// "default" only when it's actually configured. false, never an error,
+// on any failure (no gateway wiring, gateway unreachable, unknown
+// route): a missing preferred route must degrade silently, never 500
+// mission creation.
+func (h *missionAPI) routeExists(ctx context.Context, name string) bool {
+	if h.resolveExecutorOptions == nil {
+		return false
+	}
+	_, err := h.resolveExecutorOptions(ctx, name, "")
+	return err == nil
+}
+
 func failMission(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, missions.ErrNotFound):
@@ -272,7 +288,11 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		defaultRoute = h.routeForRole(r.Context(), "default")
 	}
 	if req.Route == "" {
-		req.Route = defaultRoute
+		if req.Kind == "coding" {
+			req.Route = missions.DefaultCodingRoute(r.Context(), h.routeExists, defaultRoute)
+		} else {
+			req.Route = defaultRoute
+		}
 	}
 	if req.ReviewRoute == "" {
 		req.ReviewRoute = defaultRoute
@@ -297,7 +317,24 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		failMission(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+	// Re-read rather than echo req/m back: Driver.Create's own
+	// provisioning (ensureProvisioned) can mutate the row before this
+	// handler ever sees it again — environment auto-detection in
+	// particular resolves before Create is called here, but the row is
+	// still the source of truth, and a future provisioning-time write
+	// must not silently go missing from the create response the way
+	// environment did before this fix. Best-effort: the mission was
+	// just created successfully, so a read failure here is surprising
+	// enough to log, but must not turn a successful create into an
+	// error response — id is still valid and GET /v1/missions/{id}
+	// works regardless.
+	created, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		h.log.Warn("mission: re-read after create failed", "mission_id", id, "error", err)
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
 }
 
 // classifyKind decides how a mission's work happens when the create

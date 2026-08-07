@@ -39,43 +39,19 @@ import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
 import { compact, formatDuration, money } from '../lib/format'
 
-// brainHarnessBreakdown formats "brain $x · harness $y" for the billed
-// cost pill's tooltip — only when both parts are non-zero across all
-// currencies; a single-source mission (all brain, or all harness)
-// keeps a clean pill with no extra tooltip line needed.
-function brainHarnessBreakdown(usage: MissionUsage): string | null {
-  const brain = usage.billed_brain_by_currency ?? {}
-  const harness = usage.billed_harness_by_currency ?? {}
-  const brainTotal = Object.values(brain).reduce((sum, v) => sum + v, 0)
-  const harnessTotal = Object.values(harness).reduce((sum, v) => sum + v, 0)
-  if (brainTotal === 0 || harnessTotal === 0) return null
-  const brainStr = Object.entries(brain)
-    .map(([c, v]) => money(v, c))
-    .join(', ')
-  const harnessStr = Object.entries(harness)
-    .map(([c, v]) => money(v, c))
-    .join(', ')
-  return `brain ${brainStr} · harness ${harnessStr}`
-}
-
 // notionalTooltipLine formats the "≈$X subscription (not billed)" line
-// folded into the billed cost pill's tooltip — prefers the
-// currency-converted notional total (matching the pill's own display
-// currency) and falls back to the raw per-currency amounts when no
-// converted total is available, same fallback the removed standalone
-// pill used.
-function notionalTooltipLine(usage: MissionUsage): string | null {
-  const notional = usage.notional_cost_by_currency ?? {}
-  if (Object.keys(notional).length === 0) return null
-  const converted = usage.converted_notional_cost_by_currency ?? {}
-  if (Object.keys(converted).length > 0) {
-    return Object.entries(converted)
-      .map(([c, v]) => `≈${money(v, c)} subscription (not billed)`)
-      .join(', ')
-  }
-  return Object.entries(notional)
-    .map(([c, v]) => `≈${money(v, c)} subscription (not billed)`)
-    .join(', ')
+// for the billed cost pill's tooltip, in that pill's OWN currency only
+// — prefers the currency-converted notional amount (matching the
+// pill's display currency), falling back to the raw notional amount in
+// that same currency if no converted figure exists for it. null when
+// neither map has an entry for currency, which also covers the
+// all-billed mission with no notional spend at all.
+function notionalTooltipLine(usage: MissionUsage, currency: string): string | null {
+  const converted = usage.converted_notional_cost_by_currency?.[currency]
+  const raw = usage.notional_cost_by_currency?.[currency]
+  const amount = converted ?? raw
+  if (amount == null) return null
+  return `≈${money(amount, currency)} subscription (not billed)`
 }
 
 function formatDate(v?: string): string {
@@ -151,22 +127,15 @@ function harnessDisplayName(harness: string): string {
 }
 
 // CostBadge renders the billed-cost pill: a plain Badge when there's
-// no breakdown to show, or one wrapped in a Tooltip (one line per
-// div, not \n) when there is — native title attrs don't fire on touch
-// devices and render multi-line poorly.
-function CostBadge({ cost, currency, lines }: { cost: number; currency: string; lines: string[] }) {
+// no notional (subscription) cost to note, or one wrapped in a Tooltip
+// showing that single line when there is.
+function CostBadge({ cost, currency, notionalLine }: { cost: number; currency: string; notionalLine: string | null }) {
   const badge = <Badge variant="secondary">{money(cost, currency)}</Badge>
-  if (lines.length === 0) return badge
+  if (!notionalLine) return badge
   return (
     <Tooltip>
       <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent>
-        <div className="flex flex-col gap-0.5">
-          {lines.map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </div>
-      </TooltipContent>
+      <TooltipContent>{notionalLine}</TooltipContent>
     </Tooltip>
   )
 }
@@ -484,26 +453,23 @@ export function MissionDetail() {
           {usage && usage.requests > 0 && (
             <TooltipProvider>
               {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
-                Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => {
-                  const breakdown = brainHarnessBreakdown(usage)
-                  const notional = notionalTooltipLine(usage)
-                  const converted = `Converted from the billed amount(s) (${Object.entries(usage.cost_by_currency)
-                    .map(([c, v]) => money(v, c))
-                    .join(', ')}) using a stored exchange rate.`
-                  const lines = [converted, breakdown, notional].filter(Boolean) as string[]
-                  return (
-                    <CostBadge key={currency} cost={cost} currency={currency} lines={lines} />
-                  )
-                })
+                Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => (
+                  <CostBadge
+                    key={currency}
+                    cost={cost}
+                    currency={currency}
+                    notionalLine={notionalTooltipLine(usage, currency)}
+                  />
+                ))
               ) : (
-                Object.entries(usage.cost_by_currency).map(([currency, cost]) => {
-                  const breakdown = brainHarnessBreakdown(usage)
-                  const notional = notionalTooltipLine(usage)
-                  const lines = [breakdown, notional].filter(Boolean) as string[]
-                  return (
-                    <CostBadge key={currency} cost={cost} currency={currency} lines={lines} />
-                  )
-                })
+                Object.entries(usage.cost_by_currency).map(([currency, cost]) => (
+                  <CostBadge
+                    key={currency}
+                    cost={cost}
+                    currency={currency}
+                    notionalLine={notionalTooltipLine(usage, currency)}
+                  />
+                ))
               )}
             </TooltipProvider>
           )}
