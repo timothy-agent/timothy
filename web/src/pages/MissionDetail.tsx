@@ -305,7 +305,7 @@ export function MissionDetail() {
               <span>{mission.status.replace(/_/g, ' ')}</span>
               {executorActivity && (
                 <span>
-                  activity: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
+                  executor: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
                   {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
                 </span>
               )}
