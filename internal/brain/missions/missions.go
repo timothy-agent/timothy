@@ -40,16 +40,20 @@ type Mission struct {
 	LastEvidence string `json:"last_evidence,omitempty"`
 	// ExploreNotes is the explore phase's findings, carried forward
 	// into the plan phase's prompt (see runner.go's PlanSession).
-	ExploreNotes        string   `json:"explore_notes,omitempty"`
-	Iteration           int      `json:"iteration"`
-	MaxIterations       int      `json:"max_iterations"`
-	ConsecutiveFailures int      `json:"consecutive_failures"`
-	LastGapFingerprint  string   `json:"last_gap_fingerprint,omitempty"`
-	StallCount          int      `json:"stall_count"`
-	BudgetAmount        *float64 `json:"budget_amount,omitempty"`
-	BudgetCurrency      string   `json:"budget_currency,omitempty"`
-	Route               string   `json:"route"`
-	ReviewRoute         string   `json:"review_route"`
+	ExploreNotes        string `json:"explore_notes,omitempty"`
+	Iteration           int    `json:"iteration"`
+	MaxIterations       int    `json:"max_iterations"`
+	ConsecutiveFailures int    `json:"consecutive_failures"`
+	LastGapFingerprint  string `json:"last_gap_fingerprint,omitempty"`
+	StallCount          int    `json:"stall_count"`
+	// ReplanUsed reports whether this mission already spent its one
+	// automatic replan-on-stall attempt (statemachine.go's
+	// stepWorkerRetry/stepReviewRework).
+	ReplanUsed     bool     `json:"replan_used"`
+	BudgetAmount   *float64 `json:"budget_amount,omitempty"`
+	BudgetCurrency string   `json:"budget_currency,omitempty"`
+	Route          string   `json:"route"`
+	ReviewRoute    string   `json:"review_route"`
 	// EscalationRoute, when non-empty, is the route worker turns switch
 	// to after a worker failure or review rework — instead of burning
 	// iterations on a model that already proved too weak for the unit.

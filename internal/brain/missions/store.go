@@ -48,7 +48,7 @@ const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, p
 	escalation_route, prompt_overlay,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
-	explore_notes, schedule_id, session_id, created_at, updated_at`
+	explore_notes, replan_used, schedule_id, session_id, created_at, updated_at`
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
@@ -64,7 +64,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.EscalationRoute, &m.PromptOverlay,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
-		&m.ExploreNotes, &scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
 	if agentID != nil {
@@ -426,7 +426,7 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	clearPending := t.Next.Phase.Terminal()
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
-			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, updated_at = now(),
+			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, replan_used = $11, updated_at = now(),
 			pending_permission = CASE WHEN $10 THEN '' ELSE pending_permission END,
 			pending_permission_tool = CASE WHEN $10 THEN '' ELSE pending_permission_tool END,
 			pending_permission_args = CASE WHEN $10 THEN '' ELSE pending_permission_args END,
@@ -435,7 +435,7 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
-		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending,
+		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

@@ -83,7 +83,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- The explore phase's findings, carried into the plan phase's
     -- prompt (internal/brain/missions/driver.go's runPlan) so the
     -- planner sees what exploration turned up, not just the bare goal.
-    explore_notes         text NOT NULL DEFAULT ''
+    explore_notes         text NOT NULL DEFAULT '',
+    -- A mission gets exactly one automatic replan attempt on stall
+    -- (statemachine.go's stepWorkerRetry/stepReviewRework) before a
+    -- second identical stall pauses for a human, same as always.
+    replan_used           boolean NOT NULL DEFAULT false
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

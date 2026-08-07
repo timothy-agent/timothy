@@ -133,6 +133,11 @@ type StepState struct {
 	// last unit — PhaseReview's approve transition needs this to
 	// decide between advancing to execute (more units left) or done.
 	LastUnit bool
+	// ReplanUsed reports whether this mission already spent its one
+	// automatic replan-on-stall attempt (stepWorkerRetry/
+	// stepReviewRework) — a second stall pauses for a human same as
+	// before this feature existed.
+	ReplanUsed bool
 }
 
 // StepInput bundles the triggering Input with whatever data it
@@ -336,6 +341,9 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 		}
 		s.LastGapFingerprint = in.GapFingerprint
 		if s.StallCount >= cfg.StallRounds {
+			if !s.ReplanUsed {
+				return replanTransition(s, in)
+			}
 			return Transition{
 				Next:   withPause(s, PauseNoProgress),
 				Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},
@@ -350,6 +358,19 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 		}
 	}
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: map[string]any{"cause": "worker_retry", "reason": in.Reason}}}}
+}
+
+// replanTransition sends a first-time stall back to planning instead of
+// pausing: spends the mission's one replan attempt and resets the
+// counters a fresh planning pass needs.
+func replanTransition(s StepState, in StepInput) Transition {
+	s.ReplanUsed = true
+	s.Phase = PhasePlan
+	s.Status = StatusIdle
+	s.StallCount = 0
+	s.LastGapFingerprint = ""
+	s.Iteration = 0
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.replan", Payload: map[string]any{"reason": in.Reason}}}}
 }
 
 // stepReviewApprove clears the stall counter (progress was made) and
@@ -382,6 +403,9 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 	}
 	s.LastGapFingerprint = in.GapFingerprint
 	if s.StallCount >= cfg.StallRounds {
+		if !s.ReplanUsed {
+			return replanTransition(s, in)
+		}
 		return Transition{
 			Next:   withPause(s, PauseNoProgress),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},

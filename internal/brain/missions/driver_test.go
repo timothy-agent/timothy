@@ -103,6 +103,7 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	m.Phase, m.Status, m.PauseReason = t.Next.Phase, t.Next.Status, t.Next.PauseReason
 	m.Iteration, m.MaxIterations = t.Next.Iteration, t.Next.MaxIterations
 	m.ConsecutiveFailures, m.LastGapFingerprint, m.StallCount = t.Next.ConsecutiveFailures, t.Next.LastGapFingerprint, t.Next.StallCount
+	m.ReplanUsed = t.Next.ReplanUsed
 	f.missions[id] = m
 	for _, ev := range t.Events {
 		f.seq[id]++
@@ -314,7 +315,7 @@ func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		exploreNotes: []string{"no prior implementation exists; goal is self-contained"},
-		plans:         []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -349,7 +350,7 @@ func TestDriverExploreTruncatesLongNotes(t *testing.T) {
 	long := strings.Repeat("x", exploreNotesCap+500)
 	runner := &scriptedRunner{
 		exploreNotes: []string{long},
-		plans:         []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -394,7 +395,7 @@ func TestDriverPlanReceivesStoredExploreNotes(t *testing.T) {
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		exploreNotes: []string{"found a reusable config loader in internal/platform/config"},
-		plans:         []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -502,8 +503,11 @@ func TestDriverWorkerRetryDoesNotCountTowardBackoff(t *testing.T) {
 
 func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
 	store := newFakeStore()
+	// ReplanUsed is pre-set true so the stall's first threshold hit
+	// pauses like it always did — the replan-on-first-stall behavior is
+	// covered separately by TestDriverReplanOnFirstStall.
 	store.put("m1", Mission{
-		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, ReplanUsed: true,
 		Spec: Spec{Units: []PlanUnit{{Title: "u1"}}},
 	})
 	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
@@ -531,6 +535,55 @@ func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
 	m, _ = store.Get(context.Background(), "m1")
 	if m.Status != StatusPaused || m.PauseReason != PauseNoProgress {
 		t.Fatalf("mission after 2 identical-fingerprint reworks = %+v, want paused/no_progress", m)
+	}
+}
+
+// TestDriverReplanOnFirstStall confirms a mission's FIRST stall (two
+// identical-fingerprint reworks, ReplanUsed still false) goes back to
+// planning instead of pausing — the driver-level counterpart of
+// statemachine_test.go's pure Step assertion, exercised through real
+// Advance calls so the plan phase's own re-run (via runPlan) is covered
+// too.
+func TestDriverReplanOnFirstStall(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8,
+		Spec: Spec{Units: []PlanUnit{{Title: "u1"}}},
+	})
+	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
+	runner := &scriptedRunner{
+		reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: sameFindings}},
+		plans:          []Spec{{Units: []PlanUnit{{Title: "u1 replanned"}}}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance 1: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	m.Phase = PhaseReview
+	store.put("m1", m)
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance 2: %v", err)
+	}
+	m, _ = store.Get(context.Background(), "m1")
+	if m.Status == StatusPaused {
+		t.Fatalf("mission after the FIRST stall = %+v, want a replan, not a pause", m)
+	}
+	if !m.ReplanUsed {
+		t.Fatal("ReplanUsed = false after a replan, want true")
+	}
+	if m.Phase != PhasePlan && m.Phase != PhaseExecute {
+		t.Fatalf("mission phase after replan = %q, want plan (or execute once the plan phase ran)", m.Phase)
+	}
+	found := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.replan" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission.replan event")
 	}
 }
 
@@ -1096,6 +1149,192 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 	}
 }
 
+// TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing reproduces
+// the fix: a unit that already passed can silently break while a LATER
+// unit's work is happening. Unit 0's artifact ("a.md") passed
+// previously; before the driver verifies unit 1, a.md gets deleted (as
+// if the worker's unit-1 changes broke it). The regression check must
+// catch this at the point unit 1's own verify succeeds, flip unit 0's
+// Passes back to false, emit mission.regression, and route back to
+// execute (worker_retry) instead of letting the mission advance to
+// review for unit 1.
+func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
+	root := t.TempDir()
+	aPath := filepath.Join(root, "a.md")
+	if err := os.WriteFile(aPath, []byte("unit 0 content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.md"), []byte("unit 1 content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Spec: Spec{Units: []PlanUnit{
+			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true},
+			{Title: "unit1", Artifacts: []string{"b.md"}},
+		}},
+	})
+	// Simulate unit 1's work having broken unit 0's artifact by the time
+	// the harness re-checks it: delete a.md right before the driver runs.
+	if err := os.Remove(aPath); err != nil {
+		t.Fatal(err)
+	}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote b.md"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseExecute {
+		t.Fatalf("mission phase = %q, want execute (regression routes back to work, not forward)", m.Phase)
+	}
+	if m.Spec.Units[0].Passes {
+		t.Fatal("unit 0's Passes was not flipped back to false after its artifact regressed")
+	}
+	found := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.regression" {
+			found = true
+			if !strings.Contains(string(ev.Payload), `"unit":"unit0"`) || !strings.Contains(string(ev.Payload), `"check":"artifacts"`) {
+				t.Fatalf("mission.regression payload = %s, want unit=unit0 check=artifacts", ev.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission.regression event")
+	}
+	if m.Iteration == 0 {
+		t.Fatal("a regression must cost an iteration via worker_retry, same as any other rework")
+	}
+}
+
+// TestDriverNoRegressionAdvancesNormally confirms the regression check
+// is a no-op — same phase progression as before this feature — when
+// every previously-passed unit still holds up.
+func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("unit 0 content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.md"), []byte("unit 1 content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Spec: Spec{Units: []PlanUnit{
+			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true},
+			{Title: "unit1", Artifacts: []string{"b.md"}},
+		}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote b.md"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if !m.Spec.Units[1].Passes {
+		t.Fatal("unit 1 should have passed with no regression detected")
+	}
+	if !m.Spec.Units[0].Passes {
+		t.Fatal("unit 0 must remain passed when its artifact still holds up")
+	}
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.regression" {
+			t.Fatal("no regression event expected when nothing regressed")
+		}
+	}
+}
+
+// TestDriverReplanPreservesMatchingPassedUnitsResetsOthers confirms
+// runPlan's restorePassedUnits: after a replan, a unit whose title and
+// verify_cmd are unchanged from a previously-passed unit is re-marked
+// passed (harness evidence carried forward); a unit the new plan
+// changed (or that is genuinely new) stays unverified, since
+// parseSpec's own zeroing is correct for anything actually different.
+func TestDriverReplanPreservesMatchingPassedUnitsResetsOthers(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
+		MaxIterations: 8, ReplanUsed: true,
+		Spec: Spec{Units: []PlanUnit{
+			{Title: "unit0", VerifyCmd: "test -f a.md", Passes: true},
+			{Title: "unit1", VerifyCmd: "test -f b.md", Passes: false},
+		}},
+	})
+	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{
+		{Title: "unit0", VerifyCmd: "test -f a.md"}, // unchanged: must be restored to passed
+		{Title: "unit1", VerifyCmd: "test -f c.md"}, // verify_cmd changed: must stay unverified
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if !m.Spec.Units[0].Passes {
+		t.Fatal("unit0 (title+verify_cmd unchanged) should have been restored to passed")
+	}
+	if m.Spec.Units[1].Passes {
+		t.Fatal("unit1 (verify_cmd changed) must stay unverified")
+	}
+}
+
+// TestDriverReplanPromptCarriesStallContext confirms runPlan feeds the
+// planner an augmented exploreNotes on a replan: current plan status
+// and recent progress, plus the "previous plan stalled" instruction —
+// not just the bare explore notes a first-time plan gets.
+func TestDriverReplanPromptCarriesStallContext(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
+		MaxIterations: 8, ReplanUsed: true, ExploreNotes: "original findings",
+		Progress: []ProgressNote{{Note: "tried approach A, failed"}},
+		Spec:     Spec{Units: []PlanUnit{{Title: "unit0", Passes: true}}},
+	})
+	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0"}}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(runner.planExploreNotes) != 1 {
+		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planExploreNotes))
+	}
+	got := runner.planExploreNotes[0]
+	for _, want := range []string{"original findings", "previous plan stalled", "tried approach A, failed", "unit0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("replan prompt = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestDriverFirstPlanDoesNotGetReplanNotes confirms a mission's very
+// first planning pass (ReplanUsed false) passes exploreNotes through
+// unchanged — no stall framing for a plan that never stalled.
+func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
+		MaxIterations: 8, ExploreNotes: "original findings",
+	})
+	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0"}}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got := runner.planExploreNotes[0]; got != "original findings" {
+		t.Fatalf("first-plan exploreNotes = %q, want unchanged %q", got, "original findings")
+	}
+}
+
 // TestDriverCodingMissionsAlwaysReview: the skip gate must never apply
 // to coding missions — a diff can be wrong in ways existence checks
 // cannot see.
@@ -1187,7 +1426,10 @@ func TestDriverEscalatesRepeatedRework(t *testing.T) {
 // MaxIterations instead of grinding through the whole budget.
 func TestDriverForcedRetriesStallInsteadOfBurningIterations(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 12})
+	// ReplanUsed pre-set true: this test asserts the pause outcome
+	// specifically; the first-stall replan path is covered separately
+	// by TestDriverReplanOnFirstStall.
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 12, ReplanUsed: true})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
 		{Outcome: "retry", Analysis: "the worker did not report a status; treated as a failed attempt", Forced: true},
 	}}

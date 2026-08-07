@@ -523,7 +523,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
-		LastUnit: isLastUnit(m.Spec),
+		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed,
 	}
 }
 
@@ -630,17 +630,81 @@ func (d *Driver) runExplore(ctx context.Context, m Mission) (StepInput, error) {
 }
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
-	spec, err := d.runner.PlanSession(ctx, m, m.ExploreNotes)
+	priorSpec := m.Spec
+	spec, err := d.runner.PlanSession(ctx, m, replanNotes(m))
 	if err != nil {
 		return StepInput{}, err
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_created", map[string]any{"units": len(spec.Units)}); err != nil {
 		return StepInput{}, fmt.Errorf("driver: record plan: %w", err)
 	}
+	if m.ReplanUsed {
+		// Carry forward prior harness evidence: a unit the new plan kept
+		// unchanged (same title, same verify_cmd) and that had already
+		// passed stays passed — the planner's own parseSpec forces every
+		// unit to passes=false, since it can't itself claim pre-verified.
+		restorePassedUnits(&spec, priorSpec)
+	}
 	if err := d.store.SetSpec(ctx, m.ID, spec); err != nil {
 		return StepInput{}, err
 	}
 	return StepInput{Input: InputPhaseComplete}, nil
+}
+
+// replanNotes extends the planner's exploreNotes input with what
+// stalled, on a replan only — first-time planning passes m.ExploreNotes
+// through unchanged. Folded into the existing exploreNotes string
+// argument (rather than a new Runner parameter) so PlanSession's
+// interface never has to change for this feature.
+func replanNotes(m Mission) string {
+	if !m.ReplanUsed || len(m.Spec.Units) == 0 {
+		return m.ExploreNotes
+	}
+	var b strings.Builder
+	b.WriteString(m.ExploreNotes)
+	b.WriteString("\n\nThe previous plan stalled and is being replanned. Current plan:\n")
+	for _, u := range m.Spec.Units {
+		status := "pending"
+		if u.Passes {
+			status = "verified"
+		}
+		fmt.Fprintf(&b, "- [%s] %s\n", status, u.Title)
+	}
+	if notes := recentProgressNotes(m.Progress, 3); notes != "" {
+		b.WriteString("\nRecent progress:\n")
+		b.WriteString(notes)
+	}
+	b.WriteString("\nKeep verified units unchanged, restructure or fix the rest.")
+	return b.String()
+}
+
+// recentProgressNotes renders the last n progress notes, oldest first.
+func recentProgressNotes(notes []ProgressNote, n int) string {
+	if len(notes) > n {
+		notes = notes[len(notes)-n:]
+	}
+	var b strings.Builder
+	for _, note := range notes {
+		fmt.Fprintf(&b, "- %s\n", note.Note)
+	}
+	return b.String()
+}
+
+// restorePassedUnits re-marks spec's units passed when a prior unit
+// with the exact same title and verify_cmd had already passed — harness
+// evidence a replan must not silently erase for work it didn't touch.
+func restorePassedUnits(spec *Spec, prior Spec) {
+	passed := make(map[string]bool, len(prior.Units))
+	for _, u := range prior.Units {
+		if u.Passes {
+			passed[u.Title+"\x00"+u.VerifyCmd] = true
+		}
+	}
+	for i := range spec.Units {
+		if passed[spec.Units[i].Title+"\x00"+spec.Units[i].VerifyCmd] {
+			spec.Units[i].Passes = true
+		}
+	}
 }
 
 func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
@@ -730,12 +794,75 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission) (StepInput, bool)
 		d.log.Warn("driver: pre-review verify errored; falling back to review", "mission_id", m.ID, "error", err)
 		return StepInput{}, false
 	}
+	if in, regressed := d.checkRegressions(ctx, m); regressed {
+		return in, true
+	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{
 		"unit": idx, "reason": "artifacts and verify_cmd passed harness checks",
 	}); err != nil {
 		d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 	}
 	return StepInput{Input: InputReviewApprove}, true
+}
+
+// checkRegressions re-verifies every unit that had ALREADY passed
+// (excluding whichever unit the caller just verified) after a unit's
+// own verify_cmd/CheckArtifacts just succeeded — a later unit's work
+// can silently break an earlier unit's artifacts, and passes today
+// only ever moves forward, never re-checked. Cheap and deterministic
+// (harness-side shell, same as verifyCurrentUnit), capped at the
+// spec's own unit count. Re-fetches the mission first: verifyCurrentUnit's
+// SetSpec write is not reflected in the caller's in-memory m.
+func (d *Driver) checkRegressions(ctx context.Context, m Mission) (StepInput, bool) {
+	fresh, err := d.store.Get(ctx, m.ID)
+	if err != nil {
+		d.log.Warn("driver: regression check reload failed", "mission_id", m.ID, "error", err)
+		return StepInput{}, false
+	}
+	workRoot := fresh.WorkRoot()
+	for i, u := range fresh.Spec.Units {
+		if !u.Passes {
+			continue
+		}
+		if problems := CheckArtifacts(workRoot, u.Artifacts); len(problems) > 0 {
+			return d.regressed(ctx, fresh, i, "artifacts", strings.Join(problems, "\n"))
+		}
+		if u.VerifyCmd == "" {
+			continue
+		}
+		res, err := d.runVerify(ctx, fresh.ID, workRoot, u.VerifyCmd)
+		if err != nil {
+			d.log.Warn("driver: regression re-verify errored", "mission_id", fresh.ID, "unit", i, "error", err)
+			continue
+		}
+		if !res.Passed {
+			return d.regressed(ctx, fresh, i, "verify_cmd", res.Excerpt)
+		}
+	}
+	return StepInput{}, false
+}
+
+// regressed flips a previously-passed unit back to unverified, records
+// mission.regression, and returns the same StepInput shape a failed
+// current-unit verify produces — the existing worker-retry/stall
+// machinery drives the fix with zero statemachine changes.
+func (d *Driver) regressed(ctx context.Context, m Mission, unit int, check, excerpt string) (StepInput, bool) {
+	units := make([]PlanUnit, len(m.Spec.Units))
+	copy(units, m.Spec.Units)
+	title := units[unit].Title
+	units[unit].Passes = false
+	if err := d.store.SetSpec(ctx, m.ID, Spec{Units: units}); err != nil {
+		d.log.Warn("driver: record regression spec write failed", "mission_id", m.ID, "error", err)
+	}
+	if err := d.store.AppendEvent(ctx, m.ID, "mission.regression", map[string]any{"unit": title, "check": check}); err != nil {
+		d.log.Warn("driver: record regression event failed", "mission_id", m.ID, "error", err)
+	}
+	note := fmt.Sprintf("Regression: unit %q, previously verified, now fails its %s check:\n%s", title, check, excerpt)
+	if err := d.recordProgress(ctx, m.ID, note); err != nil {
+		d.log.Warn("driver: record regression progress note failed", "mission_id", m.ID, "error", err)
+	}
+	fp := "regression:" + title
+	return StepInput{Input: InputWorkerRetry, Reason: truncate(note, 500), GapFingerprint: fp}, true
 }
 
 // currentUnit returns the plan's first unverified unit and its index,
@@ -816,6 +943,9 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 				return StepInput{Input: InputReviewRework, GapFingerprint: fp}, nil
 			}
 			return StepInput{Input: InputReviewInfraFailure}, err
+		}
+		if in, regressed := d.checkRegressions(ctx, m); regressed {
+			return in, nil
 		}
 		return StepInput{Input: InputReviewApprove}, nil
 	}

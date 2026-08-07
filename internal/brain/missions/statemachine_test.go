@@ -170,11 +170,11 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
 		},
 		{
-			name:  "worker_retry with the SAME fingerprint twice pauses no_progress (stall)",
-			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
+			name:  "worker_retry with the SAME fingerprint twice pauses no_progress once replan is already used",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0", ReplanUsed: true},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "verify_failed:unit_0"},
+			want:  StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "verify_failed:unit_0", ReplanUsed: true},
 		},
 		{
 			name:  "worker_retry with a DIFFERENT fingerprint does not accumulate stall",
@@ -205,11 +205,11 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseExecute, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
 		},
 		{
-			name:  "review_rework with the SAME fingerprint twice pauses no_progress (stall)",
-			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
+			name:  "review_rework with the SAME fingerprint twice pauses no_progress once replan is already used",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc", ReplanUsed: true},
 			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "abc"},
+			want:  StepState{Phase: PhaseReview, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "abc", ReplanUsed: true},
 		},
 		{
 			name:  "review_rework with a DIFFERENT fingerprint does not accumulate stall",
@@ -224,6 +224,20 @@ func TestStep(t *testing.T) {
 			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
 			cfg:   Config{BackoffFailures: 10, StallRounds: 10},
 			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
+		},
+		{
+			name:  "worker_retry stall with replan unused replans instead of pausing",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
+			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Reason: "same failure again"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
+		},
+		{
+			name:  "review_rework stall with replan unused replans instead of pausing",
+			state: StepState{Phase: PhaseReview, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
+			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc", Reason: "reviewer keeps rejecting"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
 		},
 		{
 			name:  "review_infra_failure pauses with infra reason",
@@ -302,6 +316,36 @@ func TestStepMixedCurrencyPauseDetail(t *testing.T) {
 	detail, _ := got.Events[0].Payload["detail"].(string)
 	if detail == "" || detail == "budget reached" {
 		t.Fatalf("Events[0].Payload[detail] = %q, want a mixed-currency-specific message", detail)
+	}
+}
+
+// TestStepReplanEmitsReasonAndUsesReplanOnlyOnce confirms the stall
+// branch's replan path emits mission.replan carrying the stall reason,
+// and that a second identical stall (ReplanUsed already true) pauses
+// no_progress exactly as before this feature existed.
+func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
+	first := Step(
+		StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "fp"},
+		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
+		DefaultConfig,
+	)
+	if len(first.Events) != 1 || first.Events[0].Kind != "mission.replan" {
+		t.Fatalf("Events = %+v, want exactly one mission.replan event", first.Events)
+	}
+	if reason, _ := first.Events[0].Payload["reason"].(string); reason != "stuck" {
+		t.Fatalf("mission.replan payload reason = %q, want %q", reason, "stuck")
+	}
+	if !first.Next.ReplanUsed {
+		t.Fatal("ReplanUsed = false after the first stall, want true")
+	}
+
+	second := Step(
+		StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "fp", ReplanUsed: true},
+		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp"},
+		DefaultConfig,
+	)
+	if second.Next.Status != StatusPaused || second.Next.PauseReason != PauseNoProgress {
+		t.Fatalf("second identical stall = %+v, want paused/no_progress", second.Next)
 	}
 }
 
