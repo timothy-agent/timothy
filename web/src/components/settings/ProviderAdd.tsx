@@ -24,6 +24,12 @@ function refFor(preset: ProviderPreset, name: string): string {
   return slug ? `${slug}_API_KEY` : ''
 }
 
+// cliAuthModes are the credential shapes a kind='cli' provider row can
+// take (D-051/D-054): a subscription OAuth token, a metered API key,
+// or the shared-volume subscription login with no credential input at
+// all.
+type CliAuthMode = 'oauth' | 'api_key' | 'subscription'
+
 // ProviderAdd is its own page (not a dialog): connecting a provider is
 // a create action, and validation runs a real one-token completion
 // against the unsaved config — a provider is born working or not at
@@ -50,6 +56,7 @@ export function ProviderAdd() {
   const [test, setTest] = useState<TestResult | null>(null)
   const [tested, setTested] = useState(false)
   const [existing, setExisting] = useState<AdminProvider[]>([])
+  const [cliAuthMode, setCliAuthMode] = useState<CliAuthMode>('oauth')
 
   useEffect(() => {
     listProviders().then(setExisting, () => undefined)
@@ -70,6 +77,7 @@ export function ProviderAdd() {
     setKeyError(null)
     setTest(null)
     setTested(false)
+    setCliAuthMode('oauth')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
 
@@ -110,6 +118,7 @@ export function ProviderAdd() {
   if (!preset) return <Navigate to="/settings/providers" replace />
 
   const isBedrock = preset.driver === 'bedrock'
+  const isCli = preset.kind === 'cli'
   const wantsKey = preset.requiresKey
 
   // Bedrock always splits into access key id / secret access key —
@@ -131,6 +140,67 @@ export function ProviderAdd() {
       setTest(null)
     }
     setKeyError(null)
+  }
+
+  // cliCredentialRef is the literal "subscription" for the shared-volume
+  // login mode (D-054's state-volume fallback), or the configured ref
+  // for a stored token/API key.
+  const cliCredentialRef = cliAuthMode === 'subscription' ? 'subscription' : ref.trim()
+
+  // submitCli validates the pasted credential's prefix against the
+  // chosen auth mode, stores it (unless it's the volume-login mode,
+  // which carries no credential), and creates the kind='cli' row.
+  // No probe: no chat driver exists for these rows (D-051), so there is
+  // nothing to test against.
+  const submitCli = async () => {
+    if (!name.trim()) {
+      toast.error('Name required', { description: 'Give this provider a unique name before adding.' })
+      return
+    }
+    if (cliAuthMode !== 'subscription') {
+      const trimmedKey = stripPaste(key)
+      const isOauthToken = trimmedKey.startsWith('sk-ant-oat')
+      if (!trimmedKey) {
+        setKeyError(
+          cliAuthMode === 'oauth' ? 'A subscription token is required.' : 'An API key is required.',
+        )
+        return
+      }
+      if (cliAuthMode === 'oauth' && !isOauthToken) {
+        setKeyError('Subscription tokens start with sk-ant-oat. Run `claude setup-token` to generate one.')
+        return
+      }
+      if (cliAuthMode === 'api_key' && isOauthToken) {
+        setKeyError('This looks like a subscription token — use "Subscription token" instead.')
+        return
+      }
+      if (!ref.trim()) {
+        setKeyError('a credential reference name is required to store it')
+        return
+      }
+    }
+    setKeyError(null)
+    setBusy(true)
+    try {
+      if (cliAuthMode !== 'subscription') {
+        await setSecret(ref.trim(), stripPaste(key))
+      }
+      await createProvider({
+        name: name.trim(),
+        kind: 'cli',
+        driver: preset.driver,
+        base_url: '',
+        credential_ref: cliCredentialRef,
+        headers: {},
+        enabled: true,
+      })
+      toast.success('Provider added', { description: `${name.trim()} is ready for coding missions.` })
+      navigate('/settings/providers')
+    } catch (err) {
+      toast.error('Could not add provider', { description: errText(err) })
+    } finally {
+      setBusy(false)
+    }
   }
 
   const runTest = async () => {
@@ -233,7 +303,84 @@ export function ProviderAdd() {
           />
         </Field>
 
-        {isBedrock && (
+        {isCli && (
+          <div className="grid gap-5">
+            <Field label="Authentication">
+              <Select
+                value={cliAuthMode}
+                onValueChange={(v) => {
+                  setCliAuthMode(v as CliAuthMode)
+                  setKey('')
+                  invalidate()
+                }}
+              >
+                <SelectTrigger className="mt-1.5 h-10 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="oauth">Subscription token</SelectItem>
+                  <SelectItem value="api_key">API key</SelectItem>
+                  <SelectItem value="subscription">Subscription login (shared volume)</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+
+            {cliAuthMode !== 'subscription' && (
+              <div>
+                <Field label={cliAuthMode === 'oauth' ? 'Subscription token' : 'API key'}>
+                  <Input
+                    type="password"
+                    value={key}
+                    onChange={(e) => {
+                      setKey(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder={cliAuthMode === 'oauth' ? 'sk-ant-oat…' : 'sk-ant-…'}
+                    className="mt-1.5 h-10"
+                    autoComplete="off"
+                    aria-invalid={keyError != null}
+                  />
+                </Field>
+                {keyError && (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                    <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                    {keyError}
+                  </p>
+                )}
+                {!keyError && (
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {cliAuthMode === 'oauth'
+                      ? 'Run `claude setup-token` on any machine with the claude CLI and paste the token.'
+                      : secretDestination(defaultBackend, ref)}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {cliAuthMode === 'subscription' && (
+              <p className="text-sm text-muted-foreground">
+                Login happens via a one-off container command documented in deploy/docker-compose.yml.
+              </p>
+            )}
+
+            {cliAuthMode !== 'subscription' && (
+              <Field label="Credential reference">
+                <Input
+                  value={ref}
+                  onChange={(e) => {
+                    setRef(e.target.value)
+                    setRefEdited(true)
+                    invalidate()
+                  }}
+                  placeholder="name (e.g. CLAUDE_CODE_TOKEN)"
+                  className="mt-1.5 h-10"
+                />
+              </Field>
+            )}
+          </div>
+        )}
+
+        {!isCli && isBedrock && (
           <Field label="Region">
             <Select
               value={region}
@@ -256,7 +403,7 @@ export function ProviderAdd() {
           </Field>
         )}
 
-        {preset.id === 'custom' && (
+        {!isCli && preset.id === 'custom' && (
           <Field label="Base URL">
             <Input
               value={baseURL}
@@ -269,7 +416,7 @@ export function ProviderAdd() {
             />
           </Field>
         )}
-        {wantsKey && bedrockSplit && (
+        {!isCli && wantsKey && bedrockSplit && (
           <div>
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="Access Key ID">
@@ -309,7 +456,7 @@ export function ProviderAdd() {
             )}
           </div>
         )}
-        {wantsKey && !bedrockSplit && (
+        {!isCli && wantsKey && !bedrockSplit && (
           <div>
             <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
               <Input
@@ -357,81 +504,91 @@ export function ProviderAdd() {
           </div>
         )}
 
-        <Field label="Model" hint="validated with a one-token completion, becomes the default">
-          <ModelInput
-            value={model}
-            onChange={(v) => {
-              setModel(v)
-              invalidate()
-            }}
-            suggestions={modelSuggestions}
-            placeholder="model id"
-            className="mt-1.5 h-10"
-          />
-        </Field>
+        {!isCli && (
+          <Field label="Model" hint="validated with a one-token completion, becomes the default">
+            <ModelInput
+              value={model}
+              onChange={(v) => {
+                setModel(v)
+                invalidate()
+              }}
+              suggestions={modelSuggestions}
+              placeholder="model id"
+              className="mt-1.5 h-10"
+            />
+          </Field>
+        )}
 
-        <details className="group">
-          <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-            Advanced: {isBedrock ? 'credential reference' : 'base URL & credential reference'}
-          </summary>
-          <div className="mt-3 grid gap-5 sm:grid-cols-2">
-            {!isBedrock && (
-              <Field label="Base URL">
+        {!isCli && (
+          <details className="group">
+            <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+              Advanced: {isBedrock ? 'credential reference' : 'base URL & credential reference'}
+            </summary>
+            <div className="mt-3 grid gap-5 sm:grid-cols-2">
+              {!isBedrock && (
+                <Field label="Base URL">
+                  <Input
+                    value={baseURL}
+                    onChange={(e) => {
+                      setBaseURL(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder={preset.driver === 'anthropic' ? 'https://api.anthropic.com (default)' : 'https://…/v1'}
+                    className="mt-1.5 h-10"
+                  />
+                </Field>
+              )}
+              <Field label="Credential reference">
                 <Input
-                  value={baseURL}
+                  value={ref}
                   onChange={(e) => {
-                    setBaseURL(e.target.value)
+                    setRef(e.target.value)
+                    setRefEdited(true)
                     invalidate()
                   }}
-                  placeholder={preset.driver === 'anthropic' ? 'https://api.anthropic.com (default)' : 'https://…/v1'}
+                  placeholder="name (e.g. OPENAI_API_KEY)"
                   className="mt-1.5 h-10"
                 />
               </Field>
-            )}
-            <Field label="Credential reference">
-              <Input
-                value={ref}
-                onChange={(e) => {
-                  setRef(e.target.value)
-                  setRefEdited(true)
-                  invalidate()
-                }}
-                placeholder="name (e.g. OPENAI_API_KEY)"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-          </div>
-        </details>
+            </div>
+          </details>
+        )}
 
-        <div
-          className={
-            'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-            (tested
-              ? 'border-good/30 bg-good-soft text-good'
-              : test && !test.ok
-                ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                : 'border-border bg-muted/40 text-muted-foreground')
-          }
-        >
-          <span className="min-w-0 flex-1 font-medium">
-            {busy
-              ? `Sending test completion to ${model.trim() || '…'}…`
-              : tested
-                ? `OK, ${test?.model} answered in ${test?.latency_ms} ms.`
+        {isCli ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+            <span className="min-w-0 flex-1 font-medium">CLI providers have no connection test.</span>
+          </div>
+        ) : (
+          <div
+            className={
+              'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+              (tested
+                ? 'border-good/30 bg-good-soft text-good'
                 : test && !test.ok
-                  ? `Failed after ${test.latency_ms} ms: ${test.detail}`
-                  : 'Not tested yet, run a test before adding.'}
-          </span>
-          <Button size="sm" variant="test" disabled={busy} onClick={() => void runTest()}>
-            {busy ? 'Testing…' : 'Test connection'}
-          </Button>
-        </div>
+                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                  : 'border-border bg-muted/40 text-muted-foreground')
+            }
+          >
+            <span className="min-w-0 flex-1 font-medium">
+              {busy
+                ? `Sending test completion to ${model.trim() || '…'}…`
+                : tested
+                  ? `OK, ${test?.model} answered in ${test?.latency_ms} ms.`
+                  : test && !test.ok
+                    ? `Failed after ${test.latency_ms} ms: ${test.detail}`
+                    : 'Not tested yet, run a test before adding.'}
+            </span>
+            <Button size="sm" variant="test" disabled={busy} onClick={() => void runTest()}>
+              {busy ? 'Testing…' : 'Test connection'}
+            </Button>
+          </div>
+        )}
 
         <div className="flex gap-3 pt-2">
           <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/providers')}>
             Cancel
           </Button>
-          <Button disabled={!tested || busy} onClick={() => void submit()}>
+          <Button disabled={(!isCli && !tested) || busy} onClick={() => void (isCli ? submitCli() : submit())}>
             Add provider
           </Button>
         </div>

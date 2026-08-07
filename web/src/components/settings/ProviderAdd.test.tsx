@@ -150,3 +150,90 @@ describe('ProviderAdd bedrock credential inputs', () => {
     expect(screen.queryByPlaceholderText('AKIA…')).not.toBeInTheDocument()
   })
 })
+
+describe('ProviderAdd cli (Claude Code) flow', () => {
+  beforeEach(() => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createProvider).mockResolvedValue('p-cli')
+  })
+
+  it('skips the connection probe entirely', async () => {
+    renderPage('claude-code')
+
+    await screen.findByText('CLI providers have no connection test.')
+    expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
+    expect(validateProvider).not.toHaveBeenCalled()
+  })
+
+  it('accepts a subscription token and rejects anything else', async () => {
+    renderPage('claude-code')
+
+    fireEvent.change(await screen.findByPlaceholderText('sk-ant-oat…'), {
+      target: { value: 'sk-ant-api03-notatoken' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    expect(
+      await screen.findByText(/Subscription tokens start with sk-ant-oat/),
+    ).toBeInTheDocument()
+    expect(createProvider).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByPlaceholderText('sk-ant-oat…'), {
+      target: { value: 'sk-ant-oat01-realtoken' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith(expect.any(String), 'sk-ant-oat01-realtoken')
+    const call = vi.mocked(createProvider).mock.calls[0][0]
+    expect(call).toMatchObject({ kind: 'cli', driver: 'claude-cli' })
+  })
+
+  it('rejects a subscription token pasted into the API key mode', async () => {
+    renderPage('claude-code')
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByText('API key'))
+
+    fireEvent.change(await screen.findByPlaceholderText('sk-ant-…'), {
+      target: { value: 'sk-ant-oat01-realtoken' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    expect(await screen.findByText(/use "Subscription token" instead/)).toBeInTheDocument()
+    expect(createProvider).not.toHaveBeenCalled()
+  })
+
+  it('accepts a plain API key in the API key mode', async () => {
+    renderPage('claude-code')
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByText('API key'))
+
+    fireEvent.change(await screen.findByPlaceholderText('sk-ant-…'), {
+      target: { value: 'sk-ant-api03-metered' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith(expect.any(String), 'sk-ant-api03-metered')
+  })
+
+  it('subscription login mode needs no credential and sets ref to "subscription"', async () => {
+    renderPage('claude-code')
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByText('Subscription login (shared volume)'))
+
+    expect(screen.queryByPlaceholderText('sk-ant-oat…')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('sk-ant-…')).not.toBeInTheDocument()
+    await screen.findByText(/one-off container command/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    const call = vi.mocked(createProvider).mock.calls[0][0]
+    expect(call).toMatchObject({ credential_ref: 'subscription' })
+  })
+})

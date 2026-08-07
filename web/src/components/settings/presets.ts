@@ -6,14 +6,15 @@ import type { AdminProvider } from '../../api/types'
 export interface ProviderPreset {
   id: string
   name: string
-  driver: 'openaicompat' | 'anthropic' | 'bedrock'
+  driver: 'openaicompat' | 'anthropic' | 'bedrock' | 'claude-cli'
   description: string
   // Sprite symbol in ProviderLogo; custom endpoints render a glyph.
   logo?: string
   brandColor: string
   // Default base_url ('' lets the driver default apply); unused for
   // bedrock, whose region lives in options.region instead (see `region`
-  // below and the registry contract).
+  // below and the registry contract), and for kind='cli' presets, which
+  // have no base_url at all.
   baseURL: string
   // Default AWS region for the bedrock preset's options.region dropdown.
   region?: string
@@ -27,6 +28,10 @@ export interface ProviderPreset {
   // Prefill for the validation model — editable in the dialog, becomes
   // the first declared model and the default on create.
   validateModel: string
+  // 'cli' presets (D-051) create mission-only executor rows: no chat
+  // probe, a harness-specific auth picker instead of a plain key field.
+  // Absent means 'api', the default and only kind before D-051.
+  kind?: 'cli'
 }
 
 // bedrockRegions lists AWS regions where Bedrock serves models, for the
@@ -183,6 +188,18 @@ export const providerPresets: ProviderPreset[] = [
     keyHint: 'Optional, leave empty for endpoints without auth.',
     validateModel: '',
   },
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
+    driver: 'claude-cli',
+    description: 'Delegated coding-CLI executor (missions only)',
+    logo: 'anthropic',
+    brandColor: '#D97757',
+    baseURL: '',
+    requiresKey: false,
+    validateModel: '',
+    kind: 'cli',
+  },
 ]
 
 // matchPreset finds the preset a configured provider was (probably)
@@ -190,6 +207,9 @@ export const providerPresets: ProviderPreset[] = [
 // host, then the custom fallback.
 export function matchPreset(p: AdminProvider): ProviderPreset {
   const custom = providerPresets.find((x) => x.id === 'custom')!
+  if (p.kind === 'cli') {
+    return providerPresets.find((x) => x.driver === p.driver && x.kind === 'cli') ?? custom
+  }
   if (p.driver === 'anthropic' || p.driver === 'bedrock') {
     return providerPresets.find((x) => x.driver === p.driver) ?? custom
   }

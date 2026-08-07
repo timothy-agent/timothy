@@ -47,4 +47,9 @@ describe('matchPreset', () => {
     const p = provider({ driver: 'anthropic', base_url: '' })
     expect(matchPreset(p).id).toBe('anthropic')
   })
+
+  it('matches the claude-code preset for a kind=cli row regardless of base_url', () => {
+    const p = provider({ kind: 'cli', driver: 'claude-cli', base_url: '' })
+    expect(matchPreset(p).id).toBe('claude-code')
+  })
 })

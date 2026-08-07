@@ -91,6 +91,7 @@ function ProviderCard({
   onManage: () => void
 }) {
   const preset = matchPreset(provider)
+  const isCli = provider.kind === 'cli'
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
 
@@ -119,8 +120,17 @@ function ProviderCard({
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{provider.name}</div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
-            {health?.healthy ? 'healthy' : 'credential missing'}
+            {isCli ? (
+              <>
+                <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
+                cli
+              </>
+            ) : (
+              <>
+                <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
+                {health?.healthy ? 'healthy' : 'credential missing'}
+              </>
+            )}
           </div>
         </div>
         <Toggle on={provider.enabled} onChange={toggle} label={`${provider.name} enabled`} />
@@ -132,7 +142,7 @@ function ProviderCard({
         </div>
       )}
 
-      {test && (
+      {!isCli && test && (
         <div
           className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
         >
@@ -141,9 +151,11 @@ function ProviderCard({
       )}
 
       <div className="mt-auto flex items-center gap-2 pt-1">
-        <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
-          {testing ? 'Testing…' : 'Test'}
-        </Button>
+        {!isCli && (
+          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
+            {testing ? 'Testing…' : 'Test'}
+          </Button>
+        )}
         <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
           Manage
         </Button>
