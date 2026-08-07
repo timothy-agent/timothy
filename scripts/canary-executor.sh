@@ -30,6 +30,7 @@ CASES=(
   ".gitattributes|Add a .gitattributes file at the repository root that sets text=auto for all files."
   "docs/ROADMAP.md|Add a docs/ROADMAP.md file with two short bullet points describing fictional next steps for this fixture repo."
   "LICENSE-NOTE.md|Add a LICENSE-NOTE.md file at the repository root with one short sentence noting this fixture repo has no real license."
+  "about.html|Create an about.html page at the repository root describing this repository based on its README."
 )
 CASE="${CASES[$((RANDOM % ${#CASES[@]}))]}"
 ARTIFACT="${CASE%%|*}"
