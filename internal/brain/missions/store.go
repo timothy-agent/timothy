@@ -393,6 +393,73 @@ func (s *Store) Events(ctx context.Context, id string) ([]Event, error) {
 	return out, rows.Err()
 }
 
+// LastRunState reads back the delegated executor's most recent run
+// manifest (executor.spawned) for missionID, plus whatever happened
+// after it — a terminal event (executor.result/executor.died) means the
+// run already reached a verdict in a prior process lifetime; otherwise
+// the highest byte_offset any executor.progress event recorded is the
+// resume point. Returns nil, nil when no executor.spawned event exists
+// yet (a mission that never ran a delegated executor, or hasn't yet).
+func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("missions last run state: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT kind, payload FROM mission_events
+		WHERE mission_id = $1 AND kind IN ('executor.spawned', 'executor.result', 'executor.died', 'executor.progress')
+		ORDER BY seq DESC`, missionID)
+	if err != nil {
+		return nil, fmt.Errorf("missions last run state: %w", err)
+	}
+	defer rows.Close()
+
+	var state *runState
+	for rows.Next() {
+		var kind string
+		var payload []byte
+		if err := rows.Scan(&kind, &payload); err != nil {
+			return nil, fmt.Errorf("missions last run state: %w", err)
+		}
+		switch kind {
+		case "executor.spawned":
+			var spawned struct {
+				Harness string `json:"harness"`
+				RunID   string `json:"run_id"`
+				RunDir  string `json:"run_dir"`
+			}
+			if err := json.Unmarshal(payload, &spawned); err != nil {
+				return nil, fmt.Errorf("missions last run state: decode spawned: %w", err)
+			}
+			if state == nil {
+				state = &runState{}
+			}
+			state.Harness, state.RunID, state.RunDir = spawned.Harness, spawned.RunID, spawned.RunDir
+			return state, nil // found the latest spawn; nothing older matters
+		case "executor.result", "executor.died":
+			if state == nil {
+				state = &runState{}
+			}
+			state.Finished = true
+		case "executor.progress":
+			if state == nil {
+				state = &runState{}
+			}
+			if state.ByteOffset == 0 {
+				var progress struct {
+					ByteOffset int64 `json:"byte_offset"`
+				}
+				if err := json.Unmarshal(payload, &progress); err == nil {
+					state.ByteOffset = progress.ByteOffset
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("missions last run state: %w", err)
+	}
+	return nil, nil
+}
+
 // ApplyTransition persists a Transition atomically: updates the
 // mission row to Next and appends its Events in order, all in one
 // txn. This is the ONLY way mission state changes after Create —

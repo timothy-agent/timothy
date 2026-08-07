@@ -452,6 +452,14 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 }
 
 func (r *nativeRunner) tryParseVerdict(args json.RawMessage) (WorkerVerdict, bool) {
+	return tryParseWorkerVerdict(args)
+}
+
+// tryParseWorkerVerdict decodes args into a WorkerVerdict, ok=false on
+// empty input or a missing outcome — shared by nativeRunner's sentinel
+// ladder and delegatedRunner's result ladder (delegated.go), since both
+// read a mission_status-shaped payload from a text-form sentinel.
+func tryParseWorkerVerdict(args json.RawMessage) (WorkerVerdict, bool) {
 	if len(args) == 0 {
 		return WorkerVerdict{}, false
 	}

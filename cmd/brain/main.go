@@ -34,6 +34,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
@@ -244,7 +245,7 @@ func main() {
 		}
 		return name
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, app.Log)
 	}
@@ -489,7 +490,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -516,7 +517,14 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// sandboxMgr routes model-authored command execution (the
 	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.
-	runner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, log)
+	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, log)
+	// The delegated runner wraps native with D-051/D-052's CLI-executor
+	// dispatch — resolve a worker route's chain via the gateway, spawn a
+	// harness entry's CLI detached in the mission's own sandbox container,
+	// poll it to a verdict. Only wired when a sandbox manager is present
+	// (missions already require one for the native shell path); nativeRunner
+	// alone is otherwise the floor, same as before this feature existed.
+	runner := buildDelegatedRunner(nativeRunner, store, gwc, secrets, sandboxMgr, db, log)
 	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
 	notifier := missions.NewNotifier(db, webhookURL, log)
 	notifier.SetHub(hub)
@@ -534,6 +542,37 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, log)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace, hub
+}
+
+// credResolveTimeout bounds one credential_ref resolution the delegated
+// runner does before spawning a CLI executor — same 3s bound
+// cmd/gateway/main.go's credentialLookup uses for the identical
+// secretstore.Resolve call.
+const credResolveTimeout = 3 * time.Second
+
+// buildDelegatedRunner wraps native with missions.NewDelegatedRunner
+// when a sandbox manager is present — missions already require one for
+// the native shell/verify_cmd path, so its absence here would mean
+// missions are disabled entirely (buildMissions already returned early
+// in that case). A nil secrets store still lets subscription-mode
+// executors run (the literal "subscription" credential_ref never
+// resolves through it); api_key-mode executors simply have no
+// resolver, so resolveCredential's ErrExecutorAuth path is what a
+// mission sees instead of a working key.
+func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gwclient.Client, secrets *secretstore.Store, sandboxMgr *sandboxclient.Client, db *pgpool.Pool, log *slog.Logger) missions.Runner {
+	if sandboxMgr == nil {
+		return native
+	}
+	var resolveCred func(context.Context, string) (string, error)
+	if secrets != nil {
+		resolveCred = func(ctx context.Context, ref string) (string, error) {
+			rctx, cancel := context.WithTimeout(ctx, credResolveTimeout)
+			defer cancel()
+			return secrets.Resolve(rctx, ref)
+		}
+	}
+	led := ledger.New(db, log)
+	return missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, log)
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd

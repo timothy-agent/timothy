@@ -369,6 +369,11 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// drive tool-using work, so retrying just burns iterations.
 			// Pause immediately as infra with the model named.
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case errors.Is(err, ErrExecutorAuth):
+			// A delegated executor's own credential failed: retrying the
+			// same entry is futile, so pause immediately as infra instead
+			// of burning iterations (same reasoning as ErrModelFloor above).
+			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
 		case m.Phase == PhaseReview:
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
 		default:
