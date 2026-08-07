@@ -247,11 +247,16 @@ func (r *delegatedRunner) resolveCredential(ctx context.Context, ref string, cap
 	return executor.AuthAPIKey, key, nil
 }
 
-// runDir builds the per-run scratch directory path under the mission's
-// own work root — brain-visible (same shared volume write_file uses),
-// so prompt.md can be written with a plain os.WriteFile.
-func runDir(workRoot, runID string) string {
-	return filepath.Join(workRoot, ".timothy-run", runID)
+// runDir builds the per-run scratch directory path as a sibling of the
+// worktree, under the mission's own directory (Mission.Workspace) rather
+// than inside the git worktree itself — keeps it out of git
+// status/mission diff/review and away from any CLI-authored commit.
+// Still brain-visible on the same shared /workspace volume the sandbox
+// container mounts wholesale, so prompt.md can be written with a plain
+// os.WriteFile and the sandbox's shell polls resolve the same absolute
+// path.
+func runDir(missionRoot, runID string) string {
+	return filepath.Join(missionRoot, "runs", runID)
 }
 
 // newRunID returns a random 12-hex-character run identifier.
@@ -313,7 +318,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", err
 	}
-	rdir := runDir(workRoot, runID)
+	rdir := runDir(m.Workspace, runID)
 	system, user := packet.Render()
 	system += delegatedSystemAppend
 

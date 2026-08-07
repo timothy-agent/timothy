@@ -608,7 +608,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRunID: %v", err)
 	}
-	rdir := runDir(m.WorkRoot(), runID)
+	rdir := runDir(m.Workspace, runID)
 	spec := executor.InvocationSpec{
 		MissionID: m.ID, Workdir: m.WorkRoot(), PromptPath: filepath.Join(rdir, "prompt.md"),
 		Model: entry.Model, AuthMode: authMode, ResultSchema: resultSchemaJSON, RunBudget: r.runBudget,
@@ -1000,7 +1000,7 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 		t.Skip("setsid unavailable on this host; runs in the containerized suite")
 	}
 	work := t.TempDir()
-	rdir := filepath.Join(work, ".timothy-run", "test01")
+	rdir := filepath.Join(work, "runs", "test01")
 	promptPath := filepath.Join(work, "prompt.md")
 	if err := os.WriteFile(promptPath, []byte("hello prompt"), 0o600); err != nil {
 		t.Fatal(err)
