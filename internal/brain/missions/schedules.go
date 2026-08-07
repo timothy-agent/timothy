@@ -53,12 +53,13 @@ func NextRun(cronExpr string, now time.Time) time.Time {
 	return schedule.Next(now)
 }
 
-const scheduleColumns = `id, name, cron, mission_template, enabled, expires_at, last_run, created_at, updated_at`
+const scheduleColumns = `id, name, cron, mission_template, enabled, expires_at, last_run, created_at, updated_at, pending_fire, last_skipped_at, skip_reason`
 
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var sc Schedule
 	var templateJSON []byte
-	if err := row.Scan(&sc.ID, &sc.Name, &sc.Cron, &templateJSON, &sc.Enabled, &sc.ExpiresAt, &sc.LastRun, &sc.CreatedAt, &sc.UpdatedAt); err != nil {
+	if err := row.Scan(&sc.ID, &sc.Name, &sc.Cron, &templateJSON, &sc.Enabled, &sc.ExpiresAt, &sc.LastRun, &sc.CreatedAt, &sc.UpdatedAt,
+		&sc.PendingFire, &sc.LastSkippedAt, &sc.SkipReason); err != nil {
 		return Schedule{}, err
 	}
 	_ = json.Unmarshal(templateJSON, &sc.MissionTemplate)

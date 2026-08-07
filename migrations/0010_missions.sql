@@ -124,7 +124,17 @@ CREATE TABLE IF NOT EXISTS schedules (
     expires_at        timestamptz,
     last_run          timestamptz,
     created_at        timestamptz NOT NULL DEFAULT now(),
-    updated_at        timestamptz NOT NULL DEFAULT now()
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    -- A due fire skipped because a mission from this schedule was still
+    -- active is not lost: pending_fire carries it forward so the next
+    -- tick with no active mission fires it, instead of the schedule
+    -- silently missing that boundary forever (scheduler.go's fireOne).
+    pending_fire      boolean NOT NULL DEFAULT false,
+    -- Records the most recent skip (backfill grace or active-mission
+    -- dedup) for the schedules API to surface; cleared on any
+    -- successful fire.
+    last_skipped_at   timestamptz,
+    skip_reason       text NOT NULL DEFAULT ''
 );
 
 -- Deferred FK: a mission may name the schedule that spawned it. NOT

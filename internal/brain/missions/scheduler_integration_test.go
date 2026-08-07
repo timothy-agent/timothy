@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createTestSchedule(t *testing.T, store *Store, name, cronExpr string) string {
@@ -113,5 +115,184 @@ func TestSchedulerLiveQueueDedup(t *testing.T) {
 	}
 	if lastRun == nil {
 		t.Fatal("last_run was not advanced despite the dedup skip")
+	}
+}
+
+// scheduleFlags reads pending_fire/last_skipped_at/skip_reason for
+// assertions below.
+func scheduleFlags(t *testing.T, ctx context.Context, db *pgxpool.Pool, id string) (pendingFire bool, lastSkippedAt *time.Time, skipReason string) {
+	t.Helper()
+	if err := db.QueryRow(ctx, `SELECT pending_fire, last_skipped_at, skip_reason FROM schedules WHERE id = $1`, id).
+		Scan(&pendingFire, &lastSkippedAt, &skipReason); err != nil {
+		t.Fatalf("read schedule flags: %v", err)
+	}
+	return
+}
+
+// TestSchedulerDedupSkipSetsPendingFireAndRecordsReason confirms a live-
+// queue dedup skip (a mission from this schedule still active) carries
+// the missed fire forward via pending_fire, and records the skip.
+func TestSchedulerDedupSkipSetsPendingFireAndRecordsReason(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	id := createTestSchedule(t, store, marker+"dedup-pending", "* * * * *")
+	db, _ := store.db.Get()
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	missionID, err := store.Create(ctx, Mission{Goal: marker + "active blocker", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE missions SET schedule_id = $2 WHERE id = $1", missionID, id); err != nil {
+		t.Fatalf("attach schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	pending, skippedAt, reason := scheduleFlags(t, ctx, db, id)
+	if !pending {
+		t.Fatal("pending_fire = false, want true after a dedup skip")
+	}
+	if skippedAt == nil || reason != "active_mission" {
+		t.Fatalf("last_skipped_at=%v skip_reason=%q, want a timestamp and active_mission", skippedAt, reason)
+	}
+}
+
+// TestSchedulerPendingFireResolvesOnceMissionClears confirms a schedule
+// carrying pending_fire from an earlier dedup skip fires on the NEXT
+// tick once the blocking mission is no longer active, and clears both
+// pending_fire and the skip fields.
+func TestSchedulerPendingFireResolvesOnceMissionClears(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	id := createTestSchedule(t, store, marker+"pending-resolves", "* * * * *")
+	db, _ := store.db.Get()
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	missionID, err := store.Create(ctx, Mission{Goal: marker + "temporarily active", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE missions SET schedule_id = $2 WHERE id = $1", missionID, id); err != nil {
+		t.Fatalf("attach schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, store.log)
+	// First tick: due, but the mission above is active -> dedup skip,
+	// pending_fire set.
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if pending, _, _ := scheduleFlags(t, ctx, db, id); !pending {
+		t.Fatal("pending_fire not set after first tick's dedup skip")
+	}
+
+	// The blocking mission finishes.
+	if _, err := db.Exec(ctx, "UPDATE missions SET phase = 'done' WHERE id = $1", missionID); err != nil {
+		t.Fatalf("complete blocking mission: %v", err)
+	}
+
+	// Second tick: cron isn't newly due (last_run just advanced a moment
+	// ago), but the pending fire must still resolve.
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	pending, skippedAt, reason := scheduleFlags(t, ctx, db, id)
+	if pending {
+		t.Fatal("pending_fire still true after the blocking mission cleared")
+	}
+	if skippedAt != nil || reason != "" {
+		t.Fatalf("last_skipped_at=%v skip_reason=%q, want both cleared after the pending fire resolved", skippedAt, reason)
+	}
+
+	var missionCount int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE schedule_id = $1`, id).Scan(&missionCount); err != nil {
+		t.Fatalf("count missions: %v", err)
+	}
+	if missionCount != 2 {
+		t.Fatalf("mission count = %d, want 2 (the original active one plus the resolved pending fire)", missionCount)
+	}
+}
+
+// TestSchedulerDueAndPendingFiresOnce confirms a schedule that is BOTH
+// newly due (its cron boundary passed again) AND still carrying an
+// earlier pending_fire only spawns one mission for the tick, not two.
+func TestSchedulerDueAndPendingFiresOnce(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	id := createTestSchedule(t, store, marker+"due-and-pending", "* * * * *")
+	db, _ := store.db.Get()
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, `UPDATE schedules SET created_at = $2, pending_fire = true,
+			last_skipped_at = $2, skip_reason = 'active_mission' WHERE id = $1`, id, past); err != nil {
+		t.Fatalf("seed pending schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var missionCount int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE schedule_id = $1`, id).Scan(&missionCount); err != nil {
+		t.Fatalf("count missions: %v", err)
+	}
+	if missionCount != 1 {
+		t.Fatalf("mission count = %d, want exactly 1 (due + pending fires once)", missionCount)
+	}
+	pending, skippedAt, reason := scheduleFlags(t, ctx, db, id)
+	if pending || skippedAt != nil || reason != "" {
+		t.Fatalf("pending_fire=%v last_skipped_at=%v skip_reason=%q, want all cleared after firing", pending, skippedAt, reason)
+	}
+}
+
+// TestSchedulerBackfillSkipRecordsReason confirms a schedule whose due
+// boundary is past misfireGrace still skips firing, but now records
+// last_skipped_at/skip_reason="backfill_grace" instead of leaving no
+// trace.
+func TestSchedulerBackfillSkipRecordsReason(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	id := createTestSchedule(t, store, marker+"backfill", "0 9 * * *")
+	db, _ := store.db.Get()
+	// Anchor far enough in the past that "now" is well beyond
+	// misfireGrace past the next boundary.
+	past := time.Now().Add(-48 * time.Hour)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var missionCount int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE schedule_id = $1`, id).Scan(&missionCount); err != nil {
+		t.Fatalf("count missions: %v", err)
+	}
+	if missionCount != 0 {
+		t.Fatalf("mission count = %d, want 0 (backfill grace skip never fires)", missionCount)
+	}
+	pending, skippedAt, reason := scheduleFlags(t, ctx, db, id)
+	if pending {
+		t.Fatal("pending_fire = true, want false (a backfill skip is not a dedup skip)")
+	}
+	if skippedAt == nil || reason != "backfill_grace" {
+		t.Fatalf("last_skipped_at=%v skip_reason=%q, want a timestamp and backfill_grace", skippedAt, reason)
 	}
 }

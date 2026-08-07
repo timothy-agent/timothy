@@ -38,6 +38,16 @@ type Schedule struct {
 	LastRun         *time.Time      `json:"last_run,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+	// PendingFire carries forward a fire that was due but skipped
+	// because a mission from this schedule was still active (fireOne's
+	// dedup) — cleared the moment it actually fires.
+	PendingFire bool `json:"pending_fire"`
+	// LastSkippedAt/SkipReason record the most recent skip (either
+	// "backfill_grace" or "active_mission"), cleared on any successful
+	// fire — nil/empty means the schedule's last due boundary fired
+	// (or it has never been due).
+	LastSkippedAt *time.Time `json:"last_skipped_at,omitempty"`
+	SkipReason    string     `json:"skip_reason,omitempty"`
 }
 
 // MissionTemplate is applied verbatim as a new mission's initial
@@ -187,7 +197,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 		return tx.Commit(ctx) // another instance already owns this tick
 	}
 
-	rows, err := tx.Query(ctx, `SELECT id, name, cron, mission_template, enabled, expires_at, last_run, created_at, updated_at
+	rows, err := tx.Query(ctx, `SELECT id, name, cron, mission_template, enabled, expires_at, last_run, created_at, updated_at, pending_fire
 		FROM schedules WHERE enabled AND (expires_at IS NULL OR expires_at > now())`)
 	if err != nil {
 		return fmt.Errorf("scheduler: query schedules: %w", err)
@@ -196,7 +206,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 	for rows.Next() {
 		var sc Schedule
 		var templateJSON []byte
-		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &templateJSON, &sc.Enabled, &sc.ExpiresAt, &sc.LastRun, &sc.CreatedAt, &sc.UpdatedAt); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &templateJSON, &sc.Enabled, &sc.ExpiresAt, &sc.LastRun, &sc.CreatedAt, &sc.UpdatedAt, &sc.PendingFire); err != nil {
 			rows.Close()
 			return fmt.Errorf("scheduler: scan schedule: %w", err)
 		}
@@ -216,9 +226,10 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 	return tx.Commit(ctx)
 }
 
-// fireOne evaluates and, if due, fires one schedule — inside the same
-// transaction tick holds, so last_run and any created mission commit
-// atomically together.
+// fireOne evaluates and, if due (or carrying a pending fire from an
+// earlier dedup skip), fires one schedule at most once — inside the
+// same transaction tick holds, so last_run/pending_fire/skip fields and
+// any created mission commit atomically together.
 func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) error {
 	// A never-run schedule anchors on its own creation, not "now" —
 	// otherwise Next(now) is always in the future and it could never
@@ -232,31 +243,102 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 	if err != nil {
 		return err
 	}
+
+	// Backfill skip: past misfireGrace, never fires for this boundary —
+	// still advance last_run (so the NEXT boundary computes from now,
+	// not the stale anchor) and record why, but pending_fire is
+	// untouched (a stale pending fire from an EARLIER dedup skip must
+	// still get its own chance below, not be silently dropped by this
+	// unrelated late boundary).
+	if dec == decisionBackfillSkip {
+		if err := s.markSkipped(ctx, tx, sc, now, "backfill_grace"); err != nil {
+			return err
+		}
+		return s.tryFirePending(ctx, tx, sc, now)
+	}
 	if dec == decisionSkip {
+		return s.tryFirePending(ctx, tx, sc, now)
+	}
+
+	// dec == decisionFire: due this tick. Whether or not a pending fire
+	// from an earlier tick is also carried, only ONE mission fires —
+	// firing the current due boundary also satisfies whatever was
+	// pending, so pending_fire clears here rather than firing twice.
+	active, err := s.activeMissionExists(ctx, tx, sc.ID)
+	if err != nil {
+		return err
+	}
+	if active {
+		// Live-queue dedup: a mission from THIS schedule still active
+		// means firing again would pile up parallel runs of the same
+		// job — skip firing, carry it forward as pending, but still
+		// advance last_run so the next boundary computes from now.
+		if _, err := tx.Exec(ctx, `UPDATE schedules SET
+				last_run = $2, pending_fire = true, last_skipped_at = $2, skip_reason = $3, updated_at = now()
+			WHERE id = $1`, sc.ID, now, "active_mission"); err != nil {
+			return fmt.Errorf("advance last_run (dedup skip): %w", err)
+		}
+		s.log.Info("scheduler: skipped firing, a mission from this schedule is still active", "schedule_id", sc.ID)
 		return nil
 	}
-
-	// Live-queue dedup: a mission from THIS schedule still active means
-	// firing again would pile up parallel runs of the same job — skip
-	// firing, but still advance last_run so the next boundary computes
-	// from now, not from the stale anchor.
-	if dec == decisionFire {
-		var activeCount int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM missions
-			WHERE schedule_id = $1 AND phase NOT IN ('done', 'failed')`, sc.ID).Scan(&activeCount); err != nil {
-			return fmt.Errorf("check active missions: %w", err)
-		}
-		if activeCount == 0 {
-			if err := s.createFromTemplate(ctx, tx, sc); err != nil {
-				return fmt.Errorf("create mission: %w", err)
-			}
-		} else {
-			s.log.Info("scheduler: skipped firing, a mission from this schedule is still active", "schedule_id", sc.ID)
-		}
+	if err := s.createFromTemplate(ctx, tx, sc); err != nil {
+		return fmt.Errorf("create mission: %w", err)
 	}
-
-	if _, err := tx.Exec(ctx, `UPDATE schedules SET last_run = $2, updated_at = now() WHERE id = $1`, sc.ID, now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE schedules SET
+			last_run = $2, pending_fire = false, last_skipped_at = NULL, skip_reason = '', updated_at = now()
+		WHERE id = $1`, sc.ID, now); err != nil {
 		return fmt.Errorf("advance last_run: %w", err)
+	}
+	return nil
+}
+
+// tryFirePending fires a carried-forward pending fire when no mission
+// from this schedule is currently active — the other half of the dedup
+// skip's carryover: the tick that skipped set pending_fire, and every
+// SUBSEQUENT tick (not just the one right after) checks it here until
+// the active mission finally clears. A no-op when pending_fire is
+// false, or when a mission is still active.
+func (s *Scheduler) tryFirePending(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) error {
+	if !sc.PendingFire {
+		return nil
+	}
+	active, err := s.activeMissionExists(ctx, tx, sc.ID)
+	if err != nil {
+		return err
+	}
+	if active {
+		return nil
+	}
+	if err := s.createFromTemplate(ctx, tx, sc); err != nil {
+		return fmt.Errorf("create mission (pending fire): %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE schedules SET
+			pending_fire = false, last_skipped_at = NULL, skip_reason = '', updated_at = now()
+		WHERE id = $1`, sc.ID); err != nil {
+		return fmt.Errorf("clear pending_fire: %w", err)
+	}
+	return nil
+}
+
+// activeMissionExists reports whether a mission from schedule id is
+// still in a non-terminal phase.
+func (s *Scheduler) activeMissionExists(ctx context.Context, tx pgx.Tx, scheduleID string) (bool, error) {
+	var activeCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM missions
+		WHERE schedule_id = $1 AND phase NOT IN ('done', 'failed')`, scheduleID).Scan(&activeCount); err != nil {
+		return false, fmt.Errorf("check active missions: %w", err)
+	}
+	return activeCount > 0, nil
+}
+
+// markSkipped records a backfill-grace skip's reason/time — last_run
+// still advances so the next boundary computes from now, not the stale
+// anchor (same rule the pre-existing backfill-skip path always followed).
+func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time, reason string) error {
+	if _, err := tx.Exec(ctx, `UPDATE schedules SET
+			last_run = $2, last_skipped_at = $2, skip_reason = $3, updated_at = now()
+		WHERE id = $1`, sc.ID, now, reason); err != nil {
+		return fmt.Errorf("advance last_run (backfill skip): %w", err)
 	}
 	return nil
 }

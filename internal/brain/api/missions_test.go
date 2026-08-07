@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -194,6 +195,61 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 
 	if code, _ := call(`{"goal":""}`); code != http.StatusBadRequest {
 		t.Fatalf("classify with an empty goal = %d, want 400", code)
+	}
+}
+
+// TestMissionsResumeMalformedBodyRejected confirms a resume request
+// with a body that isn't valid JSON 400s before ever reaching the store
+// or driver — a degraded pool would surface as 500 (failMission's
+// default) if the request passed body parsing, so a 400 here proves it
+// didn't.
+func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("resume with malformed JSON body = %d, want 400", w.Code)
+	}
+}
+
+// TestMissionsResumeEmptyBodyUnchanged confirms an absent body (nil,
+// matching the pre-answer-feature client) and an empty JSON object both
+// still reach the driver's Signal call exactly as before this feature
+// existed — proven by both hitting the same degraded-pool failure a
+// resume with no answer always hit.
+func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil)
+
+	call := func(body io.Reader) int {
+		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := call(nil); code != http.StatusBadRequest {
+		t.Fatalf("resume with no body = %d, want 400 from the degraded driver (reached Signal)", code)
+	}
+	if code := call(strings.NewReader(`{}`)); code != http.StatusBadRequest {
+		t.Fatalf("resume with empty JSON body = %d, want 400 from the degraded driver (reached Signal)", code)
+	}
+	if code := call(strings.NewReader(`{"answer":""}`)); code != http.StatusBadRequest {
+		t.Fatalf("resume with empty answer = %d, want 400 from the degraded driver (reached Signal, no answer appended)", code)
 	}
 }
 

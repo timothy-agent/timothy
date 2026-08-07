@@ -105,7 +105,7 @@ func (p *StorePermissionParker) OnPermissionCleared(ctx context.Context, mission
 // a failed append logs and never aborts the turn it's reporting on.
 func (p *StorePermissionParker) OnPermissionDenied(ctx context.Context, missionID, tool, digest string) {
 	if err := p.Store.AppendEvent(ctx, missionID, "mission.permission_denied", map[string]any{
-		"tool": tool, "digest": digest,
+		"tool": tool, "detail": digest,
 	}); err != nil {
 		p.Log.Error("mission: record permission denied failed", "mission_id", missionID, "error", err)
 	}

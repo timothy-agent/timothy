@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -327,12 +328,52 @@ func (h *missionAPI) events(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
+// resumeAnswerCap bounds the answer text carried into the progress note
+// and the mission.answered event payload — same cap as other bounded
+// event-payload fields in this package (e.g. push_failed's reason).
+const resumeAnswerCap = 500
+
+// resume handles POST /v1/missions/{id}/resume. An optional JSON body
+// {"answer": "..."} carries the human's reply to a worker's blocked
+// question: it's appended as a progress note (so the next worker
+// session's packet renders it, same as any other progress note) and as
+// a mission.answered event, BEFORE the resume signal — so the worker
+// that runs next already has the answer in its packet. An empty or
+// absent body (or one with an empty/missing answer) resumes exactly as
+// before this existed; only malformed JSON is rejected.
 func (h *missionAPI) resume(w http.ResponseWriter, r *http.Request) {
-	if err := h.driver.Signal(r.Context(), r.PathValue("id"), missions.InputResume); err != nil {
+	var body struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with an optional answer field")
+		return
+	}
+	id := r.PathValue("id")
+	if body.Answer != "" {
+		answer := missions.NeutralizeSlot(truncateAnswer(body.Answer, resumeAnswerCap))
+		if err := h.store.AppendProgress(r.Context(), id, "Answer to your question: "+answer); err != nil {
+			h.log.Warn("mission: record answer progress note failed", "mission_id", id, "error", err)
+		}
+		if err := h.store.AppendEvent(r.Context(), id, "mission.answered", map[string]any{"answer": answer}); err != nil {
+			h.log.Warn("mission: record mission.answered event failed", "mission_id", id, "error", err)
+		}
+	}
+	if err := h.driver.Signal(r.Context(), id, missions.InputResume); err != nil {
 		failMission(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// truncateAnswer caps an answer at n runes-as-bytes, matching the
+// truncate helper's shape elsewhere in this codebase (missions.truncate
+// is unexported to this package).
+func truncateAnswer(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 func (h *missionAPI) cancel(w http.ResponseWriter, r *http.Request) {

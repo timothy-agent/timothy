@@ -619,4 +619,7 @@ export interface Schedule {
   next_run?: string
   created_at: string
   updated_at: string
+  pending_fire: boolean
+  last_skipped_at?: string
+  skip_reason?: string
 }
