@@ -2,9 +2,9 @@
 
 # Java environment variant (tag timothy-sandbox-java): adds a JDK and
 # Maven to the base mission sandbox.
+ARG SANDBOX_BASE=timothy-sandbox-base:latest
 FROM eclipse-temurin:21-jdk AS java-dist
 
-ARG SANDBOX_BASE=timothy-sandbox-base:latest
 FROM ${SANDBOX_BASE}
 
 USER root
