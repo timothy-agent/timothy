@@ -268,6 +268,30 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
   })
 })
 
+describe('MissionDetail executor pill', () => {
+  it('shows the executor pill with provider/model when an executor.spawned event exists', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'executor.spawned',
+        payload: { harness: 'claude-cli', provider: 'Anthropic', model: 'sonnet', auth_mode: 'api_key' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('executor: Anthropic/sonnet')).toBeTruthy()
+  })
+
+  it('omits the executor pill when no executor.spawned event exists', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText(/^executor:/)).toBeNull()
+  })
+})
+
 describe('MissionDetail', () => {
   it('renders mission header, plan, and progress', async () => {
     renderPage()

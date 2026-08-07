@@ -79,6 +79,20 @@ function latestExecutorProgress(events: MissionEvent[]): { turns: number; tool_c
   return null
 }
 
+// latestExecutorSpawn finds the most recent executor.spawned event, so
+// the stats row can name the delegated CLI that actually ran the work
+// — unlike the native session's model pill, this is a fact about what
+// ran and stays shown once the mission is terminal.
+function latestExecutorSpawn(events: MissionEvent[]): { provider: string; model: string } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind === 'executor.spawned') {
+      const { provider, model } = events[i].payload as { provider: string; model: string }
+      return { provider, model }
+    }
+  }
+  return null
+}
+
 export function MissionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -172,6 +186,7 @@ export function MissionDetail() {
 
   const { turns, processingMs } = turnStats(events)
   const executorActivity = terminalPhases.has(mission.phase) ? null : latestExecutorProgress(events)
+  const executorSpawn = latestExecutorSpawn(events)
   // A live mission's elapsed span runs to now, not its last updated_at
   // (which only moves on a state transition, not while a turn is
   // in-flight) — otherwise "Elapsed" would understate a mission stuck
@@ -361,6 +376,13 @@ export function MissionDetail() {
                 title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
               />
             ))}
+          {executorSpawn && (
+            <ModelBadge
+              provider={executorSpawn.provider}
+              model={`executor: ${executorSpawn.provider}/${executorSpawn.model}`}
+              title="Delegated CLI executor that ran this mission's coding work"
+            />
+          )}
           {usage && usage.requests > 0 && (
             <Badge variant="secondary">
               {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
