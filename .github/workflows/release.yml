@@ -65,7 +65,7 @@ jobs:
           changed '^web/' && echo "web=true" >> "$GITHUB_OUTPUT" || echo "web=false" >> "$GITHUB_OUTPUT"
           changed '^markitdown-svc/' && echo "markitdown=true" >> "$GITHUB_OUTPUT" || echo "markitdown=false" >> "$GITHUB_OUTPUT"
           changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
-          changed '^deploy/sandbox\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
+          changed '^deploy/sandbox-.*\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
 
   images:
     needs: diff
@@ -108,9 +108,6 @@ jobs:
             dockerfile: whisper-svc/Dockerfile
             build-args: |
               WHISPER_MODEL=large-v3
-          - name: sandbox
-            context: .
-            dockerfile: deploy/sandbox.Dockerfile
     steps:
       - uses: actions/checkout@v7
         if: fromJSON(needs.diff.outputs[matrix.name])
@@ -166,8 +163,78 @@ jobs:
             --tag ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }} \
             ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${prev_version}
 
+  # Sandbox family: five variants FROM the base, so the base must be
+  # pushed before any variant builds — buildx can't resolve a
+  # cross-arch base from the local docker store the way single-stage
+  # images can. A matrix job's legs run in parallel with no ordering
+  # between them, so this is a single sequential job instead of a
+  # matrix leg. The family is all-or-nothing: any sandbox-*.Dockerfile
+  # change rebuilds and re-pushes all six images together, even if
+  # only one variant actually changed — simpler than tracking which
+  # variants use which lines of the base, and rebuilds are cheap
+  # relative to the base's own apt/node layers being cached.
+  #
+  # timothy-sandbox keeps publishing the base image (back-compat
+  # alias, matches the local `make sandbox-image` tagging convention
+  # of tagging the base as both timothy-sandbox-base and
+  # timothy-sandbox) rather than renaming it — nothing outside this
+  # workflow needs to change to keep pulling the base under its
+  # original name.
+  sandbox-images:
+    needs: diff
+    if: needs.diff.outputs.sandbox == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - id: sha
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push base
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: deploy/sandbox-base.Dockerfile
+          build-args: |
+            GIT_SHA=${{ steps.sha.outputs.short }}
+            APP_VERSION=${{ steps.version.outputs.value }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/timothy-sandbox:${{ steps.version.outputs.value }}
+            ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base:${{ steps.version.outputs.value }}
+      - name: Build and push variants
+        run: |
+          for lang in go node python java php; do
+            docker buildx build \
+              --file deploy/sandbox-$lang.Dockerfile \
+              --build-arg SANDBOX_BASE=ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base:${{ steps.version.outputs.value }} \
+              --build-arg GIT_SHA=${{ steps.sha.outputs.short }} \
+              --build-arg APP_VERSION=${{ steps.version.outputs.value }} \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              --tag ghcr.io/${{ github.repository_owner }}/timothy-sandbox-$lang:${{ steps.version.outputs.value }} \
+              .
+          done
+
   release:
-    needs: images
+    needs: [images, sandbox-images]
+    # sandbox-images is conditionally skipped (no sandbox-*.Dockerfile
+    # change this release) — the default success() treats a skipped
+    # need as not-success and would skip this job too, so it's spelled
+    # out explicitly: images must succeed, sandbox-images must succeed
+    # or be skipped.
+    if: needs.images.result == 'success' && (needs.sandbox-images.result == 'success' || needs.sandbox-images.result == 'skipped')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write

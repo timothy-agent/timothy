@@ -4,7 +4,8 @@
 # Maven to the base mission sandbox.
 FROM eclipse-temurin:21-jdk AS java-dist
 
-FROM timothy-sandbox-base:latest
+ARG SANDBOX_BASE=timothy-sandbox-base:latest
+FROM ${SANDBOX_BASE}
 
 USER root
 

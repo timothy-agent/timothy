@@ -4,4 +4,5 @@
 # live in the base image (needed there for the headless claude CLI
 # executor itself), so this variant is a no-op tag over base — it
 # exists purely so "node" is a selectable environment key.
-FROM timothy-sandbox-base:latest
+ARG SANDBOX_BASE=timothy-sandbox-base:latest
+FROM ${SANDBOX_BASE}

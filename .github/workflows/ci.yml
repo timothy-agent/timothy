@@ -49,7 +49,7 @@ jobs:
               - 'web/**'
               - '.github/workflows/ci.yml'
             sandbox:
-              - 'deploy/sandbox.Dockerfile'
+              - 'deploy/sandbox-*.Dockerfile'
               - '.github/workflows/ci.yml'
 
   # Split from go-integration: build/vet/unit-test/vuln-scan share no
@@ -195,18 +195,32 @@ jobs:
   # CVEs routinely — a CRITICAL,HIGH,exit-code=1 gate on it would make
   # CI red on churn unrelated to this repo. Scan for visibility
   # (uploaded as a run summary), don't block merges on it.
+  #
+  # Builds the base plus all five language variants (each FROM the
+  # base built here in the same job — no ARG override needed, they
+  # resolve timothy-sandbox-base:latest from this runner's local
+  # image store). Only the base is scanned: the variants are thin
+  # apt/toolchain layers on top of it, so the base's scan already
+  # covers the CVE surface that matters.
   sandbox-image:
     needs: changes
     if: needs.changes.outputs.sandbox == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v7
-      - name: Build image
-        run: docker build -f deploy/sandbox.Dockerfile -t timothy-sandbox:ci .
-      - name: Scan image (informational only)
+      - name: Build base image
+        run: docker build -f deploy/sandbox-base.Dockerfile -t timothy-sandbox-base:ci .
+      - name: Build variant images
+        run: |
+          for lang in go node python java php; do
+            docker build -f deploy/sandbox-$lang.Dockerfile \
+              --build-arg SANDBOX_BASE=timothy-sandbox-base:ci \
+              -t timothy-sandbox-$lang:ci .
+          done
+      - name: Scan base image (informational only)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: timothy-sandbox:ci
+          image-ref: timothy-sandbox-base:ci
           severity: CRITICAL,HIGH
           exit-code: "0"
           ignore-unfixed: true

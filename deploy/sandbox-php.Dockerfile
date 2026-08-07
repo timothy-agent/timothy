@@ -2,7 +2,8 @@
 
 # PHP environment variant (tag timothy-sandbox-php): adds PHP-CLI and
 # Composer to the base mission sandbox.
-FROM timothy-sandbox-base:latest
+ARG SANDBOX_BASE=timothy-sandbox-base:latest
+FROM ${SANDBOX_BASE}
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \

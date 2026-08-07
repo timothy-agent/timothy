@@ -2,7 +2,8 @@
 
 # Python environment variant (tag timothy-sandbox-python): base already
 # has python3 + pip; this variant adds venv support.
-FROM timothy-sandbox-base:latest
+ARG SANDBOX_BASE=timothy-sandbox-base:latest
+FROM ${SANDBOX_BASE}
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \

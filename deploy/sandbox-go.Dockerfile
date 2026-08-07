@@ -5,7 +5,8 @@
 # `go build`/`go test` for their verify_cmd.
 FROM golang:1.26.5 AS go-dist
 
-FROM timothy-sandbox-base:latest
+ARG SANDBOX_BASE=timothy-sandbox-base:latest
+FROM ${SANDBOX_BASE}
 
 USER root
 
