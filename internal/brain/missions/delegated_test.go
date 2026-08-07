@@ -29,11 +29,11 @@ import (
 // across a package boundary for one test helper).
 func loadDelegatedFixture(t *testing.T, name string) [][]byte {
 	t.Helper()
-	f, err := os.Open(filepath.Join("executor", "testdata", "claude-2.1.223", name))
+	f, err := os.Open(filepath.Join("executor", "testdata", "claude-2.1.223", name)) //nolint:gosec // G304: fixed testdata path.
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines [][]byte
 	sc := bufio.NewScanner(f)
@@ -599,10 +599,10 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildInvocation: %v", err)
 	}
-	if err := os.MkdirAll(rdir, 0o755); err != nil {
+	if err := os.MkdirAll(rdir, 0o750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte("prompt"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte("prompt"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	r.recordSpawned(context.Background(), m.ID, entry, runID, rdir, authMode)
@@ -829,6 +829,7 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 	}
 	// Stand-in CLI: prints each received arg on its own line.
 	cli := filepath.Join(work, "fakecli")
+	//nolint:gosec // G306: an executable stand-in script needs the exec bit.
 	if err := os.WriteFile(cli, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -844,7 +845,7 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput(); err != nil {
+	if out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // G204: executing the composed command is the point of the test.
 		t.Fatalf("launch command failed: %v: %s", err, out)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -858,7 +859,7 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	got, err := os.ReadFile(filepath.Join(rdir, "run.ndjson"))
+	got, err := os.ReadFile(filepath.Join(rdir, "run.ndjson")) //nolint:gosec // G304: path under t.TempDir.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,7 +867,8 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("child argv mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	if b, err := os.ReadFile(exitPath); err != nil || strings.TrimSpace(string(b)) != "0" {
+	b, err := os.ReadFile(exitPath) //nolint:gosec // G304: path under t.TempDir.
+	if err != nil || strings.TrimSpace(string(b)) != "0" {
 		t.Fatalf("exit_code = %q, err %v; want 0", b, err)
 	}
 }

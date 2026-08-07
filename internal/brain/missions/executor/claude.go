@@ -20,6 +20,7 @@ func init() {
 func (claudeAdapter) Harness() string { return claudeHarness }
 
 func (claudeAdapter) Capabilities() Capabilities {
+	//nolint:gosec // G101: env var NAMES the runner injects into, not credential values.
 	return Capabilities{
 		StructuredFinalOutput: true,
 		ReportsTokens:         true,

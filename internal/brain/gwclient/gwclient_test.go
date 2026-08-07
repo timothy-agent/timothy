@@ -250,7 +250,7 @@ func TestResolveRouteCachesPerRouteName(t *testing.T) {
 	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
 		route := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/routes/"), "/resolve")
 		hits[route]++
-		_, _ = fmt.Fprintf(w, `{"route":%q,"entries":[]}`, route)
+		_, _ = fmt.Fprintf(w, `{"route":%q,"entries":[]}`, route) //nolint:gosec // G705: test stub echoing a fixed test path segment as JSON.
 	})
 
 	if _, err := c.ResolveRoute(t.Context(), "coding"); err != nil {

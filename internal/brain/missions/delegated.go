@@ -309,11 +309,13 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: build invocation: %w", err)
 	}
 
-	if err := os.MkdirAll(rdir, 0o755); err != nil {
+	// 0750/0600 suffice: brain and the sandbox CLI share uid 65534 on
+	// the workspace volume, so owner permissions cover both readers.
+	if err := os.MkdirAll(rdir, 0o750); err != nil {
 		r.coolDown(entry)
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: create run dir: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte(user), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte(user), 0o600); err != nil {
 		r.coolDown(entry)
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: write prompt: %w", err)
 	}

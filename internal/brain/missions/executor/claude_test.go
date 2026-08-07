@@ -10,11 +10,11 @@ import (
 // loadFixture returns every non-empty line of a recorded claude-cli fixture.
 func loadFixture(t *testing.T, name string) [][]byte {
 	t.Helper()
-	f, err := os.Open(filepath.Join("testdata", "claude-2.1.223", name))
+	f, err := os.Open(filepath.Join("testdata", "claude-2.1.223", name)) //nolint:gosec // G304: fixed testdata path.
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines [][]byte
 	sc := bufio.NewScanner(f)
