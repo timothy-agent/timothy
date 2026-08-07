@@ -572,12 +572,16 @@ func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 		t.Fatalf("claimed %d slots, want exactly %d (cap %d minus %d already working)", len(got), want, max, baseline)
 	}
 
+	// ClaimWorkSlot takes the oldest idle mission GLOBALLY, so in a
+	// shared database an older foreign idle row may be claimed instead
+	// of this test's fixtures — the invariant under test is the global
+	// cap, not which rows filled the slots.
 	var working int
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE status = 'working' AND goal LIKE $1 || '%'`, marker).Scan(&working); err != nil {
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE status = 'working'`).Scan(&working); err != nil {
 		t.Fatalf("count working: %v", err)
 	}
-	if working != want {
-		t.Fatalf("working count = %d, want %d", working, want)
+	if working != baseline+want {
+		t.Fatalf("working count = %d, want %d (baseline %d + claimed %d)", working, baseline+want, baseline, want)
 	}
 }
 

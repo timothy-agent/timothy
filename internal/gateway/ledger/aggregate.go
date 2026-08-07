@@ -331,7 +331,7 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 }
 
 func (a *Aggregator) missionModels(ctx context.Context, db *pgxpool.Pool, missionID string) ([]ModelUsed, error) {
-	rows, err := db.Query(ctx, `SELECT provider, model, purpose = 'executor' AS harness, COUNT(*), MAX(ts)
+	rows, err := db.Query(ctx, `SELECT provider, model, purpose IS NOT DISTINCT FROM 'executor' AS harness, COUNT(*), MAX(ts)
 		FROM cost_ledger
 		WHERE mission_id = $1 AND `+notTest+`
 		GROUP BY provider, model, harness ORDER BY MAX(ts) DESC`, missionID)
