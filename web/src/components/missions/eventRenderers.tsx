@@ -128,9 +128,9 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
 
 // formatExecutorCost renders executor.result's usage.cost_usd:
 // non-null is the billed truth ($x.xxxx, never guessed — D-013);
-// null with a preceding subscription-mode spawn means cost is
-// genuinely untracked (no per-call price under subscription auth),
-// distinct from a null we simply failed to attribute.
+// null with a preceding subscription or oauth_token spawn means cost is
+// genuinely untracked (both ride the user's existing subscription, no
+// per-call price), distinct from a null we simply failed to attribute.
 function formatExecutorCost(costUsd: number | null | undefined, subscriptionAuth?: boolean): string {
   if (typeof costUsd === 'number') return `$${costUsd.toFixed(4)}`
   return subscriptionAuth ? 'subscription — cost untracked' : 'cost unreported'
@@ -165,7 +165,8 @@ function renderExecutorResult(event: MissionEvent, allEvents: MissionEvent[]): R
     .slice(0, allEvents.indexOf(event))
     .reverse()
     .find((e) => e.kind === 'executor.spawned') as MissionEvent | undefined
-  const subscriptionAuth = (spawn?.payload as ExecutorSpawnedPayload | undefined)?.auth_mode === 'subscription'
+  const spawnAuthMode = (spawn?.payload as ExecutorSpawnedPayload | undefined)?.auth_mode
+  const subscriptionAuth = spawnAuthMode === 'subscription' || spawnAuthMode === 'oauth_token'
   return (
     <span>
       Executor finished: {status} · {formatDuration(duration_ms)} · exit {exit_code} ·{' '}

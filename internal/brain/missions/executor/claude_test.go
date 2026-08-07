@@ -317,6 +317,37 @@ func TestClaudeAdapter_BuildInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "oauth_token auth: sets oauth env, no api key, no budget flag",
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+				Model: "sonnet", PromptPath: "/tmp/p.txt",
+				AuthMode: AuthOAuthToken, APIKey: "sk-ant-oat-test", BudgetUSD: &budget,
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if inv.Env["CLAUDE_CODE_OAUTH_TOKEN"] != "sk-ant-oat-test" {
+					t.Error("oauth_token auth must set CLAUDE_CODE_OAUTH_TOKEN")
+				}
+				if _, ok := inv.Env["ANTHROPIC_API_KEY"]; ok {
+					t.Error("oauth_token auth must not set ANTHROPIC_API_KEY")
+				}
+				if containsFlag(inv.Argv, "--max-budget-usd") {
+					t.Error("--max-budget-usd must not appear in oauth_token mode even with BudgetUSD set")
+				}
+			},
+		},
+		{
+			name: "oauth_token auth with base url is invalid",
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+				Model: "sonnet", PromptPath: "/tmp/p.txt",
+				AuthMode: AuthOAuthToken, APIKey: "sk-ant-oat-test", BaseURL: "https://example.com",
+			},
+			wantErr: true,
+		},
+		{
+			name:    "oauth_token auth without token is invalid",
+			spec:    InvocationSpec{Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthOAuthToken},
+			wantErr: true,
+		},
+		{
 			name:    "empty model is invalid",
 			spec:    InvocationSpec{PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription},
 			wantErr: true,

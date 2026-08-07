@@ -184,11 +184,19 @@ services:
       # missions using API-key auth (ANTHROPIC_API_KEY via per-exec env,
       # D-053) work fine without ever populating this volume.
       #
-      # One-off subscription login, run once after `make sandbox-image`.
-      # The chown comes first because compose initializes this volume
-      # through the metadata mount below (distroless, path absent from
-      # the image), which leaves a fresh volume root-owned while the
-      # CLI runs as 65534:
+      # Preferred subscription path: run `claude setup-token` on any
+      # machine with the claude CLI installed, paste the resulting
+      # sk-ant-oat… token into Settings → Secrets, then point the
+      # provider row's credential_ref at that secret name — resolveCredential
+      # classifies it as oauth_token auth automatically (no volume, no
+      # /login, works across sandbox rebuilds and restarts).
+      #
+      # The volume + /login flow below is the fallback for harnesses
+      # without a token equivalent. One-off subscription login, run once
+      # after `make sandbox-image`. The chown comes first because compose
+      # initializes this volume through the metadata mount below
+      # (distroless, path absent from the image), which leaves a fresh
+      # volume root-owned while the CLI runs as 65534:
       #   docker run --rm -u 0 -v timothy_executor-claude-state:/s timothy-sandbox:latest chown 65534:65534 /s
       #   docker run --rm -it -v timothy_executor-claude-state:/home/sandbox/.claude timothy-sandbox:latest claude /login
       - executor-claude-state:/statevols/claude

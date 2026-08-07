@@ -54,12 +54,13 @@ var missionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
 // container. Container-level Env (createContainer) stays PATH+HOME
 // only; this allowlist governs solely the per-exec addition.
 var execEnvAllowlist = map[string]bool{
-	"ANTHROPIC_API_KEY":    true,
-	"ANTHROPIC_AUTH_TOKEN": true,
-	"ANTHROPIC_BASE_URL":   true,
-	"ANTHROPIC_MODEL":      true,
-	"NO_COLOR":             true,
-	"TERM":                 true,
+	"ANTHROPIC_API_KEY":       true,
+	"ANTHROPIC_AUTH_TOKEN":    true,
+	"ANTHROPIC_BASE_URL":      true,
+	"ANTHROPIC_MODEL":         true,
+	"CLAUDE_CODE_OAUTH_TOKEN": true,
+	"NO_COLOR":                true,
+	"TERM":                    true,
 }
 
 // execEnvMaxValueLen bounds a single env value — generous for a token

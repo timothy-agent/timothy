@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -423,9 +424,10 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 		switch kind {
 		case "executor.spawned":
 			var spawned struct {
-				Harness string `json:"harness"`
-				RunID   string `json:"run_id"`
-				RunDir  string `json:"run_dir"`
+				Harness  string `json:"harness"`
+				AuthMode string `json:"auth_mode"`
+				RunID    string `json:"run_id"`
+				RunDir   string `json:"run_dir"`
 			}
 			if err := json.Unmarshal(payload, &spawned); err != nil {
 				return nil, fmt.Errorf("missions last run state: decode spawned: %w", err)
@@ -434,6 +436,7 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 				state = &runState{}
 			}
 			state.Harness, state.RunID, state.RunDir = spawned.Harness, spawned.RunID, spawned.RunDir
+			state.AuthMode = executor.AuthMode(spawned.AuthMode)
 			return state, nil // found the latest spawn; nothing older matters
 		case "executor.result", "executor.died":
 			if state == nil {

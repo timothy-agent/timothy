@@ -104,13 +104,14 @@ func TestValidExecEnv(t *testing.T) {
 		{name: "empty env", env: map[string]string{}, wantOK: true},
 		{
 			name: "all allowlisted",
-			env: map[string]string{
-				"ANTHROPIC_API_KEY":    "sk-test",
-				"ANTHROPIC_BASE_URL":   "https://api.anthropic.com",
-				"ANTHROPIC_MODEL":      "claude-x",
-				"ANTHROPIC_AUTH_TOKEN": "tok",
-				"NO_COLOR":             "1",
-				"TERM":                 "xterm",
+			env: map[string]string{ //nolint:gosec // G101: fixture values, not real credentials.
+				"ANTHROPIC_API_KEY":       "sk-test",
+				"ANTHROPIC_BASE_URL":      "https://api.anthropic.com",
+				"ANTHROPIC_MODEL":         "claude-x",
+				"ANTHROPIC_AUTH_TOKEN":    "tok",
+				"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-test",
+				"NO_COLOR":                "1",
+				"TERM":                    "xterm",
 			},
 			wantOK: true,
 		},

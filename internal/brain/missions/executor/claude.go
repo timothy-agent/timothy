@@ -29,6 +29,8 @@ func (claudeAdapter) Capabilities() Capabilities {
 		APIKeyEnv:             "ANTHROPIC_API_KEY",
 		BaseURLEnv:            "ANTHROPIC_BASE_URL",
 		StateDirs:             []string{".claude"},
+		OAuthTokenEnv:         "CLAUDE_CODE_OAUTH_TOKEN",
+		OAuthTokenPrefix:      "sk-ant-oat",
 	}
 }
 
@@ -51,6 +53,13 @@ func (claudeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	case AuthSubscription:
 		if spec.BaseURL != "" {
 			return Invocation{}, fmt.Errorf("executor/claude: subscription auth cannot set a base url")
+		}
+	case AuthOAuthToken:
+		if spec.APIKey == "" {
+			return Invocation{}, fmt.Errorf("executor/claude: oauth_token auth requires a token")
+		}
+		if spec.BaseURL != "" {
+			return Invocation{}, fmt.Errorf("executor/claude: oauth token bills the subscription, anthropic endpoint only - a custom base url means a mismatched provider row")
 		}
 	default:
 		return Invocation{}, fmt.Errorf("executor/claude: unknown auth mode %q", spec.AuthMode)
@@ -87,6 +96,9 @@ func (claudeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	env := map[string]string{"NO_COLOR": "1"}
 	if spec.AuthMode == AuthAPIKey {
 		env["ANTHROPIC_API_KEY"] = spec.APIKey
+	}
+	if spec.AuthMode == AuthOAuthToken {
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = spec.APIKey
 	}
 	if spec.BaseURL != "" {
 		env["ANTHROPIC_BASE_URL"] = spec.BaseURL

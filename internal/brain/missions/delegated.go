@@ -84,6 +84,7 @@ type eventSink interface {
 // event or progress marker after it.
 type runState struct {
 	Harness    string
+	AuthMode   executor.AuthMode
 	RunID      string
 	RunDir     string
 	ByteOffset int64
@@ -222,9 +223,11 @@ func (r *delegatedRunner) coolDown(entry gwclient.ResolvedRouteEntry) {
 
 // resolveCredential implements the credential contract: the exact
 // literal "subscription" means AuthSubscription with no resolution at
-// all; anything else resolves to an API key. Never logs the resolved
-// value.
-func (r *delegatedRunner) resolveCredential(ctx context.Context, ref string) (executor.AuthMode, string, error) {
+// all; anything else resolves to a secret, then classified against the
+// adapter's own OAuthTokenPrefix — a value starting with that prefix is
+// a long-lived OAuth token (subscription-billed), anything else is a
+// metered API key. Never logs the resolved value.
+func (r *delegatedRunner) resolveCredential(ctx context.Context, ref string, caps executor.Capabilities) (executor.AuthMode, string, error) {
 	if ref == "subscription" {
 		return executor.AuthSubscription, "", nil
 	}
@@ -234,6 +237,9 @@ func (r *delegatedRunner) resolveCredential(ctx context.Context, ref string) (ex
 	key, err := r.resolveCred(ctx, ref)
 	if err != nil || key == "" {
 		return "", "", fmt.Errorf("%w: %v", ErrExecutorAuth, err)
+	}
+	if caps.OAuthTokenPrefix != "" && strings.HasPrefix(key, caps.OAuthTokenPrefix) {
+		return executor.AuthOAuthToken, key, nil
 	}
 	return executor.AuthAPIKey, key, nil
 }
@@ -292,7 +298,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return verdict, text, err
 	}
 
-	authMode, apiKey, err := r.resolveCredential(ctx, entry.CredentialRef)
+	authMode, apiKey, err := r.resolveCredential(ctx, entry.CredentialRef, adapter.Capabilities())
 	if err != nil {
 		r.coolDown(entry)
 		r.recordAuthFailed(ctx, m.ID, entry.Harness)
@@ -313,7 +319,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		PromptPath:   filepath.Join(rdir, "prompt.md"),
 		SystemAppend: system,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
-		AllowTools:   delegatedAllowTools, DenyTools: delegatedDenyTools,
+		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
 		ResultSchema: resultSchemaJSON, RunBudget: r.runBudget,
 	}
 	inv, err := adapter.BuildInvocation(spec)
@@ -341,7 +347,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: launch: %w", err)
 	}
 
-	return r.pollToVerdict(ctx, m, workRoot, rdir, runID, entry, adapter, 0)
+	return r.pollToVerdict(ctx, m, workRoot, rdir, runID, entry, adapter, authMode, 0)
 }
 
 // attemptResume checks for an unfinished run recorded by a prior
@@ -373,7 +379,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 		return true, WorkerVerdict{Outcome: "retry", Forced: true, Analysis: "the executor's run was lost across a restart"}, "", nil
 	}
 
-	v, t, rerr := r.pollToVerdict(ctx, m, workRoot, state.RunDir, state.RunID, entry, adapter, state.ByteOffset)
+	v, t, rerr := r.pollToVerdict(ctx, m, workRoot, state.RunDir, state.RunID, entry, adapter, state.AuthMode, state.ByteOffset)
 	return true, v, t, rerr
 }
 
@@ -470,7 +476,7 @@ type pollState struct {
 // cancelled, or repeated infra errors declare the sandbox unreachable.
 // startOffset seeds the byte offset on a resumed run; 0 for a fresh
 // spawn.
-func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot, rdir, runID string, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, startOffset int64) (WorkerVerdict, string, error) {
+func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot, rdir, runID string, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, authMode executor.AuthMode, startOffset int64) (WorkerVerdict, string, error) {
 	parser := adapter.NewParser()
 	st := &pollState{offset: startOffset, lastByteMove: time.Now(), lastProgress: time.Now()}
 	start := time.Now()
@@ -507,17 +513,17 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 		}
 
 		if st.sawResult && hasExit {
-			return r.finish(ctx, m, entry, adapter, st, start, exitCode)
+			return r.finish(ctx, m, entry, adapter, authMode, st, start, exitCode)
 		}
 		if hasExit && !alive {
 			// Process exited; run.ndjson fully drained (no new bytes this
 			// poll) but no result event ever arrived — transport death.
-			return r.finishNoResult(ctx, m, entry, workRoot, rdir, st, start, exitCode)
+			return r.finishNoResult(ctx, m, entry, workRoot, rdir, authMode, st, start, exitCode)
 		}
 		if !alive && !hasExit {
 			// pid gone, no exit_code file: process died without even
 			// writing its own exit status — still transport death.
-			return r.finishNoResult(ctx, m, entry, workRoot, rdir, st, start, -1)
+			return r.finishNoResult(ctx, m, entry, workRoot, rdir, authMode, st, start, -1)
 		}
 
 		if time.Since(st.lastByteMove) > r.idleTimeout {
@@ -639,7 +645,7 @@ func (r *delegatedRunner) killRun(ctx context.Context, missionID, workRoot, rdir
 // whether the run also flagged an error); failing that, a text-form
 // sentinel in the accumulated text; failing that, a forced retry noting
 // the executor never reported a status.
-func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, st *pollState, start time.Time, exitCode int) (WorkerVerdict, string, error) {
+func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, authMode executor.AuthMode, st *pollState, start time.Time, exitCode int) (WorkerVerdict, string, error) {
 	res, ok := adapter.ParseResult(st.resultEvent)
 	parseKind := "schema"
 	var verdict WorkerVerdict
@@ -662,7 +668,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 	}
 
 	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome))
-	r.recordLedger(ctx, m, entry, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "")
+	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "")
 	if st.resultEvent.Err != "" {
 		if isAuthFailure(st.resultEvent.Err) {
 			r.coolDown(entry)
@@ -679,7 +685,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 // which return an error instead since retrying the same entry is
 // futile. An extra exec reads stderr.log's tail only on this path (exit
 // != 0, no result) to check for auth-failure signatures.
-func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, workRoot, rdir string, st *pollState, start time.Time, exitCode int) (WorkerVerdict, string, error) {
+func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, workRoot, rdir string, authMode executor.AuthMode, st *pollState, start time.Time, exitCode int) (WorkerVerdict, string, error) {
 	stderrTail := r.readStderrTail(ctx, m.ID, workRoot, rdir)
 	reason := fmt.Sprintf("executor exited (code %d) without a result event", exitCode)
 	if exitCode == -1 {
@@ -694,7 +700,7 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry g
 	}
 
 	r.recordDied(ctx, m.ID, "transport_death", &exitCode, stderrTail)
-	r.recordLedger(ctx, m, entry, nil, start, false)
+	r.recordLedger(ctx, m, entry, authMode, nil, start, false)
 	r.coolDown(entry)
 	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}, st.textBuf.String(), nil
 }
@@ -834,12 +840,12 @@ func (r *delegatedRunner) recordEventForce(ctx context.Context, missionID, kind 
 }
 
 // recordLedger writes one cost_ledger row at the run's terminal point
-// (D-055). AuthSubscription runs NEVER carry a cost, even if the CLI
-// itself reported total_cost_usd — D-013's cost-honesty invariant
-// applied to the subscription case specifically: a subscription has no
-// per-token bill, so any figure the CLI reports there is not a real
-// marginal cost and must not be recorded as one.
-func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, usage *executor.Usage, start time.Time, ok bool) {
+// (D-055). Cost rides ONLY on AuthAPIKey — AuthSubscription and
+// AuthOAuthToken are both billed on the user's existing subscription
+// with no marginal per-call cost, so any total_cost_usd the CLI itself
+// reports there is not a real cost and must not be recorded as one
+// (D-013's cost-honesty invariant).
+func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool) {
 	if r.ledger == nil {
 		return
 	}
@@ -857,7 +863,7 @@ func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwc
 			InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens),
 			CacheReadTokens: int(usage.CacheReadTokens), CacheWriteTokens: int(usage.CacheWriteTokens),
 		}
-		if entry.CredentialRef != "subscription" {
+		if authMode == executor.AuthAPIKey {
 			e.Cost = usage.CostUSD
 		}
 	}

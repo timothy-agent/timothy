@@ -16,6 +16,7 @@ type AuthMode string
 const (
 	AuthSubscription AuthMode = "subscription"
 	AuthAPIKey       AuthMode = "api_key"
+	AuthOAuthToken   AuthMode = "oauth_token" //nolint:gosec // G101: mode name, not a credential value.
 )
 
 // Capabilities declares what a harness honestly supports; the runner never
@@ -28,6 +29,11 @@ type Capabilities struct {
 	APIKeyEnv             string
 	BaseURLEnv            string
 	StateDirs             []string
+	// OAuthTokenEnv is the env var a long-lived OAuth token is injected
+	// under; OAuthTokenPrefix is the value prefix that identifies one.
+	// Empty OAuthTokenEnv means the adapter doesn't support this mode.
+	OAuthTokenEnv    string
+	OAuthTokenPrefix string
 }
 
 // InvocationSpec is what the runner supplies to build one CLI invocation.

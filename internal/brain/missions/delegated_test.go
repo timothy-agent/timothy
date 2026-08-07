@@ -590,7 +590,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if handled {
 		t.Fatalf("attemptResume handled on a mission with no prior run; want false")
 	}
-	authMode, _, err := r.resolveCredential(context.Background(), entry.CredentialRef)
+	authMode, _, err := r.resolveCredential(context.Background(), entry.CredentialRef, adapter.Capabilities())
 	if err != nil {
 		t.Fatalf("resolveCredential: %v", err)
 	}
@@ -744,6 +744,87 @@ func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {
 	// set (non-nil) for the api_key path, whatever its value.
 	if led.entries[0].Cost == nil {
 		t.Fatalf("api_key entry Cost = nil, want a recorded (possibly zero) figure")
+	}
+}
+
+// --- scenario 8: oauth-token mode -----------------------------------------
+
+func TestDelegatedRunWorker_OAuthTokenMode_EnvSetAndCostSuppressed(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	led := &fakeLedger{}
+	entry := harnessEntry("claude-cli", "cred-ref-oauth")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-ant-oat-test-token", nil), sandbox, events, nil, led)
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+
+	sandbox.mu.Lock()
+	var sawToken string
+	for _, run := range sandbox.runs {
+		sawToken = run.env["CLAUDE_CODE_OAUTH_TOKEN"]
+	}
+	sandbox.mu.Unlock()
+	if sawToken != "sk-ant-oat-test-token" { //nolint:gosec // G101: fixture value, not a real credential.
+		t.Fatalf("launch env CLAUDE_CODE_OAUTH_TOKEN = %q, want sk-ant-oat-test-token", sawToken)
+	}
+
+	spawned, _ := events.last("executor.spawned")
+	var spawnedPayload map[string]any
+	_ = json.Unmarshal(spawned.Payload, &spawnedPayload)
+	if spawnedPayload["auth_mode"] != "oauth_token" {
+		t.Fatalf("spawned auth_mode = %v, want oauth_token", spawnedPayload["auth_mode"])
+	}
+
+	if len(led.entries) != 1 {
+		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
+	}
+	if led.entries[0].Cost != nil {
+		t.Fatalf("oauth_token entry Cost = %v, want nil (D-013 — subscription-billed)", *led.entries[0].Cost)
+	}
+}
+
+func TestResolveCredential(t *testing.T) {
+	adapter, ok := executor.Lookup("claude-cli")
+	if !ok {
+		t.Fatal("claude-cli adapter not registered")
+	}
+	caps := adapter.Capabilities()
+
+	tests := []struct {
+		name     string
+		ref      string
+		key      string
+		wantMode executor.AuthMode
+	}{
+		{name: "subscription literal", ref: "subscription", wantMode: executor.AuthSubscription},
+		{name: "plain api key", ref: "cred-ref-1", key: "sk-test-key", wantMode: executor.AuthAPIKey},
+		{name: "oauth token prefix", ref: "cred-ref-oauth", key: "sk-ant-oat-test-token", wantMode: executor.AuthOAuthToken},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(nil, nil), scriptedCred(tt.key, nil), newFakeSandbox(), nil, nil, nil)
+			mode, key, err := r.resolveCredential(context.Background(), tt.ref, caps)
+			if err != nil {
+				t.Fatalf("resolveCredential: %v", err)
+			}
+			if mode != tt.wantMode {
+				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
+			}
+			if tt.ref != "subscription" && key != tt.key {
+				t.Fatalf("key = %q, want %q", key, tt.key)
+			}
+		})
 	}
 }
 

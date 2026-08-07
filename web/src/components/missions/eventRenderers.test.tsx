@@ -52,6 +52,17 @@ describe('executor.result rendering', () => {
     expect(screen.getByText(/subscription — cost untracked/)).toBeInTheDocument()
   })
 
+  it('shows subscription untracked cost when cost_usd is null and the spawn was oauth_token auth', () => {
+    const spawn = event(
+      { harness: 'claude-cli', provider: 'anthropic', model: 'sonnet', auth_mode: 'oauth_token', run_id: 'r1' },
+      'executor.spawned',
+      1,
+    )
+    const result = event(resultPayload(null), 'executor.result', 2)
+    render(<div>{renderEvent(result, [spawn, result])}</div>)
+    expect(screen.getByText(/subscription — cost untracked/)).toBeInTheDocument()
+  })
+
   it('shows cost unreported when cost_usd is null and auth was not subscription', () => {
     const spawn = event(
       { harness: 'claude-cli', provider: 'anthropic', model: 'sonnet', auth_mode: 'api_key', run_id: 'r1' },

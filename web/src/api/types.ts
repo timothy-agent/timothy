@@ -569,8 +569,9 @@ export interface MissionEvent {
 }
 
 // ExecutorUsage is executor.result's token/cost usage block. cost_usd
-// is null when the run authenticated via a subscription (no per-call
-// price) rather than metered API billing — never a guessed 0 (D-013).
+// is null when the run authenticated via a subscription or oauth_token
+// (no per-call price) rather than metered API billing — never a
+// guessed 0 (D-013).
 export interface ExecutorUsage {
   input_tokens: number
   output_tokens: number
