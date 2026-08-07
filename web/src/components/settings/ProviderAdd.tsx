@@ -51,6 +51,7 @@ export function ProviderAdd() {
   const [ref, setRef] = useState('')
   const [refEdited, setRefEdited] = useState(false)
   const [model, setModel] = useState('')
+  const [cliModel, setCliModel] = useState('claude-sonnet-4-6')
   const [busy, setBusy] = useState(false)
   const [keyError, setKeyError] = useState<string | null>(null)
   const [test, setTest] = useState<TestResult | null>(null)
@@ -73,6 +74,7 @@ export function ProviderAdd() {
     setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
+    setCliModel('claude-sonnet-4-6')
     setBusy(false)
     setKeyError(null)
     setTest(null)
@@ -178,6 +180,7 @@ export function ProviderAdd() {
         base_url: '',
         credential_ref: ref.trim(),
         headers: {},
+        default_model: cliModel.trim(),
         enabled: true,
       })
       toast.success('Provider added', { description: `${name.trim()} is ready for coding missions.` })
@@ -364,6 +367,21 @@ export function ProviderAdd() {
                 placeholder="name (e.g. CLAUDE_CODE_TOKEN)"
                 className="mt-1.5 h-10"
               />
+            </Field>
+
+            <Field label="Default model" hint="used when a mission's route chain doesn't specify one">
+              <Input
+                value={cliModel}
+                onChange={(e) => {
+                  setCliModel(e.target.value)
+                  invalidate()
+                }}
+                placeholder="claude-sonnet-4-6"
+                className="mt-1.5 h-10"
+              />
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                CLI aliases like sonnet, opus, or haiku also work.
+              </p>
             </Field>
           </div>
         )}

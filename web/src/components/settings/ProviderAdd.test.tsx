@@ -227,6 +227,43 @@ describe('ProviderAdd anthropic auth folding', () => {
     expect(call).toMatchObject({ kind: 'cli', driver: 'claude-cli' })
   })
 
+  it('prefills a default model for subscription token mode and sends it in the payload', async () => {
+    renderPage('anthropic')
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByText('Subscription token'))
+
+    expect(await screen.findByPlaceholderText('claude-sonnet-4-6')).toHaveValue('claude-sonnet-4-6')
+
+    fireEvent.change(screen.getByPlaceholderText('sk-ant-oat…'), {
+      target: { value: 'sk-ant-oat01-realtoken' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    const call = vi.mocked(createProvider).mock.calls[0][0]
+    expect(call).toMatchObject({ kind: 'cli', driver: 'claude-cli', default_model: 'claude-sonnet-4-6' })
+  })
+
+  it('sends an edited default model for subscription token mode', async () => {
+    renderPage('anthropic')
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByText('Subscription token'))
+
+    fireEvent.change(await screen.findByPlaceholderText('claude-sonnet-4-6'), {
+      target: { value: 'opus' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('sk-ant-oat…'), {
+      target: { value: 'sk-ant-oat01-realtoken' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    const call = vi.mocked(createProvider).mock.calls[0][0]
+    expect(call).toMatchObject({ default_model: 'opus' })
+  })
+
   it('shows setup-token instructions for the subscription token mode', async () => {
     renderPage('anthropic')
 
