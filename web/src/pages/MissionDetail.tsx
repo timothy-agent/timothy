@@ -31,6 +31,7 @@ import {
 } from '../components/ui/dialog'
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
+import { envIcon } from '../components/icons/EnvIcons'
 import { Badge } from '../components/ui/badge'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import { errText } from '../components/settings/util'
@@ -367,7 +368,7 @@ export function MissionDetail() {
               <span>{mission.status.replace(/_/g, ' ')}</span>
               {executorActivity && (
                 <span>
-                  executor: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
+                  harness: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
                   {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
                 </span>
               )}
@@ -428,17 +429,22 @@ export function MissionDetail() {
           {executorSpawn && (
             <Badge
               variant="secondary"
-              title={`Delegated CLI executor that ran this mission's coding work, via ${executorSpawn.provider}`}
+              title={`Delegated CLI harness that ran this mission's coding work, via ${executorSpawn.provider}`}
             >
               <ClaudeCodeIcon />
               {harnessDisplayName(executorSpawn.harness)} · {executorSpawn.model}
             </Badge>
           )}
-          {mission.environment && (
-            <Badge variant="secondary" title="Sandbox environment this mission's container runs">
-              env · {mission.environment}
-            </Badge>
-          )}
+          {mission.environment &&
+            (() => {
+              const EnvIcon = envIcon(mission.environment)
+              return (
+                <Badge variant="secondary" title="Sandbox environment this mission's container runs">
+                  {EnvIcon && <EnvIcon />}
+                  env · {mission.environment}
+                </Badge>
+              )
+            })()}
           {usage && usage.requests > 0 && (
             <Badge variant="secondary">
               {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok

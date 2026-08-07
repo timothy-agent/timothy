@@ -24,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Textarea } from '../ui/textarea'
 import { errText } from '../settings/util'
+import { envIcon } from '../icons/EnvIcons'
 
 type Kind = 'coding' | 'general'
 
@@ -571,7 +572,7 @@ export function MissionForm({
 
         {kind === 'coding' && (
           <div className="space-y-1.5">
-            <Label htmlFor="mission-executor">Executor</Label>
+            <Label htmlFor="mission-executor">Harness</Label>
             <Select
               value={harness || EXECUTOR_DEFAULT}
               onValueChange={(v) => setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
@@ -623,11 +624,15 @@ export function MissionForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {environmentChoices.map((c) => (
-                  <SelectItem key={c.value} value={c.value}>
-                    {c.label}
-                  </SelectItem>
-                ))}
+                {environmentChoices.map((c) => {
+                  const EnvIcon = envIcon(c.value)
+                  return (
+                    <SelectItem key={c.value} value={c.value}>
+                      {EnvIcon && <EnvIcon />}
+                      {c.label}
+                    </SelectItem>
+                  )
+                })}
               </SelectContent>
             </Select>
           </div>

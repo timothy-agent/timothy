@@ -677,14 +677,17 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 		}
 	}
 
+	authFailed := st.resultEvent.Err != "" && isAuthFailure(st.resultEvent.Err)
+	errorCode := ""
+	if authFailed {
+		errorCode = errorCodeAuthFailed
+	}
 	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome))
-	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "")
-	if st.resultEvent.Err != "" {
-		if isAuthFailure(st.resultEvent.Err) {
-			r.coolDown(m.Harness, entry)
-			r.recordAuthFailed(ctx, m.ID, m.Harness)
-			return WorkerVerdict{}, st.textBuf.String(), fmt.Errorf("%w: %s", ErrExecutorAuth, st.resultEvent.Err)
-		}
+	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "", errorCode)
+	if authFailed {
+		r.coolDown(m.Harness, entry)
+		r.recordAuthFailed(ctx, m.ID, m.Harness)
+		return WorkerVerdict{}, st.textBuf.String(), fmt.Errorf("%w: %s", ErrExecutorAuth, st.resultEvent.Err)
 	}
 	return verdict, st.textBuf.String(), nil
 }
@@ -705,12 +708,13 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry g
 	if exitCode != 0 && isAuthFailure(stderrTail) {
 		r.coolDown(m.Harness, entry)
 		r.recordDied(ctx, m.ID, "auth_failed", &exitCode, stderrTail)
+		r.recordLedger(ctx, m, entry, authMode, nil, start, false, errorCodeAuthFailed)
 		r.recordAuthFailed(ctx, m.ID, m.Harness)
 		return WorkerVerdict{}, st.textBuf.String(), fmt.Errorf("%w: %s", ErrExecutorAuth, stderrTail)
 	}
 
 	r.recordDied(ctx, m.ID, "transport_death", &exitCode, stderrTail)
-	r.recordLedger(ctx, m, entry, authMode, nil, start, false)
+	r.recordLedger(ctx, m, entry, authMode, nil, start, false, "")
 	r.coolDown(m.Harness, entry)
 	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}, st.textBuf.String(), nil
 }
@@ -849,6 +853,12 @@ func (r *delegatedRunner) recordEventForce(ctx context.Context, missionID, kind 
 	}
 }
 
+// errorCodeAuthFailed marks a cost_ledger row as a delegated executor
+// auth failure — HealthRow.LastError only means something to an
+// operator staring at a kind='cli' provider if it's distinguishable
+// from an ordinary run error.
+const errorCodeAuthFailed = "executor_auth"
+
 // recordLedger writes one cost_ledger row at the run's terminal point
 // (D-055). AuthAPIKey cost is real marginal spend (Notional=false).
 // AuthSubscription and AuthOAuthToken are billed on the user's existing
@@ -857,7 +867,8 @@ func (r *delegatedRunner) recordEventForce(ctx context.Context, missionID, kind 
 // amends D-013's original NULL-unless-api-key rule: that figure is
 // recorded as-is with Notional=true, so subscription/oauth runs count
 // toward the budget brake instead of staying invisible to it.
-func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool) {
+// errorCode is optional (e.g. errorCodeAuthFailed); blank on ok=true.
+func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool, errorCode string) {
 	if r.ledger == nil {
 		return
 	}
@@ -868,7 +879,7 @@ func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwc
 	e := ledger.Entry{
 		Provider: entry.ProviderName, Model: entry.Model, Route: workerRoute(m),
 		Agent: "mission-worker", Purpose: "executor", MissionID: m.ID,
-		LatencyMS: time.Since(start).Milliseconds(), Status: status,
+		LatencyMS: time.Since(start).Milliseconds(), Status: status, ErrorCode: errorCode,
 	}
 	if usage != nil {
 		e.Usage = &stream.Usage{

@@ -190,15 +190,15 @@ function DefaultCodingExecutorCard({
 
   return (
     <div className="rounded-xl border border-border p-4">
-      <div className="text-sm font-medium">Default coding executor</div>
+      <div className="text-sm font-medium">Default coding harness</div>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <div className="grid gap-1 text-xs text-muted-foreground">
-          <span>Executor</span>
+          <span>Harness</span>
           <Select
             value={executor || CODING_EXECUTOR_NATIVE}
             onValueChange={(v) => setExecutor(v === CODING_EXECUTOR_NATIVE ? '' : v)}
           >
-            <SelectTrigger className="h-10 w-56" aria-label="Default coding executor">
+            <SelectTrigger className="h-10 w-56" aria-label="Default coding harness">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -211,7 +211,7 @@ function DefaultCodingExecutorCard({
         {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        New coding missions delegate to this executor unless overridden at creation time.
+        New coding missions delegate to this harness unless overridden at creation time.
       </p>
     </div>
   )

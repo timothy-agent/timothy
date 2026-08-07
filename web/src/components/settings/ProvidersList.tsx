@@ -119,11 +119,14 @@ function ProviderCard({
         <ProviderLogo preset={preset} className="size-9" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{provider.name}</div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+            title={isCli ? 'Health reflects the last delegated harness run, not a live probe.' : undefined}
+          >
             {isCli ? (
               <>
-                <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
-                subscription
+                <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
+                subscription · {health?.healthy ? 'healthy' : 'auth failed'}
               </>
             ) : (
               <>

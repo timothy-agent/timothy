@@ -102,7 +102,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
         </span>{' '}
         · {auth_mode}
         <span className="ml-1.5 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-semibold text-brand-soft-foreground">
-          executor
+          harness
         </span>
       </span>
     )
@@ -111,18 +111,18 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const { reason, exit_code } = p as ExecutorDiedPayload
     return (
       <span className="text-red-400">
-        Executor died: {reason}
+        Harness died: {reason}
         {exit_code !== undefined ? ` (exit ${exit_code})` : ''}
       </span>
     )
   },
   'executor.idle_killed': (p) => {
     const { idle_s } = p as ExecutorIdleKilledPayload
-    return <span className="text-red-400">Executor killed: idle for {idle_s}s</span>
+    return <span className="text-red-400">Harness killed: idle for {idle_s}s</span>
   },
   'executor.auth_failed': (p) => {
     const { harness } = p as ExecutorAuthFailedPayload
-    return <span className="text-red-400">{harness} auth failed — re-run the executor login</span>
+    return <span className="text-red-400">{harness} auth failed — re-run the harness login</span>
   },
 }
 
@@ -176,7 +176,7 @@ function renderExecutorResult(event: MissionEvent, allEvents: MissionEvent[]): R
   const subscriptionAuth = spawnAuthMode === 'subscription' || spawnAuthMode === 'oauth_token'
   return (
     <span>
-      Executor finished: {status} · {formatDuration(duration_ms)} · exit {exit_code} ·{' '}
+      Harness finished: {status} · {formatDuration(duration_ms)} · exit {exit_code} ·{' '}
       {usage ? `${usage.input_tokens}→${usage.output_tokens} tok · ${formatExecutorCost(usage.cost_usd, subscriptionAuth)}` : 'no usage reported'}
       {denials.length > 0 && <span className="text-amber-400"> · denials: {denials.join(', ')}</span>}
     </span>

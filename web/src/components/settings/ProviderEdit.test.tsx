@@ -43,6 +43,19 @@ const bedrockProviderWithRef: AdminProvider = {
   credential_ref: 'BEDROCK_KEY',
 }
 
+const cliProvider: AdminProvider = {
+  id: 'p3',
+  name: 'Claude Code',
+  kind: 'cli',
+  driver: 'claude-cli',
+  base_url: '',
+  default_model: 'sonnet',
+  models: [],
+  credential_ref: 'subscription',
+  headers: {},
+  enabled: true,
+}
+
 const openaicompatProvider: AdminProvider = {
   id: 'p2',
   name: 'Ollama',
@@ -206,6 +219,34 @@ describe('ProviderEdit models section', () => {
 
     expect(await screen.findByText('amazon.titan-embed-text-v1')).toBeTruthy()
     expect(screen.getByText('embeddings')).toBeTruthy()
+  })
+})
+
+describe('ProviderEdit cli (subscription) provider', () => {
+  beforeEach(() => {
+    vi.mocked(availableModels).mockRejectedValue(
+      new Error('provider not in the serving snapshot'),
+    )
+  })
+
+  it('shows the CLI alias list with the default model marked, not an editable declared-models list', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cliProvider])
+    renderPage('p3')
+
+    await screen.findByText('Claude Code')
+    expect(screen.getByText('sonnet')).toBeInTheDocument()
+    expect(screen.getByText('opus')).toBeInTheDocument()
+    expect(screen.getByText('haiku')).toBeInTheDocument()
+    expect(screen.getByText('default')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('model id')).not.toBeInTheDocument()
+  })
+
+  it('hides the Test connection button since there is no chat driver to probe', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cliProvider])
+    renderPage('p3')
+
+    await screen.findByText('Claude Code')
+    expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
   })
 })
 

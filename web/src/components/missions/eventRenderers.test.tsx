@@ -38,6 +38,7 @@ describe('executor.result rendering', () => {
 
   it('shows the billed cost when cost_usd is a number', () => {
     render(<div>{renderEvent(event(resultPayload(0.1234), 'executor.result'))}</div>)
+    expect(screen.getByText(/Harness finished:/)).toBeInTheDocument()
     expect(screen.getByText(/\$0\.1234/)).toBeInTheDocument()
     expect(screen.queryByText(/not billed/)).not.toBeInTheDocument()
   })
@@ -118,21 +119,22 @@ describe('executor lifecycle event rendering', () => {
     )
     expect(screen.getByText(/Delegated to claude-cli/)).toBeInTheDocument()
     expect(screen.getByText('anthropic/sonnet')).toBeInTheDocument()
+    expect(screen.getByText('harness')).toBeInTheDocument()
   })
 
   it('renders executor.died as an error row', () => {
     render(<div>{renderEvent(event({ reason: 'oom' }, 'executor.died'))}</div>)
-    expect(screen.getByText(/Executor died: oom/)).toBeInTheDocument()
+    expect(screen.getByText(/Harness died: oom/)).toBeInTheDocument()
   })
 
   it('renders executor.idle_killed as an error row', () => {
     render(<div>{renderEvent(event({ idle_s: 120 }, 'executor.idle_killed'))}</div>)
-    expect(screen.getByText(/idle for 120s/)).toBeInTheDocument()
+    expect(screen.getByText(/Harness killed: idle for 120s/)).toBeInTheDocument()
   })
 
   it('renders executor.auth_failed with a re-login hint', () => {
     render(<div>{renderEvent(event({ harness: 'claude-cli' }, 'executor.auth_failed'))}</div>)
-    expect(screen.getByText(/re-run the executor login/)).toBeInTheDocument()
+    expect(screen.getByText(/re-run the harness login/)).toBeInTheDocument()
   })
 })
 

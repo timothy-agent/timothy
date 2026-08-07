@@ -95,13 +95,18 @@ export function ProviderEdit() {
             provider={provider}
             onChanged={refresh}
             defaultBackend={defaultBackend}
+            isCli={provider.kind === 'cli'}
           />
         )}
         {provider.driver === 'bedrock' && <RegionSection provider={provider} onChanged={refresh} />}
         {provider.driver === 'openaicompat' && (
           <ReasoningSection provider={provider} onChanged={refresh} />
         )}
-        <ModelsSection provider={provider} onChanged={refresh} />
+        {provider.kind === 'cli' ? (
+          <CliModelsSection provider={provider} />
+        ) : (
+          <ModelsSection provider={provider} onChanged={refresh} />
+        )}
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -132,11 +137,13 @@ function CredentialSection({
   onChanged,
   defaultBackend,
   bedrock,
+  isCli,
 }: {
   provider: AdminProvider
   onChanged: () => void
   defaultBackend?: string
   bedrock?: boolean
+  isCli?: boolean
 }) {
   const [ref, setRef] = useState(provider.credential_ref)
   const [configured, setConfigured] = useState(false)
@@ -232,31 +239,43 @@ function CredentialSection({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-semibold">{bedrock ? 'AWS credentials' : 'API key'}</h2>
+      <h2 className="text-sm font-semibold">
+        {bedrock ? 'AWS credentials' : isCli ? 'Subscription token' : 'API key'}
+      </h2>
 
-      <div
-        className={
-          'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-          (test?.ok
-            ? 'border-good/30 bg-good-soft text-good'
-            : test && !test.ok
-              ? 'border-destructive/30 bg-destructive/5 text-destructive'
-              : 'border-border bg-muted/40 text-muted-foreground')
-        }
-      >
-        <span className="min-w-0 flex-1 font-medium">
-          {testing
-            ? 'Testing connection…'
-            : test?.ok
-              ? `OK, ${test.model} answered in ${test.latency_ms} ms.`
+      {isCli ? (
+        <p
+          className="rounded-xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground"
+          title="No chat driver exists for a subscription provider (D-051); health instead reflects the last delegated harness run."
+        >
+          Health reflects the last harness run, not a live probe — subscription auth has no chat
+          endpoint to test.
+        </p>
+      ) : (
+        <div
+          className={
+            'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+            (test?.ok
+              ? 'border-good/30 bg-good-soft text-good'
               : test && !test.ok
-                ? `Failed after ${test.latency_ms} ms: ${test.detail}`
-                : 'Not tested yet.'}
-        </span>
-        <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
-          {testing ? 'Testing…' : 'Test connection'}
-        </Button>
-      </div>
+                ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                : 'border-border bg-muted/40 text-muted-foreground')
+          }
+        >
+          <span className="min-w-0 flex-1 font-medium">
+            {testing
+              ? 'Testing connection…'
+              : test?.ok
+                ? `OK, ${test.model} answered in ${test.latency_ms} ms.`
+                : test && !test.ok
+                  ? `Failed after ${test.latency_ms} ms: ${test.detail}`
+                  : 'Not tested yet.'}
+          </span>
+          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
+            {testing ? 'Testing…' : 'Test connection'}
+          </Button>
+        </div>
+      )}
 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
@@ -475,6 +494,47 @@ function RegionSection({ provider, onChanged }: { provider: AdminProvider; onCha
           </SelectContent>
         </Select>
       </Field>
+    </section>
+  )
+}
+
+// cliModelAliases are the Claude Code CLI's own model aliases (D-051)
+// — a kind='cli' row has no chat driver to enumerate models against,
+// so these are shown as-is rather than an editable declared-models list.
+const cliModelAliases = ['sonnet', 'opus', 'haiku']
+
+// CliModelsSection replaces ModelsSection for kind='cli' providers:
+// there's no provider API to list or declare models against, so this
+// shows the fixed CLI alias set and which one is the mission default
+// instead of an editable (and here, always-empty) list.
+function CliModelsSection({ provider }: { provider: AdminProvider }) {
+  return (
+    <section className="space-y-4">
+      <h2 className="text-sm font-semibold">Models</h2>
+      <p className="text-sm text-muted-foreground">
+        Subscription auth uses the Claude Code CLI's own model aliases, not a declared list.
+      </p>
+      <ul className="space-y-1.5">
+        {cliModelAliases.map((alias) => (
+          <li
+            key={alias}
+            className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"
+          >
+            <span className="truncate font-mono">{alias}</span>
+            {provider.default_model === alias && (
+              <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
+                default
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {!cliModelAliases.includes(provider.default_model) && provider.default_model && (
+        <p className="text-sm text-muted-foreground">
+          Default model <span className="font-mono text-foreground">{provider.default_model}</span>{' '}
+          is not one of the CLI aliases above but is passed through as-is.
+        </p>
+      )}
     </section>
   )
 }

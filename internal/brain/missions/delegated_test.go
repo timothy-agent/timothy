@@ -541,8 +541,9 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 	events := &fakeEventSink{}
 	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	led := &fakeLedger{}
 
-	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, led)
 	m := testMission("m1", t.TempDir())
 
 	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
@@ -551,6 +552,17 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 	}
 	if events.count("executor.auth_failed") != 1 {
 		t.Fatalf("executor.auth_failed count = %d, want 1", events.count("executor.auth_failed"))
+	}
+	// A ledger row on auth failure lets HealthRow.LastError reflect a
+	// bad/expired token instead of staying silent about it.
+	if len(led.entries) != 1 {
+		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
+	}
+	if led.entries[0].Status != "error" {
+		t.Fatalf("ledger entry status = %q, want error", led.entries[0].Status)
+	}
+	if led.entries[0].ErrorCode != errorCodeAuthFailed {
+		t.Fatalf("ledger entry error_code = %q, want %q", led.entries[0].ErrorCode, errorCodeAuthFailed)
 	}
 }
 

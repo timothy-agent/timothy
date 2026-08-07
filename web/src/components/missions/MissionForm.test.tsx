@@ -190,33 +190,33 @@ describe('MissionForm — kind chip', () => {
   })
 })
 
-describe('MissionForm — executor select placement', () => {
-  it('shows the executor select in the main form body for a coding mission, without expanding Advanced', async () => {
+describe('MissionForm — harness select placement', () => {
+  it('shows the harness select in the main form body for a coding mission, without expanding Advanced', async () => {
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
     expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
 
-    expect(screen.getByLabelText('Executor')).toBeInTheDocument()
+    expect(screen.getByLabelText('Harness')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Hide advanced options' })).toBeNull()
   })
 
-  it('omits the executor select for a general mission', async () => {
+  it('omits the harness select for a general mission', async () => {
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Executor')).toBeNull()
+    expect(screen.queryByLabelText('Harness')).toBeNull()
   })
 
-  it('submits the picked executor for a coding mission', async () => {
+  it('submits the picked harness for a coding mission', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm5' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
-    fireEvent.click(screen.getByLabelText('Executor'))
+    fireEvent.click(screen.getByLabelText('Harness'))
     fireEvent.click(await screen.findByText('Claude Code'))
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
 

@@ -395,7 +395,7 @@ export function Analytics() {
                 {'annotation' in t && t.annotation && (
                   <span
                     className="ml-1.5 text-xs font-normal text-muted-foreground"
-                    title="Subscription-billed executor spend, at metered API prices — not billed, excluded from the total."
+                    title="Subscription-billed harness spend, at metered API prices — not billed, excluded from the total."
                   >
                     {t.annotation}
                   </span>

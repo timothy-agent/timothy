@@ -26,10 +26,10 @@ const apiProvider: AdminProvider = {
   enabled: true,
 }
 
-// kind='cli' rows (D-051) never resolve through the chat health check —
-// their credential_ref is either a stored token/key or the literal
-// "subscription", which never "resolves" as a secret, so the gateway's
-// healthy map always reads false for it even when the row works fine.
+// kind='cli' rows (D-051) have no chat driver to probe, so the
+// gateway's healthy map for them means "the last delegated executor
+// run succeeded" (or, before any run, "credential_ref resolves") —
+// not a live connection check like an api row gets.
 const cliProvider: AdminProvider = {
   id: 'p2',
   name: 'Claude Code',
@@ -57,7 +57,7 @@ beforeEach(() => {
 })
 
 describe('ProvidersList cli row rendering', () => {
-  it('shows a neutral "subscription" badge instead of a healthy/unhealthy dot', async () => {
+  it('shows auth failed when the last harness run failed auth', async () => {
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     vi.mocked(providersHealth).mockResolvedValue([
       { name: 'Claude Code', enabled: true, healthy: false } as ProviderHealth,
@@ -65,9 +65,21 @@ describe('ProvidersList cli row rendering', () => {
     renderPage()
 
     await screen.findByText('Claude Code')
-    expect(screen.getByText('subscription')).toBeInTheDocument()
+    expect(screen.getByText(/subscription/)).toBeInTheDocument()
+    expect(screen.getByText(/auth failed/)).toBeInTheDocument()
     expect(screen.queryByText('credential missing')).not.toBeInTheDocument()
-    expect(screen.queryByText('healthy')).not.toBeInTheDocument()
+  })
+
+  it('shows healthy when the last harness run succeeded', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cliProvider])
+    vi.mocked(providersHealth).mockResolvedValue([
+      { name: 'Claude Code', enabled: true, healthy: true } as ProviderHealth,
+    ])
+    renderPage()
+
+    await screen.findByText('Claude Code')
+    expect(screen.getByText(/subscription/)).toBeInTheDocument()
+    expect(screen.getByText(/healthy/)).toBeInTheDocument()
   })
 
   it('hides the Test button for a cli row but keeps Manage', async () => {

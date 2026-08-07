@@ -34,13 +34,13 @@ describe('FileViewer', () => {
     expect(code?.querySelector('.hljs-keyword')).toBeTruthy()
   })
 
-  it('renders markdown rendered by default, with a toggle to raw', async () => {
+  it('renders markdown rendered by default, with a toggle to source', async () => {
     vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['# Hello world']))
     const { container } = render(<FileViewer missionId="m1" file={file('README.md')} />)
 
     expect(await screen.findByRole('heading', { name: 'Hello world' })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Raw' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
     await screen.findByText('Hello', { exact: false })
     const code = container.querySelector('code.hljs')
     expect(code?.textContent).toBe('# Hello world')
@@ -66,5 +66,40 @@ describe('FileViewer', () => {
 
     expect(await screen.findByText(/Can.t preview this file type/)).toBeTruthy()
     expect(fetchMissionFileBlob).not.toHaveBeenCalled()
+  })
+
+  it('renders a line-number gutter outside the selectable code', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['line one\nline two\nline three']))
+    const { container } = render(<FileViewer missionId="m1" file={file('main.go')} />)
+
+    await screen.findByText('line one', { exact: false })
+    const gutter = container.querySelector('[aria-hidden="true"].select-none')
+    expect(gutter?.textContent).toBe('123')
+    expect(screen.getByText(/3 lines/)).toBeTruthy()
+  })
+
+  it('copies file content to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['package main']))
+    render(<FileViewer missionId="m1" file={file('main.go')} />)
+
+    await screen.findByText('package', { exact: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Copy main.go' }))
+
+    expect(writeText).toHaveBeenCalledWith('package main')
+  })
+
+  it('opens raw content in a new tab via a blob URL', async () => {
+    const open = vi.fn()
+    vi.stubGlobal('open', open)
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['package main']))
+    render(<FileViewer missionId="m1" file={file('main.go')} />)
+
+    await screen.findByText('package', { exact: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Raw' }))
+
+    expect(URL.createObjectURL).toHaveBeenCalled()
+    expect(open).toHaveBeenCalledWith('blob:mock', '_blank')
   })
 })

@@ -907,6 +907,30 @@ func TestResolveRouteMixedChainExecutorAxis(t *testing.T) {
 	}
 }
 
+// TestKindCliHealthyMeansCredentialResolves: a kind='cli' row has no
+// chat driver to probe, so Providers()'s healthy map must judge it
+// purely on whether its credential_ref resolves — same rule as an
+// api-kind row, just without ever reaching provider.Build.
+func TestKindCliHealthyMeansCredentialResolves(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+
+	_, healthy := snap.Providers()
+	if !healthy["claude-sub"] {
+		t.Fatal("kind='cli' row with a resolving credential_ref reported unhealthy")
+	}
+
+	provRows := []ProviderRow{
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	unresolved, _ := BuildSnapshot(provRows, nil, func(string) string { return "" })
+	_, healthy = unresolved.Providers()
+	if healthy["claude-sub"] {
+		t.Fatal("kind='cli' row with an unresolved credential_ref reported healthy")
+	}
+}
+
 func TestResolveRouteHarnessOnly(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
