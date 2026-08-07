@@ -33,6 +33,13 @@ type Registry struct {
 	providers map[string]Provider
 }
 
+// NewRegistry returns an empty registry — router.BuildSnapshot builds
+// providers one at a time (per-provider degradation) and adds each
+// survivor via Add.
+func NewRegistry() *Registry {
+	return &Registry{providers: make(map[string]Provider)}
+}
+
 // Build constructs providers from configs. lookup resolves a
 // credential reference to its secret value (os.Getenv in production,
 // a fake in tests). A ref that resolves empty still builds the
@@ -102,6 +109,13 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 func (r *Registry) Get(name string) (Provider, bool) {
 	p, ok := r.providers[name]
 	return p, ok
+}
+
+// Add inserts a single built provider, overwriting any existing entry
+// of the same name — router.BuildSnapshot builds providers one at a
+// time for per-provider degradation and merges the survivors here.
+func (r *Registry) Add(name string, p Provider) {
+	r.providers[name] = p
 }
 
 // Names returns all provider names (unordered).

@@ -162,10 +162,7 @@ func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
 			{ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}
-	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	return snap
 }
 
@@ -503,10 +500,7 @@ func TestStreamVisionRouteMissingFallsBackToDefault(t *testing.T) {
 		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 		// no "vision" route row at all.
 	}
-	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -549,10 +543,7 @@ func TestStreamVisionRouteDisabledFallsBackToDefault(t *testing.T) {
 		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: false},
 	}
-	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -584,10 +575,7 @@ func TestStreamVisionRoutePresentNoFallback(t *testing.T) {
 		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "vm"}}, Enabled: true},
 		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p2", Model: "dm"}}, Enabled: true},
 	}
-	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -626,10 +614,7 @@ func TestStreamVisionCapabilityExhaustedNoFallback(t *testing.T) {
 	routes := []router.RouteRow{
 		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 	}
-	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -700,10 +685,7 @@ func TestEmbedSkipsIncapableDriverAtResolve(t *testing.T) {
 			{ProviderID: "p0", Model: "m0"}, {ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}
-	snap, err := router.BuildSnapshot(rows, routes, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleEmbed, `{"texts":["a","b"]}`)
@@ -728,10 +710,7 @@ func TestProvidersListingNeverLeaksSecrets(t *testing.T) {
 		CredentialRef: "ONE_KEY", Enabled: true,
 		Models: []router.ModelInfo{{ID: "m1"}},
 	}}
-	snap, err := router.BuildSnapshot(rows, nil, func(string) string { return secret })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(rows, nil, func(string) string { return secret })
 	a, _ := newAPI(snap)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/providers", nil)

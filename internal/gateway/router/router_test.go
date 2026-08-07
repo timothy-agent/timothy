@@ -49,10 +49,7 @@ func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
 			{ProviderID: "p2", Model: "embed-b"},
 		}, Enabled: true},
 	}
-	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string { return lookups[ref] })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string { return lookups[ref] })
 	return snap
 }
 
@@ -214,10 +211,7 @@ func TestResolveModelLevelCapabilities(t *testing.T) {
 			{ProviderID: "p1", Model: "titan-embed"},
 		}, Enabled: true},
 	}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
 	attempts, err := snap.Resolve("coding", "", Sticky{})
 	if err != nil {
@@ -247,12 +241,9 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
-	_, err = snap.Resolve("coding", "", Sticky{})
+	_, err := snap.Resolve("coding", "", Sticky{})
 	if err == nil || !strings.Contains(err.Error(), "bedrock/titan-embed (lacks chat capability") {
 		t.Fatalf("err = %v, want model-naming capability reason", err)
 	}
@@ -276,10 +267,7 @@ func TestResolveVisionRejectsModelDeclaringOnlyChat(t *testing.T) {
 		{ProviderID: "p1", Model: "haiku"},
 		{ProviderID: "p1", Model: "sonnet"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
 	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
 	if err != nil {
@@ -325,12 +313,9 @@ func TestResolveVisionExhaustionMentionsVision(t *testing.T) {
 	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "haiku"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
-	_, err = snap.Resolve("coding", "", Sticky{}, provider.CapVision)
+	_, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
 	if err == nil || !strings.Contains(err.Error(), "lacks vision capability") {
 		t.Fatalf("err = %v, want a reason mentioning vision", err)
 	}
@@ -377,11 +362,117 @@ func TestRoutesListing(t *testing.T) {
 	}
 }
 
-// TestBedrockUnresolvedCredentialRefFailsBuild covers D-048: AWS
+// TestDisabledProviderSkippedByRouting covers the disabled-provider
+// contract: a disabled row is still built into the registry (the admin
+// connection probe reaches providers before they are enabled), stays
+// unhealthy, keeps its place in rows/byName for admin visibility, and
+// a chain entry pointing at it is skipped by routing.
+func TestDisabledProviderSkippedByRouting(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys())
+
+	if _, ok := snap.Provider("disabled-one"); !ok {
+		t.Fatal("disabled provider missing from the registry")
+	}
+	rows, healthy := snap.Providers()
+	found := false
+	for _, r := range rows {
+		if r.Name == "disabled-one" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("disabled provider missing from Providers() rows")
+	}
+	if healthy["disabled-one"] {
+		t.Fatal("disabled provider reported healthy")
+	}
+
+	attempts, err := snap.Resolve("mini", "", Sticky{})
+	var nre *NoRouteError
+	if !errors.As(err, &nre) || attempts != nil {
+		t.Fatalf("Resolve(mini) = %+v, %v, want NoRouteError skipping the disabled entry", attempts, err)
+	}
+	if !strings.Contains(err.Error(), "disabled-one (disabled") {
+		t.Fatalf("err = %v, want a disabled skip reason", err)
+	}
+}
+
+// TestBuildSnapshotOneInvalidProviderAmongTwo covers the second
+// defect: a single misconfigured provider row (here, openaicompat
+// missing its required base_url) must not take down routing for every
+// other provider. The bad row surfaces as a BuildWarning and stays
+// unhealthy; the good row keeps serving.
+func TestBuildSnapshotOneInvalidProviderAmongTwo(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "bad", Kind: "api", Driver: "openaicompat", // no BaseURL: Build errors
+			DefaultModel: "m", CredentialRef: "K", Enabled: true,
+			Models: []ModelInfo{{ID: "m"}}},
+		{ID: "p2", Name: "good", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://good.example/v1", DefaultModel: "m", CredentialRef: "K", Enabled: true,
+			Models: []ModelInfo{{ID: "m"}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "m"},
+		{ProviderID: "p2", Model: "m"},
+	}}}
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if len(warnings) != 1 || warnings[0].Provider != "bad" || !strings.Contains(warnings[0].Err.Error(), "requires base_url") {
+		t.Fatalf("warnings = %+v, want one warning naming bad's base_url requirement", warnings)
+	}
+	if _, ok := snap.Provider("bad"); ok {
+		t.Fatal("invalid provider built into the registry")
+	}
+	if _, ok := snap.Provider("good"); !ok {
+		t.Fatal("valid provider missing from the registry")
+	}
+
+	attempts, err := snap.Resolve("r", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := attemptNames(attempts); got != "good/m" {
+		t.Fatalf("attempts = %s, want good/m only", got)
+	}
+}
+
+// TestBuildSnapshotAllProvidersInvalidStillBuilds covers the same
+// defect at its extreme: every provider row fails to build. The
+// snapshot must still build (an empty registry is a valid degraded
+// state), and Resolve falls through to the existing, well-handled
+// no-usable-provider path rather than any build-time failure.
+func TestBuildSnapshotAllProvidersInvalidStillBuilds(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "bad1", Kind: "api", Driver: "openaicompat", // no BaseURL
+			DefaultModel: "m", CredentialRef: "K", Enabled: true, Models: []ModelInfo{{ID: "m"}}},
+		{ID: "p2", Name: "bad2", Kind: "api", Driver: "openaicompat", // no BaseURL
+			DefaultModel: "m", CredentialRef: "K", Enabled: true, Models: []ModelInfo{{ID: "m"}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "m"},
+		{ProviderID: "p2", Model: "m"},
+	}}}
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %+v, want two", warnings)
+	}
+
+	_, err := snap.Resolve("r", "", Sticky{})
+	var nre *NoRouteError
+	if !errors.As(err, &nre) {
+		t.Fatalf("err = %v, want the existing NoRouteError path", err)
+	}
+}
+
+// TestBedrockUnresolvedCredentialRefDegradesNotFails covers D-048: AWS
 // profile/SSO mode is gone, so a bedrock row whose credential_ref does
-// not resolve in the secret store is a hard BuildSnapshot error, not a
-// degraded-but-usable provider.
-func TestBedrockUnresolvedCredentialRefFailsBuild(t *testing.T) {
+// not resolve in the secret store fails to build its own driver — but
+// per-provider degradation means BuildSnapshot itself never fails: the
+// row surfaces as a warning and stays unhealthy rather than taking
+// down the whole snapshot.
+func TestBedrockUnresolvedCredentialRefDegradesNotFails(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
@@ -392,9 +483,13 @@ func TestBedrockUnresolvedCredentialRefFailsBuild(t *testing.T) {
 	routeRows := []RouteRow{{Name: "embedding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
-	_, err := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
-	if err == nil || !strings.Contains(err.Error(), "bedrock requires static keys in the secret store") {
-		t.Fatalf("BuildSnapshot err = %v, want a clear static-keys-required message", err)
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	if len(warnings) != 1 || warnings[0].Provider != "bedrock" ||
+		!strings.Contains(warnings[0].Err.Error(), "bedrock requires static keys in the secret store") {
+		t.Fatalf("warnings = %+v, want one bedrock static-keys-required warning", warnings)
+	}
+	if _, err := snap.Resolve("embedding", "", Sticky{}); err == nil || !strings.Contains(err.Error(), "unhealthy") {
+		t.Fatalf("Resolve err = %v, want unhealthy skip", err)
 	}
 }
 
@@ -415,15 +510,12 @@ func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.
 	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string {
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string {
 		if ref == "bedrock-static" {
 			return secretJSON
 		}
 		return ""
 	})
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
 
 	attempts, err := snap.Resolve("chat", "", Sticky{})
 	if err != nil {
@@ -458,15 +550,12 @@ func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
 	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
 	}, Enabled: true}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(ref string) string {
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string {
 		if ref == "bedrock-static" {
 			return secretJSON
 		}
 		return ""
 	})
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
 
 	attempts, err := snap.Resolve("chat", "", Sticky{})
 	if err != nil {
@@ -492,10 +581,7 @@ func TestScoredStrategyReordersChain(t *testing.T) {
 		{ProviderID: "p1", Model: "big"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
 	attempts, err := snap.Resolve("r", "", Sticky{})
 	if err != nil {
@@ -597,10 +683,7 @@ func TestResolveDetailScoredMatchesResolve(t *testing.T) {
 		{ProviderID: "p1", Model: "big"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
 	detail := snap.ResolveDetail("r")
 	attempts, err := snap.Resolve("r", "", Sticky{})
@@ -646,10 +729,7 @@ func TestResolveDetailNeutralAndFloor(t *testing.T) {
 		{ProviderID: "p1", Model: "m1"},
 		{ProviderID: "p2", Model: "m2"},
 	}}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 	snap.SetStats(map[string]ModelStats{
 		"flaky/m2": {Uptime: 0.01, LatencyMS: 100, TokensPerS: 10},
 	})
@@ -716,10 +796,7 @@ func TestResolveDetailSingleEntryScored(t *testing.T) {
 	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "m"},
 	}}}
-	snap, err := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 
 	d := snap.ResolveDetail("r")
 	if len(d) != 1 || !d[0].Scored {

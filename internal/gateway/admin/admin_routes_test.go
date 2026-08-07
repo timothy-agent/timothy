@@ -23,10 +23,7 @@ func routesSnapshot(t *testing.T, strategy string) *router.Snapshot {
 		{ProviderID: "p3", Model: "m"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
 	return snap
 }
 
@@ -97,10 +94,7 @@ func TestResolvedForRouteSkipsAllUnusable(t *testing.T) {
 	routeRows := []router.RouteRow{{Name: "r", Enabled: true, Chain: []router.ChainEntry{
 		{ProviderID: "p1", Model: "m"},
 	}}}
-	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
+	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" })
 
 	resolved, serving := resolvedForRoute(snap, "r")
 	if len(resolved) != 1 || resolved[0].Usable {

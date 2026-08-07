@@ -152,9 +152,9 @@ func (s *Store) Load(ctx context.Context) error {
 		return fmt.Errorf("router: route rows: %w", err)
 	}
 
-	snap, err := BuildSnapshot(provRows, routes, s.lookup)
-	if err != nil {
-		return fmt.Errorf("router: build snapshot: %w", err)
+	snap, warnings := BuildSnapshot(provRows, routes, s.lookup)
+	for _, w := range warnings {
+		s.log.Warn("router: provider failed to build; marked unhealthy", "provider", w.Provider, "error", w.Err)
 	}
 	// Ledger stats feed scored strategies; a failure only degrades
 	// scoring to declared prices, never the snapshot itself.

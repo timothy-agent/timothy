@@ -101,7 +101,8 @@ type Snapshot struct {
 	roleRoute  map[string]string       // role -> route name (all routes, not just enabled)
 	stats      map[string]ModelStats   // "provider/model" -> recent ledger stats
 	registry   *provider.Registry
-	healthy    map[string]bool // by name: credential ref resolved
+	healthy    map[string]bool   // by name: credential ref resolved and driver built
+	unhealthy  map[string]string // by name: reason, set whenever healthy[name] is false
 }
 
 // ModelStats are time-decayed aggregates from the recent cost ledger,
@@ -142,10 +143,26 @@ func (e *NoRouteError) Error() string {
 	return msg
 }
 
+// BuildWarning reports one provider row that could not be built into a
+// usable driver — a malformed config never takes down the whole
+// snapshot; the row stays in Providers()/rows for admin visibility,
+// just unhealthy and absent from the registry.
+type BuildWarning struct {
+	Provider string
+	Err      error
+}
+
 // BuildSnapshot assembles a snapshot from table rows. lookup resolves
 // credential references; a ref that resolves empty marks the provider
-// unhealthy (skipped by routing) without failing the build.
-func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string) (*Snapshot, error) {
+// unhealthy (skipped by routing) without failing the build. Rows whose
+// driver fails to build are excluded from the registry; disabled rows
+// stay in the registry (admin probes need them) but are marked
+// unhealthy. Neither is removed from rows/byName — admin views still
+// list them. providers.name is DB-unique, so
+// duplicate rows can't reach BuildSnapshot; a bad or disabled provider
+// is reported via the returned warnings — BuildSnapshot itself never
+// fails.
+func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string) (*Snapshot, []BuildWarning) {
 	s := &Snapshot{
 		rows:       make(map[string]ProviderRow, len(provRows)),
 		byName:     make(map[string]ProviderRow, len(provRows)),
@@ -154,18 +171,35 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 		capability: map[string]string{},
 		roleRoute:  map[string]string{},
 		healthy:    make(map[string]bool, len(provRows)),
+		unhealthy:  map[string]string{},
+		registry:   provider.NewRegistry(),
 	}
 
-	cfgs := make([]provider.Config, 0, len(provRows))
+	var warnings []BuildWarning
 	for _, row := range provRows {
 		s.rows[row.ID] = row
 		s.byName[row.Name] = row
+		// Disabled rows are still built into the registry so the admin
+		// connection probe can reach them (create → test → enable); they
+		// stay unhealthy and routing rejects them on row.Enabled.
+		switch {
+		case !row.Enabled:
+			s.unhealthy[row.Name] = "disabled"
 		// credential_ref names an env var for API-key drivers; bedrock now
 		// requires the same ref to resolve in the secret store as static
 		// keys (D-047, profile/SSO mode removed) — so an unresolved ref
 		// marks every driver unhealthy alike.
-		s.healthy[row.Name] = row.CredentialRef == "" || lookup(row.CredentialRef) != ""
-		cfgs = append(cfgs, provider.Config{
+		case row.CredentialRef != "" && lookup(row.CredentialRef) == "":
+			s.unhealthy[row.Name] = fmt.Sprintf("credential %s unresolved", row.CredentialRef)
+		default:
+			s.healthy[row.Name] = true
+		}
+
+		// Built one provider at a time: a single bad driver name or
+		// invalid config must not take down every other route's
+		// providers, so provider.Build's all-or-nothing error is
+		// contained to this one row.
+		reg, err := provider.Build([]provider.Config{{
 			Name:            row.Name,
 			Kind:            provider.Kind(row.Kind),
 			Driver:          row.Driver,
@@ -175,14 +209,16 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 			Region:          row.Region,
 			ReasoningEffort: row.ReasoningEffort,
 			Timeout:         row.Timeout,
-		})
+		}}, lookup)
+		if err != nil {
+			warnings = append(warnings, BuildWarning{Provider: row.Name, Err: err})
+			s.healthy[row.Name] = false
+			s.unhealthy[row.Name] = err.Error()
+			continue
+		}
+		p, _ := reg.Get(row.Name)
+		s.registry.Add(row.Name, p)
 	}
-
-	reg, err := provider.Build(cfgs, lookup)
-	if err != nil {
-		return nil, err
-	}
-	s.registry = reg
 
 	for _, r := range routeRows {
 		s.capability[r.Name] = r.Capability
@@ -194,7 +230,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 			s.strategy[r.Name] = r.Strategy
 		}
 	}
-	return s, nil
+	return s, warnings
 }
 
 // RouteForRole returns the name of the route currently bound to role
@@ -314,7 +350,7 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.
 	case !row.Enabled:
 		return nil, row.Name, "disabled"
 	case !s.healthy[row.Name]:
-		return nil, row.Name, fmt.Sprintf("unhealthy: credential %s unresolved", row.CredentialRef)
+		return nil, row.Name, fmt.Sprintf("unhealthy: %s", s.unhealthy[row.Name])
 	case !inRegistry:
 		return nil, row.Name, "not in registry"
 	}
