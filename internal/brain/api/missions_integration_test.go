@@ -46,7 +46,16 @@ func testMissionStore(t *testing.T) *missions.Store {
 	t.Cleanup(func() {
 		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer ccancel()
-		_, _ = db.Exec(cctx, "DELETE FROM missions WHERE goal LIKE $1 || '%'", "itest-api-mission ")
+		// Delete the missions plus any hidden sessions they provisioned,
+		// which would otherwise linger as empty chats in the session list.
+		_, _ = db.Exec(cctx, `WITH gone AS (
+			DELETE FROM missions WHERE goal LIKE $1 || '%' RETURNING session_id
+		), ids AS (SELECT session_id FROM gone WHERE session_id IS NOT NULL),
+		g AS (DELETE FROM session_grants WHERE session_id IN (SELECT session_id FROM ids)),
+		a AS (DELETE FROM tool_audit WHERE session_id IN (SELECT session_id FROM ids)),
+		o AS (DELETE FROM tool_outputs WHERE session_id IN (SELECT session_id FROM ids)),
+		e AS (DELETE FROM session_events WHERE session_id IN (SELECT session_id FROM ids))
+		DELETE FROM sessions WHERE id IN (SELECT session_id FROM ids)`, "itest-api-mission ")
 	})
 	return store
 }

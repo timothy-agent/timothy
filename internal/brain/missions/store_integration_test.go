@@ -78,11 +78,25 @@ type execer interface {
 // rows are also swept by the slug form.
 func sweep(ctx context.Context, db execer) {
 	slug := strings.TrimSpace(marker)
-	_, _ = db.Exec(ctx, `DELETE FROM missions WHERE schedule_id IN (
+	_, _ = db.Exec(ctx, sweepMissionsSQL(`schedule_id IN (
 		SELECT id FROM schedules WHERE name LIKE $1 || '%' OR name LIKE $2 || '%'
-	)`, marker, slug)
+	)`), marker, slug)
 	_, _ = db.Exec(ctx, "DELETE FROM schedules WHERE name LIKE $1 || '%' OR name LIKE $2 || '%'", marker, slug)
-	_, _ = db.Exec(ctx, "DELETE FROM missions WHERE goal LIKE $1 || '%'", marker)
+	_, _ = db.Exec(ctx, sweepMissionsSQL("goal LIKE $1 || '%'"), marker)
+}
+
+// sweepMissionsSQL deletes missions matching filter along with the
+// hidden sessions they provisioned, which would otherwise linger as
+// empty chats in the session list.
+func sweepMissionsSQL(filter string) string {
+	return `WITH gone AS (
+		DELETE FROM missions WHERE ` + filter + ` RETURNING session_id
+	), ids AS (SELECT session_id FROM gone WHERE session_id IS NOT NULL),
+	g AS (DELETE FROM session_grants WHERE session_id IN (SELECT session_id FROM ids)),
+	a AS (DELETE FROM tool_audit WHERE session_id IN (SELECT session_id FROM ids)),
+	o AS (DELETE FROM tool_outputs WHERE session_id IN (SELECT session_id FROM ids)),
+	e AS (DELETE FROM session_events WHERE session_id IN (SELECT session_id FROM ids))
+	DELETE FROM sessions WHERE id IN (SELECT session_id FROM ids)`
 }
 
 func TestMissionCRUD(t *testing.T) {
