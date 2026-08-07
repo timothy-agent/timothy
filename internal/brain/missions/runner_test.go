@@ -804,7 +804,7 @@ func TestMissionToolsSandboxRoutesShell(t *testing.T) {
 	dir := t.TempDir()
 	var gotMissionID, gotWorkdir, gotCommand string
 	r := newTestRunner(&scriptedAgent{})
-	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		gotMissionID, gotWorkdir, gotCommand = missionID, workdir, command
 		_, _ = out.Write([]byte("sandboxed output"))
 		return 3, nil
@@ -830,7 +830,7 @@ func TestMissionToolsSandboxRoutesShell(t *testing.T) {
 // a non-zero exit is not).
 func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
 	r := newTestRunner(&scriptedAgent{})
-	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		return 124, errors.New("command timed out after 30s")
 	}
 	extraTools := r.missionTools(Mission{ID: "m1", Workspace: t.TempDir()})
@@ -848,7 +848,7 @@ func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
 func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	r := newTestRunner(&scriptedAgent{})
 	over := strings.Repeat("x", shellOutputCap+1024)
-	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		_, _ = out.Write([]byte(over))
 		return 0, nil
 	}

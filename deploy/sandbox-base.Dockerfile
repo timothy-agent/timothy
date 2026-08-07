@@ -1,13 +1,18 @@
 # syntax=docker/dockerfile:1
 
-# Mission sandbox: the container model-authored shell commands (mission
-# worker/reviewer shell calls, verify_cmd) execute inside, instead of
-# brain's own process — see internal/brain/sandbox. This is a warm
-# exec target (created once per mission, `sleep infinity` as PID 1
-# under tini via --init at runtime, reused across a mission's turns),
-# not a service — no ENTRYPOINT beyond that.
+# Mission sandbox base: the container model-authored shell commands
+# (mission worker/reviewer shell calls, verify_cmd) execute inside,
+# instead of brain's own process — see internal/brain/sandbox. This is
+# a warm exec target (created once per mission, `sleep infinity` as
+# PID 1 under tini via --init at runtime, reused across a mission's
+# turns), not a service — no ENTRYPOINT beyond that.
+#
+# This base image (tag timothy-sandbox-base) carries the tools every
+# mission needs regardless of language: node (for the headless claude
+# CLI executor) and general POSIX tooling. Per-language toolchains
+# (go, java, php, ...) live in sandbox-<lang>.Dockerfile variants
+# FROM this image — see the "environment" axis (D-05x, sandboxd).
 FROM node:24.18.0-slim AS node-dist
-FROM golang:1.26.5 AS go-dist
 
 FROM debian:stable-slim
 
@@ -28,13 +33,6 @@ COPY --from=node-dist /usr/local/lib/node_modules /usr/local/lib/node_modules
 # that prefix is per-user (/home/sandbox) and not writable at this
 # build stage — so it lands on PATH for uid 65534 too.
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @anthropic-ai/claude-code@2.1.223
-
-# Go toolchain from the same pinned image the repo's own containerized
-# builds use — missions writing Go need `go build`/`go test` for their
-# verify_cmd. GOPATH lands in the writable home below.
-COPY --from=go-dist /usr/local/go /usr/local/go
-ENV GOPATH=/home/sandbox/go
-ENV PATH="/usr/local/go/bin:/home/sandbox/go/bin:${PATH}"
 
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in

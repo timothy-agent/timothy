@@ -224,7 +224,9 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     expect(await screen.findByText('EUR 6.88')).toBeTruthy()
-    expect(screen.getByTitle(/USD 8\.00/)).toBeTruthy()
+    const pill = await screen.findByText('EUR 6.88')
+    fireEvent.focus(pill)
+    expect(await screen.findByText(/USD 8\.00/)).toBeTruthy()
   })
 
   it('adds a brain/harness breakdown to the billed pill tooltip when both incurred cost', async () => {
@@ -241,10 +243,11 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     const pill = await screen.findByText('USD 1.32')
-    expect(pill.closest('span')).toHaveAttribute('title', 'brain USD 1.11 · harness USD 0.2100')
+    fireEvent.focus(pill)
+    expect(await screen.findByText('brain USD 1.11 · harness USD 0.2100')).toBeTruthy()
   })
 
-  it('omits the brain/harness breakdown when the mission is single-source', async () => {
+  it('omits the brain/harness breakdown tooltip when the mission is single-source', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 1.11 },
@@ -258,7 +261,10 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     const pill = await screen.findByText('USD 1.11')
-    expect(pill.closest('span')).not.toHaveAttribute('title')
+    fireEvent.focus(pill)
+    // No breakdown/notional lines to show: the pill has no Tooltip
+    // wrapper at all, so nothing renders on focus.
+    expect(screen.queryByText(/brain|harness|subscription/)).toBeNull()
   })
 
   it('folds the notional subscription line into the billed pill tooltip, after the breakdown', async () => {
@@ -277,11 +283,9 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     const pill = await screen.findByText('USD 0.3200')
-    expect(pill.closest('span')).toHaveAttribute(
-      'title',
-      'brain USD 0.1100 · harness USD 0.2100\n≈BDT 94.25 subscription (not billed)',
-    )
-    expect(screen.queryByText(/subscription \(not billed\)/)).toBeNull()
+    fireEvent.focus(pill)
+    expect(await screen.findByText('brain USD 0.1100 · harness USD 0.2100')).toBeTruthy()
+    expect(await screen.findByText('≈BDT 94.25 subscription (not billed)')).toBeTruthy()
   })
 
   it('shows only the notional tooltip line when the mission is all-harness', async () => {
@@ -297,7 +301,8 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     const pill = await screen.findByText('USD 0')
-    expect(pill.closest('span')).toHaveAttribute('title', '≈USD 0.5000 subscription (not billed)')
+    fireEvent.focus(pill)
+    expect(await screen.findByText('≈USD 0.5000 subscription (not billed)')).toBeTruthy()
   })
 })
 
@@ -391,6 +396,20 @@ describe('MissionDetail harness pill', () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText(/Claude Code/)).toBeNull()
+  })
+})
+
+describe('MissionDetail environment pill', () => {
+  it('shows the environment pill when mission.environment is set', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, environment: 'go' })
+    renderPage()
+    expect(await screen.findByText('env · go')).toBeTruthy()
+  })
+
+  it('omits the environment pill when mission.environment is empty', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText(/^env ·/)).toBeNull()
   })
 })
 

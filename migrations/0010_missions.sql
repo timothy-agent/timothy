@@ -92,7 +92,15 @@ CREATE TABLE IF NOT EXISTS missions (
     -- A mission gets exactly one automatic replan attempt on stall
     -- (statemachine.go's stepWorkerRetry/stepReviewRework) before a
     -- second identical stall pauses for a human, same as always.
-    replan_used           boolean NOT NULL DEFAULT false
+    replan_used           boolean NOT NULL DEFAULT false,
+    -- Environment selects the per-language sandbox image (D-05x,
+    -- sandboxd's image allowlist) a coding mission's container runs.
+    -- Unlike harness, this has NO settings default: precedence is
+    -- explicit request -> auto-detect from repo markers at
+    -- provisioning (driver.go's ensureProvisioned) -> base ("").
+    -- Sticky once detected (store.SetEnvironment) so a mission never
+    -- re-detects mid-run. General missions never set this.
+    environment           text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

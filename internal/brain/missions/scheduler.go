@@ -66,6 +66,11 @@ type MissionTemplate struct {
 	// time via resolveTemplateDefaults, same precedence as create()'s
 	// own handling of an omitted request field.
 	Harness string `json:"harness,omitempty"`
+	// Environment selects the sandbox image key (D-05x) a coding
+	// mission's container runs; empty auto-detects at fire time via
+	// resolveTemplateDefaults (goal keyword only — no worktree exists
+	// yet), same precedence as create()'s own handling.
+	Environment string `json:"environment,omitempty"`
 	// AutoApproveSafe defaults true for a scheduled mission, same as
 	// api/missions.go's create handler — a mission fired unattended
 	// needs the same standing shell approval a UI-created one gets by
@@ -370,10 +375,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 		budgetCurrency = "USD"
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness, environment)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute,
-		promptOverlay, t.AutoApproveSafe, spec, sc.ID, t.Harness)
+		promptOverlay, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment)
 	return err
 }
 
@@ -415,6 +420,13 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 	}
 	if t.Kind == "coding" && t.Harness == "" && codingExecutorDefault != nil {
 		t.Harness = codingExecutorDefault(ctx)
+	}
+	// Environment (D-05x): no settings default (unlike Harness above) —
+	// an omitted template auto-detects from the goal at fire time. No
+	// worktree exists yet, so only the goal-keyword heuristic can fire;
+	// repo-marker detection has nothing to check.
+	if t.Kind == "coding" && t.Environment == "" {
+		t.Environment, _ = DetectEnvironment("", t.Goal)
 	}
 	return t, promptOverlay
 }

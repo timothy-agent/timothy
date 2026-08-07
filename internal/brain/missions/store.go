@@ -49,7 +49,7 @@ const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, p
 	escalation_route, prompt_overlay,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
-	explore_notes, replan_used, schedule_id, session_id, harness, created_at, updated_at`
+	explore_notes, replan_used, schedule_id, session_id, harness, environment, created_at, updated_at`
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
@@ -65,7 +65,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.EscalationRoute, &m.PromptOverlay,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
-		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
 	if agentID != nil {
@@ -122,9 +122,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		budgetCurrency = "USD"
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, $13, $14) RETURNING id`,
-		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness,
+			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, $13, $14, $15) RETURNING id`,
+		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -369,6 +369,34 @@ func (s *Store) SetExploreNotes(ctx context.Context, id, notes string) error {
 		return fmt.Errorf("missions set explore notes: %w", err)
 	}
 	return nil
+}
+
+// SetEnvironment persists a coding mission's auto-detected sandbox
+// environment (D-05x) and appends a mission.environment_detected event
+// — sticky, like SetProvisioned: driver.go's ensureProvisioned only
+// calls this once, when Environment is still "". Bypasses the state
+// machine like SetExploreNotes/SetLastEvidence: detection happens
+// mid-provisioning, not at an Advance boundary.
+func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set environment: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("missions set environment begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `UPDATE missions SET environment = $2, updated_at = now() WHERE id = $1`,
+		id, environment); err != nil {
+		return fmt.Errorf("missions set environment: %w", err)
+	}
+	if err := appendEventTx(ctx, tx, id, "mission.environment_detected", map[string]any{
+		"environment": environment, "marker": marker,
+	}, "live"); err != nil {
+		return fmt.Errorf("missions set environment event: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // Events returns a mission's full event log in seq order.

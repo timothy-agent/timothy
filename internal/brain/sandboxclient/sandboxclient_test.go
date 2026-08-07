@@ -34,7 +34,7 @@ func TestExecDecodesOutputChunksInOrder(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	code, err := c.Exec(t.Context(), "m1", "/workspace", "echo hi", 0, &out)
+	code, err := c.Exec(t.Context(), "m1", "", "/workspace", "echo hi", 0, &out)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestExecNonZeroExitIsNotAnError(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	code, err := c.Exec(t.Context(), "m1", "/workspace", "exit 7", 0, &out)
+	code, err := c.Exec(t.Context(), "m1", "", "/workspace", "exit 7", 0, &out)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestExecOmitsEnvField(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if _, err := c.Exec(t.Context(), "m1", "/workspace", "true", 0, &out); err != nil {
+	if _, err := c.Exec(t.Context(), "m1", "", "/workspace", "true", 0, &out); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
 	if strings.Contains(gotBody, "\"env\"") {
@@ -100,7 +100,7 @@ func TestExecEnvMarshalsEnvField(t *testing.T) {
 
 	var out bytes.Buffer
 	env := map[string]string{"ANTHROPIC_API_KEY": "sk-test"}
-	if _, err := c.ExecEnv(t.Context(), "m1", "/workspace", "true", env, 0, &out); err != nil {
+	if _, err := c.ExecEnv(t.Context(), "m1", "", "/workspace", "true", env, 0, &out); err != nil {
 		t.Fatalf("ExecEnv: %v", err)
 	}
 	var decoded struct {
@@ -124,7 +124,7 @@ func TestExecTimeoutErrorMessage(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	code, err := c.Exec(t.Context(), "m1", "/workspace", "sleep 5", 0, &out)
+	code, err := c.Exec(t.Context(), "m1", "", "/workspace", "sleep 5", 0, &out)
 	if err == nil {
 		t.Fatal("Exec: want a timeout error, got nil")
 	}
@@ -148,7 +148,7 @@ func TestExecStreamCutWithoutTerminalIsInfraError(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if _, err := c.Exec(t.Context(), "m1", "/workspace", "cmd", 0, &out); err == nil {
+	if _, err := c.Exec(t.Context(), "m1", "", "/workspace", "cmd", 0, &out); err == nil {
 		t.Fatal("Exec: want an error when the stream ends without a terminal event, got nil")
 	}
 }
@@ -160,7 +160,7 @@ func TestExecNon200IsInfraError(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if _, err := c.Exec(t.Context(), "not-a-uuid", "/workspace", "cmd", 0, &out); err == nil {
+	if _, err := c.Exec(t.Context(), "not-a-uuid", "", "/workspace", "cmd", 0, &out); err == nil {
 		t.Fatal("Exec: want an error for a non-200 sandboxd response, got nil")
 	}
 }

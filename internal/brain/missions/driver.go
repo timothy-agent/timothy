@@ -835,7 +835,7 @@ func (d *Driver) checkRegressions(ctx context.Context, m Mission) (StepInput, bo
 		if u.VerifyCmd == "" {
 			continue
 		}
-		res, err := d.runVerify(ctx, fresh.ID, workRoot, u.VerifyCmd)
+		res, err := d.runVerify(ctx, fresh.ID, fresh.Environment, workRoot, u.VerifyCmd)
 		if err != nil {
 			d.log.Warn("driver: regression re-verify errored", "mission_id", fresh.ID, "unit", i, "error", err)
 			continue
@@ -1021,7 +1021,7 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
 		if u.VerifyCmd == "" {
 			return d.markUnitPassed(ctx, m, i)
 		}
-		res, err := d.runVerify(ctx, m.ID, workRoot, u.VerifyCmd)
+		res, err := d.runVerify(ctx, m.ID, m.Environment, workRoot, u.VerifyCmd)
 		if err != nil {
 			return fmt.Errorf("driver: verify unit %d: %w", i, err)
 		}
@@ -1066,10 +1066,12 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 
 // runVerify executes verify_cmd via the mission's sandbox container —
 // the verify-side counterpart of nativeRunner routing shell/write_file
-// through the same backend.
-func (d *Driver) runVerify(ctx context.Context, missionID, workRoot, verifyCmd string) (VerifyResult, error) {
+// through the same backend. environment (D-05x) only matters on the
+// mission's first exec, since a container's image is fixed once
+// created.
+func (d *Driver) runVerify(ctx context.Context, missionID, environment, workRoot, verifyCmd string) (VerifyResult, error) {
 	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
-		return d.sandboxExec(ctx, missionID, workdir, command, timeout, out)
+		return d.sandboxExec(ctx, missionID, environment, workdir, command, timeout, out)
 	}
 	return RunVerifyWithBackend(ctx, backend, workRoot, verifyCmd)
 }

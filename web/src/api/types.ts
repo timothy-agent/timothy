@@ -566,6 +566,11 @@ export interface Mission {
   pending_permission_rationale?: string
   last_evidence?: string
   auto_approve_safe: boolean
+  // environment is the sandbox image key (D-05x) this coding mission's
+  // container runs — "" means base, resolved server-side at create
+  // time (explicit request > repo markers > goal keyword > base).
+  // General missions never set this.
+  environment?: string
   schedule_id?: string
   created_at: string
   updated_at: string
@@ -684,6 +689,7 @@ export interface MissionTemplate {
   budget_currency?: string
   auto_approve_safe?: boolean
   harness?: string
+  environment?: string
 }
 
 // Schedule is a recurring cron trigger that fires mission_template

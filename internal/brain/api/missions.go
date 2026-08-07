@@ -172,6 +172,12 @@ type createMissionRequest struct {
 	// "native" forces native (stored as ""), anything else must name a
 	// registered harness. Rejected outright on kind=general.
 	Harness string `json:"harness"`
+	// Environment selects the per-language sandbox image (D-05x) a
+	// coding mission's container runs: "" auto-detects from the repo at
+	// provisioning (falling back to base), a registered key forces that
+	// image. Unlike Harness there is no settings default. Rejected
+	// outright on kind=general.
+	Environment string `json:"environment"`
 	// AutoApproveSafe defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
@@ -217,6 +223,23 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown harness %q", req.Harness))
 			return
 		}
+	}
+	switch {
+	case req.Kind != "coding" && req.Environment != "":
+		jsonError(w, http.StatusBadRequest, "bad_request", "environment is only valid for kind=coding missions")
+		return
+	case !missions.ValidEnvironment(req.Environment):
+		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown environment %q", req.Environment))
+		return
+	case req.Kind == "coding" && req.Environment == "":
+		// Auto-detect (D-05x), resolved server-side at create time so
+		// the environment is fixed before the sandbox container is ever
+		// created: no worktree exists yet (it's provisioned after this
+		// handler returns), so only the goal-keyword heuristic can fire
+		// here — repo-marker detection has nothing to check against a
+		// mission that hasn't been provisioned. Never wins over an
+		// explicit request; "" stays "" (base) when nothing matches.
+		req.Environment, _ = missions.DetectEnvironment("", req.Goal)
 	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
@@ -267,7 +290,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
-		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness,
+		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {

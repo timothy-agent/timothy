@@ -3,6 +3,7 @@ package sandboxd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,7 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 }
 
 func newTestManager(cli *client.Client) *Manager {
-	return &Manager{cli: cli, image: "img", locks: map[string]*sync.Mutex{}}
+	return &Manager{cli: cli, baseImage: "img", locks: map[string]*sync.Mutex{}}
 }
 
 func TestResolveWorkspaceMountVolume(t *testing.T) {
@@ -111,7 +112,7 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "")
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestEnsureContainerExitedRestarts(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "")
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -194,7 +195,7 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "")
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -230,7 +231,7 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "")
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -290,7 +291,7 @@ func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	mgr.stateMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_executor-claude-state", Target: executorStateMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1"); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if len(gotMounts) != 2 {
@@ -337,11 +338,56 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	// mgr.stateMount left zero-value: not configured.
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1"); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if len(gotMounts) != 1 || gotMounts[0].Target != workspaceMountPath {
 		t.Fatalf("create body: Mounts = %+v, want exactly [workspace]", gotMounts)
+	}
+}
+
+// TestImageFor covers D-05x's environment->image resolution: the
+// allowlist in environmentImages is the ONLY source of a variant image
+// tag; "" and "base" both resolve to the operator-configured base
+// image; anything else unrecognized is a loud error, never a silent
+// fallback.
+func TestImageFor(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		environment string
+		want        string
+		wantErr     bool
+	}{
+		{environment: "", want: "timothy-sandbox-base:latest"},
+		{environment: "base", want: "timothy-sandbox-base:latest"},
+		{environment: "go", want: "timothy-sandbox-go:latest"},
+		{environment: "node", want: "timothy-sandbox-node:latest"},
+		{environment: "python", want: "timothy-sandbox-python:latest"},
+		{environment: "java", want: "timothy-sandbox-java:latest"},
+		{environment: "php", want: "timothy-sandbox-php:latest"},
+		{environment: "ruby", wantErr: true},
+		{environment: "timothy-sandbox-go:latest", wantErr: true}, // an image string, not a key
+	}
+	for _, tc := range cases {
+		t.Run(tc.environment, func(t *testing.T) {
+			t.Parallel()
+			got, err := imageFor("timothy-sandbox-base:latest", tc.environment)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("imageFor(%q) = %q, nil, want an error", tc.environment, got)
+				}
+				if !errors.Is(err, ErrUnknownEnvironment) {
+					t.Errorf("imageFor(%q) error = %v, want ErrUnknownEnvironment", tc.environment, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("imageFor(%q): %v", tc.environment, err)
+			}
+			if got != tc.want {
+				t.Errorf("imageFor(%q) = %q, want %q", tc.environment, got, tc.want)
+			}
+		})
 	}
 }
 

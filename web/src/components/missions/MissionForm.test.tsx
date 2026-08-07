@@ -226,6 +226,54 @@ describe('MissionForm — executor select placement', () => {
   })
 })
 
+describe('MissionForm — environment select', () => {
+  it('shows the environment select for a coding mission, defaulted to Auto-detect', async () => {
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+
+    expect(screen.getByLabelText('Environment')).toBeInTheDocument()
+    expect(screen.getByLabelText('Environment')).toHaveTextContent('Auto-detect')
+  })
+
+  it('omits the environment select for a general mission', async () => {
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Environment')).toBeNull()
+  })
+
+  it('submits the picked environment for a coding mission, and omits it when left on Auto-detect', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm6' })
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByLabelText('Environment'))
+    fireEvent.click(await screen.findByText('Go'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ environment: 'go' })),
+    )
+  })
+
+  it('omits environment from the create payload when left on Auto-detect', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm7' })
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ environment: undefined })),
+    )
+  })
+})
+
 describe('MissionForm — create mode, repeat on schedule', () => {
   it('submits a schedule with the slugified default name, preset cron, and general kind', async () => {
     vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })

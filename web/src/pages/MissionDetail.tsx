@@ -32,6 +32,7 @@ import {
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
 import { Badge } from '../components/ui/badge'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
@@ -147,6 +148,27 @@ const harnessDisplayNames: Record<string, string> = {
 
 function harnessDisplayName(harness: string): string {
   return harnessDisplayNames[harness] ?? harness
+}
+
+// CostBadge renders the billed-cost pill: a plain Badge when there's
+// no breakdown to show, or one wrapped in a Tooltip (one line per
+// div, not \n) when there is — native title attrs don't fire on touch
+// devices and render multi-line poorly.
+function CostBadge({ cost, currency, lines }: { cost: number; currency: string; lines: string[] }) {
+  const badge = <Badge variant="secondary">{money(cost, currency)}</Badge>
+  if (lines.length === 0) return badge
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent>
+        <div className="flex flex-col gap-0.5">
+          {lines.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 export function MissionDetail() {
@@ -443,6 +465,11 @@ export function MissionDetail() {
               {harnessDisplayName(executorSpawn.harness)} · {executorSpawn.model}
             </Badge>
           )}
+          {mission.environment && (
+            <Badge variant="secondary" title="Sandbox environment this mission's container runs">
+              env · {mission.environment}
+            </Badge>
+          )}
           {usage && usage.requests > 0 && (
             <Badge variant="secondary">
               {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
@@ -455,7 +482,7 @@ export function MissionDetail() {
             total {formatDuration(elapsedMs)}
           </Badge>
           {usage && usage.requests > 0 && (
-            <>
+            <TooltipProvider>
               {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
                 Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => {
                   const breakdown = brainHarnessBreakdown(usage)
@@ -463,26 +490,22 @@ export function MissionDetail() {
                   const converted = `Converted from the billed amount(s) (${Object.entries(usage.cost_by_currency)
                     .map(([c, v]) => money(v, c))
                     .join(', ')}) using a stored exchange rate.`
-                  const title = [converted, breakdown, notional].filter(Boolean).join('\n')
+                  const lines = [converted, breakdown, notional].filter(Boolean) as string[]
                   return (
-                    <Badge key={currency} variant="secondary" title={title}>
-                      {money(cost, currency)}
-                    </Badge>
+                    <CostBadge key={currency} cost={cost} currency={currency} lines={lines} />
                   )
                 })
               ) : (
                 Object.entries(usage.cost_by_currency).map(([currency, cost]) => {
                   const breakdown = brainHarnessBreakdown(usage)
                   const notional = notionalTooltipLine(usage)
-                  const title = [breakdown, notional].filter(Boolean).join('\n')
+                  const lines = [breakdown, notional].filter(Boolean) as string[]
                   return (
-                    <Badge key={currency} variant="secondary" title={title || undefined}>
-                      {money(cost, currency)}
-                    </Badge>
+                    <CostBadge key={currency} cost={cost} currency={currency} lines={lines} />
                   )
                 })
               )}
-            </>
+            </TooltipProvider>
           )}
           <Badge variant="secondary">
             {turns} turn{turns === 1 ? '' : 's'}

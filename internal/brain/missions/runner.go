@@ -126,11 +126,14 @@ type parkNotifier interface {
 	OnPermissionDenied(ctx context.Context, missionID, tool, digest string)
 }
 
-// sandboxExec is the narrow slice of *sandbox.Manager nativeRunner
-// needs — kept as a function type (not an import of the sandbox
-// package) so missions has no compile-time dependency on Docker; the
-// driver wires the real *sandbox.Manager.Exec in cmd/brain/main.go.
-type sandboxExec func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
+// sandboxExec is the narrow slice of *sandboxclient.Client nativeRunner
+// needs — kept as a function type (not an import of sandboxclient) so
+// missions has no compile-time dependency on Docker; the driver wires
+// the real *sandboxclient.Client.Exec in cmd/brain/main.go. environment
+// selects the mission's sandbox image (D-05x) — only matters on the
+// mission's first exec, since a container's image is fixed once
+// created.
+type sandboxExec func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
 
 // nativeRunner is Phase 1's only Runner: every call is one loop.Agent
 // turn over the gateway, tagged with the mission's route/review_route
@@ -206,14 +209,14 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 	if root == "" {
 		return nil
 	}
-	missionID, workdir := m.ID, root
+	missionID, environment, workdir := m.ID, m.Environment, root
 	shellCfg := builtin.ShellConfig{
 		WorkspaceRoot: root,
 		MaxTimeout:    sandboxShellMaxTimeout,
 		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
 			var out strings.Builder
 			capped := &cappedStringWriter{w: &out, max: shellOutputCap}
-			exitCode, err := r.sandbox(ctx, missionID, workdir, command, timeout, capped)
+			exitCode, err := r.sandbox(ctx, missionID, environment, workdir, command, timeout, capped)
 			if err != nil {
 				// The sandbox backend's contract mirrors runShell's: a
 				// timeout comes back as an error, everything else

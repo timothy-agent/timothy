@@ -240,7 +240,7 @@ func (r *scriptedRunner) ExploreSession(ctx context.Context, m Mission) (string,
 // tests exercising verify_cmd need the real exit code/output a plan's
 // check produces, not a mocked one, and don't care that it isn't
 // actually containerized.
-func fakeSandboxExec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+func fakeSandboxExec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec // test-only, command is test-authored
 	cmd.Dir = workdir
 	cmd.Stdout, cmd.Stderr = out, out

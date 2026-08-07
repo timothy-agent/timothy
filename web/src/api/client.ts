@@ -856,6 +856,11 @@ export interface CreateMissionInput {
   // "native" to force the built-in agent loop. Only valid when
   // kind === 'coding'.
   harness?: string
+  // environment selects the sandbox image key (D-05x) a coding
+  // mission's container runs — omit (or "") to auto-detect (repo
+  // markers, then a goal-keyword heuristic, falling back to base).
+  // Only valid when kind === 'coding'.
+  environment?: string
 }
 
 // ExecutorOption is one registered harness's usability on a given

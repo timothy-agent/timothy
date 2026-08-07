@@ -166,6 +166,39 @@ func TestHandleExecUnknownEnvNameRejected(t *testing.T) {
 	}
 }
 
+// TestHandleExecUnknownEnvironmentRejected confirms an environment key
+// outside manager.go's environmentImages allowlist (D-05x) 400s before
+// ever reaching the daemon — mirrors D-053's env-var allowlist gate.
+func TestHandleExecUnknownEnvironmentRejected(t *testing.T) {
+	t.Parallel()
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected daemon call for an unknown environment that should 400 before ensureContainer: %s %s", r.Method, r.URL.Path)
+	})
+	mgr := newTestManager(cli)
+
+	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5,"environment":"ruby"}`
+	rec := httptest.NewRecorder()
+	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "ruby") {
+		t.Errorf("response body = %q, want it to name the offending environment", rec.Body.String())
+	}
+}
+
+// TestHandleExecKnownEnvironmentAccepted confirms "", "base", and every
+// registered key pass validation (the daemon call itself is exercised
+// by TestEnsureContainerNotFoundCreates/TestCreateContainer*).
+func TestHandleExecKnownEnvironmentAccepted(t *testing.T) {
+	t.Parallel()
+	for _, env := range []string{"", "base", "go", "node", "python", "java", "php"} {
+		if !validExecEnvironment(env) {
+			t.Errorf("validExecEnvironment(%q) = false, want true", env)
+		}
+	}
+}
+
 func TestHandleExecUnknownFieldRejected(t *testing.T) {
 	t.Parallel()
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

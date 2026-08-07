@@ -91,13 +91,56 @@ const (
 // string-matching the error text.
 var ErrTimeout = errors.New("sandbox: command timed out")
 
+// environmentImages is the D-05x allowlist mapping a mission's
+// "environment" key to the sandbox image tag it runs — the ONLY way an
+// image is ever chosen; a request carries the key, never a free-form
+// image string (mirrors internal/brain/missions.Environments, which
+// the API validates create/schedule requests against before this is
+// ever reached). "" and "base" both resolve to the operator-configured
+// base image (MISSION_SANDBOX_IMAGE) — "" is Manager's zero-value
+// default for back-compat with a caller that predates the environment
+// axis, "base" is the operator's explicit escape hatch out of
+// auto-detection. Every other key names a variant image built FROM
+// that base (deploy/sandbox-<key>.Dockerfile, `make sandbox-image`).
+var environmentImages = map[string]string{
+	"go":     "timothy-sandbox-go:latest",
+	"node":   "timothy-sandbox-node:latest",
+	"python": "timothy-sandbox-python:latest",
+	"java":   "timothy-sandbox-java:latest",
+	"php":    "timothy-sandbox-php:latest",
+}
+
+// ErrUnknownEnvironment reports an environment key outside
+// environmentImages (and not "" or "base") — never silently falls back
+// to the base image, so a typo'd or stale key fails loudly instead of
+// running a mission's coding work in the wrong toolchain.
+var ErrUnknownEnvironment = errors.New("sandbox: unknown environment")
+
+// imageFor resolves environment to an image tag via environmentImages
+// only — see D-05x. baseImage is the operator-configured
+// MISSION_SANDBOX_IMAGE (back-compat default, and "base"'s explicit
+// target).
+func imageFor(baseImage, environment string) (string, error) {
+	switch environment {
+	case "", "base":
+		return baseImage, nil
+	default:
+		if img, ok := environmentImages[environment]; ok {
+			return img, nil
+		}
+		return "", fmt.Errorf("%w: %q", ErrUnknownEnvironment, environment)
+	}
+}
+
 // Manager creates, reuses, and tears down one Docker container per
 // mission on the same Docker daemon brain itself runs under (driven via
 // the mounted docker.sock). Safe for concurrent use.
 type Manager struct {
-	cli   *client.Client
-	image string
-	log   *slog.Logger
+	cli *client.Client
+	// baseImage is MISSION_SANDBOX_IMAGE — the image "", "base", and (via
+	// CheckImage) the boot-time health check all resolve to.
+	baseImage string
+	log       *slog.Logger
 
 	// workspaceMount is resolved once at startup by inspecting brain's
 	// OWN container for its /workspace mount and replicating that exact
@@ -146,7 +189,7 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	if err != nil {
 		log.Info("sandbox: executor state volume not configured, mission containers will run without it", "error", err)
 	}
-	return &Manager{cli: cli, image: image, log: log, workspaceMount: wm, stateMount: sm, locks: map[string]*sync.Mutex{}}, nil
+	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // resolveWorkspaceMount inspects the calling container (brain) for its
@@ -192,12 +235,17 @@ func (m *Manager) Ping(ctx context.Context) error {
 	return err
 }
 
-// CheckImage confirms the configured sandbox image actually exists
-// locally — an operator who never ran `make sandbox-image` would
-// otherwise see every mission shell call fail opaquely instead of a
-// clear boot-time health signal.
+// CheckImage confirms the configured BASE sandbox image actually
+// exists locally — an operator who never ran `make sandbox-image`
+// would otherwise see every mission shell call fail opaquely instead
+// of a clear boot-time health signal. Variant images (go/node/...) are
+// not checked here: an operator who never runs a mission in that
+// environment need not have built it, and a missing variant fails
+// loudly at ensureContainer time instead (ErrUnknownEnvironment is for
+// an unrecognized key, not a missing image — Docker's own pull/create
+// error covers the latter).
 func (m *Manager) CheckImage(ctx context.Context) error {
-	_, err := m.cli.ImageInspect(ctx, m.image)
+	_, err := m.cli.ImageInspect(ctx, m.baseImage)
 	return err
 }
 
@@ -228,8 +276,13 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // are handled explicitly: absent (create+start), Created/Exited
 // (restart in place — preserves any packages the worker installed
 // earlier in the mission, and recovers a container left stopped by a
-// host reboot or an OOM-killed PID 1), Running (reuse as-is).
-func (m *Manager) ensureContainer(ctx context.Context, missionID string) (string, error) {
+// host reboot or an OOM-killed PID 1), Running (reuse as-is). environment
+// (D-05x) only matters on the absent path — a container's image is
+// fixed for its whole life, so ensureContainer never checks it against
+// an already-running/existing container; the mission row's own
+// Environment field is what's sticky, not anything read back from
+// Docker.
+func (m *Manager) ensureContainer(ctx context.Context, missionID, environment string) (string, error) {
 	lock := m.missionLock(missionID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -246,7 +299,7 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID string) (string
 		}
 		return insp.Container.ID, nil
 	case errdefs.IsNotFound(err):
-		id, createErr := m.createContainer(ctx, missionID, name)
+		id, createErr := m.createContainer(ctx, missionID, name, environment)
 		if createErr == nil {
 			return id, nil
 		}
@@ -272,14 +325,18 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID string) (string
 	}
 }
 
-func (m *Manager) createContainer(ctx context.Context, missionID, name string) (string, error) {
+func (m *Manager) createContainer(ctx context.Context, missionID, name, environment string) (string, error) {
+	image, err := imageFor(m.baseImage, environment)
+	if err != nil {
+		return "", err
+	}
 	memBytes := int64(sandboxMemoryBytes)
 	nanoCPUs := int64(sandboxNanoCPUs)
 	pids := int64(sandboxPidsLimit)
 	initTrue := true
 
 	cfg := &container.Config{
-		Image: m.image,
+		Image: image,
 		// PATH/HOME only — deliberately NOT os.Environ(): the whole point
 		// of the sandbox is that a model-authored command never sees
 		// brain's DATABASE_URL/TIMOTHY_MASTER_KEY/API tokens. Anything
@@ -327,20 +384,22 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name string) (
 	return resp.ID, nil
 }
 
-// Exec runs command in missionID's sandbox container, streaming
-// combined stdout+stderr to out, and returns the exit code. Timeout is
-// enforced by wrapping the command in the container's own `timeout`
-// binary — Docker has no ExecKill API, so cancelling ctx only closes
-// the attach stream, it does not stop the process running inside the
-// container. The client-side deadline (timeout + execClientSlack) is a
-// backstop for a command the timeout binary cannot kill.
+// Exec runs command in missionID's sandbox container (environment
+// selects its image, D-05x, on first creation only — see
+// ensureContainer), streaming combined stdout+stderr to out, and
+// returns the exit code. Timeout is enforced by wrapping the command in
+// the container's own `timeout` binary — Docker has no ExecKill API,
+// so cancelling ctx only closes the attach stream, it does not stop
+// the process running inside the container. The client-side deadline
+// (timeout + execClientSlack) is a backstop for a command the timeout
+// binary cannot kill.
 //
 // err is non-nil only for infrastructure failures (daemon unreachable,
 // container gone, attach failed) or a timeout (mirroring
 // builtin.Shell's contract: a command that ran and exited non-zero is
 // reported via exitCode, not err).
-func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	return m.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
+func (m *Manager) Exec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+	return m.ExecEnv(ctx, missionID, environment, workdir, command, nil, timeout, out)
 }
 
 // ExecEnv is Exec plus per-exec environment variables (D-053) — env
@@ -348,8 +407,8 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 // layer); this method trusts it and passes it straight to Docker's
 // ExecCreate. Existing Exec callers are unaffected: they route through
 // here with env == nil.
-func (m *Manager) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	containerID, err := m.ensureContainer(ctx, missionID)
+func (m *Manager) ExecEnv(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+	containerID, err := m.ensureContainer(ctx, missionID, environment)
 	if err != nil {
 		return 0, err
 	}

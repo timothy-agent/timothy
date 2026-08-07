@@ -44,6 +44,11 @@ type execRequest struct {
 	Command        string            `json:"command"`
 	TimeoutSeconds int               `json:"timeout_seconds"`
 	Env            map[string]string `json:"env,omitempty"`
+	// Environment selects the mission's sandbox image (D-05x) — a key
+	// into sandboxd's own environmentImages allowlist, never a
+	// free-form image string. Only matters on the mission's first exec
+	// (image is fixed once its container is created).
+	Environment string `json:"environment,omitempty"`
 }
 
 // Exec matches the missions package's sandboxExec function type: runs
@@ -52,8 +57,8 @@ type execRequest struct {
 // for infrastructure failures or a timeout — mirroring
 // sandboxd.Manager.Exec's own contract (a command that ran and exited
 // non-zero is reported via exitCode, not err).
-func (c *Client) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
-	return c.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
+func (c *Client) Exec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	return c.ExecEnv(ctx, missionID, environment, workdir, command, nil, timeout, out)
 }
 
 // ExecEnv is Exec plus per-exec environment variables (D-053) —
@@ -61,9 +66,9 @@ func (c *Client) Exec(ctx context.Context, missionID, workdir, command string, t
 // client passes it through unmodified. Existing Exec callers are
 // unaffected: they route through here with env == nil, which the
 // json:"omitempty" tag drops from the wire request entirely.
-func (c *Client) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (int, error) {
+func (c *Client) ExecEnv(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (int, error) {
 	body, err := json.Marshal(execRequest{
-		Workdir: workdir, Command: command, TimeoutSeconds: int(timeout / time.Second), Env: env,
+		Workdir: workdir, Command: command, TimeoutSeconds: int(timeout / time.Second), Env: env, Environment: environment,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("sandboxclient: marshal: %w", err)
