@@ -24,7 +24,7 @@ EXECUTOR_MODEL_FALLBACK="claude-haiku-4-5-20251001"
 # the exact same goal string either, so the tag also makes cross-script
 # collisions impossible, not just cross-run ones.
 CASES=(
-  "docs/EXECUTOR.md|Add a docs/EXECUTOR.md file with a short paragraph explaining what a delegated executor is in this project."
+  "docs/EXECUTOR.md|Add a docs/EXECUTOR.md file with one short invented paragraph defining the term delegated executor. Write it from your own knowledge; no research needed."
   "NOTES.md|Add a NOTES.md file at the repository root with a single bullet point about this fixture repo's purpose."
   "docs/ARCHITECTURE.md|Add a docs/ARCHITECTURE.md file with one short paragraph describing this fixture repo's (fictional) architecture."
   ".gitattributes|Add a .gitattributes file at the repository root that sets text=auto for all files."
