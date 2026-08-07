@@ -804,16 +804,19 @@ type MissionSpend struct {
 // NULL (unpriced calls) contribute 0, same as everywhere else in this
 // codebase that treats "unknown price" as best-effort zero for
 // brake/alert purposes while still recording NULL, never a guess, at
-// write time (D-013). Only currencies with at least one ledger row for
-// this mission appear in the map — an absent key means zero spend in
-// that currency, same as a present zero.
+// write time (D-013). Notional rows (subscription-billed executor
+// runs recording the API-equivalent price) are excluded — the brake
+// bounds real marginal spend, and a subscription run costs nothing at
+// the margin. Only currencies with at least one ledger row for this
+// mission appear in the map — an absent key means zero spend in that
+// currency, same as a present zero.
 func (s *Store) Spend(ctx context.Context, missionID string) (MissionSpend, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT currency, COALESCE(SUM(cost), 0)
-		FROM cost_ledger WHERE mission_id = $1 GROUP BY currency`, missionID)
+		FROM cost_ledger WHERE mission_id = $1 AND NOT notional GROUP BY currency`, missionID)
 	if err != nil {
 		return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
 	}

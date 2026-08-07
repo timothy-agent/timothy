@@ -714,3 +714,38 @@ func TestRecoverStaleWorking(t *testing.T) {
 		t.Fatal("RecoverStaleWorking incorrectly returned a fresh working mission")
 	}
 }
+
+func TestSpendExcludesNotionalRows(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: marker + "spend-notional", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	for _, row := range []struct {
+		cost     float64
+		notional bool
+	}{{0.05, false}, {0.25, true}} {
+		if _, err := db.Exec(ctx, `INSERT INTO cost_ledger
+			(provider, model, route, latency_ms, status, cost, currency, purpose, mission_id, notional)
+			VALUES ('itest-provider', 'itest-model', 'itest', 1, 'ok', $1, 'USD', 'executor', $2, $3)`,
+			row.cost, id, row.notional); err != nil {
+			t.Fatalf("insert ledger row: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM cost_ledger WHERE mission_id = $1`, id)
+	})
+
+	spend, err := s.Spend(ctx, id)
+	if err != nil {
+		t.Fatalf("Spend: %v", err)
+	}
+	if got := spend.ByCurrency["USD"]; got != 0.05 {
+		t.Fatalf("Spend USD = %v, want 0.05 (notional row must be excluded from the brake)", got)
+	}
+}
