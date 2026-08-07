@@ -234,13 +234,18 @@ type MissionUsage struct {
 	Models                  []ModelUsed        `json:"models"`
 }
 
-// ModelUsed is one provider/model pair actually invoked for a mission
-// — a route is a named fallback chain, not a single model, so this is
-// the only honest answer to "which model ran this," and it can be
-// more than one entry if the chain fell back mid-mission.
+// ModelUsed is one provider/model/harness-ness triple actually invoked
+// for a mission — a route is a named fallback chain, not a single
+// model, so this is the only honest answer to "which model ran this,"
+// and it can be more than one entry if the chain fell back mid-mission.
+// Harness is true when the group's rows are the delegated CLI
+// executor's own (purpose='executor', D-051) rather than the missions
+// engine's direct calls — a model used by both sides yields two rows,
+// so callers can tell the harness's model apart from brain's.
 type ModelUsed struct {
 	Provider string    `json:"provider"`
 	Model    string    `json:"model"`
+	Harness  bool      `json:"harness"`
 	Requests int64     `json:"requests"`
 	LastUsed time.Time `json:"last_used"`
 }
@@ -314,10 +319,10 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 }
 
 func (a *Aggregator) missionModels(ctx context.Context, db *pgxpool.Pool, missionID string) ([]ModelUsed, error) {
-	rows, err := db.Query(ctx, `SELECT provider, model, COUNT(*), MAX(ts)
+	rows, err := db.Query(ctx, `SELECT provider, model, purpose = 'executor' AS harness, COUNT(*), MAX(ts)
 		FROM cost_ledger
 		WHERE mission_id = $1 AND `+notTest+`
-		GROUP BY provider, model ORDER BY MAX(ts) DESC`, missionID)
+		GROUP BY provider, model, harness ORDER BY MAX(ts) DESC`, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("usage mission: models: %w", err)
 	}
@@ -326,7 +331,7 @@ func (a *Aggregator) missionModels(ctx context.Context, db *pgxpool.Pool, missio
 	out := []ModelUsed{}
 	for rows.Next() {
 		var mu ModelUsed
-		if err := rows.Scan(&mu.Provider, &mu.Model, &mu.Requests, &mu.LastUsed); err != nil {
+		if err := rows.Scan(&mu.Provider, &mu.Model, &mu.Harness, &mu.Requests, &mu.LastUsed); err != nil {
 			return nil, fmt.Errorf("usage mission: models: %w", err)
 		}
 		out = append(out, mu)

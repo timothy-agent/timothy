@@ -296,6 +296,10 @@ export interface GroupTotal extends ConvertedMoney {
 export interface ModelUsed {
   provider: string
   model: string
+  // harness is true when this row is the delegated CLI executor's own
+  // calls (purpose='executor', D-051) rather than brain's direct ones —
+  // a model used by both sides yields two separate rows.
+  harness: boolean
   requests: number
   last_used: string
 }

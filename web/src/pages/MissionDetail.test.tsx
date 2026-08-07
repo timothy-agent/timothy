@@ -146,7 +146,9 @@ describe('MissionDetail spend', () => {
       output_tokens: 8_000,
       requests: 7,
       unpriced_requests: 2,
-      models: [{ provider: 'GLM (Z.ai)', model: 'glm-5.2', requests: 7, last_used: '2026-01-01T00:00:00Z' }],
+      models: [
+        { provider: 'GLM (Z.ai)', model: 'glm-5.2', harness: false, requests: 7, last_used: '2026-01-01T00:00:00Z' },
+      ],
     })
     renderPage()
     expect(await screen.findByText('USD 0.5000')).toBeTruthy()
@@ -169,11 +171,37 @@ describe('MissionDetail spend', () => {
       output_tokens: 8_000,
       requests: 7,
       unpriced_requests: 0,
-      models: [{ provider: 'my-custom-endpoint', model: 'whatever', requests: 7, last_used: '2026-01-01T00:00:00Z' }],
+      models: [
+        {
+          provider: 'my-custom-endpoint',
+          model: 'whatever',
+          harness: false,
+          requests: 7,
+          last_used: '2026-01-01T00:00:00Z',
+        },
+      ],
     })
     renderPage()
     expect(await screen.findByText('brain · whatever')).toBeTruthy()
     expect(screen.getByText('brain · whatever').closest('span')?.querySelector('svg use')).not.toBeInTheDocument()
+  })
+
+  it('filters harness-flagged models out of the brain pill row', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [
+        { provider: 'GLM (Z.ai)', model: 'glm-5.2', harness: false, requests: 5, last_used: '2026-01-01T00:00:00Z' },
+        { provider: 'Anthropic', model: 'sonnet', harness: true, requests: 2, last_used: '2026-01-01T00:00:00Z' },
+      ],
+    })
+    renderPage()
+    expect(await screen.findByText('brain · glm-5.2')).toBeTruthy()
+    expect(screen.queryByText('brain · sonnet')).toBeNull()
   })
 
   it('hides the cost pills while the mission has no ledger rows', async () => {
@@ -231,6 +259,45 @@ describe('MissionDetail spend', () => {
     renderPage()
     const pill = await screen.findByText('USD 1.11')
     expect(pill.closest('span')).not.toHaveAttribute('title')
+  })
+
+  it('folds the notional subscription line into the billed pill tooltip, after the breakdown', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.32 },
+      billed_brain_by_currency: { USD: 0.11 },
+      billed_harness_by_currency: { USD: 0.21 },
+      notional_cost_by_currency: { USD: 0.94 },
+      converted_notional_cost_by_currency: { BDT: 94.25 },
+      input_tokens: 100,
+      output_tokens: 50,
+      requests: 3,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    const pill = await screen.findByText('USD 0.3200')
+    expect(pill.closest('span')).toHaveAttribute(
+      'title',
+      'brain USD 0.1100 · harness USD 0.2100\n≈BDT 94.25 subscription (not billed)',
+    )
+    expect(screen.queryByText(/subscription \(not billed\)/)).toBeNull()
+  })
+
+  it('shows only the notional tooltip line when the mission is all-harness', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0 },
+      notional_cost_by_currency: { USD: 0.5 },
+      input_tokens: 100,
+      output_tokens: 50,
+      requests: 3,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    const pill = await screen.findByText('USD 0')
+    expect(pill.closest('span')).toHaveAttribute('title', '≈USD 0.5000 subscription (not billed)')
   })
 })
 

@@ -57,6 +57,26 @@ function brainHarnessBreakdown(usage: MissionUsage): string | null {
   return `brain ${brainStr} · harness ${harnessStr}`
 }
 
+// notionalTooltipLine formats the "≈$X subscription (not billed)" line
+// folded into the billed cost pill's tooltip — prefers the
+// currency-converted notional total (matching the pill's own display
+// currency) and falls back to the raw per-currency amounts when no
+// converted total is available, same fallback the removed standalone
+// pill used.
+function notionalTooltipLine(usage: MissionUsage): string | null {
+  const notional = usage.notional_cost_by_currency ?? {}
+  if (Object.keys(notional).length === 0) return null
+  const converted = usage.converted_notional_cost_by_currency ?? {}
+  if (Object.keys(converted).length > 0) {
+    return Object.entries(converted)
+      .map(([c, v]) => `≈${money(v, c)} subscription (not billed)`)
+      .join(', ')
+  }
+  return Object.entries(notional)
+    .map(([c, v]) => `≈${money(v, c)} subscription (not billed)`)
+    .join(', ')
+}
+
 function formatDate(v?: string): string {
   if (!v) return 'N/A'
   return new Date(v).toLocaleString()
@@ -404,14 +424,16 @@ export function MissionDetail() {
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {usage &&
             usage.requests > 0 &&
-            usage.models.map((m) => (
-              <ModelBadge
-                key={`${m.provider}:${m.model}`}
-                provider={m.provider}
-                model={`brain · ${m.model}`}
-                title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
-              />
-            ))}
+            usage.models
+              .filter((m) => !m.harness)
+              .map((m) => (
+                <ModelBadge
+                  key={`${m.provider}:${m.model}`}
+                  provider={m.provider}
+                  model={`brain · ${m.model}`}
+                  title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
+                />
+              ))}
           {executorSpawn && (
             <Badge
               variant="secondary"
@@ -437,15 +459,13 @@ export function MissionDetail() {
               {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
                 Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => {
                   const breakdown = brainHarnessBreakdown(usage)
+                  const notional = notionalTooltipLine(usage)
                   const converted = `Converted from the billed amount(s) (${Object.entries(usage.cost_by_currency)
                     .map(([c, v]) => money(v, c))
                     .join(', ')}) using a stored exchange rate.`
+                  const title = [converted, breakdown, notional].filter(Boolean).join('\n')
                   return (
-                    <Badge
-                      key={currency}
-                      variant="secondary"
-                      title={breakdown ? `${converted} ${breakdown}` : converted}
-                    >
+                    <Badge key={currency} variant="secondary" title={title}>
                       {money(cost, currency)}
                     </Badge>
                   )
@@ -453,41 +473,15 @@ export function MissionDetail() {
               ) : (
                 Object.entries(usage.cost_by_currency).map(([currency, cost]) => {
                   const breakdown = brainHarnessBreakdown(usage)
+                  const notional = notionalTooltipLine(usage)
+                  const title = [breakdown, notional].filter(Boolean).join('\n')
                   return (
-                    <Badge key={currency} variant="secondary" title={breakdown ?? undefined}>
+                    <Badge key={currency} variant="secondary" title={title || undefined}>
                       {money(cost, currency)}
                     </Badge>
                   )
                 })
               )}
-              {usage.notional_cost_by_currency &&
-                Object.keys(usage.notional_cost_by_currency).length > 0 &&
-                (usage.converted_notional_cost_by_currency &&
-                Object.keys(usage.converted_notional_cost_by_currency).length > 0
-                  ? Object.entries(usage.converted_notional_cost_by_currency).map(([currency, cost]) => (
-                      <Badge
-                        key={`notional-${currency}`}
-                        variant="outline"
-                        className="text-muted-foreground"
-                        title={`API-equivalent price of work billed through a subscription/oauth executor, not actually charged (${Object.entries(
-                          usage.notional_cost_by_currency ?? {},
-                        )
-                          .map(([c, v]) => money(v, c))
-                          .join(', ')}).`}
-                      >
-                        ≈{money(cost, currency)} subscription (not billed)
-                      </Badge>
-                    ))
-                  : Object.entries(usage.notional_cost_by_currency).map(([currency, cost]) => (
-                      <Badge
-                        key={`notional-${currency}`}
-                        variant="outline"
-                        className="text-muted-foreground"
-                        title="API-equivalent price of work billed through a subscription/oauth executor, not actually charged."
-                      >
-                        ≈{money(cost, currency)} subscription (not billed)
-                      </Badge>
-                    )))}
             </>
           )}
           <Badge variant="secondary">

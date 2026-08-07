@@ -4,6 +4,7 @@ package ledger
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -259,6 +260,13 @@ func TestAggregateMissionUsage(t *testing.T) {
 		{Provider: aggMarker + "a", Model: "m-local", Route: "coding", MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 40, OutputTokens: 20},
 			LatencyMS: 100, Status: "ok"},
+		// Same provider/model as the harness's delegated CLI executor
+		// used directly by brain too — purpose='executor' must split
+		// this into its own Harness=true row rather than merging with
+		// brain's m1 rows above.
+		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission, Purpose: "executor",
+			Usage:     &stream.Usage{InputTokens: 10, OutputTokens: 5},
+			LatencyMS: 100, Status: "ok", Cost: usd(0.05)},
 		// Another mission and a test probe: both excluded.
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: aggMarker + "other",
 			Usage:     &stream.Usage{InputTokens: 1000, OutputTokens: 1000},
@@ -275,29 +283,36 @@ func TestAggregateMissionUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mission: %v", err)
 	}
-	if got.MissionID != mission || got.CostByCurrency["USD"] != 0.30 || got.InputTokens != 340 ||
-		got.OutputTokens != 170 || got.Requests != 3 || got.UnpricedRequests != 1 {
-		t.Fatalf("Mission = %+v, want mission_id=%s cost=0.30 in=340 out=170 requests=3 unpriced=1",
+	if got.MissionID != mission || got.CostByCurrency["USD"] != 0.35 || got.InputTokens != 350 ||
+		got.OutputTokens != 175 || got.Requests != 4 || got.UnpricedRequests != 1 {
+		t.Fatalf("Mission = %+v, want mission_id=%s cost=0.35 in=350 out=175 requests=4 unpriced=1",
 			got, mission)
 	}
-	// None of these rows carry Purpose="executor" — all billed cost is
-	// brain's, none is the harness's.
-	if got.BilledBrainByCurrency["USD"] != 0.30 || got.BilledHarnessByCurrency["USD"] != 0 {
-		t.Fatalf("BilledBrainByCurrency/BilledHarnessByCurrency = %+v/%+v, want brain=0.30 harness=0",
+	// The executor-purpose row's $0.05 is the harness's; the rest is
+	// brain's.
+	if got.BilledBrainByCurrency["USD"] != 0.30 || got.BilledHarnessByCurrency["USD"] != 0.05 {
+		t.Fatalf("BilledBrainByCurrency/BilledHarnessByCurrency = %+v/%+v, want brain=0.30 harness=0.05",
 			got.BilledBrainByCurrency, got.BilledHarnessByCurrency)
 	}
-	if len(got.Models) != 2 {
-		t.Fatalf("Models = %+v, want 2 distinct provider/model pairs", got.Models)
+	// m1 appears twice: once as brain's rows, once as the harness's
+	// executor row — grouping by (provider, model, harness) keeps them
+	// as distinct entries instead of merging brain and harness usage
+	// of the same model.
+	if len(got.Models) != 3 {
+		t.Fatalf("Models = %+v, want 3 distinct provider/model/harness triples", got.Models)
 	}
-	byModel := map[string]ModelUsed{}
+	byKey := map[string]ModelUsed{}
 	for _, mu := range got.Models {
-		byModel[mu.Model] = mu
+		byKey[fmt.Sprintf("%s:%v", mu.Model, mu.Harness)] = mu
 	}
-	if mu := byModel["m1"]; mu.Provider != aggMarker+"a" || mu.Requests != 2 {
-		t.Fatalf("Models[m1] = %+v, want provider=%s requests=2", mu, aggMarker+"a")
+	if mu := byKey["m1:false"]; mu.Provider != aggMarker+"a" || mu.Requests != 2 {
+		t.Fatalf("Models[m1,harness=false] = %+v, want provider=%s requests=2", mu, aggMarker+"a")
 	}
-	if mu := byModel["m-local"]; mu.Provider != aggMarker+"a" || mu.Requests != 1 {
-		t.Fatalf("Models[m-local] = %+v, want provider=%s requests=1", mu, aggMarker+"a")
+	if mu := byKey["m1:true"]; mu.Provider != aggMarker+"a" || mu.Requests != 1 {
+		t.Fatalf("Models[m1,harness=true] = %+v, want provider=%s requests=1", mu, aggMarker+"a")
+	}
+	if mu := byKey["m-local:false"]; mu.Provider != aggMarker+"a" || mu.Requests != 1 {
+		t.Fatalf("Models[m-local,harness=false] = %+v, want provider=%s requests=1", mu, aggMarker+"a")
 	}
 
 	// A mission with no ledger rows is all zeros, not an error.
