@@ -180,9 +180,15 @@ jobs:
   # timothy-sandbox) rather than renaming it — nothing outside this
   # workflow needs to change to keep pulling the base under its
   # original name.
+  #
+  # Unlike service images, the family's copy-forward lives inside this
+  # same job (per-step ifs) rather than a matrix conditional: the
+  # release compose pins MISSION_SANDBOX_IMAGE to the release version
+  # and sandboxd derives variant refs from it, so every release MUST
+  # have all six sandbox tags — a skipped job would leave them
+  # dangling and break the first mission of each environment.
   sandbox-images:
     needs: diff
-    if: needs.diff.outputs.sandbox == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       packages: write
@@ -193,14 +199,27 @@ jobs:
       - id: sha
         run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v4
+        if: fromJSON(needs.diff.outputs.sandbox)
       - name: Setup Blacksmith Builder
+        if: fromJSON(needs.diff.outputs.sandbox)
         uses: useblacksmith/setup-docker-builder@v1
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy forward unchanged family
+        if: needs.diff.outputs.prev_tag != '' && !fromJSON(needs.diff.outputs.sandbox)
+        run: |
+          prev_version="${{ needs.diff.outputs.prev_tag }}"
+          prev_version="${prev_version#v}"
+          for name in sandbox sandbox-base sandbox-go sandbox-node sandbox-python sandbox-java sandbox-php; do
+            docker buildx imagetools create \
+              --tag ghcr.io/${{ github.repository_owner }}/timothy-$name:${{ steps.version.outputs.value }} \
+              ghcr.io/${{ github.repository_owner }}/timothy-$name:${prev_version}
+          done
       - name: Build and push base
+        if: fromJSON(needs.diff.outputs.sandbox)
         uses: useblacksmith/build-push-action@v2
         with:
           context: .
@@ -214,6 +233,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/timothy-sandbox:${{ steps.version.outputs.value }}
             ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base:${{ steps.version.outputs.value }}
       - name: Build and push variants
+        if: fromJSON(needs.diff.outputs.sandbox)
         run: |
           for lang in go node python java php; do
             docker buildx build \
@@ -229,12 +249,7 @@ jobs:
 
   release:
     needs: [images, sandbox-images]
-    # sandbox-images is conditionally skipped (no sandbox-*.Dockerfile
-    # change this release) — the default success() treats a skipped
-    # need as not-success and would skip this job too, so it's spelled
-    # out explicitly: images must succeed, sandbox-images must succeed
-    # or be skipped.
-    if: needs.images.result == 'success' && (needs.sandbox-images.result == 'success' || needs.sandbox-images.result == 'skipped')
+    if: needs.images.result == 'success' && needs.sandbox-images.result == 'success'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
