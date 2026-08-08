@@ -342,7 +342,8 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if err != nil {
 		return false, fmt.Errorf("driver advance: %w", err)
 	}
-	if m.Phase.Terminal() || m.Status == StatusPaused || m.Status == StatusWaitingForInput {
+	if m.Phase.Terminal() || m.Status == StatusPaused || m.Status == StatusWaitingForInput ||
+		m.Status == StatusDone || m.Status == StatusError {
 		return false, nil
 	}
 	// D-056: admission applies only to idle->working, never to a mission
@@ -435,6 +436,18 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	state := d.toStepState(ctx, m)
 	t := Step(state, in, d.cfg)
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
+		if errors.Is(err, ErrTerminal) {
+			// The mission reached a terminal state (e.g. cancel) while this
+			// turn was in flight — the turn's own transition arrived too
+			// late and must be discarded, not written over the terminal
+			// row. Cancel's own transition already tore down the sandbox;
+			// this is the belt for a turn that raced past that teardown and
+			// may have started a fresh container of its own.
+			d.log.Info("driver: mission reached terminal state mid-turn, discarding turn result", "mission_id", id)
+			delete(d.gatekeepers, id)
+			d.removeSandbox(id)
+			return false, nil
+		}
 		return false, fmt.Errorf("driver advance: apply transition: %w", err)
 	}
 	if t.Next.Phase.Terminal() {

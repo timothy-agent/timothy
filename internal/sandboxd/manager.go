@@ -671,13 +671,26 @@ type CapacityReport struct {
 	Reason           string // empty when Admit is true
 }
 
+// hostMeminfoPath is bind-mounted from the LXC guest's own host-side
+// /proc/meminfo (deploy/docker-compose.yml). Under LXC, a container's
+// raw /proc/meminfo is the hypervisor's kernel procfs — lxcfs only
+// masks /proc for processes running directly on the guest, not for
+// something bind-mounted straight through into a container — so
+// sandboxd's own /proc/meminfo reports the HYPERVISOR's memory (e.g.
+// 32 GB on a 4 GB guest). The guest's real, lxcfs-served view is only
+// reachable via this separately-mounted path; falls back to
+// /proc/meminfo when absent (bare-metal/non-LXC hosts, or the mount
+// missing).
+const hostMeminfoPath = "/host/meminfo"
+
 // Capacity reports whether the host can afford one more working
-// mission. MemAvailableMB reads /proc/meminfo — sandboxd's own container
-// runs with no memory limit, so this is the HOST's view of available
+// mission. MemAvailableMB reads /host/meminfo when present, else
+// /proc/meminfo (see hostMeminfoPath) — sandboxd's own container runs
+// with no memory limit, so this is the HOST's view of available
 // memory, not sandboxd's cgroup. RunningSandboxes reuses List, the same
 // live-container count api.go's ensure-time cap uses.
 func (m *Manager) Capacity(ctx context.Context) (CapacityReport, error) {
-	f, err := os.Open("/proc/meminfo")
+	f, err := openMeminfo(hostMeminfoPath, "/proc/meminfo")
 	if err != nil {
 		return CapacityReport{}, fmt.Errorf("sandbox: capacity: %w", err)
 	}
@@ -699,6 +712,17 @@ func (m *Manager) Capacity(ctx context.Context) (CapacityReport, error) {
 	}
 	report.Reason = fmt.Sprintf("mem_available %dMB < floor %d + per-sandbox %d", availMB, hostMemoryFloorMB, perSandboxEstimateMB)
 	return report, nil
+}
+
+// openMeminfo opens primary, falling back to fallback when primary
+// doesn't exist — split out from Capacity (params instead of the
+// hostMeminfoPath/proc constants directly) so the preference order is
+// table-testable against temp files without a real /host or /proc.
+func openMeminfo(primary, fallback string) (*os.File, error) {
+	if f, err := os.Open(primary); err == nil { //nolint:gosec // G304: fixed operator-controlled paths (hostMeminfoPath/proc), not user input.
+		return f, nil
+	}
+	return os.Open(fallback) //nolint:gosec // G304: fixed operator-controlled paths (hostMeminfoPath/proc), not user input.
 }
 
 // parseMemAvailable reads the "MemAvailable:" line from a /proc/meminfo

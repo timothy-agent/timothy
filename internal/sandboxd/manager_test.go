@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -661,6 +663,53 @@ func TestManagerCapacityReadsRealMeminfo(t *testing.T) {
 	if !report.Admit && report.Reason == "" {
 		t.Error("Admit = false, want a non-empty Reason")
 	}
+}
+
+// TestOpenMeminfo covers the LXC/lxcfs path preference: primary
+// (hostMeminfoPath's bind mount) wins when present, and a missing
+// primary falls back to the plain /proc/meminfo path — reproduces the
+// bug where sandboxd read the hypervisor's /proc/meminfo instead of
+// the guest's lxcfs-served one.
+func TestOpenMeminfo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	primary := filepath.Join(dir, "host-meminfo")
+	fallback := filepath.Join(dir, "proc-meminfo")
+	if err := os.WriteFile(primary, []byte("MemAvailable: 1000 kB\n"), 0o600); err != nil {
+		t.Fatalf("write primary: %v", err)
+	}
+	if err := os.WriteFile(fallback, []byte("MemAvailable: 2000 kB\n"), 0o600); err != nil {
+		t.Fatalf("write fallback: %v", err)
+	}
+	missing := filepath.Join(dir, "does-not-exist")
+
+	t.Run("primary present", func(t *testing.T) {
+		f, err := openMeminfo(primary, fallback)
+		if err != nil {
+			t.Fatalf("openMeminfo: %v", err)
+		}
+		defer func() { _ = f.Close() }()
+		if f.Name() != primary {
+			t.Errorf("opened %q, want primary %q", f.Name(), primary)
+		}
+	})
+
+	t.Run("primary missing falls back", func(t *testing.T) {
+		f, err := openMeminfo(missing, fallback)
+		if err != nil {
+			t.Fatalf("openMeminfo: %v", err)
+		}
+		defer func() { _ = f.Close() }()
+		if f.Name() != fallback {
+			t.Errorf("opened %q, want fallback %q", f.Name(), fallback)
+		}
+	})
+
+	t.Run("both missing errors", func(t *testing.T) {
+		if _, err := openMeminfo(missing, filepath.Join(dir, "also-missing")); err == nil {
+			t.Error("openMeminfo with both paths missing = nil error, want an error")
+		}
+	})
 }
 
 // TestParseMemAvailable covers normal /proc/meminfo shape, a missing

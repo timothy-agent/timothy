@@ -204,6 +204,11 @@ services:
       #   docker run --rm -u 0 -v timothy_executor-claude-state:/s timothy-sandbox:latest chown 65534:65534 /s
       #   docker run --rm -it -v timothy_executor-claude-state:/home/sandbox/.claude timothy-sandbox:latest claude /login
       - executor-claude-state:/statevols/claude
+      # Host meminfo — under LXC, lxcfs serves the guest's real memory
+      # limit here, while this container's own /proc shows the
+      # hypervisor's (Capacity's admission gate would otherwise read a
+      # 32 GB host on a 4 GB guest). No-op bind on bare metal.
+      - /proc/meminfo:/host/meminfo:ro
       # The socket this service exists to hold instead of brain.
       # group_add grants its group inside the container; Docker
       # Desktop's socket is group 0 (root), Linux hosts typically use a

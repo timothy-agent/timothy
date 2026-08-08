@@ -29,6 +29,10 @@ type fakeStore struct {
 	// zero spend in every currency, matching a mission with no ledger
 	// rows yet.
 	spend map[string]MissionSpend
+	// applyTransitionErr, when set, makes ApplyTransition return this
+	// error instead of writing — scripts the real Store's terminal-row
+	// guard (ErrTerminal) without a Postgres pool.
+	applyTransitionErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -99,6 +103,9 @@ func (f *fakeStore) Get(ctx context.Context, id string) (Mission, error) {
 func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.applyTransitionErr != nil {
+		return f.applyTransitionErr
+	}
 	m := f.missions[id]
 	m.Phase, m.Status, m.PauseReason = t.Next.Phase, t.Next.Status, t.Next.PauseReason
 	m.Iteration, m.MaxIterations = t.Next.Iteration, t.Next.MaxIterations
@@ -1566,5 +1573,86 @@ func TestDriverAdvanceCapacityGateIgnoredWhenAlreadyWorking(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhasePlan {
 		t.Fatalf("mission.Phase = %s, want plan (a denial must not stall a mission already working)", m.Phase)
+	}
+}
+
+// fakeSandboxRemover records Remove calls so a test can assert
+// terminal-transition cleanup ran without a real Docker socket.
+type fakeSandboxRemover struct {
+	mu      sync.Mutex
+	removed []string
+}
+
+func (f *fakeSandboxRemover) Remove(ctx context.Context, missionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, missionID)
+	return nil
+}
+
+func (f *fakeSandboxRemover) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.removed...)
+}
+
+// TestDriverAdvanceStopsOnTerminalStatus is the cheap belt: a mission
+// whose Status already reads done/error (set by a concurrent cancel)
+// must not run another turn, even before the Store-level guard is
+// consulted.
+func TestDriverAdvanceStopsOnTerminalStatus(t *testing.T) {
+	for _, status := range []Status{StatusDone, StatusError} {
+		store := newFakeStore()
+		store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: status, MaxIterations: 8})
+		runner := &scriptedRunner{}
+		d := testDriver(store, runner)
+
+		cont, err := d.Advance(context.Background(), "m1")
+		if err != nil {
+			t.Fatalf("Advance (status=%s): %v", status, err)
+		}
+		if cont {
+			t.Fatalf("Advance (status=%s) canContinue = true, want false", status)
+		}
+	}
+}
+
+// TestDriverAdvanceDiscardsTurnOnConcurrentTerminal reproduces the
+// production bug: a cancel lands mid-turn (ApplyTransition's row-lock
+// guard now returns ErrTerminal for the turn's own late transition).
+// Advance must treat that as a clean stop — no error escalation — and
+// still tear down the sandbox, since the in-flight turn may have
+// recreated a container after cancel's own teardown ran.
+func TestDriverAdvanceDiscardsTurnOnConcurrentTerminal(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.applyTransitionErr = ErrTerminal
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+	remover := &fakeSandboxRemover{}
+	d := NewDriver(store, runner, nil, nil, nil, nil, fakeSandboxExec, remover, slog.Default())
+	d.gatekeepers["m1"] = &GatekeeperState{}
+
+	cont, err := d.Advance(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if cont {
+		t.Fatal("Advance canContinue = true, want false (turn discarded on terminal race)")
+	}
+	if _, stillPresent := d.gatekeepers["m1"]; stillPresent {
+		t.Fatal("gatekeeper state was not cleaned up when the turn discarded on terminal race")
+	}
+	// removeSandbox fires the actual Remove call in a background
+	// goroutine (independent of the request's own ctx) — poll briefly
+	// rather than asserting immediately.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if calls := remover.calls(); len(calls) == 1 && calls[0] == "m1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sandboxRemove.Remove calls = %v, want exactly one call for m1", remover.calls())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

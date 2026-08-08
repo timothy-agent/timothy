@@ -486,6 +486,94 @@ func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
 	}
 }
 
+// TestApplyTransitionRejectsWriteOnTerminalMission reproduces a real
+// bug: a mission cancelled (terminal phase persisted) while a Drive
+// loop's turn was in flight — the turn's own ApplyTransition,
+// operating on a stale pre-cancel snapshot, must not be allowed to
+// overwrite the terminal row and resurrect the mission.
+func TestApplyTransitionRejectsWriteOnTerminalMission(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "terminal-guard", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next:   StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "cancelled"}}},
+	}); err != nil {
+		t.Fatalf("ApplyTransition (cancel): %v", err)
+	}
+
+	// A stale in-flight turn's transition arrives after cancel already
+	// landed — must be rejected, not written over the terminal row.
+	err = s.ApplyTransition(ctx, id, Transition{
+		Next:   StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "execute"}}},
+	})
+	if !errors.Is(err, ErrTerminal) {
+		t.Fatalf("ApplyTransition (stale turn) err = %v, want ErrTerminal", err)
+	}
+
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Phase != PhaseFailed || m.Status != StatusError {
+		t.Fatalf("mission after rejected write: phase=%q status=%q, want failed/error unchanged", m.Phase, m.Status)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != "mission.failed" {
+		t.Fatalf("Events = %+v, want only the cancel's mission.failed event, no mission.turn", events)
+	}
+}
+
+// TestApplyTransitionCancelThenDoubleCancel exercises the two ends of
+// the cancel path around the new guard: a cancel applied to a live
+// mission still writes normally, and a second cancel on the
+// now-terminal mission is rejected rather than silently re-applying.
+func TestApplyTransitionCancelThenDoubleCancel(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "double-cancel", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	cancelTransition := Transition{
+		Next:   StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "cancelled"}}},
+	}
+	if err := s.ApplyTransition(ctx, id, cancelTransition); err != nil {
+		t.Fatalf("ApplyTransition (first cancel): %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Phase != PhaseFailed {
+		t.Fatalf("mission phase after first cancel = %q, want failed", m.Phase)
+	}
+
+	if err := s.ApplyTransition(ctx, id, cancelTransition); !errors.Is(err, ErrTerminal) {
+		t.Fatalf("ApplyTransition (second cancel) err = %v, want ErrTerminal", err)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("Events = %+v, want exactly one mission.failed from the first cancel", events)
+	}
+}
+
 // TestAppendEventSeqMonotonic drives concurrent appends to the SAME
 // mission and asserts seq is a gap-free 1..N sequence — the FOR UPDATE
 // lock on the mission row must serialize these, not merely avoid a

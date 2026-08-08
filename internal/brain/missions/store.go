@@ -515,6 +515,15 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 // mission row to Next and appends its Events in order, all in one
 // txn. This is the ONLY way mission state changes after Create —
 // Driver never issues a bare UPDATE.
+//
+// Guards against a cancel (or any other terminal transition) landing
+// mid-turn: the row is locked FOR UPDATE and its CURRENT phase
+// re-checked before writing. A mission observed non-terminal at the
+// top of a Drive turn can be cancelled by a concurrent Signal before
+// that turn's own ApplyTransition runs; without this check the turn's
+// stale transition would overwrite the terminal row and resurrect the
+// mission. Once Terminal(), the row is a dead end — this returns
+// ErrTerminal and appends NO event, never a silent no-op write.
 func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) error {
 	db, err := s.db.Get()
 	if err != nil {
@@ -525,6 +534,17 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 		return fmt.Errorf("missions apply transition begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var currentPhase string
+	if err := tx.QueryRow(ctx, `SELECT phase FROM missions WHERE id = $1 FOR UPDATE`, id).Scan(&currentPhase); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("mission %s: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("missions apply transition lock: %w", err)
+	}
+	if phase, ok := parsePhase(currentPhase); ok && phase.Terminal() {
+		return ErrTerminal
+	}
 
 	// pause_message is cleared unconditionally: the state machine's
 	// Transition never carries a message string (only scanMission's
