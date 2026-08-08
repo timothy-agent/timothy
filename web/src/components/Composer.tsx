@@ -13,7 +13,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import type { ClipboardEvent, DragEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { transcribe, uploadAttachment } from '../api/client'
+import { getSettings, transcribe, uploadAttachment } from '../api/client'
 import { skillLabels } from '../lib/skills'
 import {
   getTranscribeLanguage,
@@ -104,6 +104,16 @@ export function Composer({
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [transcribeLanguage, setTranscribeLanguageState] = useState(getTranscribeLanguage)
+  // Default hidden: a mic that 404s because WHISPER_URL is unset is
+  // worse than one that appears a beat late once the settings fetch
+  // resolves.
+  const [transcribeEnabled, setTranscribeEnabled] = useState(false)
+
+  useEffect(() => {
+    getSettings()
+      .then((s) => setTranscribeEnabled(s.settings.transcribe_enabled ?? false))
+      .catch(() => setTranscribeEnabled(false))
+  }, [])
 
   // Auto-grow up to a cap, then scroll inside. Runs on every draft
   // change so programmatic clears (post-send) shrink it back.
@@ -342,64 +352,71 @@ export function Composer({
               </button>
             </>
           )}
-          <button
-            type="button"
-            onClick={recording ? stopRecording : startRecording}
-            aria-label={recording ? 'Stop recording' : 'Record voice input'}
-            aria-pressed={recording}
-            disabled={disabled || transcribing}
-            className={
-              recording
-                ? 'flex size-8 shrink-0 animate-pulse items-center justify-center rounded-full bg-red-600 text-white transition hover:bg-red-500'
-                : 'flex size-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600'
-            }
-          >
-            <HugeiconsIcon
-              icon={transcribing ? Loading03Icon : Mic01Icon}
-              className={transcribing ? 'size-4 animate-spin' : 'size-4'}
-            />
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              aria-label="Speech input language"
-              disabled={disabled || recording || transcribing}
-              className="flex h-8 items-center gap-1 rounded-full px-2 text-xs text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600"
-            >
-              <span>
-                {TRANSCRIBE_LANGUAGES.find((l) => l.code === transcribeLanguage)?.label ?? 'Auto'}
-              </span>
-              <HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-48 p-1.5">
-              <DropdownMenuItem
-                onSelect={() => {
-                  setTranscribeLanguageState('')
-                  setTranscribeLanguage('')
-                }}
-                data-selected={transcribeLanguage === '' || undefined}
-                className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+          {transcribeEnabled && (
+            <>
+              <button
+                type="button"
+                onClick={recording ? stopRecording : startRecording}
+                aria-label={recording ? 'Stop recording' : 'Record voice input'}
+                aria-pressed={recording}
+                disabled={disabled || transcribing}
+                className={
+                  recording
+                    ? 'flex size-8 shrink-0 animate-pulse items-center justify-center rounded-full bg-red-600 text-white transition hover:bg-red-500'
+                    : 'flex size-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600'
+                }
               >
-                <span className="text-sm">Auto-detect</span>
-                {transcribeLanguage === '' && <HugeiconsIcon icon={Tick02Icon} className="size-4" />}
-              </DropdownMenuItem>
-              {TRANSCRIBE_LANGUAGES.map((l) => (
-                <DropdownMenuItem
-                  key={l.code}
-                  onSelect={() => {
-                    setTranscribeLanguageState(l.code)
-                    setTranscribeLanguage(l.code)
-                  }}
-                  data-selected={transcribeLanguage === l.code || undefined}
-                  className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                <HugeiconsIcon
+                  icon={transcribing ? Loading03Icon : Mic01Icon}
+                  className={transcribing ? 'size-4 animate-spin' : 'size-4'}
+                />
+              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label="Speech input language"
+                  disabled={disabled || recording || transcribing}
+                  className="flex h-8 items-center gap-1 rounded-full px-2 text-xs text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600"
                 >
-                  <span className="text-sm">{l.label}</span>
-                  {transcribeLanguage === l.code && (
-                    <HugeiconsIcon icon={Tick02Icon} className="size-4" />
-                  )}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  <span>
+                    {TRANSCRIBE_LANGUAGES.find((l) => l.code === transcribeLanguage)?.label ??
+                      'Auto'}
+                  </span>
+                  <HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-48 p-1.5">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setTranscribeLanguageState('')
+                      setTranscribeLanguage('')
+                    }}
+                    data-selected={transcribeLanguage === '' || undefined}
+                    className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                  >
+                    <span className="text-sm">Auto-detect</span>
+                    {transcribeLanguage === '' && (
+                      <HugeiconsIcon icon={Tick02Icon} className="size-4" />
+                    )}
+                  </DropdownMenuItem>
+                  {TRANSCRIBE_LANGUAGES.map((l) => (
+                    <DropdownMenuItem
+                      key={l.code}
+                      onSelect={() => {
+                        setTranscribeLanguageState(l.code)
+                        setTranscribeLanguage(l.code)
+                      }}
+                      data-selected={transcribeLanguage === l.code || undefined}
+                      className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                    >
+                      <span className="text-sm">{l.label}</span>
+                      {transcribeLanguage === l.code && (
+                        <HugeiconsIcon icon={Tick02Icon} className="size-4" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
         </div>
         {streaming && onStop ? (
           <button

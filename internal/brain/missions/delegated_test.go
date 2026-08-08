@@ -731,6 +731,62 @@ func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
 	if sandbox.launches != 1 {
 		t.Fatalf("sandbox launches = %d, want 1 (second call must not retry the cooled-down entry)", sandbox.launches)
 	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "cooldown" {
+		t.Fatalf("executor.skipped reason = %v, want cooldown", skippedPayload["reason"])
+	}
+	if skippedPayload["harness"] != m.Harness {
+		t.Fatalf("executor.skipped harness = %v, want %q", skippedPayload["harness"], m.Harness)
+	}
+	if skippedPayload["provider"] != failing.ProviderName || skippedPayload["model"] != failing.Model {
+		t.Fatalf("executor.skipped provider/model = %v/%v, want %v/%v", skippedPayload["provider"], skippedPayload["model"], failing.ProviderName, failing.Model)
+	}
+	if _, ok := skippedPayload["until"].(string); !ok {
+		t.Fatalf("executor.skipped until = %v, want an RFC3339 string", skippedPayload["until"])
+	}
+}
+
+// TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative covers
+// the route-had-entries-but-none-Usable case, distinct from cooldown:
+// no entry was ever usable in the first place, so there is nothing to
+// cool down.
+func TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative(t *testing.T) {
+	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
+	sandbox := newFakeSandbox()
+	events := &fakeEventSink{}
+	unusable := gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-1", ProviderName: "anthropic", Driver: "anthropic",
+		Model: "claude-haiku-4-5-20251001", Usable: false, SkipReason: "no credential configured",
+	}
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{unusable}}
+
+	r := newTestDelegatedRunner(native, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if native.callCount() != 1 {
+		t.Fatalf("native call count = %d, want 1", native.callCount())
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "no_usable_entry" {
+		t.Fatalf("executor.skipped reason = %v, want no_usable_entry", skippedPayload["reason"])
+	}
+	reasons, ok := skippedPayload["skip_reasons"].([]any)
+	if !ok || len(reasons) != 1 || reasons[0] != "no credential configured" {
+		t.Fatalf("executor.skipped skip_reasons = %v, want [%q]", skippedPayload["skip_reasons"], "no credential configured")
+	}
 }
 
 // --- scenario 7: api-key mode ---------------------------------------------
@@ -1060,8 +1116,9 @@ func TestDelegatedRunWorker_Dispatch_EmptyHarnessSkipsResolve(t *testing.T) {
 func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
+	events := &fakeEventSink{}
 
-	r := newTestDelegatedRunner(native, scriptedResolver(nil, nil), scriptedCred("", nil), sandbox, nil, nil, &fakeLedger{})
+	r := newTestDelegatedRunner(native, scriptedResolver(nil, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 	m.Harness = "codex-cli-unregistered"
 
@@ -1071,13 +1128,26 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.
 	if native.callCount() != 1 {
 		t.Fatalf("native call count = %d, want 1", native.callCount())
 	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "unknown_harness" {
+		t.Fatalf("executor.skipped reason = %v, want unknown_harness", skippedPayload["reason"])
+	}
+	if skippedPayload["harness"] != m.Harness {
+		t.Fatalf("executor.skipped harness = %v, want %q", skippedPayload["harness"], m.Harness)
+	}
 }
 
 func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
+	events := &fakeEventSink{}
 
-	r := newTestDelegatedRunner(native, scriptedResolver(nil, fmt.Errorf("gateway unreachable")), scriptedCred("", nil), sandbox, nil, nil, &fakeLedger{})
+	r := newTestDelegatedRunner(native, scriptedResolver(nil, fmt.Errorf("gateway unreachable")), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 
 	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
@@ -1085,6 +1155,18 @@ func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T)
 	}
 	if native.callCount() != 1 {
 		t.Fatalf("native call count = %d, want 1", native.callCount())
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "resolve_failed" {
+		t.Fatalf("executor.skipped reason = %v, want resolve_failed", skippedPayload["reason"])
+	}
+	if errStr, _ := skippedPayload["error"].(string); errStr == "" {
+		t.Fatalf("executor.skipped error = %q, want a non-empty error string", errStr)
 	}
 }
 

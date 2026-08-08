@@ -57,6 +57,7 @@ services:
 
   whisper:
     <<: *service
+    profiles: [whisper]
     image: ghcr.io/timothy-agent/timothy-whisper:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
     environment:
       # The published image bakes model "large-v3" at build time;
@@ -65,6 +66,9 @@ services:
       WHISPER_MODEL: large-v3
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng/markitdown.
+    # Off by default: the model holds ~3 GiB RSS at idle. Enable with
+    # COMPOSE_PROFILES=whisper and WHISPER_URL=http://whisper:8001 in
+    # .env.
 
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and
@@ -104,8 +108,10 @@ services:
       # markdown/text; compose-internal only.
       MARKITDOWN_URL: http://markitdown:8000
       # Local speech-to-text for the web mic button; compose-internal
-      # only, audio never leaves the box.
-      WHISPER_URL: http://whisper:8001
+      # only, audio never leaves the box. Empty by default (feature
+      # off) since whisper itself defaults off — see its service
+      # comment.
+      WHISPER_URL: ${WHISPER_URL:-}
       # sandboxd's internal address — mission shell/verify_cmd execution
       # always runs there; brain never touches the Docker socket
       # directly.
@@ -124,8 +130,6 @@ services:
       searxng:
         condition: service_started
       markitdown:
-        condition: service_started
-      whisper:
         condition: service_started
       sandboxd:
         condition: service_started

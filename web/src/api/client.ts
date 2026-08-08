@@ -812,6 +812,9 @@ export async function setRouteRole(name: string, role: string): Promise<void> {
 }
 
 export interface AdminSettings {
+  // Feature switches, plus the read-only derived transcribe_enabled
+  // key (true when WHISPER_URL is configured server-side) — the
+  // Composer mic button hides itself when it's false.
   settings: Record<string, boolean>
   // Typed runtime settings; empty string means the built-in default.
   values: Record<string, string>

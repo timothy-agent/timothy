@@ -4,6 +4,7 @@ import type {
   ExecutorDiedPayload,
   ExecutorIdleKilledPayload,
   ExecutorResultPayload,
+  ExecutorSkippedPayload,
   ExecutorSpawnedPayload,
   MissionEvent,
 } from '../../api/types'
@@ -123,6 +124,19 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'executor.auth_failed': (p) => {
     const { harness } = p as ExecutorAuthFailedPayload
     return <span className="text-red-400">{harness} auth failed — re-run the harness login</span>
+  },
+  'executor.skipped': (p) => {
+    const { reason, error, until, provider, model, skip_reasons } = p as ExecutorSkippedPayload
+    return (
+      <span className="text-amber-400">
+        Harness skipped: {reason}
+        {reason === 'resolve_failed' && error ? ` — ${truncateForDisplay(error)}` : ''}
+        {reason === 'cooldown' && until ? ` — ${provider}/${model} until ${until}` : ''}
+        {reason === 'no_usable_entry' && skip_reasons && skip_reasons.length > 0
+          ? ` — ${skip_reasons.join(', ')}`
+          : ''}
+      </span>
+    )
   },
 }
 

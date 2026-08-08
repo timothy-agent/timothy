@@ -247,7 +247,7 @@ func main() {
 	}
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, app.Log)
 	if missionDriver != nil {
-		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, app.Log)
+		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, app.Log)
 	}
 	app.AddCheck("sandbox", func() httpserver.Check {
 		if err := missionSandbox.Health(ctx); err != nil {
@@ -458,8 +458,9 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 }
 
 // missionWorkSlotMax bounds how many missions may be status='working'
-// at once — a conservative default until this needs to be a runtime
-// setting.
+// at once — the absolute ceiling; in practice the D-056 memory
+// admission gate (sandboxd's /capacity) binds first, since a host tight
+// on memory denies well before 4 concurrent missions.
 const missionWorkSlotMax = 4
 
 // missionAgentResolver adapts agentReg.ResolveByID to scheduler.go's
@@ -535,6 +536,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	perms := tools.NewPermissions(db, toolWorkspaceRoot)
 	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
 	driver.SetFXRates(fxStore)
+	driver.SetCapacityGate(sandboxMgr)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 

@@ -39,15 +39,42 @@ type sandboxSweeper interface {
 	Sweep(ctx context.Context, isTerminal func(missionID string) bool) error
 }
 
+// capacityChecker is the narrow slice of sandboxclient.Client's
+// admission gate (D-056) the sweep needs — kept as an interface for the
+// same reason sandboxSweeper is: no compile-time dependency on Docker
+// from this package.
+type capacityChecker interface {
+	Capacity(ctx context.Context) (admit bool, reason string, err error)
+}
+
+// admitWork reports whether the host can afford claiming another work
+// slot right now (D-056). A nil gate always admits (tests, and any
+// sandbox-less setup that never wired sandboxclient in). A gate that
+// itself errors also admits, logged at WARN: a dead sandboxd must not
+// freeze the mission queue — a mission that actually needs the sandbox
+// will fail loudly at exec time anyway, so failing this check open costs
+// nothing a live gate wouldn't also risk.
+func admitWork(ctx context.Context, gate capacityChecker, log *slog.Logger) (admit bool, reason string) {
+	if gate == nil {
+		return true, ""
+	}
+	admit, reason, err := gate.Capacity(ctx)
+	if err != nil {
+		log.Warn("work slot sweep: capacity check failed, admitting open", "error", err)
+		return true, ""
+	}
+	return admit, reason
+}
+
 // RecoverAndSweep runs the boot-time recovery pass once (re-Drives any
 // mission left status='working' from a prior process's crash), then
 // runs the periodic work-slot sweep until ctx is done — which now also
 // sweeps orphaned sandbox containers on the same tick (see
 // runWorkSlotSweep). This is the one entry point cmd/brain/main.go
 // needs — it owns the Driver, which carries its own Store reference.
-func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, log *slog.Logger) {
+func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, log *slog.Logger) {
 	recoverWorking(ctx, d, store, log)
-	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, log)
+	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, log)
 }
 
 // sweepOrphanSandboxes runs on every runWorkSlotSweep tick (previously
@@ -117,7 +144,7 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 // re-Drives any 'working' mission stale past staleWorkingAfter — all on
 // the same tick. Runs until ctx is done — this call blocks, so
 // RecoverAndSweep's caller runs it in its own goroutine.
-func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, log *slog.Logger) {
+func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, log *slog.Logger) {
 	ticker := time.NewTicker(workSlotSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -127,6 +154,14 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 		case <-ticker.C:
 			sweepOrphanSandboxes(ctx, store, sandbox, log)
 			reDriveStaleWorking(ctx, d, store, log)
+			// D-056: skip the claim entirely this tick if the host can't
+			// afford another working mission — the mission stays idle,
+			// and this same sweep retries it in workSlotSweepInterval; that
+			// retry IS the queue, no separate parking state needed.
+			if admit, reason := admitWork(ctx, capacity, log); !admit {
+				log.Info("work slot sweep: capacity denied, leaving missions idle", "reason", reason)
+				continue
+			}
 			id, ok, err := store.ClaimWorkSlot(ctx, maxConcurrent)
 			if err != nil {
 				log.Error("work slot sweep: claim failed", "error", err)

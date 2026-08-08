@@ -664,6 +664,16 @@ export interface ExecutorAuthFailedPayload {
   harness: string
 }
 
+export interface ExecutorSkippedPayload {
+  harness: string
+  reason: 'unknown_harness' | 'resolve_failed' | 'no_usable_entry' | 'cooldown'
+  error?: string
+  until?: string
+  provider?: string
+  model?: string
+  skip_reasons?: string[]
+}
+
 // MissionFile is one entry of a mission workspace's file listing
 // (GET /v1/missions/:id/files). Declared marks files named in the
 // mission's plan artifacts, not the full tree.

@@ -217,3 +217,56 @@ func TestHealthOK(t *testing.T) {
 		t.Fatalf("Health: %v", err)
 	}
 }
+
+func TestCapacityAdmitted(t *testing.T) {
+	t.Parallel()
+	c := sandboxdStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/capacity" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"admit":true,"mem_available_mb":4096,"running_sandboxes":1}`))
+	})
+
+	admit, reason, err := c.Capacity(t.Context())
+	if err != nil {
+		t.Fatalf("Capacity: %v", err)
+	}
+	if !admit {
+		t.Error("admit = false, want true")
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty when admitted", reason)
+	}
+}
+
+func TestCapacityDenied(t *testing.T) {
+	t.Parallel()
+	c := sandboxdStub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"admit":false,"mem_available_mb":900,"running_sandboxes":3,"reason":"mem_available 900MB < floor 1024 + per-sandbox 768"}`))
+	})
+
+	admit, reason, err := c.Capacity(t.Context())
+	if err != nil {
+		t.Fatalf("Capacity: %v", err)
+	}
+	if admit {
+		t.Error("admit = true, want false")
+	}
+	if reason == "" {
+		t.Error("reason = empty, want the denial reason surfaced")
+	}
+}
+
+func TestCapacityNon200IsError(t *testing.T) {
+	t.Parallel()
+	c := sandboxdStub(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"infra","message":"read meminfo failed"}`, http.StatusBadGateway)
+	})
+
+	if _, _, err := c.Capacity(t.Context()); err == nil {
+		t.Fatal("Capacity: want an error for a non-200 sandboxd response, got nil")
+	}
+}

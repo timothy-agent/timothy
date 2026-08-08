@@ -7,6 +7,7 @@ vi.mock('../api/client', () => ({
   listRoutes: vi.fn().mockResolvedValue([]),
   transcribe: vi.fn(),
   uploadAttachment: vi.fn(),
+  getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: true }, values: {} }),
 }))
 
 vi.mock('sonner', () => ({
@@ -61,9 +62,32 @@ afterEach(() => {
 })
 
 describe('Composer mic button', () => {
-  it('renders a mic button', () => {
+  it('renders a mic button', async () => {
     render(<Composer {...baseProps()} />)
-    expect(screen.getByRole('button', { name: 'Record voice input' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Record voice input' })).toBeTruthy()
+  })
+
+  it('hides the mic button while the settings fetch is unresolved', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.getSettings).mockReturnValueOnce(new Promise(() => {}))
+    render(<Composer {...baseProps()} />)
+    expect(screen.queryByRole('button', { name: 'Record voice input' })).toBeNull()
+  })
+
+  it('hides the mic button when transcription is disabled', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.getSettings).mockResolvedValueOnce({
+      settings: { transcribe_enabled: false },
+      values: {},
+    })
+    render(<Composer {...baseProps()} />)
+    await waitFor(() => expect(client.getSettings).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Record voice input' })).toBeNull()
+  })
+
+  it('shows the mic button when transcription is enabled', async () => {
+    render(<Composer {...baseProps()} />)
+    expect(await screen.findByRole('button', { name: 'Record voice input' })).toBeTruthy()
   })
 
   it('records, stops, transcribes, and appends the text to the draft', async () => {
@@ -72,7 +96,7 @@ describe('Composer mic button', () => {
     const onDraft = vi.fn()
     render(<Composer {...baseProps()} onDraft={onDraft} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Record voice input' }))
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledWith({ audio: true }))
     await waitFor(() => expect(FakeMediaRecorder.instances).toHaveLength(1))
     const recorder = FakeMediaRecorder.instances[0]
@@ -93,7 +117,7 @@ describe('Composer mic button', () => {
     const onDraft = vi.fn()
     render(<Composer {...baseProps()} draft="hello" onDraft={onDraft} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Record voice input' }))
     await waitFor(() => expect(FakeMediaRecorder.instances).toHaveLength(1))
     fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
 
@@ -107,7 +131,7 @@ describe('Composer mic button', () => {
     const onDraft = vi.fn()
     render(<Composer {...baseProps()} draft="untouched" onDraft={onDraft} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Record voice input' }))
     await waitFor(() => expect(FakeMediaRecorder.instances).toHaveLength(1))
     fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
 
@@ -120,12 +144,12 @@ describe('Composer mic button', () => {
     vi.mocked(client.transcribe).mockResolvedValue('হ্যালো')
     render(<Composer {...baseProps()} />)
 
-    const trigger = screen.getByRole('button', { name: 'Speech input language' })
+    const trigger = await screen.findByRole('button', { name: 'Speech input language' })
     fireEvent.pointerDown(trigger, { button: 0, pointerId: 1 })
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByText('Bangla'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Record voice input' }))
     await waitFor(() => expect(FakeMediaRecorder.instances).toHaveLength(1))
     fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
 
@@ -138,7 +162,7 @@ describe('Composer mic button', () => {
     getUserMedia.mockRejectedValueOnce(new Error('denied'))
     render(<Composer {...baseProps()} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Record voice input' }))
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('Microphone permission was denied'),
     )
@@ -150,7 +174,7 @@ describe('Composer mic button', () => {
     Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: true })
     render(<Composer {...baseProps()} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Record voice input' }))
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
         'Microphone input is not available in this browser or context',

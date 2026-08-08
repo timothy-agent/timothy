@@ -129,6 +129,11 @@ type Driver struct {
 	// behavior.
 	fxRates fxRateSource
 
+	// capacity backs the D-056 admission gate (see SetCapacityGate /
+	// Advance) — nil-safe: unset means every idle->working transition is
+	// admitted, same as before this existed.
+	capacity capacityChecker
+
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
 	// rework. Process-local by design: lost on restart is acceptable —
@@ -177,6 +182,13 @@ func (d *Driver) SetAgentResolver(resolve AgentResolver) {
 // optional cross-cutting dependency.
 func (d *Driver) SetFXRates(store fxRateSource) {
 	d.fxRates = store
+}
+
+// SetCapacityGate wires the D-056 admission gate Advance consults before
+// flipping a mission idle->working — a setter (not a NewDriver
+// parameter) for the same reason SetFXRates is.
+func (d *Driver) SetCapacityGate(gate capacityChecker) {
+	d.capacity = gate
 }
 
 // removeSandbox best-effort tears down a mission's sandbox container in
@@ -332,6 +344,20 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	}
 	if m.Phase.Terminal() || m.Status == StatusPaused || m.Status == StatusWaitingForInput {
 		return false, nil
+	}
+	// D-056: admission applies only to idle->working, never to a mission
+	// already mid-flight (Drive's own loop calling Advance again finds
+	// m.Status == StatusWorking here, past this check) — a memory-tight
+	// host must queue NEW work, not stall work already in progress.
+	// canContinue=false stops just THIS Drive call; the mission's row is
+	// untouched (still status='idle'), so the periodic work-slot sweep
+	// retries it in workSlotSweepInterval exactly like a mission that
+	// never got an immediate Drive at all.
+	if m.Status == StatusIdle {
+		if admit, reason := admitWork(ctx, d.capacity, d.log); !admit {
+			d.log.Info("driver: capacity denied, mission stays idle", "mission_id", id, "reason", reason)
+			return false, nil
+		}
 	}
 	// A mission that reached the store without going through Create
 	// (scheduler.go's createFromTemplate inserts a bare row directly) has

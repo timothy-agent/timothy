@@ -1466,3 +1466,105 @@ func TestDriverModelFloorPausesImmediately(t *testing.T) {
 		t.Fatalf("mission after below-floor turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
 	}
 }
+
+// TestDriverAdvanceDeniesIdleToWorkingOnCapacity covers D-056's driver-
+// path gate: an idle mission whose capacity gate denies must not run
+// its turn at all (the runner is never called) and canContinue=false so
+// this Drive call stops with the mission still idle for the periodic
+// sweep to retry.
+func TestDriverAdvanceDeniesIdleToWorkingOnCapacity(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusIdle, MaxIterations: 8,
+		SessionID: "already-provisioned", Workspace: "/already/provisioned",
+	})
+	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	d := testDriver(store, runner)
+	d.SetCapacityGate(fakeCapacityChecker{admit: false, reason: "mem_available 900MB < floor 1024 + per-sandbox 768"})
+
+	cont, err := d.Advance(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if cont {
+		t.Fatal("Advance = canContinue true, want false when capacity denies")
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusIdle || m.Phase != PhaseExplore {
+		t.Fatalf("mission after capacity denial = %s/%s, want idle/explore untouched (phase run must not happen)", m.Status, m.Phase)
+	}
+}
+
+// TestDriverAdvanceCapacityGateErrorAdmitsOpen confirms a gate that
+// itself errors (sandboxd unreachable) does not block the turn — a dead
+// gate must never freeze the mission queue.
+func TestDriverAdvanceCapacityGateErrorAdmitsOpen(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusIdle, MaxIterations: 8})
+	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	d := testDriver(store, runner)
+	d.SetCapacityGate(fakeCapacityChecker{err: fmt.Errorf("sandboxd unreachable")})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhasePlan {
+		t.Fatalf("mission.Phase = %s, want plan (turn ran despite the gate erroring)", m.Phase)
+	}
+}
+
+// TestDriverAdvanceCapacityGateAdmitsRunsTurn confirms a gate that
+// admits lets the idle mission's turn run normally.
+func TestDriverAdvanceCapacityGateAdmitsRunsTurn(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusIdle, MaxIterations: 8})
+	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	d := testDriver(store, runner)
+	d.SetCapacityGate(fakeCapacityChecker{admit: true})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhasePlan {
+		t.Fatalf("mission.Phase = %s, want plan (turn ran when the gate admits)", m.Phase)
+	}
+}
+
+// TestDriverAdvanceNilCapacityGateRunsTurn confirms the default (no gate
+// wired) behaves exactly as before this existed — every idle mission's
+// turn runs unconditionally.
+func TestDriverAdvanceNilCapacityGateRunsTurn(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusIdle, MaxIterations: 8})
+	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhasePlan {
+		t.Fatalf("mission.Phase = %s, want plan (nil gate never blocks)", m.Phase)
+	}
+}
+
+// TestDriverAdvanceCapacityGateIgnoredWhenAlreadyWorking confirms
+// admission applies only to idle->working: a mission already working
+// must keep advancing even when the gate denies.
+func TestDriverAdvanceCapacityGateIgnoredWhenAlreadyWorking(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	d := testDriver(store, runner)
+	d.SetCapacityGate(fakeCapacityChecker{admit: false, reason: "denied"})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhasePlan {
+		t.Fatalf("mission.Phase = %s, want plan (a denial must not stall a mission already working)", m.Phase)
+	}
+}

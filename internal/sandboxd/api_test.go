@@ -112,6 +112,7 @@ func TestValidExecEnv(t *testing.T) {
 				"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-test",
 				"NO_COLOR":                "1",
 				"TERM":                    "xterm",
+				"NODE_OPTIONS":            "--max-old-space-size=768",
 			},
 			wantOK: true,
 		},
@@ -439,5 +440,37 @@ func TestHandleListLabelFiltering(t *testing.T) {
 	}
 	if len(out.MissionIDs) != 1 || out.MissionIDs[0] != validUUID {
 		t.Fatalf("mission_ids = %v, want [%s] (empty/missing labels skipped)", out.MissionIDs, validUUID)
+	}
+}
+
+// TestHandleCapacity confirms the /capacity route reports Manager's
+// Capacity result as JSON (D-056) — brain's admission gate reads this.
+func TestHandleCapacity(t *testing.T) {
+	t.Parallel()
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json") {
+			writeJSON(t, w, http.StatusOK, []container.Summary{
+				{ID: "c1", Labels: map[string]string{missionLabel: validUUID}},
+			})
+			return
+		}
+		t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+	})
+	mgr := newTestManager(cli)
+
+	rec := httptest.NewRecorder()
+	testAPI(mgr).handleCapacity(rec, httptest.NewRequest(http.MethodGet, "/capacity", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out capacityResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.RunningSandboxes != 1 {
+		t.Fatalf("running_sandboxes = %d, want 1", out.RunningSandboxes)
+	}
+	if out.MemAvailableMB <= 0 {
+		t.Fatalf("mem_available_mb = %d, want > 0 from a real /proc/meminfo", out.MemAvailableMB)
 	}
 }

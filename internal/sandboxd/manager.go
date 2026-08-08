@@ -9,6 +9,7 @@
 package sandboxd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -57,6 +58,19 @@ const (
 	sandboxMemoryBytes = 2 << 30 // 2 GiB
 	sandboxNanoCPUs    = 2_000_000_000
 	sandboxPidsLimit   = 256
+
+	// sandboxMemoryReservationBytes is the soft limit (D-056):
+	// MemorySwap == sandboxMemoryBytes below caps a container's total
+	// memory+swap usage at the same 2 GiB ceiling, so a sandbox can
+	// never push the host into swap; MemoryReservation is the kernel's
+	// earlier, softer signal — under host memory pressure it reclaims a
+	// sandbox's page cache before the 2 GiB hard cap is ever reached.
+	sandboxMemoryReservationBytes = 256 << 20 // 256 MiB
+
+	// sandboxOomScoreAdj (D-056) biases the kernel's OOM killer toward
+	// sacrificing a sandbox container's processes before brain, gateway,
+	// or sshd under host memory pressure.
+	sandboxOomScoreAdj = 500
 
 	// execGraceKill is how long `timeout` waits after SIGTERM before
 	// SIGKILL — matches shell.go's cmd.WaitDelay intent (give a process a
@@ -187,6 +201,12 @@ type Manager struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
+
+	// pullMu (D-056) serializes ImagePull across missions — concurrent
+	// layer decompression for two different variant images spikes
+	// hundreds of MB each; serializing trades pull latency for bounded
+	// memory during the pull.
+	pullMu sync.Mutex
 }
 
 // NewManager connects to the Docker daemon and resolves the shared
@@ -388,10 +408,19 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// zombies against PidsLimit over a long mission.
 		Init: &initTrue,
 		Resources: container.Resources{
-			Memory:    memBytes,
-			NanoCPUs:  nanoCPUs,
-			PidsLimit: &pids,
+			Memory: memBytes,
+			// MemorySwap == Memory (D-056): swap is included in, not
+			// added on top of, the 2 GiB cap — a sandbox can never push
+			// the host into swap no matter how it misbehaves.
+			MemorySwap:        memBytes,
+			MemoryReservation: sandboxMemoryReservationBytes,
+			NanoCPUs:          nanoCPUs,
+			PidsLimit:         &pids,
 		},
+		// OomScoreAdj (D-056): the kernel sacrifices sandboxes before
+		// brain/gateway/sshd when the host itself is under memory
+		// pressure.
+		OomScoreAdj: sandboxOomScoreAdj,
 		// Default bridge: internet access (a coding mission may need
 		// `pip install`/`npm install`), but NOT the compose-internal
 		// "timothy" network — no route to postgres/gateway/memoryd.
@@ -410,17 +439,12 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		}
 		// Image not pulled locally yet (variant images especially are
 		// built/pushed at release time, not baked into every deployment) —
-		// pull it once and retry create exactly once.
-		if m.log != nil {
-			m.log.Info("sandbox: pulling image", "image", image, "mission", missionID)
-		}
-		pull, pullErr := m.cli.ImagePull(ctx, image, client.ImagePullOptions{})
-		if pullErr != nil {
-			return "", fmt.Errorf("sandbox: pull image %s: %w", image, pullErr)
-		}
-		waitErr := pull.Wait(ctx)
-		if waitErr != nil {
-			return "", fmt.Errorf("sandbox: pull image %s: %w", image, waitErr)
+		// pull it once and retry create exactly once. pullMu (D-056)
+		// serializes this across concurrent missions: two different
+		// variant images decompressing layers at once spikes hundreds of
+		// MB each, and this trades pull latency for bounded memory.
+		if err := m.pullImage(ctx, image, missionID); err != nil {
+			return "", err
 		}
 		resp, err = m.cli.ContainerCreate(ctx, createOpts)
 		if err != nil {
@@ -431,6 +455,31 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		return "", fmt.Errorf("sandbox: start container %s: %w", name, err)
 	}
 	return resp.ID, nil
+}
+
+// pullImage pulls image, serialized against every other pull via pullMu
+// (D-056). Re-checks with ImageInspect after acquiring the lock: the
+// image may have arrived while this call waited on a sibling mission's
+// pull, and re-pulling it would be a wasted decompression pass.
+func (m *Manager) pullImage(ctx context.Context, image, missionID string) error {
+	m.pullMu.Lock()
+	defer m.pullMu.Unlock()
+
+	if _, err := m.cli.ImageInspect(ctx, image); err == nil {
+		return nil
+	}
+
+	if m.log != nil {
+		m.log.Info("sandbox: pulling image", "image", image, "mission", missionID)
+	}
+	pull, pullErr := m.cli.ImagePull(ctx, image, client.ImagePullOptions{})
+	if pullErr != nil {
+		return fmt.Errorf("sandbox: pull image %s: %w", image, pullErr)
+	}
+	if waitErr := pull.Wait(ctx); waitErr != nil {
+		return fmt.Errorf("sandbox: pull image %s: %w", image, waitErr)
+	}
+	return nil
 }
 
 // Exec runs command in missionID's sandbox container (environment
@@ -595,4 +644,86 @@ func (m *Manager) List(ctx context.Context) ([]string, error) {
 		}
 	}
 	return ids, nil
+}
+
+// hostMemoryFloorMB / perSandboxEstimateMB (D-056) are the two halves of
+// the admission rule: floor is the headroom the host and its own
+// services (brain, gateway, sshd, ...) must keep; estimate is one
+// active sandbox's typical working set INCLUDING a claude CLI run —
+// deliberately below sandboxMemoryBytes's 2 GiB hard cap, which is a
+// ceiling a runaway container may hit, not what a normal one actually
+// uses. Admission compares against MemAvailable (not free), the kernel's
+// own estimate of what can be handed to a new workload without swapping.
+const (
+	hostMemoryFloorMB    = 1024
+	perSandboxEstimateMB = 768
+)
+
+// CapacityReport is sandboxd's answer to "can this host afford another
+// working mission" — brain's admission gate (missions/sweep.go,
+// driver.go) consults it before flipping a mission idle->working, so a
+// host already tight on memory queues new work instead of swap-thrashing
+// under one more sandbox plus its claude CLI process.
+type CapacityReport struct {
+	Admit            bool
+	MemAvailableMB   int
+	RunningSandboxes int
+	Reason           string // empty when Admit is true
+}
+
+// Capacity reports whether the host can afford one more working
+// mission. MemAvailableMB reads /proc/meminfo — sandboxd's own container
+// runs with no memory limit, so this is the HOST's view of available
+// memory, not sandboxd's cgroup. RunningSandboxes reuses List, the same
+// live-container count api.go's ensure-time cap uses.
+func (m *Manager) Capacity(ctx context.Context) (CapacityReport, error) {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return CapacityReport{}, fmt.Errorf("sandbox: capacity: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	availMB, err := parseMemAvailable(f)
+	if err != nil {
+		return CapacityReport{}, fmt.Errorf("sandbox: capacity: %w", err)
+	}
+
+	ids, err := m.List(ctx)
+	if err != nil {
+		return CapacityReport{}, fmt.Errorf("sandbox: capacity: %w", err)
+	}
+
+	report := CapacityReport{MemAvailableMB: availMB, RunningSandboxes: len(ids)}
+	if availMB >= hostMemoryFloorMB+perSandboxEstimateMB {
+		report.Admit = true
+		return report, nil
+	}
+	report.Reason = fmt.Sprintf("mem_available %dMB < floor %d + per-sandbox %d", availMB, hostMemoryFloorMB, perSandboxEstimateMB)
+	return report, nil
+}
+
+// parseMemAvailable reads the "MemAvailable:" line from a /proc/meminfo
+// stream and returns it in MB (the file reports kB) — split out from
+// Capacity so the parsing logic is table-testable without a real
+// /proc/meminfo.
+func parseMemAvailable(r io.Reader) (int, error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "MemAvailable:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0, fmt.Errorf("sandbox: malformed MemAvailable line %q", line)
+		}
+		kb, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return 0, fmt.Errorf("sandbox: parse MemAvailable value %q: %w", fields[1], err)
+		}
+		return kb / 1024, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("sandbox: read meminfo: %w", err)
+	}
+	return 0, fmt.Errorf("sandbox: no MemAvailable line in meminfo")
 }

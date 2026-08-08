@@ -257,6 +257,9 @@ func TestClaudeAdapter_BuildInvocation(t *testing.T) {
 				if inv.Env["NO_COLOR"] != "1" {
 					t.Error("NO_COLOR must always be set")
 				}
+				if inv.Env["NODE_OPTIONS"] != "--max-old-space-size=768" {
+					t.Errorf("NODE_OPTIONS = %q, want --max-old-space-size=768 (D-056, bounds the CLI's node heap)", inv.Env["NODE_OPTIONS"])
+				}
 			},
 		},
 		{

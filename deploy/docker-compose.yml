@@ -58,6 +58,7 @@ services:
 
   whisper:
     <<: *service
+    profiles: [whisper]
     build:
       context: ../whisper-svc
       args:
@@ -73,6 +74,9 @@ services:
     # the right language. Slower per clip and a bigger image, but
     # dictation is not latency-sensitive the way live transcription
     # would be.
+    # Off by default: the model holds ~3 GiB RSS at idle. Enable with
+    # COMPOSE_PROFILES=whisper and WHISPER_URL=http://whisper:8001 in
+    # .env.
 
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and
@@ -122,8 +126,10 @@ services:
       # markdown/text; compose-internal only.
       MARKITDOWN_URL: http://markitdown:8000
       # Local speech-to-text for the web mic button; compose-internal
-      # only, audio never leaves the box.
-      WHISPER_URL: http://whisper:8001
+      # only, audio never leaves the box. Empty by default (feature
+      # off) since whisper itself defaults off — see its service
+      # comment.
+      WHISPER_URL: ${WHISPER_URL:-}
       # sandboxd's internal address — mission shell/verify_cmd execution
       # always runs there; brain never touches the Docker socket
       # directly.
@@ -142,8 +148,6 @@ services:
       searxng:
         condition: service_started
       markitdown:
-        condition: service_started
-      whisper:
         condition: service_started
       sandboxd:
         condition: service_started

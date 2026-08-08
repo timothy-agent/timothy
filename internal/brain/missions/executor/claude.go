@@ -93,7 +93,10 @@ func (claudeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		argv = append(argv, "--append-system-prompt", spec.SystemAppend)
 	}
 
-	env := map[string]string{"NO_COLOR": "1"}
+	// nodeMaxOldSpaceMB (D-056) bounds the CLI's node heap: unbounded,
+	// node sizes its heap from cgroup limits, and a long run's transcript
+	// heap balloons toward the sandbox's 2 GiB cap.
+	env := map[string]string{"NO_COLOR": "1", "NODE_OPTIONS": "--max-old-space-size=768"}
 	if spec.AuthMode == AuthAPIKey {
 		env["ANTHROPIC_API_KEY"] = spec.APIKey
 	}

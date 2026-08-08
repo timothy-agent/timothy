@@ -97,7 +97,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		}
 	}
 	a.registerAdmin(srv.Handle, admin)
-	a.registerSettings(srv.Handle, flags)
+	a.registerSettings(srv.Handle, flags, whisperURL)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog)
 	a.registerTools(srv.Handle, toolset)

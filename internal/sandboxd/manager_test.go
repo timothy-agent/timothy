@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -436,6 +437,9 @@ func TestEnsureContainerPullsMissingImage(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
 			http.Error(w, "no such container", http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1.51/images/"):
+			// pullImage's ImageInspect re-check (D-056): not present yet.
+			http.Error(w, "no such image", http.StatusNotFound)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
 			createCalls++
 			if createCalls == 1 {
@@ -478,6 +482,8 @@ func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
 			http.Error(w, "no such container", http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1.51/images/"):
+			http.Error(w, "no such image", http.StatusNotFound)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
 			http.Error(w, "No such image: img:latest", http.StatusNotFound)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/images/create":
@@ -496,5 +502,217 @@ func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "img") {
 		t.Errorf("error = %q, want it to name the image", err.Error())
+	}
+}
+
+// TestEnsureContainerConcurrentPullsDoNotOverlap covers D-056's pullMu:
+// two missions racing a create for the SAME missing image must not
+// trigger two overlapping ImagePull calls — the second caller's
+// ImageInspect (after acquiring pullMu) must find the image the first
+// caller already pulled.
+func TestEnsureContainerConcurrentPullsDoNotOverlap(t *testing.T) {
+	var mu sync.Mutex
+	pullCalls := 0
+	pullInFlight := false
+	imagePresent := false
+
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1.51/containers/") && strings.HasSuffix(r.URL.Path, "/json"):
+			http.Error(w, "no such container", http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1.51/images/"):
+			mu.Lock()
+			present := imagePresent
+			mu.Unlock()
+			if present {
+				writeJSON(t, w, http.StatusOK, container.InspectResponse{})
+				return
+			}
+			http.Error(w, "no such image", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/images/create":
+			mu.Lock()
+			if pullInFlight {
+				mu.Unlock()
+				t.Errorf("overlapping ImagePull calls: pullMu did not serialize")
+				return
+			}
+			pullInFlight = true
+			pullCalls++
+			mu.Unlock()
+
+			time.Sleep(20 * time.Millisecond) // widen the window a missing lock would race in
+
+			mu.Lock()
+			imagePresent = true
+			pullInFlight = false
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"Pull complete"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			mu.Lock()
+			present := imagePresent
+			mu.Unlock()
+			if !present {
+				http.Error(w, "No such image: img:latest", http.StatusNotFound)
+				return
+			}
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new-" + r.RemoteAddr})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "")
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("createContainer[%d]: %v", i, err)
+		}
+	}
+	if pullCalls != 1 {
+		t.Fatalf("pullCalls = %d, want exactly 1 (second caller's ImageInspect after pullMu should find it already pulled)", pullCalls)
+	}
+}
+
+// TestCreateContainerHardensResources covers D-056: MemorySwap caps at
+// the same 2 GiB the memory limit does (so swap can never let a sandbox
+// exceed it), MemoryReservation is the soft-limit floor, and
+// OomScoreAdj biases the kernel to sacrifice a sandbox before brain.
+func TestCreateContainerHardensResources(t *testing.T) {
+	var gotHostConfig container.HostConfig
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read create body: %v", err)
+			}
+			var cfg struct {
+				HostConfig container.HostConfig
+			}
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			gotHostConfig = cfg.HostConfig
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+	if gotHostConfig.MemorySwap != sandboxMemoryBytes {
+		t.Errorf("MemorySwap = %d, want %d (== Memory, swap included not additive)", gotHostConfig.MemorySwap, sandboxMemoryBytes)
+	}
+	if gotHostConfig.MemoryReservation != sandboxMemoryReservationBytes {
+		t.Errorf("MemoryReservation = %d, want %d", gotHostConfig.MemoryReservation, sandboxMemoryReservationBytes)
+	}
+	if gotHostConfig.OomScoreAdj != sandboxOomScoreAdj {
+		t.Errorf("OomScoreAdj = %d, want %d", gotHostConfig.OomScoreAdj, sandboxOomScoreAdj)
+	}
+}
+
+// TestManagerCapacityReadsRealMeminfo confirms Capacity reads the
+// process's real /proc/meminfo (the host view sandboxd's own
+// memory-unlimited container sees) and folds in List's live container
+// count — it can't script MemAvailable itself, so it only asserts the
+// report is internally consistent with whatever this test process's
+// actual /proc/meminfo and container list report.
+func TestManagerCapacityReadsRealMeminfo(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, []container.Summary{})
+	})
+	mgr := newTestManager(cli)
+
+	report, err := mgr.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity: %v", err)
+	}
+	if report.MemAvailableMB <= 0 {
+		t.Errorf("MemAvailableMB = %d, want > 0 from a real /proc/meminfo", report.MemAvailableMB)
+	}
+	if report.RunningSandboxes != 0 {
+		t.Errorf("RunningSandboxes = %d, want 0 (fake daemon reported none)", report.RunningSandboxes)
+	}
+	wantAdmit := report.MemAvailableMB >= hostMemoryFloorMB+perSandboxEstimateMB
+	if report.Admit != wantAdmit {
+		t.Errorf("Admit = %v, want %v for MemAvailableMB=%d", report.Admit, wantAdmit, report.MemAvailableMB)
+	}
+	if !report.Admit && report.Reason == "" {
+		t.Error("Admit = false, want a non-empty Reason")
+	}
+}
+
+// TestParseMemAvailable covers normal /proc/meminfo shape, a missing
+// MemAvailable line (error, never a guessed 0), and outright garbage.
+func TestParseMemAvailable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{
+			name: "normal",
+			input: "MemTotal:        8000000 kB\n" +
+				"MemFree:         1000000 kB\n" +
+				"MemAvailable:    3145728 kB\n" +
+				"Buffers:          200000 kB\n",
+			want: 3072, // 3145728 kB / 1024
+		},
+		{
+			name:    "missing line",
+			input:   "MemTotal:        8000000 kB\nMemFree:         1000000 kB\n",
+			wantErr: true,
+		},
+		{
+			name:    "garbage value",
+			input:   "MemAvailable:    notanumber kB\n",
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			input:   "",
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseMemAvailable(strings.NewReader(tc.input))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseMemAvailable(%q) = %d, nil, want an error", tc.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseMemAvailable(%q): %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("parseMemAvailable(%q) = %d, want %d", tc.input, got, tc.want)
+			}
+		})
 	}
 }

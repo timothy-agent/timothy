@@ -50,14 +50,18 @@ func (a *API) registerAdmin(handle func(pattern string, h http.Handler), admin h
 
 // registerSettings mounts brain's own feature switches — served
 // locally, not proxied: the gateway has no business knowing them.
-func (a *API) registerSettings(handle func(pattern string, h http.Handler), flags *settings.Store) {
+// whisperURL derives the read-only transcribe_enabled flag; it isn't a
+// stored setting and PATCH rejects it like any other unknown key.
+func (a *API) registerSettings(handle func(pattern string, h http.Handler), flags *settings.Store, whisperURL string) {
 	if flags == nil {
 		return
 	}
 	handle("GET /v1/admin/settings", a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		s := flags.All(r.Context())
+		s["transcribe_enabled"] = whisperURL != ""
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"settings": flags.All(r.Context()),
+			"settings": s,
 			"values":   flags.AllValues(r.Context()),
 		})
 	})))

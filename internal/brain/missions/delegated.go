@@ -177,7 +177,11 @@ func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet Revie
 // route on the executor axis, walking the first usable, non-cooled
 // entry into the delegated protocol. An unknown harness, a resolve
 // failure, or no usable entry at all falls back to native.RunWorker
-// unchanged — today's behavior is always the floor.
+// unchanged — today's behavior is always the floor — but a mission
+// that explicitly asked for a harness must not fall back silently: an
+// executor.skipped event is recorded first (see recordSkipped) so the
+// mission's own history shows the requested harness was never actually
+// used.
 func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
 	if m.Harness == "" {
 		return r.native.RunWorker(ctx, m, packet)
@@ -185,6 +189,7 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 	adapter, ok := executor.Lookup(m.Harness)
 	if !ok {
 		r.log.Warn("delegated runner: unknown harness; falling back to native", "mission_id", m.ID, "harness", m.Harness)
+		r.recordSkipped(ctx, m.ID, m.Harness, "unknown_harness", nil)
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
@@ -192,29 +197,60 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 	if err != nil || route == nil {
 		if err != nil {
 			r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
+			r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": truncate(err.Error(), 2000)})
+		} else {
+			r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": "resolved route was nil without an error"})
 		}
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
-	for _, entry := range route.Entries {
+	var skipReasons []string
+	var cooledEntry *gwclient.ResolvedRouteEntry
+	var cooledUntil time.Time
+	for i, entry := range route.Entries {
 		if !entry.Usable {
+			skipReasons = append(skipReasons, entry.SkipReason)
 			continue
 		}
-		if r.cooledDown(m.Harness, entry) {
+		if exp, cooled := r.cooledUntil(m.Harness, entry); cooled {
+			if cooledEntry == nil {
+				cooledEntry = &route.Entries[i]
+				cooledUntil = exp
+			}
 			continue
 		}
 		return r.runDelegated(ctx, m, packet, entry, adapter)
 	}
+
+	if cooledEntry != nil {
+		r.log.Warn("delegated runner: every usable entry cooled down; falling back to native", "mission_id", m.ID, "harness", m.Harness)
+		r.recordSkipped(ctx, m.ID, m.Harness, "cooldown", map[string]any{
+			"until": cooledUntil.UTC().Format(time.RFC3339), "provider": cooledEntry.ProviderName, "model": cooledEntry.Model,
+		})
+	} else {
+		r.log.Warn("delegated runner: no usable route entry; falling back to native", "mission_id", m.ID, "harness", m.Harness)
+		r.recordSkipped(ctx, m.ID, m.Harness, "no_usable_entry", map[string]any{"skip_reasons": boundStrings(skipReasons, 5)})
+	}
 	return r.native.RunWorker(ctx, m, packet)
 }
 
-// cooledDown reports whether entry is in its post-failure cooldown
-// window.
-func (r *delegatedRunner) cooledDown(harness string, entry gwclient.ResolvedRouteEntry) bool {
+// boundStrings caps a []string to at most n elements — skip_reasons is
+// operator-facing context, not a field anything keys logic on.
+func boundStrings(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
+// cooledUntil reports whether entry is in its post-failure cooldown
+// window, and if so, when it expires — RunWorker's walk needs the
+// expiry to report a cooldown reason's "until" field.
+func (r *delegatedRunner) cooledUntil(harness string, entry gwclient.ResolvedRouteEntry) (time.Time, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	exp, ok := r.cooldown[cooldownKey{entry.ProviderID, entry.Model, harness}]
-	return ok && time.Now().Before(exp)
+	return exp, ok && time.Now().Before(exp)
 }
 
 // coolDown marks entry unusable for cooldownTTL — set on transport
@@ -837,6 +873,19 @@ func (r *delegatedRunner) recordDied(ctx context.Context, missionID, reason stri
 // recordAuthFailed writes executor.auth_failed.
 func (r *delegatedRunner) recordAuthFailed(ctx context.Context, missionID, harness string) {
 	r.recordEventForce(ctx, missionID, "executor.auth_failed", map[string]any{"harness": harness})
+}
+
+// recordSkipped writes executor.skipped — the one persisted record that
+// a mission explicitly requesting harness ran native instead, and why.
+// extra carries the reason-specific fields (error/until+provider+model/
+// skip_reasons); nil for unknown_harness, which needs nothing beyond
+// harness+reason.
+func (r *delegatedRunner) recordSkipped(ctx context.Context, missionID, harness, reason string, extra map[string]any) {
+	payload := map[string]any{"harness": harness, "reason": reason}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	r.recordEventForce(ctx, missionID, "executor.skipped", payload)
 }
 
 // recordEvent appends one executor.* event, respecting maxExecutorEvents

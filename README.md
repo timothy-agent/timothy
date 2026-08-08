@@ -21,7 +21,9 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 - **Multi-provider chat**: Anthropic, Amazon Bedrock, and any OpenAI-compatible API behind one gateway; providers, models, and per-task routing are database configuration, editable at runtime from the settings panel with hot reload.
 - **Sessions that survive**: every conversation is an append-only event log; kill a container mid-stream and the session resumes and replays exactly.
 - **Tools, permissions, skills**: the agent loop executes tools behind a constraint/permission chain (destructive actions require explicit approval in the UI); skill packs load lazily by task.
-- **Missions**: long-running agent tasks with a pure state machine, harness-owned verification (artifacts must exist before any model claim counts), per-mission sandboxes, budgets, and LLM review; recurring missions fire from cron schedules.
+- **Missions**: long-running agent tasks with a pure state machine, harness-owned verification (artifacts must exist before any model claim counts), per-mission sandboxes, budgets, and LLM review; recurring missions fire from cron schedules. Coding missions auto-detect their language environment (Go, Node, Python, Java, PHP) and run in a matching per-language sandbox image, pulled on demand.
+- **Delegated coding harness**: a coding mission can hand its execution to headless Claude Code running inside the mission sandbox — against an Anthropic subscription, or any provider with an Anthropic-compatible endpoint (GLM, local Ollama) — while Timothy keeps verification, review, budgets, and the event timeline; it falls back to the native loop (recorded in the timeline) whenever the harness is unavailable.
+- **Memory-aware scheduling**: before starting a mission, sandboxd checks whether the host can actually afford another sandbox; if not, the mission queues idle and is retried automatically as resources free up.
 - **Long-term memory**: staged fact extraction with a confirmation queue, hybrid pgvector retrieval (vector + text + entity, RRF-fused) under a strict token budget.
 - **Cost accounting**: every request lands in a ledger with honest pricing (unknown price is recorded as null, never guessed); usage dashboard, spend budgets with alerts, Prometheus metrics on every service.
 - **Privacy floor**: tools whose output carries sensitive data (raw email) pin the rest of their turn, and every downstream side-call (memory extraction, compaction), to a dedicated route you can chain to a local model.
@@ -39,7 +41,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                 |
 | `searxng`    | Internal metasearch backend for the web_search tool                                          |
 | `markitdown` | Internal Python sidecar: file→markdown conversion                                           |
-| `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button                        |
+| `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`.
 
@@ -78,7 +80,18 @@ The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker
 
 3. Open the printed link: the web UI signs in automatically from the token in the URL.
 
-To upgrade later: bump `TIMOTHY_VERSION` in `.env`, run `docker compose pull && docker compose up -d`, then `docker pull ghcr.io/timothy-agent/timothy-sandbox:$TIMOTHY_VERSION` (the per-mission sandbox image sandboxd pulls via the Docker socket, outside compose's own pull) — or just re-run `install.sh`, which does all three (it leaves an existing `.env` untouched and only refreshes `docker-compose.yml`, the searxng config, and the sandbox image).
+To upgrade later, in this order:
+
+1. Download the new release's `docker-compose.yml` (it changes between releases; the old one may reference services or settings the new images don't expect):
+
+   ```sh
+   curl -fsSLo docker-compose.yml "https://github.com/timothy-agent/timothy/releases/download/<new-tag>/docker-compose.yml"
+   ```
+
+2. Set `TIMOTHY_VERSION` in `.env` to the new tag (without the `v` prefix).
+3. `docker compose pull && docker compose up -d`
+
+Or bump `TIMOTHY_VERSION` in `.env` and re-run the new release's `install.sh`, which handles the rest (it leaves an existing `.env` untouched, refreshes `docker-compose.yml` and the searxng config, and pre-pulls the mission sandbox image). Sandbox images (base and the per-language variants) are otherwise pulled on demand by sandboxd the first time a mission needs them.
 
 The rest of this README covers building and running from source instead.
 
@@ -108,7 +121,7 @@ Prerequisites:
    make sandbox-image
    ```
 
-   Skip this and leave `MISSION_SANDBOX_IMAGE` empty in `.env` if you don't need missions isolated in their own container; mission shell commands then run in-process instead.
+   This builds the base image plus the per-language variants (`timothy-sandbox-{go,node,python,java,php}:latest`) that coding missions run in; sandboxd derives a variant's image name from `MISSION_SANDBOX_IMAGE`, so the local names must stay in this convention. Skip this and leave `MISSION_SANDBOX_IMAGE` empty in `.env` if you don't need missions isolated in their own container; mission shell commands then run in-process instead.
 
 3. (Linux only) Set `DOCKER_SOCK_GID` so `sandboxd` can use the Docker socket:
 
@@ -129,27 +142,6 @@ Prerequisites:
 5. First login. There's no login page: the web UI auto-opens a settings dialog asking for an API token the first time it can't find one. Paste the `TIMOTHY_API_TOKEN` value from `deploy/.env`. It's stored in your browser's `localStorage`.
 
 6. Add a provider. A fresh install has zero LLM providers and no routing configured, so Timothy can't answer anything until you do this. Go to **Settings → Providers**, pick a preset tile (OpenAI, Anthropic, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint), fill in the form, and run the connection test before adding it. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`); the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the 4 routes Timothy needs to work (`default`, `summarize`, `embedding`, `vision`); routes are otherwise fully user-managed (create, edit chain/strategy, delete) from **Settings → Routing**.
-
-## Optional: local models
-
-Run Ollama natively on the host, not in a container: a containerized Ollama only gets CPU, while a host install can use Metal or CUDA. Then add a provider with the **Ollama** preset; it prefills the base URL `http://host.docker.internal:11434/v1`. On Linux, `host.docker.internal` may need a `host-gateway` entry in your Docker config to resolve.
-
-## Optional: Google connectors (Gmail, Calendar)
-
-1. Create an OAuth client in Google Cloud Console, type **Web application**.
-2. Set `TIMOTHY_PUBLIC_URL` in `.env` to the URL your *browser* uses to reach Timothy (e.g. `http://localhost:3300`). This must match what you register with Google, or the OAuth callback fails.
-3. Add `<TIMOTHY_PUBLIC_URL>/v1/connectors/oauth/callback` to the OAuth client's authorized redirect URIs.
-4. In the UI: **Settings → Connectors**, pick the Gmail or Calendar tile, paste the client ID and client secret, and complete the consent flow. Scopes requested: `gmail.modify`, `calendar`.
-
-While the Google OAuth app is in "Testing" mode (the default for a new Cloud project), refresh tokens expire roughly every 7 days; when a connector stops working, reconnect it from Settings, or publish the OAuth app to avoid the expiry.
-
-## Optional: GitHub connector
-
-Configured as an MCP preset in **Settings → Connectors**: paste a GitHub personal access token into the Bearer token field.
-
-## Optional: Amazon Bedrock
-
-Create an IAM user scoped to `bedrock:InvokeModel*` only, generate an access key, and enter the access key ID and secret access key into their own fields on the Bedrock provider in **Settings → Providers**. Pick a region from the dropdown; no `~/.aws`, no SSO, nothing to run on the host.
 
 ## Operating the stack
 

@@ -8,6 +8,7 @@ vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
   listMemories: vi.fn(),
   listRoutes: vi.fn(),
+  getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
 }))
 
 import type { AdminRoute } from '../api/types'

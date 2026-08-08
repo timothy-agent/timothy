@@ -215,6 +215,40 @@ func (c *Client) list(ctx context.Context) ([]string, error) {
 	return out.MissionIDs, nil
 }
 
+// capacityTimeout bounds the /capacity call (D-056) — it's a single
+// local read (/proc/meminfo + a container list), so 5s is already
+// generous; a hung sandboxd must not stall the admission gate's caller.
+const capacityTimeout = 5 * time.Second
+
+// Capacity asks sandboxd whether the host can afford one more working
+// mission (D-056) — brain's admission gate consults this before flipping
+// a mission idle->working.
+func (c *Client) Capacity(ctx context.Context) (admit bool, reason string, err error) {
+	cctx, cancel := context.WithTimeout(ctx, capacityTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, c.baseURL+"/capacity", nil)
+	if err != nil {
+		return false, "", fmt.Errorf("sandboxclient: request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false, "", fmt.Errorf("sandboxclient: sandboxd unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return false, "", fmt.Errorf("sandboxclient: sandboxd http %d: %s", resp.StatusCode, string(msg))
+	}
+	var body struct {
+		Admit  bool   `json:"admit"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, "", fmt.Errorf("sandboxclient: decode capacity: %w", err)
+	}
+	return body.Admit, body.Reason, nil
+}
+
 // Health reports whether sandboxd itself is reachable — the sandbox
 // health check surfaced through brain's own /health.
 func (c *Client) Health(ctx context.Context) error {

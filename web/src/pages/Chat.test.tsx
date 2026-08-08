@@ -24,6 +24,7 @@ vi.mock('../api/client', () => ({
   answerPermission: vi.fn(),
   listRoutes: vi.fn(),
   listAgents: vi.fn(),
+  getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
 }))
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))

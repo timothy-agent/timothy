@@ -151,6 +151,54 @@ describe('executor lifecycle event rendering', () => {
     render(<div>{renderEvent(event({ harness: 'claude-cli' }, 'executor.auth_failed'))}</div>)
     expect(screen.getByText(/re-run the harness login/)).toBeInTheDocument()
   })
+
+  it('renders executor.skipped with the resolve_failed error', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ harness: 'claude-cli', reason: 'resolve_failed', error: 'gateway unreachable' }, 'executor.skipped'),
+        )}
+      </div>,
+    )
+    expect(screen.getByText(/Harness skipped: resolve_failed/)).toBeInTheDocument()
+    expect(screen.getByText(/gateway unreachable/)).toBeInTheDocument()
+  })
+
+  it('renders executor.skipped with the cooldown provider/model/until', () => {
+    render(
+      <div>
+        {renderEvent(
+          event(
+            {
+              harness: 'claude-cli',
+              reason: 'cooldown',
+              until: '2026-01-01T00:10:00Z',
+              provider: 'anthropic',
+              model: 'claude-haiku-4-5-20251001',
+            },
+            'executor.skipped',
+          ),
+        )}
+      </div>,
+    )
+    expect(screen.getByText(/Harness skipped: cooldown/)).toBeInTheDocument()
+    expect(screen.getByText(/anthropic\/claude-haiku-4-5-20251001 until 2026-01-01T00:10:00Z/)).toBeInTheDocument()
+  })
+
+  it('renders executor.skipped with the no_usable_entry skip reasons', () => {
+    render(
+      <div>
+        {renderEvent(
+          event(
+            { harness: 'claude-cli', reason: 'no_usable_entry', skip_reasons: ['no credential configured'] },
+            'executor.skipped',
+          ),
+        )}
+      </div>,
+    )
+    expect(screen.getByText(/Harness skipped: no_usable_entry/)).toBeInTheDocument()
+    expect(screen.getByText(/no credential configured/)).toBeInTheDocument()
+  })
 })
 
 describe('unknown event kind fallback', () => {

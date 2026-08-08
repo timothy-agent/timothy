@@ -61,6 +61,10 @@ var execEnvAllowlist = map[string]bool{
 	"CLAUDE_CODE_OAUTH_TOKEN": true,
 	"NO_COLOR":                true,
 	"TERM":                    true,
+	// NODE_OPTIONS (D-056): bounds the claude CLI's node heap so a long
+	// run's transcript doesn't balloon toward the sandbox's 2 GiB cap —
+	// set unconditionally by the claude adapter, not a credential.
+	"NODE_OPTIONS": true,
 }
 
 // execEnvMaxValueLen bounds a single env value — generous for a token
@@ -121,6 +125,7 @@ func Register(s *httpserver.Server, mgr *Manager, cfg Config, log *slog.Logger) 
 	s.Handle("POST /v1/sandboxes/{missionID}/exec", http.HandlerFunc(a.handleExec))
 	s.Handle("DELETE /v1/sandboxes/{missionID}", http.HandlerFunc(a.handleRemove))
 	s.Handle("GET /v1/sandboxes", http.HandlerFunc(a.handleList))
+	s.Handle("GET /capacity", http.HandlerFunc(a.handleCapacity))
 }
 
 func jsonError(w http.ResponseWriter, status int, code, msg string) {
@@ -346,4 +351,25 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(listResponse{MissionIDs: ids})
+}
+
+type capacityResponse struct {
+	Admit            bool   `json:"admit"`
+	MemAvailableMB   int    `json:"mem_available_mb"`
+	RunningSandboxes int    `json:"running_sandboxes"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+// handleCapacity reports whether the host can afford one more working
+// mission (D-056) — brain's admission gate consults this before flipping
+// a mission idle->working.
+func (a *API) handleCapacity(w http.ResponseWriter, r *http.Request) {
+	report, err := a.mgr.Capacity(r.Context())
+	if err != nil {
+		a.log.Warn("sandbox capacity failed", "error", err)
+		jsonError(w, http.StatusBadGateway, "infra", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(capacityResponse(report))
 }
