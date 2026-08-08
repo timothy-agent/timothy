@@ -167,7 +167,7 @@ func TestHandleExecUnknownEnvNameRejected(t *testing.T) {
 }
 
 // TestHandleExecUnknownEnvironmentRejected confirms an environment key
-// outside manager.go's environmentImages allowlist (D-05x) 400s before
+// outside manager.go's environmentKeys allowlist (D-05x) 400s before
 // ever reaching the daemon — mirrors D-053's env-var allowlist gate.
 func TestHandleExecUnknownEnvironmentRejected(t *testing.T) {
 	t.Parallel()

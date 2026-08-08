@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -346,46 +347,71 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestImageFor covers D-05x's environment->image resolution: the
-// allowlist in environmentImages is the ONLY source of a variant image
-// tag; "" and "base" both resolve to the operator-configured base
-// image; anything else unrecognized is a loud error, never a silent
-// fallback.
+// TestImageFor covers D-05x's environment->image derivation: "" and
+// "base" both resolve to the operator-configured base image; every
+// other allowlisted key derives a variant ref from the base ref
+// (repository + "-<key>", same tag); a digest base or an unrecognized
+// key is a loud error, never a silent fallback.
 func TestImageFor(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
+		name        string
+		baseImage   string
 		environment string
 		want        string
 		wantErr     bool
 	}{
-		{environment: "", want: "timothy-sandbox-base:latest"},
-		{environment: "base", want: "timothy-sandbox-base:latest"},
-		{environment: "go", want: "timothy-sandbox-go:latest"},
-		{environment: "node", want: "timothy-sandbox-node:latest"},
-		{environment: "python", want: "timothy-sandbox-python:latest"},
-		{environment: "java", want: "timothy-sandbox-java:latest"},
-		{environment: "php", want: "timothy-sandbox-php:latest"},
-		{environment: "ruby", wantErr: true},
-		{environment: "timothy-sandbox-go:latest", wantErr: true}, // an image string, not a key
+		{name: "empty", baseImage: "timothy-sandbox:latest", environment: "", want: "timothy-sandbox:latest"},
+		{name: "base", baseImage: "timothy-sandbox:latest", environment: "base", want: "timothy-sandbox:latest"},
+		{name: "go", baseImage: "timothy-sandbox:latest", environment: "go", want: "timothy-sandbox-go:latest"},
+		{name: "node", baseImage: "timothy-sandbox:latest", environment: "node", want: "timothy-sandbox-node:latest"},
+		{name: "python", baseImage: "timothy-sandbox:latest", environment: "python", want: "timothy-sandbox-python:latest"},
+		{name: "java", baseImage: "timothy-sandbox:latest", environment: "java", want: "timothy-sandbox-java:latest"},
+		{name: "php", baseImage: "timothy-sandbox:latest", environment: "php", want: "timothy-sandbox-php:latest"},
+		{
+			name:        "ghcr versioned",
+			baseImage:   "ghcr.io/timothy-agent/timothy-sandbox:0.1.0-alpha.21",
+			environment: "go",
+			want:        "ghcr.io/timothy-agent/timothy-sandbox-go:0.1.0-alpha.21",
+		},
+		{
+			name:        "registry with port",
+			baseImage:   "localhost:5000/timothy-sandbox:v1",
+			environment: "go",
+			want:        "localhost:5000/timothy-sandbox-go:v1",
+		},
+		{
+			name:        "untagged base",
+			baseImage:   "timothy-sandbox",
+			environment: "go",
+			want:        "timothy-sandbox-go",
+		},
+		{
+			name:        "digest base rejected",
+			baseImage:   "x@sha256:abc",
+			environment: "go",
+			wantErr:     true,
+		},
+		{name: "unknown env", baseImage: "timothy-sandbox:latest", environment: "ruby", wantErr: true},
 	}
 	for _, tc := range cases {
-		t.Run(tc.environment, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := imageFor("timothy-sandbox-base:latest", tc.environment)
+			got, err := imageFor(tc.baseImage, tc.environment)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("imageFor(%q) = %q, nil, want an error", tc.environment, got)
+					t.Fatalf("imageFor(%q, %q) = %q, nil, want an error", tc.baseImage, tc.environment, got)
 				}
-				if !errors.Is(err, ErrUnknownEnvironment) {
-					t.Errorf("imageFor(%q) error = %v, want ErrUnknownEnvironment", tc.environment, err)
+				if tc.environment == "ruby" && !errors.Is(err, ErrUnknownEnvironment) {
+					t.Errorf("imageFor(%q, %q) error = %v, want ErrUnknownEnvironment", tc.baseImage, tc.environment, err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("imageFor(%q): %v", tc.environment, err)
+				t.Fatalf("imageFor(%q, %q): %v", tc.baseImage, tc.environment, err)
 			}
 			if got != tc.want {
-				t.Errorf("imageFor(%q) = %q, want %q", tc.environment, got, tc.want)
+				t.Errorf("imageFor(%q, %q) = %q, want %q", tc.baseImage, tc.environment, got, tc.want)
 			}
 		})
 	}
@@ -398,5 +424,77 @@ func TestNewManagerEmptyImageErrors(t *testing.T) {
 	}
 	if mgr != nil {
 		t.Fatalf("NewManager(\"\") = %v, want nil manager alongside the error", mgr)
+	}
+}
+
+// TestEnsureContainerPullsMissingImage confirms a create that 404s for
+// a missing image triggers exactly one ImagePull, then a retried create
+// that succeeds.
+func TestEnsureContainerPullsMissingImage(t *testing.T) {
+	var createCalls, pullCalls int
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
+			http.Error(w, "no such container", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			createCalls++
+			if createCalls == 1 {
+				http.Error(w, "No such image: img:latest", http.StatusNotFound)
+				return
+			}
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/images/create":
+			pullCalls++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"Pull complete"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	if err != nil {
+		t.Fatalf("ensureContainer: %v", err)
+	}
+	if id != "new1" {
+		t.Fatalf("id = %q, want new1", id)
+	}
+	if pullCalls != 1 {
+		t.Fatalf("pullCalls = %d, want exactly 1", pullCalls)
+	}
+	if createCalls != 2 {
+		t.Fatalf("createCalls = %d, want exactly 2 (initial 404 + retry)", createCalls)
+	}
+}
+
+// TestEnsureContainerPullFailureNamesImage confirms a pull that itself
+// fails surfaces an error naming the image, not a generic infra error.
+func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
+			http.Error(w, "no such container", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			http.Error(w, "No such image: img:latest", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/images/create":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"errorDetail":{"message":"manifest unknown"}}`))
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	_, err := mgr.ensureContainer(context.Background(), "m1", "")
+	if err == nil {
+		t.Fatal("ensureContainer: want error when pull fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "img") {
+		t.Errorf("error = %q, want it to name the image", err.Error())
 	}
 }

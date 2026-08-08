@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,45 +92,73 @@ const (
 // string-matching the error text.
 var ErrTimeout = errors.New("sandbox: command timed out")
 
-// environmentImages is the D-05x allowlist mapping a mission's
-// "environment" key to the sandbox image tag it runs — the ONLY way an
-// image is ever chosen; a request carries the key, never a free-form
-// image string (mirrors internal/brain/missions.Environments, which
-// the API validates create/schedule requests against before this is
-// ever reached). "" and "base" both resolve to the operator-configured
-// base image (MISSION_SANDBOX_IMAGE) — "" is Manager's zero-value
-// default for back-compat with a caller that predates the environment
-// axis, "base" is the operator's explicit escape hatch out of
-// auto-detection. Every other key names a variant image built FROM
-// that base (deploy/sandbox-<key>.Dockerfile, `make sandbox-image`).
-var environmentImages = map[string]string{
-	"go":     "timothy-sandbox-go:latest",
-	"node":   "timothy-sandbox-node:latest",
-	"python": "timothy-sandbox-python:latest",
-	"java":   "timothy-sandbox-java:latest",
-	"php":    "timothy-sandbox-php:latest",
+// environmentKeys is the D-05x allowlist of a mission's "environment"
+// key — the ONLY way an image is ever chosen; a request carries the
+// key, never a free-form image string (mirrors
+// internal/brain/missions.Environments, which the API validates
+// create/schedule requests against before this is ever reached). ""
+// and "base" both resolve to the operator-configured base image
+// (MISSION_SANDBOX_IMAGE) — "" is Manager's zero-value default for
+// back-compat with a caller that predates the environment axis, "base"
+// is the operator's explicit escape hatch out of auto-detection. Every
+// other key derives a variant image ref from the base ref (imageFor):
+// the base repository name gets "-<key>" appended, same tag —
+// timothy-sandbox:latest -> timothy-sandbox-go:latest (local `make
+// sandbox-image` convention) and
+// ghcr.io/timothy-agent/timothy-sandbox:0.1.0-alpha.21 ->
+// ghcr.io/timothy-agent/timothy-sandbox-go:0.1.0-alpha.21 (release
+// convention: deploy/sandbox-<key>.Dockerfile + release.yml publish
+// exactly these names).
+var environmentKeys = map[string]bool{
+	"go":     true,
+	"node":   true,
+	"python": true,
+	"java":   true,
+	"php":    true,
 }
 
 // ErrUnknownEnvironment reports an environment key outside
-// environmentImages (and not "" or "base") — never silently falls back
+// environmentKeys (and not "" or "base") — never silently falls back
 // to the base image, so a typo'd or stale key fails loudly instead of
 // running a mission's coding work in the wrong toolchain.
 var ErrUnknownEnvironment = errors.New("sandbox: unknown environment")
 
-// imageFor resolves environment to an image tag via environmentImages
-// only — see D-05x. baseImage is the operator-configured
-// MISSION_SANDBOX_IMAGE (back-compat default, and "base"'s explicit
-// target).
+// imageFor derives environment's image ref from baseImage — see
+// D-05x. baseImage is the operator-configured MISSION_SANDBOX_IMAGE
+// (back-compat default, and "base"'s explicit target). Digest refs
+// (baseImage containing "@") cannot be derived from and are rejected
+// for any variant environment.
 func imageFor(baseImage, environment string) (string, error) {
 	switch environment {
 	case "", "base":
 		return baseImage, nil
 	default:
-		if img, ok := environmentImages[environment]; ok {
-			return img, nil
+		if !environmentKeys[environment] {
+			return "", fmt.Errorf("%w: %q", ErrUnknownEnvironment, environment)
 		}
-		return "", fmt.Errorf("%w: %q", ErrUnknownEnvironment, environment)
+		if strings.Contains(baseImage, "@") {
+			return "", fmt.Errorf("sandbox: variant environments require a tagged image ref, got digest %q", baseImage)
+		}
+		repo, tag := splitImageRef(baseImage)
+		variant := repo + "-" + environment
+		if tag == "" {
+			return variant, nil
+		}
+		return variant + ":" + tag, nil
 	}
+}
+
+// splitImageRef splits an image ref into repository and tag. The tag
+// separator is the last ":" occurring after the last "/", so a
+// registry-with-port ref (e.g. localhost:5000/timothy-sandbox) is never
+// split at the port colon. No tag present -> tag is "".
+func splitImageRef(image string) (repo, tag string) {
+	slash := strings.LastIndex(image, "/")
+	colon := strings.LastIndex(image, ":")
+	if colon <= slash {
+		return image, ""
+	}
+	return image[:colon], image[colon+1:]
 }
 
 // Manager creates, reuses, and tears down one Docker container per
@@ -240,10 +269,9 @@ func (m *Manager) Ping(ctx context.Context) error {
 // would otherwise see every mission shell call fail opaquely instead
 // of a clear boot-time health signal. Variant images (go/node/...) are
 // not checked here: an operator who never runs a mission in that
-// environment need not have built it, and a missing variant fails
-// loudly at ensureContainer time instead (ErrUnknownEnvironment is for
-// an unrecognized key, not a missing image — Docker's own pull/create
-// error covers the latter).
+// environment need not have it locally yet, and createContainer pulls
+// a missing variant on demand instead (ErrUnknownEnvironment is for an
+// unrecognized key, not a missing image).
 func (m *Manager) CheckImage(ctx context.Context) error {
 	_, err := m.cli.ImageInspect(ctx, m.baseImage)
 	return err
@@ -370,13 +398,34 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		NetworkMode:   "bridge",
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
 	}
-	resp, err := m.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+	createOpts := client.ContainerCreateOptions{
 		Config:     cfg,
 		HostConfig: hostCfg,
 		Name:       name,
-	})
+	}
+	resp, err := m.cli.ContainerCreate(ctx, createOpts)
 	if err != nil {
-		return "", fmt.Errorf("sandbox: create container %s: %w", name, err)
+		if !errdefs.IsNotFound(err) {
+			return "", fmt.Errorf("sandbox: create container %s: %w", name, err)
+		}
+		// Image not pulled locally yet (variant images especially are
+		// built/pushed at release time, not baked into every deployment) —
+		// pull it once and retry create exactly once.
+		if m.log != nil {
+			m.log.Info("sandbox: pulling image", "image", image, "mission", missionID)
+		}
+		pull, pullErr := m.cli.ImagePull(ctx, image, client.ImagePullOptions{})
+		if pullErr != nil {
+			return "", fmt.Errorf("sandbox: pull image %s: %w", image, pullErr)
+		}
+		waitErr := pull.Wait(ctx)
+		if waitErr != nil {
+			return "", fmt.Errorf("sandbox: pull image %s: %w", image, waitErr)
+		}
+		resp, err = m.cli.ContainerCreate(ctx, createOpts)
+		if err != nil {
+			return "", fmt.Errorf("sandbox: create container %s: %w", name, err)
+		}
 	}
 	if _, err := m.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return "", fmt.Errorf("sandbox: start container %s: %w", name, err)

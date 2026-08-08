@@ -154,7 +154,7 @@ type execRequest struct {
 	TimeoutSeconds int               `json:"timeout_seconds"`
 	Env            map[string]string `json:"env,omitempty"`
 	// Environment selects the mission's sandbox image (D-05x) — a key
-	// into manager.go's environmentImages allowlist, never a free-form
+	// into manager.go's environmentKeys allowlist, never a free-form
 	// image string. "" and "base" both mean the configured base image.
 	// Only matters on a mission's first exec (image is fixed once its
 	// container is created); a later exec sends whatever the mission
@@ -165,7 +165,7 @@ type execRequest struct {
 }
 
 // validExecEnvironment rejects any environment key outside
-// manager.go's environmentImages allowlist (plus the "" and "base"
+// manager.go's environmentKeys allowlist (plus the "" and "base"
 // aliases for the base image) — same shape as validExecEnv's D-053
 // allowlist check, checked before the exec ever reaches Docker so an
 // unrecognized key is a clean 400, not a mid-stream infra error.
@@ -174,7 +174,7 @@ func validExecEnvironment(environment string) bool {
 	case "", "base":
 		return true
 	default:
-		return environmentImages[environment] != ""
+		return environmentKeys[environment]
 	}
 }
 

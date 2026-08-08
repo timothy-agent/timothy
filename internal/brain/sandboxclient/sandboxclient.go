@@ -45,7 +45,7 @@ type execRequest struct {
 	TimeoutSeconds int               `json:"timeout_seconds"`
 	Env            map[string]string `json:"env,omitempty"`
 	// Environment selects the mission's sandbox image (D-05x) — a key
-	// into sandboxd's own environmentImages allowlist, never a
+	// into sandboxd's own environmentKeys allowlist, never a
 	// free-form image string. Only matters on the mission's first exec
 	// (image is fixed once its container is created).
 	Environment string `json:"environment,omitempty"`
