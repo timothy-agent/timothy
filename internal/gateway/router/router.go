@@ -85,12 +85,20 @@ type ChainEntry struct {
 // CLIs live in brain (internal/brain/missions/executor); the gateway
 // only validates names and wire-format compatibility, never runs a
 // subprocess itself.
-var KnownHarnesses = map[string]bool{"claude-cli": true}
+var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true}
 
-// harnessWireFormat names the wire protocol each known harness requires
-// from its provider row — checked by both admin validation and the
-// resolve endpoint's executor gate so the two can never disagree.
-var harnessWireFormat = map[string]string{"claude-cli": "anthropic"}
+// harnessDrivers names the set of driver names each known harness
+// accepts directly from its provider row — checked by both admin
+// validation and the resolve endpoint's executor gate so the two can
+// never disagree. claude-cli speaks anthropic only; pi speaks either
+// anthropic or openaicompat natively (its whole point is dual-wire
+// support). Independent of this set, the anthropic_base_url override
+// (D-051) always satisfies either harness, since it exposes an
+// anthropic-format endpoint regardless of the row's own driver.
+var harnessDrivers = map[string]map[string]bool{
+	"claude-cli": {"anthropic": true},
+	"pi":         {"anthropic": true, "openaicompat": true},
+}
 
 // RouteRow mirrors one routes table row. Strategy picks the chain
 // order at resolve time: "ordered" keeps the written priority; "auto",
@@ -556,6 +564,12 @@ type ResolvedRouteEntry struct {
 	// reported tokens for a non-anthropic provider (D-05x) without a
 	// second round trip.
 	Prices *ModelPrices
+	// Wire is the wire format this entry exposes on the executor axis —
+	// "anthropic" or "openai" — set only when harness != "" and
+	// row.Kind != "cli" (a kind='cli' row has no wire format at all).
+	// A dual-wire harness (pi) uses this to pick its provider config;
+	// a single-wire harness (claude-cli) ignores it.
+	Wire string
 }
 
 // ResolveRoute returns route's chain in stored order, annotated with
@@ -606,10 +620,14 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 			// vendor's own default endpoint and must keep BaseURL empty, or
 			// BuildInvocation's AuthSubscription/AuthOAuthToken checks
 			// reject the spawn outright (they require no BaseURL at all).
-			if row.Kind != "cli" && row.Driver != "anthropic" && row.AnthropicBaseURL != "" {
+			overrideApplied := row.Kind != "cli" && row.Driver != "anthropic" && row.AnthropicBaseURL != ""
+			if overrideApplied {
 				re.BaseURL = row.AnthropicBaseURL
 			}
 			re.Usable, re.SkipReason = executorUsable(row, harness)
+			if row.Kind != "cli" {
+				re.Wire = harnessWire(row.Driver, overrideApplied)
+			}
 		}
 		out = append(out, re)
 	}
@@ -628,7 +646,12 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 // own CLI talking to the vendor's own default endpoint under
 // subscription/oauth credentials, never a third-party anthropic-
 // compatible one, so the wire check only applies to kind='api' rows
-// (a chat-serving row repurposed as an executor entry).
+// (a chat-serving row repurposed as an executor entry). A kind='cli'
+// row exists specifically to serve the harness named by its own
+// driver (e.g. driver="claude-cli" serves only the claude-cli harness)
+// — usable by any other harness it would resolve wire-compatible
+// (Wire == "") yet BuildInvocation rejects outright, a config that
+// looks valid but always falls back to native.
 func executorUsable(row ProviderRow, harness string) (bool, string) {
 	if !row.Enabled {
 		return false, "disabled"
@@ -636,17 +659,51 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 	if !KnownHarnesses[harness] {
 		return false, "unknown harness"
 	}
-	if row.Kind != "cli" {
-		wantWire := harnessWireFormat[harness]
-		wireOK := row.Driver == wantWire || (harness == "claude-cli" && row.AnthropicBaseURL != "")
+	if row.Kind == "cli" {
+		if row.Driver != harness {
+			return false, fmt.Sprintf("cli provider row serves the %s harness", row.Driver)
+		}
+	} else {
+		wireOK := harnessDrivers[harness][row.Driver] || row.AnthropicBaseURL != ""
 		if !wireOK {
-			return false, fmt.Sprintf("wire-incompatible: %s requires %s wire format", harness, wantWire)
+			return false, fmt.Sprintf("wire-incompatible: %s requires one of %s, or options.anthropic_base_url", harness, sortedKeys(harnessDrivers[harness]))
 		}
 	}
 	if row.CredentialRef == "" {
 		return false, "credential_ref is required"
 	}
 	return true, ""
+}
+
+// sortedKeys returns m's keys, sorted — used only to keep an operator-
+// facing skip-reason string deterministic.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// harnessWire computes the wire format a resolved executor entry
+// exposes: the anthropic_base_url override (in play whenever BaseURL
+// was swapped to it) always means anthropic; otherwise it follows the
+// row's own driver. Empty when neither applies (row.Kind == "cli",
+// which has no wire format at all — the CLI talks to its vendor's own
+// default endpoint).
+func harnessWire(driver string, overrideApplied bool) string {
+	if overrideApplied {
+		return "anthropic"
+	}
+	switch driver {
+	case "anthropic":
+		return "anthropic"
+	case "openaicompat":
+		return "openai"
+	default:
+		return ""
+	}
 }
 
 // attemptCapable gates one provider+model candidate on the required

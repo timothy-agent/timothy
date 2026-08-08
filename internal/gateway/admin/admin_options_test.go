@@ -115,7 +115,12 @@ func TestValidateHarnessWireFormat(t *testing.T) {
 		{name: "anthropic_base_url satisfies claude-cli", harness: "claude-cli", driver: "claude-cli",
 			opts: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
 		{name: "neither rejected", harness: "claude-cli", driver: "claude-cli", wantErr: "requires driver"},
-		{name: "openaicompat without base_url rejected", harness: "claude-cli", driver: "openaicompat", wantErr: "requires driver"},
+		{name: "openaicompat without base_url rejected for claude-cli", harness: "claude-cli", driver: "openaicompat", wantErr: "requires driver"},
+		{name: "anthropic driver satisfies pi", harness: "pi", driver: "anthropic"},
+		{name: "openaicompat driver satisfies pi (dual-wire)", harness: "pi", driver: "openaicompat"},
+		{name: "anthropic_base_url satisfies pi too", harness: "pi", driver: "made-up",
+			opts: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
+		{name: "neither satisfies pi", harness: "pi", driver: "made-up", wantErr: "requires driver"},
 		{name: "unknown harness has no rule", harness: "codex-cli", driver: "openaicompat"},
 		{name: "empty harness has no rule", harness: "", driver: "openaicompat"},
 	}

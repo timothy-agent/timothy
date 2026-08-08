@@ -51,3 +51,69 @@ describe('MissionCard name fallback', () => {
     expect(screen.getByText(`${'a'.repeat(60)}…`)).toBeInTheDocument()
   })
 })
+
+describe('MissionCard status pill', () => {
+  it('shows the raw status for a non-terminal mission', () => {
+    renderCard({ ...baseMission, status: 'working', phase: 'execute' })
+    expect(screen.getByText('working')).toBeInTheDocument()
+  })
+
+  it('shows "done" for a completed mission', () => {
+    renderCard({ ...baseMission, status: 'done', phase: 'done' })
+    expect(screen.getByText('done')).toBeInTheDocument()
+  })
+
+  it('shows "failed" for a failed mission with no failure_reason', () => {
+    renderCard({ ...baseMission, status: 'error', phase: 'failed' })
+    expect(screen.getByText('failed')).toBeInTheDocument()
+    expect(screen.queryByText('error')).not.toBeInTheDocument()
+  })
+
+  it('shows "cancelled" instead of "failed" when failure_reason is cancelled', () => {
+    renderCard({ ...baseMission, status: 'error', phase: 'failed', failure_reason: 'cancelled' })
+    expect(screen.getByText('cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('failed')).not.toBeInTheDocument()
+    expect(screen.queryByText('error')).not.toBeInTheDocument()
+  })
+})
+
+describe('MissionCard harness and model', () => {
+  it('shows the Native label and brand icon when harness is absent', () => {
+    renderCard({ ...baseMission })
+    expect(screen.getByText('Native')).toBeInTheDocument()
+  })
+
+  it('shows the pi label for harness=pi', () => {
+    renderCard({ ...baseMission, harness: 'pi' })
+    expect(screen.getByText('pi')).toBeInTheDocument()
+  })
+
+  it('shows the Claude Code label for harness=claude-cli', () => {
+    renderCard({ ...baseMission, harness: 'claude-cli' })
+    expect(screen.getByText('Claude Code')).toBeInTheDocument()
+  })
+
+  it('shows top_model when present', () => {
+    renderCard({ ...baseMission, top_model: 'claude-sonnet-5' })
+    expect(screen.getByText('claude-sonnet-5')).toBeInTheDocument()
+  })
+
+  it('omits model text when top_model is absent', () => {
+    renderCard({ ...baseMission })
+    expect(screen.queryByText('claude-sonnet-5')).not.toBeInTheDocument()
+  })
+})
+
+describe('MissionCard removed fields', () => {
+  it('never renders retries, unit progress, or the raw phase text', () => {
+    renderCard({
+      ...baseMission,
+      phase: 'execute',
+      iteration: 3,
+      spec: { units: [{ title: 'a', verify_cmd: '', passes: true }, { title: 'b', verify_cmd: '', passes: false }] },
+    })
+    expect(screen.queryByText(/Retries/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/\d+\/\d+ units/)).not.toBeInTheDocument()
+    expect(screen.queryByText('execute')).not.toBeInTheDocument()
+  })
+})

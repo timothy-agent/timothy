@@ -561,6 +561,59 @@ func TestAggregateMissionUsageUnbilledSplit(t *testing.T) {
 	}
 }
 
+// TestAggregateTopModelByMission confirms the mission list's batched
+// "which model served this" lookup ranks by request count (not
+// recency), covers multiple missions in one call, and omits any
+// mission id with no ledger rows rather than erroring or zero-filling.
+func TestAggregateTopModelByMission(t *testing.T) {
+	agg, led := testAggregator(t)
+	ctx := t.Context()
+	missionA := aggMarker + "top-model-a"
+	missionB := aggMarker + "top-model-b"
+	missionNever := aggMarker + "top-model-never-ran"
+
+	rows := []Entry{
+		// Mission A: m1 has 2 requests, m-fallback has 1 more-recent
+		// request — m1 must still win on count, not recency.
+		{Provider: aggMarker + "x", Model: "m1", Route: "coding", MissionID: missionA,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "x", Model: "m1", Route: "coding", MissionID: missionA,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "x", Model: "m-fallback", Route: "coding", MissionID: missionA,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		// Mission B: single model, single request.
+		{Provider: aggMarker + "y", Model: "m2", Route: "coding", MissionID: missionB,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		// A test-purpose probe on mission A: must never win the ranking.
+		{Provider: aggMarker + "x", Model: "m-test-probe", Route: "coding", MissionID: missionA, Purpose: "test",
+			Usage: &stream.Usage{InputTokens: 999, OutputTokens: 999}, LatencyMS: 100, Status: "ok", Cost: usd(9.0)},
+	}
+	for _, e := range rows {
+		led.Record(ctx, e)
+	}
+
+	got, err := agg.TopModelByMission(ctx, []string{missionA, missionB, missionNever})
+	if err != nil {
+		t.Fatalf("TopModelByMission: %v", err)
+	}
+	a, ok := got[missionA]
+	if !ok || a.Provider != aggMarker+"x" || a.Model != "m1" || a.Requests != 2 {
+		t.Fatalf("mission A top model = %+v (ok=%v), want provider=%s model=m1 requests=2", a, ok, aggMarker+"x")
+	}
+	b, ok := got[missionB]
+	if !ok || b.Provider != aggMarker+"y" || b.Model != "m2" || b.Requests != 1 {
+		t.Fatalf("mission B top model = %+v (ok=%v), want provider=%s model=m2 requests=1", b, ok, aggMarker+"y")
+	}
+	if _, ok := got[missionNever]; ok {
+		t.Fatalf("mission with no ledger rows must be absent from the result, got %+v", got[missionNever])
+	}
+
+	empty, err := agg.TopModelByMission(ctx, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("TopModelByMission(nil) = %+v, %v, want empty map and no error", empty, err)
+	}
+}
+
 func TestAggregateLatencyPercentiles(t *testing.T) {
 	agg, led := testAggregator(t)
 	from, to := seedAgg(t, led)

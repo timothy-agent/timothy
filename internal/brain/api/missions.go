@@ -18,6 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
@@ -38,12 +39,15 @@ import (
 // nameMission generates a mission's short display name from its goal
 // (chat.TitleOverGateway, the same mechanism a chat session's title
 // uses) — nil (no gateway wiring) leaves every mission unnamed, same
-// as any generation failure.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string) {
+// as any generation failure. topModels resolves the top-served
+// provider/model per mission id from the cost ledger (D-05x's
+// ledger.Aggregator.TopModelByMission) for the list response's
+// top_model decoration — nil (no ledger wiring) omits the field.
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error)) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -93,6 +97,10 @@ type missionAPI struct {
 	// goal, fired async after create; nil (no gateway wiring) leaves
 	// every mission unnamed, same as any generation failure.
 	nameMission func(context.Context, string) string
+	// topModels resolves the top-served provider/model per mission id
+	// from the cost ledger; nil (no ledger wiring) omits top_model/
+	// top_model_provider from list/get responses entirely.
+	topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error)
 	// perms answers a mission's pending_permission — the same
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
@@ -162,7 +170,46 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "missions_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"missions": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"missions": h.decorateTopModels(r.Context(), rows)})
+}
+
+// missionResponse is missions.Mission plus fields the store itself
+// has no business computing: top_model/top_model_provider come from
+// the cost ledger (a different service's data), decorated on here at
+// serve time rather than added to missions.Mission itself.
+type missionResponse struct {
+	missions.Mission
+	TopModel         string `json:"top_model,omitempty"`
+	TopModelProvider string `json:"top_model_provider,omitempty"`
+}
+
+// decorateTopModels adds top_model/top_model_provider to a page of
+// missions in one ledger call — nil topModels (no ledger wiring) or a
+// ledger error both degrade to every mission simply omitting the
+// field, never a failed list/get.
+func (h *missionAPI) decorateTopModels(ctx context.Context, rows []missions.Mission) []missionResponse {
+	out := make([]missionResponse, len(rows))
+	for i, m := range rows {
+		out[i] = missionResponse{Mission: m}
+	}
+	if h.topModels == nil || len(rows) == 0 {
+		return out
+	}
+	ids := make([]string, len(rows))
+	for i, m := range rows {
+		ids[i] = m.ID
+	}
+	top, err := h.topModels(ctx, ids)
+	if err != nil {
+		h.log.Warn("missions: top model lookup failed", "error", err)
+		return out
+	}
+	for i := range out {
+		if mu, ok := top[out[i].ID]; ok {
+			out[i].TopModel, out[i].TopModelProvider = mu.Model, mu.Provider
+		}
+	}
+	return out
 }
 
 type createMissionRequest struct {
@@ -471,7 +518,7 @@ func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {
 		failMission(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, m)
+	writeJSON(w, http.StatusOK, h.decorateTopModels(r.Context(), []missions.Mission{m})[0])
 }
 
 // delete permanently removes a terminal mission: its row (Store.Delete

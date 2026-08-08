@@ -1,6 +1,9 @@
 import { Link } from 'react-router'
 import type { Mission } from '../../api/types'
 import { missionDisplayName } from '../../lib/format'
+import { BrandMark } from '../BrandMark'
+import { ClaudeCodeIcon } from '../icons/ClaudeCodeIcon'
+import { PiIcon } from '../icons/PiIcon'
 
 const statusColor: Record<Mission['status'], string> = {
   idle: 'bg-muted text-muted-foreground',
@@ -11,15 +14,44 @@ const statusColor: Record<Mission['status'], string> = {
   error: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
 }
 
-function unitProgress(mission: Mission): string | null {
-  const units = mission.spec?.units
-  if (!units || units.length === 0) return null
-  const done = units.filter((u) => u.passes).length
-  return `${done}/${units.length} units`
+// harnessDisplayNames mirrors MissionDetail's own map (D-051 harness
+// ids to labels) — kept separate since that one lives with its own
+// event-derived HarnessIcon, not the mission row's own harness field.
+const harnessDisplayNames: Record<string, string> = {
+  'claude-cli': 'Claude Code',
+  pi: 'pi',
+}
+
+function harnessLabel(harness?: string): string {
+  if (!harness) return 'Native'
+  return harnessDisplayNames[harness] ?? harness
+}
+
+function HarnessIcon({ harness }: { harness?: string }) {
+  if (harness === 'pi') return <PiIcon />
+  if (harness === 'claude-cli') return <ClaudeCodeIcon />
+  return <BrandMark className="size-3.5 shrink-0 rounded-[3px]" />
+}
+
+// statusLabel renders the pill text: non-terminal statuses print as-is
+// (status.replace), but a terminal mission never shows the raw status
+// "error" — phase=failed reads as "cancelled" (failure_reason) or
+// "failed", phase=done reads "done".
+function statusLabel(mission: Mission): string {
+  if (mission.phase === 'done') return 'done'
+  if (mission.phase === 'failed') return mission.failure_reason === 'cancelled' ? 'cancelled' : 'failed'
+  return mission.status.replace(/_/g, ' ')
+}
+
+function statusPillColor(mission: Mission): string {
+  if (mission.phase === 'done') return statusColor.done
+  if (mission.phase === 'failed') {
+    return mission.failure_reason === 'cancelled' ? statusColor.idle : statusColor.error
+  }
+  return statusColor[mission.status]
 }
 
 export function MissionCard({ mission }: { mission: Mission }) {
-  const progress = unitProgress(mission)
   return (
     <Link
       to={`/missions/${mission.id}`}
@@ -28,21 +60,23 @@ export function MissionCard({ mission }: { mission: Mission }) {
       <div className="flex items-start justify-between gap-2">
         <span className="line-clamp-2 text-sm font-semibold">{missionDisplayName(mission)}</span>
         <span
-          className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${statusColor[mission.status]}`}
+          className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${statusPillColor(mission)}`}
         >
-          {mission.status.replace(/_/g, ' ')}
+          {statusLabel(mission)}
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="capitalize">{mission.kind}</span>
-        <span>{mission.phase}</span>
         {mission.schedule_id && (
           <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
             recurring
           </span>
         )}
-        {mission.iteration > 0 && <span>Retries {mission.iteration}</span>}
-        {progress && <span>{progress}</span>}
+        <span className="inline-flex items-center gap-1">
+          <HarnessIcon harness={mission.harness} />
+          {harnessLabel(mission.harness)}
+        </span>
+        {mission.top_model && <span className="max-w-32 truncate">{mission.top_model}</span>}
       </div>
       {mission.pause_message && (
         <p className="line-clamp-2 text-xs text-amber-700 dark:text-amber-400">{mission.pause_message}</p>

@@ -553,6 +553,10 @@ export interface Mission {
   agent_id?: string
   phase: 'explore' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
+  // failure_reason is derived server-side (Store.List/Get) from this
+  // mission's latest mission.failed event's payload.reason —
+  // "cancelled" or "max_iterations" — set only when phase is 'failed'.
+  failure_reason?: string
   pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | ''
   pause_message?: string
   workspace?: string
@@ -588,6 +592,17 @@ export interface Mission {
   // time (explicit request > repo markers > goal keyword > base).
   // General missions never set this.
   environment?: string
+  // harness is the delegated CLI executor this coding mission's worker
+  // turns run under (D-051): "" or absent is native in-process
+  // dispatch, "claude-cli"/"pi" name a registered executor.
+  harness?: string
+  // top_model/top_model_provider are decorated onto the list/get
+  // response from the cost ledger's top-served-model-per-mission
+  // lookup (internal/brain/api/missions.go's decorateTopModels) — the
+  // model that actually served this mission, by request count. Absent
+  // for a mission with no ledger rows yet.
+  top_model?: string
+  top_model_provider?: string
   schedule_id?: string
   created_at: string
   updated_at: string

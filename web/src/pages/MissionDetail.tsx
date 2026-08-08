@@ -32,6 +32,7 @@ import {
 } from '../components/ui/dialog'
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
+import { PiIcon } from '../components/icons/PiIcon'
 import { envIcon } from '../components/icons/EnvIcons'
 import { Badge } from '../components/ui/badge'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
@@ -122,10 +123,18 @@ function latestExecutorSpawn(
 // in the pill — mirrors MissionForm's executorChoices labels.
 const harnessDisplayNames: Record<string, string> = {
   'claude-cli': 'Claude Code',
+  pi: 'pi',
 }
 
 function harnessDisplayName(harness: string): string {
   return harnessDisplayNames[harness] ?? harness
+}
+
+// HarnessIcon picks the pill's mark for a harness id, defaulting to
+// the Claude Code mark for ids without one of their own.
+function HarnessIcon({ harness }: { harness: string }) {
+  if (harness === 'pi') return <PiIcon />
+  return <ClaudeCodeIcon />
 }
 
 // CostBadge renders the billed-cost pill: a plain Badge when there's
@@ -434,7 +443,7 @@ export function MissionDetail() {
               aria-label={`${harnessDisplayName(executorSpawn.harness)} harness`}
               title={`Delegated CLI harness (${harnessDisplayName(executorSpawn.harness)}) that ran this mission's coding work, via ${executorSpawn.provider}`}
             >
-              <ClaudeCodeIcon />
+              <HarnessIcon harness={executorSpawn.harness} />
               {executorSpawn.model}
             </Badge>
           )}

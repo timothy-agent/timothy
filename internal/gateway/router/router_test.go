@@ -1017,11 +1017,138 @@ func TestResolveRouteCLIKindInherentlyWireCompatible(t *testing.T) {
 	}
 }
 
+// TestResolveRouteCLIKindServesOnlyItsOwnHarness: a kind='cli' row
+// exists to serve the harness named by its own driver only. A pi
+// mission resolving a chain that includes the claude-cli subscription
+// row must see it as unusable (bugfix) — pi's BuildInvocation has no
+// wire format for a kind='cli' row and rejects the spawn outright, so
+// resolving it usable=true silently falls back to native.
+func TestResolveRouteCLIKindServesOnlyItsOwnHarness(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p2", Model: "m"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	entries, ok := snap.ResolveRoute("coding-exec", "pi")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[0].Usable || entries[0].SkipReason != "cli provider row serves the claude-cli harness" {
+		t.Fatalf("entry = %+v, want unusable with the cli-harness-mismatch reason", entries[0])
+	}
+
+	// Regression: claude-cli against its own cli row stays usable.
+	entries, ok = snap.ResolveRoute("coding-exec", "claude-cli")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if !entries[0].Usable || entries[0].SkipReason != "" {
+		t.Fatalf("entry = %+v, want usable with no skip reason", entries[0])
+	}
+}
+
 func TestResolveRouteUnknownRoute(t *testing.T) {
 	t.Parallel()
 	snap := harnessSnapshot(t)
 	if _, ok := snap.ResolveRoute("no-such-route", ""); ok {
 		t.Fatalf("ResolveRoute: want ok=false for unknown route")
+	}
+}
+
+// TestResolveRoutePiWireVariants covers pi's dual-wire support and the
+// Wire field ResolveRoute now annotates every kind='api' executor entry
+// with: an openaicompat row is directly usable for pi (unlike
+// claude-cli, which would reject it), an anthropic row is usable too,
+// a third driver needs the anthropic_base_url override to be usable at
+// all, and claude-cli's own behavior on the same rows is unchanged
+// (regression).
+func TestResolveRoutePiWireVariants(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+			CredentialRef: "A_KEY", Enabled: true},
+		{ID: "p2", Name: "ollama", Kind: "api", Driver: "openaicompat",
+			CredentialRef: "O_KEY", Enabled: true},
+		{ID: "p3", Name: "glm-direct", Kind: "api", Driver: "openaicompat",
+			CredentialRef: "G_KEY", Enabled: true, AnthropicBaseURL: "https://glm.example/anthropic"},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "sonnet"},
+			{ProviderID: "p2", Model: "qwen"},
+			{ProviderID: "p3", Model: "glm-4.7"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	// pi axis: anthropic usable+anthropic wire, openaicompat usable+
+	// openai wire (pi's whole point), and the override row usable with
+	// anthropic wire (the override always exposes an anthropic-format
+	// endpoint regardless of the row's own driver).
+	piEntries, ok := snap.ResolveRoute("coding-exec", "pi")
+	if !ok || len(piEntries) != 3 {
+		t.Fatalf("ResolveRoute(pi) = %+v, ok=%v", piEntries, ok)
+	}
+	if !piEntries[0].Usable || piEntries[0].Wire != "anthropic" {
+		t.Fatalf("pi anthropic entry = %+v", piEntries[0])
+	}
+	if !piEntries[1].Usable || piEntries[1].Wire != "openai" {
+		t.Fatalf("pi openaicompat entry = %+v", piEntries[1])
+	}
+	if piEntries[1].BaseURL != "" {
+		t.Fatalf("pi openaicompat entry base_url = %q, want the row's own (empty here)", piEntries[1].BaseURL)
+	}
+	if !piEntries[2].Usable || piEntries[2].Wire != "anthropic" {
+		t.Fatalf("pi override entry = %+v", piEntries[2])
+	}
+	if piEntries[2].BaseURL != "https://glm.example/anthropic" {
+		t.Fatalf("pi override entry base_url = %q, want the override url", piEntries[2].BaseURL)
+	}
+
+	// claude-cli axis on the SAME rows: anthropic usable+anthropic
+	// wire (regression, unchanged from before pi existed), openaicompat
+	// WITHOUT the override is wire-incompatible (claude-cli has no
+	// openai wire support), the override row is usable+anthropic wire.
+	claudeEntries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
+	if !ok || len(claudeEntries) != 3 {
+		t.Fatalf("ResolveRoute(claude-cli) = %+v, ok=%v", claudeEntries, ok)
+	}
+	if !claudeEntries[0].Usable || claudeEntries[0].Wire != "anthropic" {
+		t.Fatalf("claude-cli anthropic entry = %+v", claudeEntries[0])
+	}
+	if claudeEntries[1].Usable {
+		t.Fatalf("claude-cli openaicompat entry without override must be unusable: %+v", claudeEntries[1])
+	}
+	if !strings.Contains(claudeEntries[1].SkipReason, "wire-incompatible") {
+		t.Fatalf("claude-cli openaicompat skip reason = %q, want wire-incompatible", claudeEntries[1].SkipReason)
+	}
+	if !claudeEntries[2].Usable || claudeEntries[2].Wire != "anthropic" {
+		t.Fatalf("claude-cli override entry = %+v", claudeEntries[2])
+	}
+}
+
+// TestResolveRouteKindCliHasNoWire: a kind='cli' row spawns its own CLI
+// against the vendor's default endpoint - it has no wire format at
+// all, so Wire must stay empty even though it's usable.
+func TestResolveRouteKindCliHasNoWire(t *testing.T) {
+	t.Parallel()
+	snap := harnessSnapshot(t)
+	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	if !ok || len(entries) != 2 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[1].Kind != "cli" {
+		t.Fatalf("test setup assumption broken: entries[1] = %+v", entries[1])
+	}
+	if entries[1].Wire != "" {
+		t.Fatalf("kind='cli' entry Wire = %q, want empty", entries[1].Wire)
 	}
 }
 

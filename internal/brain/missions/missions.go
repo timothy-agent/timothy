@@ -30,6 +30,11 @@ type Mission struct {
 	PromptOverlay string         `json:"prompt_overlay,omitempty"`
 	Phase         Phase          `json:"phase"`
 	Status        Status         `json:"status"`
+	// FailureReason is derived (no column) from this mission's latest
+	// mission.failed event's payload.reason — "cancelled" or
+	// "max_iterations" (statemachine.go) — set only by Store.List/Get for
+	// a phase=failed mission. Empty for every other mission.
+	FailureReason string `json:"failure_reason,omitempty"`
 	PauseReason   PauseReason    `json:"pause_reason,omitempty"`
 	PauseMessage  string         `json:"pause_message,omitempty"`
 	Workspace     string         `json:"workspace,omitempty"`

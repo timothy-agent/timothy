@@ -835,6 +835,145 @@ func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {
 	}
 }
 
+// loadPiDelegatedFixture returns every non-empty line of a recorded pi
+// fixture — same loader shape as loadDelegatedFixture, pointed at the
+// pi-0.84.1 testdata directory instead.
+func loadPiDelegatedFixture(t *testing.T, name string) [][]byte {
+	t.Helper()
+	f, err := os.Open(filepath.Join("executor", "testdata", "pi-0.84.1", name)) //nolint:gosec // G304: fixed testdata path.
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var lines [][]byte
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		cp := make([]byte, len(line))
+		copy(cp, line)
+		lines = append(lines, cp)
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("scan fixture: %v", err)
+	}
+	return lines
+}
+
+// piHarnessEntry builds a pi executor-axis chain entry with an
+// anthropic driver — the exact shape cliCostTrusted must NOT treat as
+// cost-trusted, since pi's ReportsCost capability is false regardless
+// of which driver it ran against (D-013).
+func piHarnessEntry(credRef string) gwclient.ResolvedRouteEntry {
+	return gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-1", ProviderName: "anthropic", Driver: "anthropic",
+		Model: "claude-sonnet-4", CredentialRef: credRef, Usable: true, Wire: "anthropic",
+	}
+}
+
+func piTestMission(id, workRoot string) Mission {
+	return Mission{ID: id, Kind: "coding", Workspace: workRoot, Route: "default", Harness: "pi"}
+}
+
+// TestDelegatedRunWorker_PiAdapter_FilesWrittenUnderRunDir: pi's
+// BuildInvocation always emits an extra Invocation.Files entry
+// (pi-agent/models.json) - runDelegated must write it to disk under
+// the run directory alongside prompt.md before spawn.
+func TestDelegatedRunWorker_PiAdapter_FilesWrittenUnderRunDir(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadPiDelegatedFixture(t, "happy.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	led := &fakeLedger{}
+	entry := piHarnessEntry("cred-ref-pi")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, led)
+	m := piTestMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+
+	spawned, ok := events.last("executor.spawned")
+	if !ok {
+		t.Fatal("no executor.spawned event recorded")
+	}
+	var payload struct {
+		RunDir string `json:"run_dir"`
+	}
+	if err := json.Unmarshal(spawned.Payload, &payload); err != nil {
+		t.Fatalf("decode executor.spawned payload: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(payload.RunDir, "pi-agent", "models.json")) //nolint:gosec // G304: path under t.TempDir.
+	if err != nil {
+		t.Fatalf("read written models.json: %v", err)
+	}
+	var cfg struct {
+		Providers map[string]struct {
+			BaseURL string `json:"baseUrl"`
+			API     string `json:"api"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("models.json does not decode: %v", err)
+	}
+	if cfg.Providers["timothy"].API != "anthropic-messages" {
+		t.Fatalf("written models.json = %s, want providers.timothy.api = anthropic-messages", got)
+	}
+}
+
+// TestDelegatedRunWorker_PiAdapter_CostNeverTrustedEvenOnAnthropicDriver:
+// cliCostTrusted must be false for a pi run even against an
+// anthropic-driver entry with api_key auth - unlike claude-cli, pi's
+// Capabilities().ReportsCost is false (D-013: pi prices client-side
+// against its own catalog, never trusted as billed spend).
+func TestDelegatedRunWorker_PiAdapter_CostNeverTrustedEvenOnAnthropicDriver(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadPiDelegatedFixture(t, "happy.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	led := &fakeLedger{}
+	entry := piHarnessEntry("cred-ref-pi")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, led)
+	m := piTestMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+
+	result, ok := events.last("executor.result")
+	if !ok {
+		t.Fatal("no executor.result event recorded")
+	}
+	var payload struct {
+		Usage struct {
+			CostUSDBilled bool `json:"cost_usd_billed"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		t.Fatalf("decode executor.result payload: %v", err)
+	}
+	if payload.Usage.CostUSDBilled {
+		t.Fatal("cost_usd_billed = true for a pi run, want false regardless of driver == anthropic")
+	}
+}
+
 // --- scenario 8: oauth-token mode -----------------------------------------
 
 func TestDelegatedRunWorker_OAuthTokenMode_EnvSetAndCostSuppressed(t *testing.T) {

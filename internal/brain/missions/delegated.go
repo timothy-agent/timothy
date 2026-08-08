@@ -297,6 +297,23 @@ func runDir(missionRoot, runID string) string {
 	return filepath.Join(missionRoot, "runs", runID)
 }
 
+// writeInvocationFiles writes each of inv.Files under rdir, creating
+// parent directories as needed. Keys are slash-separated paths
+// relative to rdir (e.g. "pi-agent/models.json"); values are never
+// logged.
+func writeInvocationFiles(rdir string, files map[string]string) error {
+	for rel, content := range files {
+		full := filepath.Join(rdir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // newRunID returns a random 12-hex-character run identifier.
 func newRunID() (string, error) {
 	var b [6]byte
@@ -366,7 +383,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		SystemAppend: system,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
-		ResultSchema: resultSchemaJSON, RunBudget: r.runBudget,
+		ResultSchema: resultSchemaJSON, RunBudget: r.runBudget, Wire: entry.Wire,
 	}
 	inv, err := adapter.BuildInvocation(spec)
 	if err != nil {
@@ -383,6 +400,10 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte(user), 0o600); err != nil {
 		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: write prompt: %w", err)
+	}
+	if err := writeInvocationFiles(rdir, inv.Files); err != nil {
+		r.coolDown(m.Harness, entry)
+		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: write invocation files: %w", err)
 	}
 
 	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode)
@@ -721,10 +742,15 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 	// cliCostTrusted tells recordResult whether executor.result's
 	// cost_usd (the CLI's OWN reported figure) is the same number
 	// recordLedger just booked as real spend — true only for the
-	// Anthropic-first-party api_key case (costSource). Every other
-	// path either books a different, provider-priced figure or none at
-	// all, so the UI must not present the raw CLI number as billed.
-	cliCostTrusted := authMode == executor.AuthAPIKey && entry.Driver == "anthropic"
+	// Anthropic-first-party api_key case (costSource), AND only when
+	// the adapter itself claims to report cost at all: pi computes
+	// cost client-side from its own catalog (D-013, never trusted)
+	// regardless of which driver it ran against, so
+	// Capabilities().ReportsCost gates this even for a pi run against
+	// an anthropic-driver row. Every other path either books a
+	// different, provider-priced figure or none at all, so the UI must
+	// not present the raw CLI number as billed.
+	cliCostTrusted := authMode == executor.AuthAPIKey && entry.Driver == "anthropic" && adapter.Capabilities().ReportsCost
 	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome), cliCostTrusted)
 	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "", errorCode)
 	if authFailed {

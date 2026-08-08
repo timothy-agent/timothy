@@ -59,11 +59,12 @@ const ROUTE_DEFAULT = '__default__'
 const EXECUTOR_DEFAULT = '__default__'
 
 // executorChoices maps a harness Select value to its label — easy to
-// extend as more harnesses register; claude-cli is the only one today.
+// extend as more harnesses register.
 const executorChoices: { value: string; label: string }[] = [
   { value: EXECUTOR_DEFAULT, label: 'Default (from settings)' },
   { value: 'native', label: 'Native' },
   { value: 'claude-cli', label: 'Claude Code' },
+  { value: 'pi', label: 'pi' },
 ]
 
 // Sentinel for the environment Select's "auto-detect" choice — wire

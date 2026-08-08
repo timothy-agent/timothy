@@ -351,6 +351,46 @@ func (a *Aggregator) missionModels(ctx context.Context, db *pgxpool.Pool, missio
 	return out, rows.Err()
 }
 
+// TopModelByMission answers the mission list's "which model served
+// this" column for a page of missions in one query: per mission_id,
+// the provider/model with the most requests (ties broken by most
+// recent). Unlike missionModels above (one mission's full model mix,
+// ranked by recency), this ranks by request count and returns only the
+// winner, batched across many missions — the list view's cheaper
+// question. A mission with no ledger rows is simply absent from the
+// result map.
+func (a *Aggregator) TopModelByMission(ctx context.Context, missionIDs []string) (map[string]ModelUsed, error) {
+	out := map[string]ModelUsed{}
+	if len(missionIDs) == 0 {
+		return out, nil
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("top model by mission: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT DISTINCT ON (mission_id) mission_id, provider, model, requests, last_used FROM (
+			SELECT mission_id, provider, model, COUNT(*) AS requests, MAX(ts) AS last_used
+			FROM cost_ledger
+			WHERE mission_id = ANY($1) AND `+notTest+`
+			GROUP BY mission_id, provider, model
+		) ranked
+		ORDER BY mission_id, requests DESC, last_used DESC`, missionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("top model by mission: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var missionID string
+		var mu ModelUsed
+		if err := rows.Scan(&missionID, &mu.Provider, &mu.Model, &mu.Requests, &mu.LastUsed); err != nil {
+			return nil, fmt.Errorf("top model by mission: %w", err)
+		}
+		out[missionID] = mu
+	}
+	return out, rows.Err()
+}
+
 // SessionUsage ranks sessions by spend for the top-N table. Grouped by
 // currency as well as session: a session's rows are ranked by cost
 // within their own currency, never summed against a different one.

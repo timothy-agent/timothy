@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -269,22 +270,45 @@ func validateProvider(p Provider) error {
 	return nil
 }
 
+// harnessDrivers mirrors router.harnessDrivers (unexported there) —
+// the set of driver names each known harness accepts directly from a
+// kind='api' provider row, independent of the anthropic_base_url
+// override. claude-cli speaks anthropic only; pi speaks either
+// anthropic or openaicompat (its whole point is dual-wire support).
+var harnessDrivers = map[string]map[string]bool{
+	"claude-cli": {"anthropic": true},
+	"pi":         {"anthropic": true, "openaicompat": true},
+}
+
 // validateHarnessWireFormat checks that a kind='api' provider row can
-// actually speak the wire protocol harness requires (D-051), mirroring
-// router.executorUsable's wire check exactly so admin can never write
-// a provider the resolve endpoint would then mark wire-incompatible:
-// claude-cli requires either driver=="anthropic" or
-// options.anthropic_base_url pointing at an Anthropic-compatible
-// endpoint. Never called for kind='cli' rows — those are inherently
-// wire-compatible (D-051, see validateProvider's "cli" case).
+// actually speak a wire protocol harness accepts (D-051, extended for
+// pi's dual-wire support), mirroring router.executorUsable's wire
+// check exactly so admin can never write a provider the resolve
+// endpoint would then mark wire-incompatible: the row's driver must be
+// in harnessDrivers[harness], or options.anthropic_base_url must point
+// at an Anthropic-compatible endpoint. Never called for kind='cli'
+// rows — those are inherently wire-compatible (D-051, see
+// validateProvider's "cli" case).
 func validateHarnessWireFormat(harness, driver string, opts map[string]string) error {
-	switch harness {
-	case "claude-cli":
-		if driver != "anthropic" && opts["anthropic_base_url"] == "" {
-			return fmt.Errorf("harness %q requires driver \"anthropic\" or options.anthropic_base_url", harness)
-		}
+	accepted, known := harnessDrivers[harness]
+	if !known {
+		return nil
+	}
+	if !accepted[driver] && opts["anthropic_base_url"] == "" {
+		return fmt.Errorf("harness %q requires driver in %v or options.anthropic_base_url", harness, sortedDrivers(accepted))
 	}
 	return nil
+}
+
+// sortedDrivers returns m's keys, sorted — keeps the validation error
+// message deterministic.
+func sortedDrivers(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // parseRequestTimeout parses options.request_timeout (D-041) into a

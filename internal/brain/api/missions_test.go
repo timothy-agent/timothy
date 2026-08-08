@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -17,7 +18,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -55,7 +56,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -103,7 +104,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -133,7 +134,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 
 	post := func(codingExecutorDefault func(context.Context) string, body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -242,7 +243,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	classify := func(context.Context, string) (string, error) { return "general", nil }
 	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
@@ -275,7 +276,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -298,7 +299,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
@@ -318,6 +319,46 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	}
 }
 
+// TestMissionsDecorateTopModels covers decorateTopModels's three
+// degrade paths (nil seam, seam error, no rows) plus the happy path,
+// all against a fake topModels func — no store/ledger involved, since
+// the method itself never calls either.
+func TestMissionsDecorateTopModels(t *testing.T) {
+	t.Parallel()
+	rows := []missions.Mission{{ID: "m1"}, {ID: "m2"}}
+
+	h := &missionAPI{log: discard()}
+	out := h.decorateTopModels(context.Background(), rows)
+	if len(out) != 2 || out[0].TopModel != "" || out[1].TopModel != "" {
+		t.Fatalf("nil topModels seam = %+v, want every row present with top_model omitted", out)
+	}
+
+	h = &missionAPI{log: discard(), topModels: func(context.Context, []string) (map[string]ledger.ModelUsed, error) {
+		return nil, errors.New("ledger unreachable")
+	}}
+	out = h.decorateTopModels(context.Background(), rows)
+	if len(out) != 2 || out[0].TopModel != "" || out[1].TopModel != "" {
+		t.Fatalf("erroring topModels seam = %+v, want degrade to omitted, not a failed decoration", out)
+	}
+
+	h = &missionAPI{log: discard(), topModels: func(context.Context, []string) (map[string]ledger.ModelUsed, error) {
+		return map[string]ledger.ModelUsed{
+			"m1": {Provider: "anthropic", Model: "claude-sonnet"},
+		}, nil
+	}}
+	out = h.decorateTopModels(context.Background(), rows)
+	if out[0].TopModel != "claude-sonnet" || out[0].TopModelProvider != "anthropic" {
+		t.Fatalf("m1 decoration = %+v, want top_model=claude-sonnet top_model_provider=anthropic", out[0])
+	}
+	if out[1].TopModel != "" || out[1].TopModelProvider != "" {
+		t.Fatalf("m2 (absent from ledger map) = %+v, want fields omitted", out[1])
+	}
+
+	if out := h.decorateTopModels(context.Background(), nil); len(out) != 0 {
+		t.Fatalf("decorateTopModels(nil) = %+v, want empty slice", out)
+	}
+}
+
 // TestMissionsCreateKindOptional confirms an omitted kind no longer
 // 400s: it reaches classifyKind (defaulting to "coding" with no
 // classify wired) and then the degraded store, which 500s — proving
@@ -330,7 +371,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))

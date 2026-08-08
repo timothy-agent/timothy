@@ -113,7 +113,7 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/resume", strings.NewReader(`{"answer":"the deploy target is staging"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -181,7 +181,7 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/resume", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -216,7 +216,7 @@ func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"coding"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -260,7 +260,7 @@ func TestMissionsCreateGeneratesNameAsync(t *testing.T) {
 	nameMission := func(ctx context.Context, goal string) string {
 		return "Parse Logs Utility"
 	}
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission, nil)
 
 	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"general"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -308,7 +308,7 @@ func TestMissionsCreateNameFallsBackToEmptyOnGenerationFailure(t *testing.T) {
 		defer close(done)
 		return "" // simulates a gateway/timeout failure, same as TitleOverGateway
 	}
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission, nil)
 
 	body := `{"goal":"itest-api-mission a goal whose naming will fail","kind":"general"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))

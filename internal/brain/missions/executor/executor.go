@@ -52,6 +52,11 @@ type InvocationSpec struct {
 	DenyTools    []string
 	ResultSchema json.RawMessage
 	RunBudget    time.Duration
+	// Wire is the wire format the resolved route entry exposes —
+	// "anthropic" or "openai" — set by the runner from
+	// gwclient.ResolvedRouteEntry.Wire. Only a dual-wire harness (pi)
+	// needs this; a single-wire harness ignores it.
+	Wire string
 }
 
 // Invocation is the argv + env an adapter wants spawned. PromptFile, when
@@ -63,6 +68,10 @@ type Invocation struct {
 	Argv       []string
 	Env        map[string]string // allowlisted names only; values never logged
 	PromptFile string
+	// Files are extra files the runner writes into the run dir before
+	// spawn, keyed by slash-separated path relative to the run dir
+	// (e.g. "pi-agent/models.json"). Values are never logged.
+	Files map[string]string
 }
 
 // EventKind names one normalized event's shape.

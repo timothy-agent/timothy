@@ -51,6 +51,80 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, created_at, updated_at`
 
+// scanMissionWithFailureReason is scanMission plus one extra trailing
+// column: the mission's latest mission.failed event's payload.reason
+// (via a lateral join, added by the caller's query), empty for a
+// mission that never failed. Used only by List/Get, which are what the
+// web UI's mission list/detail views read.
+func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
+	var (
+		m                              Mission
+		agentID, scheduleID, sessionID *string
+		phase, status                  string
+		pendingPermission              *string
+		spec, progress                 []byte
+		failureReason                  *string
+	)
+	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
+		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
+		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
+		&m.EscalationRoute, &m.PromptOverlay,
+		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
+		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
+		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment, &m.CreatedAt, &m.UpdatedAt,
+		&failureReason); err != nil {
+		return Mission{}, err
+	}
+	if agentID != nil {
+		m.AgentID = *agentID
+	}
+	if scheduleID != nil {
+		m.ScheduleID = *scheduleID
+	}
+	if sessionID != nil {
+		m.SessionID = *sessionID
+	}
+	if pendingPermission != nil {
+		m.PendingPermission = *pendingPermission
+	}
+	if failureReason != nil {
+		m.FailureReason = *failureReason
+	}
+	if p, ok := parsePhase(phase); ok {
+		m.Phase = p
+	} else {
+		m.Phase = PhaseFailed
+		m.PauseMessage = fmt.Sprintf("unrecognized phase %q degraded to failed", phase)
+	}
+	if st, ok := parseStatus(status); ok {
+		m.Status = st
+	} else {
+		m.Status = StatusPaused
+		m.PauseReason = PauseInfra
+		if m.PauseMessage == "" {
+			m.PauseMessage = fmt.Sprintf("unrecognized status %q degraded to paused", status)
+		}
+	}
+	_ = json.Unmarshal(spec, &m.Spec)
+	_ = json.Unmarshal(progress, &m.Progress)
+	if m.Progress == nil {
+		m.Progress = []ProgressNote{}
+	}
+	return m, nil
+}
+
+// failureReasonJoin is a lateral join appended to missionColumns'
+// SELECT, adding one trailing column: the LATEST mission.failed
+// event's payload->>'reason' for that mission row (mission_events is
+// append-only, so "latest by seq" is the one true outcome — see
+// ReconcileTerminal). null for a mission that never failed.
+const failureReasonJoin = `
+	LEFT JOIN LATERAL (
+		SELECT payload->>'reason' AS reason FROM mission_events
+		WHERE mission_events.mission_id = missions.id AND kind = 'mission.failed'
+		ORDER BY seq DESC LIMIT 1
+	) fr ON true`
+
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
 		m                              Mission
@@ -145,7 +219,7 @@ func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 	if err != nil {
 		return Mission{}, fmt.Errorf("missions get: %w", err)
 	}
-	m, err := scanMission(db.QueryRow(ctx, `SELECT `+missionColumns+` FROM missions WHERE id = $1`, id))
+	m, err := scanMissionWithFailureReason(db.QueryRow(ctx, `SELECT `+missionColumns+`, fr.reason FROM missions`+failureReasonJoin+` WHERE missions.id = $1`, id))
 	if err != nil {
 		return Mission{}, fmt.Errorf("mission %s: %w", id, ErrNotFound)
 	}
@@ -211,7 +285,7 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 	if err != nil {
 		return nil, fmt.Errorf("missions list: %w", err)
 	}
-	query := `SELECT ` + missionColumns + ` FROM missions`
+	query := `SELECT ` + missionColumns + `, fr.reason FROM missions` + failureReasonJoin
 	var args []any
 	if filter.ScheduleID != "" {
 		args = append(args, filter.ScheduleID)
@@ -229,7 +303,7 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 	defer rows.Close()
 	out := []Mission{}
 	for rows.Next() {
-		m, err := scanMission(rows)
+		m, err := scanMissionWithFailureReason(rows)
 		if err != nil {
 			return nil, fmt.Errorf("missions list: %w", err)
 		}

@@ -61,10 +61,18 @@ var execEnvAllowlist = map[string]bool{
 	"CLAUDE_CODE_OAUTH_TOKEN": true,
 	"NO_COLOR":                true,
 	"TERM":                    true,
-	// NODE_OPTIONS (D-056): bounds the claude CLI's node heap so a long
-	// run's transcript doesn't balloon toward the sandbox's 2 GiB cap —
-	// set unconditionally by the claude adapter, not a credential.
+	// NODE_OPTIONS (D-056): bounds the claude/pi CLI's node heap so a
+	// long run's transcript doesn't balloon toward the sandbox's 2 GiB
+	// cap — set unconditionally by the adapter, not a credential.
 	"NODE_OPTIONS": true,
+	// pi adapter env (executor/pi.go): PI_API_KEY is the credential;
+	// the rest pin pi's agent-state dir and disable network/telemetry
+	// calls the sandbox has no route to make anyway.
+	"PI_API_KEY":            true,
+	"PI_CODING_AGENT_DIR":   true,
+	"PI_OFFLINE":            true,
+	"PI_SKIP_VERSION_CHECK": true,
+	"PI_TELEMETRY":          true,
 }
 
 // execEnvMaxValueLen bounds a single env value — generous for a token

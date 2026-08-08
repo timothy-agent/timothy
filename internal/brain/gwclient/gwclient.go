@@ -191,6 +191,11 @@ type ResolvedRouteEntry struct {
 	// Prices is the entry's configured per-Mtok prices, when the
 	// provider has a price row for Model — nil when unpriced (D-013).
 	Prices *router.ModelPrices `json:"prices,omitempty"`
+	// Wire is the wire format this entry exposes on the executor axis —
+	// "anthropic" or "openai" — set only for a kind='api' row on a
+	// harness resolve. A dual-wire harness (pi) picks its provider
+	// config off this; empty for a kind='cli' row or the chat axis.
+	Wire string `json:"wire,omitempty"`
 }
 
 // ResolvedRoute is a route's ordered chain, each entry annotated with

@@ -550,6 +550,7 @@ type resolveRouteEntry struct {
 	Usable        bool                `json:"usable"`
 	SkipReason    string              `json:"skip_reason,omitempty"`
 	Prices        *router.ModelPrices `json:"prices,omitempty"`
+	Wire          string              `json:"wire,omitempty"`
 }
 
 // handleResolveRoute reports a route's ordered chain with enough
@@ -584,7 +585,7 @@ func (a *API) handleResolveRoute(w http.ResponseWriter, r *http.Request) {
 			ProviderID: e.ProviderID, ProviderName: e.ProviderName,
 			Driver: e.Driver, Kind: e.Kind, Model: e.Model,
 			CredentialRef: e.CredentialRef, BaseURL: e.BaseURL,
-			Usable: e.Usable, SkipReason: e.SkipReason, Prices: e.Prices,
+			Usable: e.Usable, SkipReason: e.SkipReason, Prices: e.Prices, Wire: e.Wire,
 		}
 	}
 	writeJSON(w, map[string]any{"route": name, "entries": entries})
