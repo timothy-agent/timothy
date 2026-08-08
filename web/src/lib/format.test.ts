@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compact, formatDuration, money } from './format'
+import { compact, formatDuration, missionDisplayName, money } from './format'
 
 describe('compact', () => {
   it('leaves small numbers as-is', () => {
@@ -33,22 +33,51 @@ describe('formatDuration', () => {
   })
 })
 
+describe('missionDisplayName', () => {
+  it('prefers name when set', () => {
+    expect(missionDisplayName({ name: 'Fix Login Bug', goal: 'fix the login bug on staging' })).toBe(
+      'Fix Login Bug',
+    )
+  })
+
+  it('falls back to the goal, truncated, when name is empty', () => {
+    const longGoal = 'a'.repeat(80)
+    expect(missionDisplayName({ name: '', goal: longGoal })).toBe(`${'a'.repeat(60)}…`)
+  })
+
+  it('falls back to the goal unmodified when short enough', () => {
+    expect(missionDisplayName({ name: '', goal: 'fix the bug' })).toBe('fix the bug')
+  })
+
+  it('falls back to the goal when name is undefined', () => {
+    expect(missionDisplayName({ goal: 'fix the bug' })).toBe('fix the bug')
+  })
+})
+
 describe('money', () => {
   it('renders a zero amount without decimals', () => {
-    expect(money(0)).toBe('USD 0')
-    expect(money(0, 'EUR')).toBe('EUR 0')
+    expect(money(0)).toBe('$0')
+    expect(money(0, 'EUR')).toBe('€0')
   })
 
   it('renders amounts under 1 with 4 decimal places', () => {
-    expect(money(0.5)).toBe('USD 0.5000')
+    expect(money(0.5)).toBe('$0.5000')
   })
 
   it('renders amounts of 1 or more with 2 decimal places', () => {
-    expect(money(8)).toBe('USD 8.00')
-    expect(money(6.88, 'EUR')).toBe('EUR 6.88')
+    expect(money(8)).toBe('$8.00')
+    expect(money(6.88, 'EUR')).toBe('€6.88')
   })
 
   it('defaults to USD when no currency is given', () => {
-    expect(money(1.5)).toBe('USD 1.50')
+    expect(money(1.5)).toBe('$1.50')
+  })
+
+  it('uses the narrow currency symbol, not the ISO code', () => {
+    expect(money(32.1, 'BDT')).toBe('৳32.10')
+  })
+
+  it('falls back to "CODE amount" for a currency code Intl rejects, without throwing', () => {
+    expect(money(1.5, 'NOTACODE')).toBe('NOTACODE 1.50')
   })
 })

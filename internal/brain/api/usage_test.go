@@ -131,31 +131,96 @@ func TestDecorateUsageResponseMissionUsageCostByCurrency(t *testing.T) {
 	}
 }
 
-func TestDecorateUsageResponseMissionUsageNotionalCostByCurrency(t *testing.T) {
+func TestDecorateUsageResponseMissionUsageUnbilledCostByCurrency(t *testing.T) {
 	t.Parallel()
 	asOf := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
 	rates := map[string]fxrates.Rate{"EUR": {Value: 0.86, AsOf: asOf}}
-	// notional_cost_by_currency gets the same decoration as
+	// unbilled_cost_by_currency gets the same decoration as
 	// cost_by_currency, under its own converted_ key — both left
 	// byte-for-byte unchanged, only a parallel converted map is added.
-	body := `{"mission_id":"m1","cost_by_currency":{"USD":10},"notional_cost_by_currency":{"USD":5}}`
+	body := `{"mission_id":"m1","cost_by_currency":{"USD":10},"unbilled_cost_by_currency":{"USD":5}}`
 	out := DecorateUsageResponse([]byte(body), "EUR", rates)
 	var decoded map[string]any
 	if err := json.Unmarshal(out, &decoded); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if decoded["notional_cost_by_currency"].(map[string]any)["USD"].(float64) != 5 {
-		t.Fatalf("notional_cost_by_currency = %+v, want USD unchanged at 5", decoded["notional_cost_by_currency"])
+	if decoded["unbilled_cost_by_currency"].(map[string]any)["USD"].(float64) != 5 {
+		t.Fatalf("unbilled_cost_by_currency = %+v, want USD unchanged at 5", decoded["unbilled_cost_by_currency"])
 	}
-	converted, ok := decoded["converted_notional_cost_by_currency"].(map[string]any)
+	converted, ok := decoded["converted_unbilled_cost_by_currency"].(map[string]any)
 	if !ok {
-		t.Fatalf("decoded = %+v, want a converted_notional_cost_by_currency map", decoded)
+		t.Fatalf("decoded = %+v, want a converted_unbilled_cost_by_currency map", decoded)
 	}
 	if got := converted["EUR"].(float64); got < 4 || got > 5 {
-		t.Fatalf("converted_notional_cost_by_currency[EUR] = %v, want ~4.3", got)
+		t.Fatalf("converted_unbilled_cost_by_currency[EUR] = %v, want ~4.3", got)
 	}
 	if decoded["converted_cost_by_currency"].(map[string]any)["EUR"].(float64) < 8 {
 		t.Fatalf("converted_cost_by_currency should still be decorated too: %+v", decoded)
+	}
+}
+
+func TestDecorateUsageResponseSummaryUnbilledCost(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	rates := map[string]fxrates.Rate{"EUR": {Value: 0.86, AsOf: asOf}}
+	// Summary/SeriesPoint's unbilled_cost scalar shares the row's own
+	// currency/cost — gets a converted_unbilled_cost sibling the same
+	// way cost gets converted_amount, so the analytics spend tile's
+	// unbilled annotation can show the converted figure like the
+	// billed amount does.
+	body := `{"summaries":[{"currency":"USD","cost":100,"unbilled_cost":10}]}`
+	out := DecorateUsageResponse([]byte(body), "EUR", rates)
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	row := decoded["summaries"].([]any)[0].(map[string]any)
+	if row["unbilled_cost"].(float64) != 10 {
+		t.Fatalf("unbilled_cost = %+v, want unchanged at 10", row["unbilled_cost"])
+	}
+	got, ok := row["converted_unbilled_cost"].(float64)
+	if !ok {
+		t.Fatalf("row = %+v, want a converted_unbilled_cost field", row)
+	}
+	if got < 8 || got > 9 {
+		t.Fatalf("converted_unbilled_cost = %v, want ~8.6", got)
+	}
+}
+
+func TestDecorateUsageResponseSummaryUnbilledCostZeroOmitted(t *testing.T) {
+	t.Parallel()
+	rates := map[string]fxrates.Rate{"EUR": {Value: 0.86}}
+	// Zero unbilled_cost (the common case: no subscription/oauth_token
+	// spend in range) must never grow a converted_unbilled_cost field —
+	// same convention as decorateCostByCurrency omitting empty maps.
+	body := `{"summaries":[{"currency":"USD","cost":100,"unbilled_cost":0}]}`
+	out := DecorateUsageResponse([]byte(body), "EUR", rates)
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	row := decoded["summaries"].([]any)[0].(map[string]any)
+	if _, ok := row["converted_unbilled_cost"]; ok {
+		t.Fatalf("row = %+v, want no converted_unbilled_cost for a zero unbilled_cost", row)
+	}
+}
+
+func TestDecorateUsageResponseSummaryUnbilledCostMissingRateOmitted(t *testing.T) {
+	t.Parallel()
+	rates := map[string]fxrates.Rate{} // no stored rates at all
+	// No rate for the row's currency: converted_amount is already
+	// omitted by the existing logic, and converted_unbilled_cost must
+	// follow the same "never guess" rule (D-013) rather than falling
+	// back to some other figure.
+	body := `{"summaries":[{"currency":"GBP","cost":100,"unbilled_cost":10}]}`
+	out := DecorateUsageResponse([]byte(body), "EUR", rates)
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	row := decoded["summaries"].([]any)[0].(map[string]any)
+	if _, ok := row["converted_unbilled_cost"]; ok {
+		t.Fatalf("row = %+v, want no converted_unbilled_cost when no rate exists", row)
 	}
 }
 

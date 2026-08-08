@@ -463,7 +463,7 @@ describe('cost badge', () => {
       },
     ])
     render(<AssistantMessage msg={msg} />)
-    expect(screen.getByTestId('cost-badge')).toHaveTextContent('USD 0.0123')
+    expect(screen.getByTestId('cost-badge')).toHaveTextContent('$0.0123')
   })
 
   it('omits the cost pill when cost is null (unpriced model)', () => {
@@ -501,8 +501,8 @@ describe('cost badge', () => {
     ])
     render(<AssistantMessage msg={msg} />)
     const badge = screen.getByTestId('cost-badge')
-    expect(badge).toHaveTextContent('EUR 0.0106')
-    expect(badge).toHaveAttribute('title', expect.stringContaining('USD 0.0123'))
+    expect(badge).toHaveTextContent('€0.0106')
+    expect(badge).toHaveAttribute('title', expect.stringContaining('$0.0123'))
   })
 
   it('falls back to the billed amount with no title when no conversion is present', () => {
@@ -519,7 +519,7 @@ describe('cost badge', () => {
     ])
     render(<AssistantMessage msg={msg} />)
     const badge = screen.getByTestId('cost-badge')
-    expect(badge).toHaveTextContent('USD 0.0123')
+    expect(badge).toHaveTextContent('$0.0123')
     expect(badge).not.toHaveAttribute('title')
   })
 })

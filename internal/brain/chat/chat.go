@@ -421,6 +421,52 @@ func ClassifyOverGateway(gw Gateway) agents.Classify {
 	}
 }
 
+// TitleOverGateway mirrors autoTitle's mechanism (same "default" role
+// route, same system prompt, same MaxTokens headroom, same rune-safe
+// truncation) as a standalone one-shot call — for callers outside chat
+// (missions naming a mission from its goal) that want a short display
+// name generated the identical way a session's title is, without the
+// session/reply/sensitive-route ceremony a live chat turn carries.
+// Returns "" (never an error) on any failure — best-effort, exactly
+// like autoTitle's own logged-and-dropped failure path; the caller
+// decides what "no name yet" means for its own fallback rendering.
+func TitleOverGateway(gw Gateway) func(ctx context.Context, input string) string {
+	return func(ctx context.Context, input string) string {
+		ctx, cancel := context.WithTimeout(ctx, titleTimeout)
+		defer cancel()
+
+		const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
+		route, ok, err := gw.RouteForRole(ctx, "default")
+		if err != nil || !ok {
+			return ""
+		}
+		events, err := gw.Stream(ctx, gwclient.StreamRequest{
+			Route:    route,
+			Purpose:  "title",
+			System:   titleSystem,
+			Messages: []provider.Message{{Role: "user", Content: input}},
+			// Reasoning models spend hundreds of tokens thinking before
+			// the first answer token; a tight cap truncates the stream
+			// mid-reasoning and yields an empty title.
+			MaxTokens: 1000,
+		})
+		if err != nil {
+			return ""
+		}
+		var b strings.Builder
+		for ev := range events {
+			if ev.Type == stream.EventChunk {
+				b.WriteString(ev.Text)
+			}
+		}
+		title := strings.TrimSpace(strings.Trim(strings.TrimSpace(b.String()), `"'`))
+		if title == "" {
+			return ""
+		}
+		return truncateRunes(title, 80)
+	}
+}
+
 // allowedPacks filters the loaded packs through the global runtime
 // allowlist AND the serving agent's own skill list (empty = all).
 func (s *Service) allowedPacks(ctx context.Context, profile agents.Agent) []skills.Skill {

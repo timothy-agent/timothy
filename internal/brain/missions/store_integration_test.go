@@ -252,6 +252,72 @@ func TestMissionHarnessRoundTrips(t *testing.T) {
 	}
 }
 
+func TestMissionNameRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "named", Kind: "general", Route: "default", Name: "Marker Mission",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Name != "Marker Mission" {
+		t.Fatalf("Name = %q, want Marker Mission", m.Name)
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "unnamed", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.Name != "" {
+		t.Fatalf("Name = %q, want empty when not set", m2.Name)
+	}
+}
+
+// TestSetNameIfEmpty mirrors session.Store.SetTitleIfEmpty's own
+// integration coverage: a name lands once and a second call (the
+// generation retrying, or racing a scheduler-set name) never clobbers
+// it.
+func TestSetNameIfEmpty(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "set-name", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.SetNameIfEmpty(ctx, id, "Generated Name"); err != nil {
+		t.Fatalf("SetNameIfEmpty: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Name != "Generated Name" {
+		t.Fatalf("Name = %q, want Generated Name", m.Name)
+	}
+
+	if err := s.SetNameIfEmpty(ctx, id, "Should Not Land"); err != nil {
+		t.Fatalf("SetNameIfEmpty (second call): %v", err)
+	}
+	m2, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.Name != "Generated Name" {
+		t.Fatalf("Name = %q, want unchanged Generated Name (guard against clobbering)", m2.Name)
+	}
+}
+
 func TestSetAndClearPendingPermission(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -719,10 +785,10 @@ func TestRecoverStaleWorking(t *testing.T) {
 	}
 }
 
-func TestSpendExcludesNotionalRows(t *testing.T) {
+func TestSpendExcludesUnbilledRows(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
-	id, err := s.Create(ctx, Mission{Goal: marker + "spend-notional", Kind: "general", Route: "default"})
+	id, err := s.Create(ctx, Mission{Goal: marker + "spend-unbilled", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -732,12 +798,12 @@ func TestSpendExcludesNotionalRows(t *testing.T) {
 	}
 	for _, row := range []struct {
 		cost     float64
-		notional bool
+		unbilled bool
 	}{{0.05, false}, {0.25, true}} {
 		if _, err := db.Exec(ctx, `INSERT INTO cost_ledger
-			(provider, model, route, latency_ms, status, cost, currency, purpose, mission_id, notional)
+			(provider, model, route, latency_ms, status, cost, currency, purpose, mission_id, unbilled)
 			VALUES ('itest-provider', 'itest-model', 'itest', 1, 'ok', $1, 'USD', 'executor', $2, $3)`,
-			row.cost, id, row.notional); err != nil {
+			row.cost, id, row.unbilled); err != nil {
 			t.Fatalf("insert ledger row: %v", err)
 		}
 	}
@@ -750,6 +816,6 @@ func TestSpendExcludesNotionalRows(t *testing.T) {
 		t.Fatalf("Spend: %v", err)
 	}
 	if got := spend.ByCurrency["USD"]; got != 0.05 {
-		t.Fatalf("Spend USD = %v, want 0.05 (notional row must be excluded from the brake)", got)
+		t.Fatalf("Spend USD = %v, want 0.05 (unbilled row must be excluded from the brake)", got)
 	}
 }

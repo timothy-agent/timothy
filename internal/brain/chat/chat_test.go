@@ -158,6 +158,19 @@ func (g *fakeGW) lastChatRequest() gwclient.StreamRequest {
 	return gwclient.StreamRequest{}
 }
 
+// erroringGW resolves any role but fails every Stream call — for
+// pinning a caller's best-effort behavior on a gateway-unreachable
+// error, distinct from fakeGW's always-succeeds default.
+type erroringGW struct{}
+
+func (erroringGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
+func (erroringGW) Stream(context.Context, gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	return nil, errors.New("gateway unreachable")
+}
+
 func okEvents(text string) []stream.StreamEvent {
 	return []stream.StreamEvent{
 		{Type: stream.EventChunk, Text: text},
@@ -1565,6 +1578,45 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 		}
 	}
 	t.Fatal("no title request recorded")
+}
+
+// TestTitleOverGatewayUsesDefaultRoleAndTrimsQuotes mirrors
+// TestAutoTitleUsesDefaultRouteNotClassifyRoute for the standalone
+// TitleOverGateway constructor (missions naming reuses this instead of
+// autoTitle directly, since a mission has no session/reply at create
+// time) — same "default" role, same quote/whitespace trimming.
+func TestTitleOverGatewayUsesDefaultRoleAndTrimsQuotes(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents(`"Parse Logs Utility"`)}
+	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	if name != "Parse Logs Utility" {
+		t.Fatalf("name = %q, want quotes trimmed to Parse Logs Utility", name)
+	}
+
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(gw.requests))
+	}
+	if gw.requests[0].Route != "default" {
+		t.Fatalf("route = %q, want default", gw.requests[0].Route)
+	}
+	if gw.requests[0].Purpose != "title" {
+		t.Fatalf("purpose = %q, want title", gw.requests[0].Purpose)
+	}
+}
+
+// TestTitleOverGatewayEmptyOnGatewayError confirms the best-effort
+// contract: any Stream error returns "" rather than propagating, so a
+// caller (missions' async naming) never has to distinguish failure
+// modes — same as autoTitle's own logged-and-dropped path.
+func TestTitleOverGatewayEmptyOnGatewayError(t *testing.T) {
+	t.Parallel()
+	gw := &erroringGW{}
+	name := TitleOverGateway(gw)(context.Background(), "a goal")
+	if name != "" {
+		t.Fatalf("name = %q, want empty on gateway error", name)
+	}
 }
 
 // TestMemoryExtractUsesSensitiveRouteWhenTurnRanSensitiveTool pins the

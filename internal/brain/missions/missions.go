@@ -14,9 +14,15 @@ import (
 
 // Mission is the API/DB shape of one missions row.
 type Mission struct {
-	ID      string `json:"id"`
-	Goal    string `json:"goal"`
-	Kind    string `json:"kind"` // coding | general
+	ID   string `json:"id"`
+	Goal string `json:"goal"`
+	// Name is a short display name generated once from Goal, the same
+	// way a chat session's title is (chat.go's autoTitle) — see
+	// Store.SetNameIfEmpty. Scheduler-fired missions get the schedule's
+	// own name directly, no LLM call. Empty means generation hasn't
+	// landed yet; the UI falls back to a truncated Goal.
+	Name string `json:"name,omitempty"`
+	Kind string `json:"kind"` // coding | general
 	AgentID string `json:"agent_id,omitempty"`
 	// PromptOverlay is a snapshot of the creating agent's overlay text
 	// at create time — see 0010_missions.sql for why this isn't a live

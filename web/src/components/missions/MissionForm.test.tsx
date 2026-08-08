@@ -84,6 +84,19 @@ describe('MissionForm — create mode, one-off mission', () => {
     expect(onDone).toHaveBeenCalledWith({ kind: 'mission', id: 'm2' })
   })
 
+  it('preserves multi-line markdown in the goal on submit, trimming only leading/trailing whitespace', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const markdownGoal = '## Plan\n\n- step one\n- step two\n\nDo it **carefully**.'
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: `  ${markdownGoal}  ` } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ goal: markdownGoal })),
+    )
+  })
+
   it('sends auto_approve_safe: false when the toggle is unchecked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     render(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)

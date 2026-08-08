@@ -37,10 +37,10 @@ type Entry struct {
 	// Currency is the provider's billing currency for Cost. Blank
 	// defaults to USD at write time (all current providers bill USD).
 	Currency string
-	// Notional marks Cost as the CLI-reported API-equivalent price for
+	// Unbilled marks Cost as the CLI-reported API-equivalent price for
 	// a subscription/oauth-billed delegated executor run — a real
 	// figure, but not actual marginal spend.
-	Notional bool
+	Unbilled bool
 }
 
 // Recorder is what the API layer depends on; tests supply an in-memory
@@ -82,11 +82,11 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
 		(id, provider, model, route, agent, purpose, session_id, mission_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-		 latency_ms, status, error_code, cost, currency, notional)
+		 latency_ms, status, error_code, cost, currency, unbilled)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
 		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18)`,
 		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
-		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Notional)
+		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
 	}

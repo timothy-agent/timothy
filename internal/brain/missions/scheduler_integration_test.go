@@ -72,6 +72,35 @@ func TestSchedulerNoDoubleFireAcrossInstances(t *testing.T) {
 	}
 }
 
+// TestSchedulerFireUsesScheduleNameDirectly confirms a scheduler-fired
+// mission's name is the schedule's own name, set directly at insert
+// time (createFromTemplate) — no LLM/gateway call involved, unlike a
+// UI-created mission's async name generation.
+func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	id := createTestSchedule(t, store, marker+"named-schedule", "* * * * *")
+	db, _ := store.db.Get()
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRow(ctx, `SELECT name FROM missions WHERE schedule_id = $1`, id).Scan(&name); err != nil {
+		t.Fatalf("query fired mission's name: %v", err)
+	}
+	if name != marker+"named-schedule" {
+		t.Fatalf("fired mission name = %q, want the schedule's own name %q", name, marker+"named-schedule")
+	}
+}
+
 // TestSchedulerLiveQueueDedup confirms a schedule whose prior mission
 // is still active does not fire a second one, but last_run still
 // advances so the next boundary computes correctly.

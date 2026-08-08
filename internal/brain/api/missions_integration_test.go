@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,31 @@ import (
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
 )
+
+// errRunner is a missions.Runner that errors on every method — used
+// in place of a nil runner wherever a test's create() call spawns
+// Driver.Create's own background Drive goroutine (driver.go:219): a
+// nil runner interface value panics the FIRST time Drive reaches a
+// phase turn, which races unpredictably with (and can crash) an
+// otherwise-unrelated test in the same process. A real error is what
+// production would ever actually see from a broken runner.
+type errRunner struct{}
+
+func (errRunner) RunWorker(context.Context, missions.Mission, missions.WorkPacket) (missions.WorkerVerdict, string, error) {
+	return missions.WorkerVerdict{}, "", errors.New("errRunner: not implemented")
+}
+
+func (errRunner) RunReview(context.Context, missions.Mission, missions.ReviewPacket, *missions.GatekeeperState) (missions.ReviewVerdict, *missions.GatekeeperState, error) {
+	return missions.ReviewVerdict{}, nil, errors.New("errRunner: not implemented")
+}
+
+func (errRunner) PlanSession(context.Context, missions.Mission, string) (missions.Spec, error) {
+	return missions.Spec{}, errors.New("errRunner: not implemented")
+}
+
+func (errRunner) ExploreSession(context.Context, missions.Mission) (string, error) {
+	return "", errors.New("errRunner: not implemented")
+}
 
 // testMissionStore mirrors internal/brain/missions' own testStore
 // helper — a real Postgres-backed *missions.Store, migrated, with
@@ -87,7 +113,7 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/resume", strings.NewReader(`{"answer":"the deploy target is staging"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -155,7 +181,7 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/resume", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -187,10 +213,10 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"coding"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -215,5 +241,98 @@ func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	}
 	if got.Environment != created.Environment {
 		t.Fatalf("stored environment = %q, create response = %q, want equal", got.Environment, created.Environment)
+	}
+}
+
+// TestMissionsCreateGeneratesNameAsync confirms a successful naming
+// call lands on the row via SetNameIfEmpty without create having to
+// wait for it — the create response itself carries no name yet (the
+// call hasn't necessarily finished when create returns), but a
+// subsequent GET picks it up once the background goroutine completes.
+// Polls rather than gating on nameMission's own return, since the
+// store write happens strictly after it — the same allowance
+// chat_test.go's own waitFor makes for auto-title.
+func TestMissionsCreateGeneratesNameAsync(t *testing.T) {
+	store := testMissionStore(t)
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	nameMission := func(ctx context.Context, goal string) string {
+		return "Parse Logs Utility"
+	}
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission)
+
+	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"general"}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var created missions.Mission
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var got missions.Mission
+	for time.Now().Before(deadline) {
+		var err error
+		got, err = store.Get(context.Background(), created.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Name != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got.Name != "Parse Logs Utility" {
+		t.Fatalf("stored name = %q, want %q", got.Name, "Parse Logs Utility")
+	}
+}
+
+// TestMissionsCreateNameFallsBackToEmptyOnGenerationFailure confirms a
+// nameMission failure (returns "", matching chat.TitleOverGateway's
+// own best-effort contract) leaves the mission's name empty rather
+// than writing anything — the client is expected to fall back to a
+// truncated goal.
+func TestMissionsCreateNameFallsBackToEmptyOnGenerationFailure(t *testing.T) {
+	store := testMissionStore(t)
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	done := make(chan struct{})
+	nameMission := func(ctx context.Context, goal string) string {
+		defer close(done)
+		return "" // simulates a gateway/timeout failure, same as TitleOverGateway
+	}
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission)
+
+	body := `{"goal":"itest-api-mission a goal whose naming will fail","kind":"general"}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var created missions.Mission
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nameMission was never called")
+	}
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Name != "" {
+		t.Fatalf("stored name = %q, want empty on generation failure", got.Name)
 	}
 }

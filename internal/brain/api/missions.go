@@ -35,11 +35,15 @@ import (
 // backs GET /v1/missions/executor-options — a thin proxy over
 // gwclient.ResolveRoute so the web UI can preview provider/model
 // pairing before create without duplicating gateway resolve logic.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error)) {
+// nameMission generates a mission's short display name from its goal
+// (chat.TitleOverGateway, the same mechanism a chat session's title
+// uses) — nil (no gateway wiring) leaves every mission unnamed, same
+// as any generation failure.
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -85,6 +89,10 @@ type missionAPI struct {
 	// resolveExecutorOptions backs GET /v1/missions/executor-options;
 	// nil (no gateway wiring) makes the endpoint 404.
 	resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
+	// nameMission generates a mission's short display name from its
+	// goal, fired async after create; nil (no gateway wiring) leaves
+	// every mission unnamed, same as any generation failure.
+	nameMission func(context.Context, string) string
 	// perms answers a mission's pending_permission — the same
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
@@ -317,6 +325,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		failMission(w, err)
 		return
 	}
+	h.generateName(id, req.Goal)
 	// Re-read rather than echo req/m back: Driver.Create's own
 	// provisioning (ensureProvisioned) can mutate the row before this
 	// handler ever sees it again — environment auto-detection in
@@ -335,6 +344,28 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// generateName fires the mission's one-shot naming call in the
+// background — never blocks or fails create, mirrors chat.autoTitle's
+// fire-and-forget shape exactly. Detached from the request context
+// (context.Background()) so a client disconnect right after create
+// doesn't cancel it; nameMission carries its own short timeout
+// (chat.TitleOverGateway). SetNameIfEmpty's own guard is what makes
+// this safe even if called twice for the same id.
+func (h *missionAPI) generateName(id, goal string) {
+	if h.nameMission == nil {
+		return
+	}
+	go func() {
+		name := h.nameMission(context.Background(), goal)
+		if name == "" {
+			return
+		}
+		if err := h.store.SetNameIfEmpty(context.Background(), id, name); err != nil {
+			h.log.Warn("mission: set name failed", "mission_id", id, "error", err)
+		}
+	}()
 }
 
 // classifyKind decides how a mission's work happens when the create

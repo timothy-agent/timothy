@@ -19,6 +19,7 @@ import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ProgressSection } from '../components/missions/ProgressSection'
 import { ExploreSection } from '../components/missions/ExploreSection'
+import { GoalSection } from '../components/missions/GoalSection'
 import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Button } from '../components/ui/button'
@@ -38,21 +39,21 @@ import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
-import { compact, formatDuration, money } from '../lib/format'
+import { compact, formatDuration, missionDisplayName, money } from '../lib/format'
 
-// notionalTooltipLine formats the "≈$X subscription (not billed)" line
-// for the billed cost pill's tooltip, in that pill's OWN currency only
-// — prefers the currency-converted notional amount (matching the
-// pill's display currency), falling back to the raw notional amount in
-// that same currency if no converted figure exists for it. null when
-// neither map has an entry for currency, which also covers the
-// all-billed mission with no notional spend at all.
-function notionalTooltipLine(usage: MissionUsage, currency: string): string | null {
-  const converted = usage.converted_notional_cost_by_currency?.[currency]
-  const raw = usage.notional_cost_by_currency?.[currency]
+// unbilledTooltipLine formats the billed cost pill's tooltip line, in
+// that pill's OWN currency only — prefers the currency-converted
+// unbilled amount (matching the pill's display currency), falling back
+// to the raw amount in that same currency if no converted figure
+// exists for it (D-013: never guess a rate, but never hide the figure
+// either). null when neither map has an entry for currency, which also
+// covers the all-billed mission with no unbilled spend at all.
+function unbilledTooltipLine(usage: MissionUsage, currency: string): string | null {
+  const converted = usage.converted_unbilled_cost_by_currency?.[currency]
+  const raw = usage.unbilled_cost_by_currency?.[currency]
   const amount = converted ?? raw
   if (amount == null) return null
-  return `≈${money(amount, currency)} subscription (not billed)`
+  return `+${money(amount, currency)} unbilled`
 }
 
 function formatDate(v?: string): string {
@@ -128,15 +129,15 @@ function harnessDisplayName(harness: string): string {
 }
 
 // CostBadge renders the billed-cost pill: a plain Badge when there's
-// no notional (subscription) cost to note, or one wrapped in a Tooltip
+// no unbilled (subscription) cost to note, or one wrapped in a Tooltip
 // showing that single line when there is.
-function CostBadge({ cost, currency, notionalLine }: { cost: number; currency: string; notionalLine: string | null }) {
+function CostBadge({ cost, currency, unbilledLine }: { cost: number; currency: string; unbilledLine: string | null }) {
   const badge = <Badge variant="secondary">{money(cost, currency)}</Badge>
-  if (!notionalLine) return badge
+  if (!unbilledLine) return badge
   return (
     <Tooltip>
       <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent>{notionalLine}</TooltipContent>
+      <TooltipContent>{unbilledLine}</TooltipContent>
     </Tooltip>
   )
 }
@@ -361,7 +362,10 @@ export function MissionDetail() {
       <div className="border-b border-border pb-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{mission.goal}</h1>
+            <h1 className="text-xl font-semibold tracking-tight">{missionDisplayName(mission)}</h1>
+            <div className="mt-1.5">
+              <GoalSection goal={mission.goal} />
+            </div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span className="capitalize">{mission.kind}</span>
               <span>{mission.phase}</span>
@@ -376,9 +380,7 @@ export function MissionDetail() {
                 <span>Retries {mission.iteration}</span>
               )}
               {mission.budget_amount != null && (
-                <span>
-                  budget {mission.budget_currency ?? 'USD'} {mission.budget_amount}
-                </span>
+                <span>budget {money(mission.budget_amount, mission.budget_currency ?? 'USD')}</span>
               )}
             </div>
             {mission.branch && (
@@ -422,26 +424,31 @@ export function MissionDetail() {
                 <ModelBadge
                   key={`${m.provider}:${m.model}`}
                   provider={m.provider}
-                  model={`brain · ${m.model}`}
+                  model={m.model}
                   title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
                 />
               ))}
           {executorSpawn && (
             <Badge
               variant="secondary"
-              title={`Delegated CLI harness that ran this mission's coding work, via ${executorSpawn.provider}`}
+              aria-label={`${harnessDisplayName(executorSpawn.harness)} harness`}
+              title={`Delegated CLI harness (${harnessDisplayName(executorSpawn.harness)}) that ran this mission's coding work, via ${executorSpawn.provider}`}
             >
               <ClaudeCodeIcon />
-              {harnessDisplayName(executorSpawn.harness)} · {executorSpawn.model}
+              {executorSpawn.model}
             </Badge>
           )}
           {mission.environment &&
             (() => {
               const EnvIcon = envIcon(mission.environment)
+              const label = `${mission.environment} environment`
               return (
-                <Badge variant="secondary" title="Sandbox environment this mission's container runs">
-                  {EnvIcon && <EnvIcon />}
-                  env · {mission.environment}
+                <Badge
+                  variant="secondary"
+                  aria-label={EnvIcon ? label : undefined}
+                  title={EnvIcon ? label : "Sandbox environment this mission's container runs"}
+                >
+                  {EnvIcon ? <EnvIcon /> : `env · ${mission.environment}`}
                 </Badge>
               )
             })()}
@@ -464,7 +471,7 @@ export function MissionDetail() {
                     key={currency}
                     cost={cost}
                     currency={currency}
-                    notionalLine={notionalTooltipLine(usage, currency)}
+                    unbilledLine={unbilledTooltipLine(usage, currency)}
                   />
                 ))
               ) : (
@@ -473,7 +480,7 @@ export function MissionDetail() {
                     key={currency}
                     cost={cost}
                     currency={currency}
-                    notionalLine={notionalTooltipLine(usage, currency)}
+                    unbilledLine={unbilledTooltipLine(usage, currency)}
                   />
                 ))
               )}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/sse"
 )
@@ -187,6 +188,9 @@ type ResolvedRouteEntry struct {
 	BaseURL       string `json:"base_url"`
 	Usable        bool   `json:"usable"`
 	SkipReason    string `json:"skip_reason"`
+	// Prices is the entry's configured per-Mtok prices, when the
+	// provider has a price row for Model — nil when unpriced (D-013).
+	Prices *router.ModelPrices `json:"prices,omitempty"`
 }
 
 // ResolvedRoute is a route's ordered chain, each entry annotated with

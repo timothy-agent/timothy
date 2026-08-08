@@ -26,24 +26,25 @@ describe('mission.unit_verified rendering', () => {
 })
 
 describe('executor.result rendering', () => {
-  const resultPayload = (cost_usd: number | null) => ({
+  const resultPayload = (cost_usd: number | null, cost_usd_billed = false) => ({
     status: 'ok',
     is_error: false,
     duration_ms: 1500,
     exit_code: 0,
     parse: 'json',
     denials: [],
-    usage: { input_tokens: 100, output_tokens: 50, cost_usd },
+    usage: { input_tokens: 100, output_tokens: 50, cost_usd, cost_usd_billed },
   })
 
-  it('shows the billed cost when cost_usd is a number', () => {
-    render(<div>{renderEvent(event(resultPayload(0.1234), 'executor.result'))}</div>)
+  it('shows the billed cost plainly when cost_usd_billed is true (anthropic api_key)', () => {
+    render(<div>{renderEvent(event(resultPayload(0.1234, true), 'executor.result'))}</div>)
     expect(screen.getByText(/Harness finished:/)).toBeInTheDocument()
     expect(screen.getByText(/\$0\.1234/)).toBeInTheDocument()
     expect(screen.queryByText(/not billed/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/harness-reported/)).not.toBeInTheDocument()
   })
 
-  it('flags a subscription-auth run as notional when cost_usd is a number', () => {
+  it('flags a subscription-auth run as unbilled when cost_usd is a number', () => {
     const spawn = event(
       { harness: 'claude-cli', provider: 'anthropic', model: 'sonnet', auth_mode: 'subscription', run_id: 'r1' },
       'executor.spawned',
@@ -54,7 +55,7 @@ describe('executor.result rendering', () => {
     expect(screen.getByText(/\$0\.2534 · subscription \(not billed\)/)).toBeInTheDocument()
   })
 
-  it('flags an oauth_token-auth run as notional when cost_usd is a number', () => {
+  it('flags an oauth_token-auth run as unbilled when cost_usd is a number', () => {
     const spawn = event(
       { harness: 'claude-cli', provider: 'anthropic', model: 'sonnet', auth_mode: 'oauth_token', run_id: 'r1' },
       'executor.spawned',
@@ -63,6 +64,20 @@ describe('executor.result rendering', () => {
     const result = event(resultPayload(0.2534), 'executor.result', 2)
     render(<div>{renderEvent(result, [spawn, result])}</div>)
     expect(screen.getByText(/\$0\.2534 · subscription \(not billed\)/)).toBeInTheDocument()
+  })
+
+  it('labels a non-anthropic api_key run\'s cost_usd as harness-reported, never presented as billed', () => {
+    const spawn = event(
+      { harness: 'claude-cli', provider: 'GLM (Z.ai)', model: 'glm-4.7', auth_mode: 'api_key', run_id: 'r1' },
+      'executor.spawned',
+      1,
+    )
+    // cost_usd_billed omitted (false): the ledger priced this run from
+    // GLM's own rows, not the CLI's Anthropic-priced total_cost_usd.
+    const result = event(resultPayload(0.0727), 'executor.result', 2)
+    render(<div>{renderEvent(result, [spawn, result])}</div>)
+    expect(screen.getByText(/harness-reported \$0\.0727/)).toBeInTheDocument()
+    expect(screen.queryByText(/not billed/)).not.toBeInTheDocument()
   })
 
   it('shows subscription untracked cost when cost_usd is null and the spawn was subscription auth', () => {

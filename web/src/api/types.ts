@@ -252,10 +252,14 @@ export interface ConvertedMoney {
 export interface UsageSummary extends ConvertedMoney {
   currency: string
   cost: number
-  // notional_cost is the metered-price equivalent of spend billed
+  // unbilled_cost is the metered-price equivalent of spend billed
   // through a subscription/oauth_token executor (D-051) — real spend
   // was $0, excluded from cost, never folded into it.
-  notional_cost: number
+  unbilled_cost: number
+  // converted_unbilled_cost mirrors converted_amount, same mechanism
+  // (usage.go's decorator), for unbilled_cost specifically — present
+  // only when a stored fx rate exists and unbilled_cost is nonzero.
+  converted_unbilled_cost?: number
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
@@ -272,8 +276,10 @@ export interface UsagePoint extends ConvertedMoney {
   group: string
   currency: string
   cost: number
-  // notional_cost mirrors UsageSummary's field — excluded from cost.
-  notional_cost: number
+  // unbilled_cost mirrors UsageSummary's field — excluded from cost.
+  unbilled_cost: number
+  // converted_unbilled_cost mirrors UsageSummary's field.
+  converted_unbilled_cost?: number
   input_tokens: number
   output_tokens: number
   requests: number
@@ -312,7 +318,7 @@ export interface ModelUsed {
 
 export interface MissionUsage {
   mission_id: string
-  // cost_by_currency is billed spend only — notional (subscription-
+  // cost_by_currency is billed spend only — unbilled (subscription-
   // billed) rows are excluded, so this is the mission's true bill.
   // Equals billed_brain_by_currency + billed_harness_by_currency.
   cost_by_currency: Record<string, number>
@@ -327,12 +333,12 @@ export interface MissionUsage {
   // directly (brain: explore/plan/worker/review).
   billed_brain_by_currency?: Record<string, number>
   billed_harness_by_currency?: Record<string, number>
-  // notional_cost_by_currency is the API-equivalent price of rows
+  // unbilled_cost_by_currency is the API-equivalent price of rows
   // billed through a subscription/oauth_token executor (D-051) —
   // real spend was $0, this is what the same work would have cost
   // metered.
-  notional_cost_by_currency?: Record<string, number>
-  converted_notional_cost_by_currency?: Record<string, number>
+  unbilled_cost_by_currency?: Record<string, number>
+  converted_unbilled_cost_by_currency?: Record<string, number>
   rate_as_of?: string
   input_tokens: number
   output_tokens: number
@@ -538,6 +544,11 @@ export interface ProgressNote {
 export interface Mission {
   id: string
   goal: string
+  // name is a short display name generated once from goal, the same
+  // way a chat session's title is — empty until generation lands (or
+  // for a mission predating this field); the UI falls back to a
+  // truncated goal.
+  name?: string
   kind: 'coding' | 'general'
   agent_id?: string
   phase: 'explore' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
@@ -595,13 +606,20 @@ export interface MissionEvent {
 // ExecutorUsage is executor.result's token/cost usage block. cost_usd
 // is null when the run authenticated via a subscription or oauth_token
 // (no per-call price) rather than metered API billing — never a
-// guessed 0 (D-013).
+// guessed 0 (D-013). cost_usd_billed is true only when cost_usd is the
+// SAME figure the cost ledger booked as real spend (Anthropic
+// first-party api_key) — false whenever cost_usd is merely the CLI's
+// own harness-reported figure: subscription/oauth_token (never billed)
+// or a non-anthropic provider (priced against Anthropic's table, which
+// is fiction for that provider — the ledger prices it separately from
+// that provider's own rows, or leaves it unpriced).
 export interface ExecutorUsage {
   input_tokens: number
   output_tokens: number
   cache_read?: number
   cache_write?: number
   cost_usd?: number | null
+  cost_usd_billed?: boolean
 }
 
 // Payloads for the delegated coding-CLI executor's mission_events

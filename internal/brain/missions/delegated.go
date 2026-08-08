@@ -682,7 +682,14 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 	if authFailed {
 		errorCode = errorCodeAuthFailed
 	}
-	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome))
+	// cliCostTrusted tells recordResult whether executor.result's
+	// cost_usd (the CLI's OWN reported figure) is the same number
+	// recordLedger just booked as real spend — true only for the
+	// Anthropic-first-party api_key case (costSource). Every other
+	// path either books a different, provider-priced figure or none at
+	// all, so the UI must not present the raw CLI number as billed.
+	cliCostTrusted := authMode == executor.AuthAPIKey && entry.Driver == "anthropic"
+	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome), cliCostTrusted)
 	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "", errorCode)
 	if authFailed {
 		r.coolDown(m.Harness, entry)
@@ -790,7 +797,15 @@ func (r *delegatedRunner) recordProgressThrottled(ctx context.Context, missionID
 // the PARSED verdict (DONE/RETRY/BLOCKED), never the raw result text —
 // the raw text mirrors the whole structured-output JSON and belongs in
 // the transcript, not an event field the UI and canary key on.
-func (r *delegatedRunner) recordResult(ctx context.Context, missionID string, st *pollState, start time.Time, exitCode int, ev executor.Event, parseKind, status string) {
+// cliCostTrusted mirrors costSource's decision (computed once by the
+// caller so this stays a pure payload builder): true only when
+// usage.cost_usd is the SAME figure recordLedger just booked as real
+// billed spend (Anthropic first-party api_key) — false for every other
+// path (subscription/oauth unbilled, or a non-anthropic provider where
+// cost_usd is priced against Anthropic's table and was never booked at
+// all). The UI keys off this to avoid presenting an unbooked number as
+// billed.
+func (r *delegatedRunner) recordResult(ctx context.Context, missionID string, st *pollState, start time.Time, exitCode int, ev executor.Event, parseKind, status string, cliCostTrusted bool) {
 	payload := map[string]any{
 		"status": status, "is_error": ev.Err != "",
 		"duration_ms": time.Since(start).Milliseconds(),
@@ -803,7 +818,7 @@ func (r *delegatedRunner) recordResult(ctx context.Context, missionID string, st
 		payload["usage"] = map[string]any{
 			"input_tokens": ev.Usage.InputTokens, "output_tokens": ev.Usage.OutputTokens,
 			"cache_read": ev.Usage.CacheReadTokens, "cache_write": ev.Usage.CacheWriteTokens,
-			"cost_usd": ev.Usage.CostUSD,
+			"cost_usd": ev.Usage.CostUSD, "cost_usd_billed": cliCostTrusted,
 		}
 	}
 	r.recordEventForce(ctx, missionID, "executor.result", payload)
@@ -859,14 +874,49 @@ func (r *delegatedRunner) recordEventForce(ctx context.Context, missionID, kind 
 // from an ordinary run error.
 const errorCodeAuthFailed = "executor_auth"
 
+// costSource decides where a delegated run's ledger cost comes from
+// and whether it's real billed spend or unbilled (D-05x, fixes the
+// bug where a non-anthropic api_key provider's CLI-reported cost —
+// priced against ANTHROPIC's table, not that provider's — got booked
+// as real spend; a local Ollama run this way showed $0.34 billed for
+// $0 of actual spend):
+//
+//   - AuthSubscription/AuthOAuthToken: a kind='cli' provider row
+//     (driver "claude-cli"/"codex-cli", D-051) — never real spend,
+//     billed on the user's existing subscription instead. The CLI's
+//     reported figure is kept as-is, Unbilled=true, same as before.
+//   - AuthAPIKey + driver "anthropic": a kind='api' row repurposed as
+//     an executor entry (admin.go's validateHarnessWireFormat), the
+//     CLI talking to Anthropic's own real endpoint under that row's
+//     API key — the ONLY case where the CLI is genuinely pricing
+//     against its own provider's table. The reported cost is trusted,
+//     Unbilled=false, same as before.
+//   - AuthAPIKey + any other driver (GLM, Ollama, etc — a kind='api'
+//     row wired via options.anthropic_base_url instead): the CLI still
+//     prices against Anthropic's table regardless of which backend it
+//     actually talked to — that number is fiction for this provider.
+//     Cost is instead computed from the provider's OWN configured
+//     price row (entry.Prices) × the run's reported tokens
+//     (ledger.Cost, same formula the gateway uses for native calls).
+//     No price row → Cost stays nil (D-013: unknown price recorded as
+//     NULL, never guessed; tokens still surface the usage as
+//     unpriced).
+//
+// Driver, not kind, is the signal: kind='cli' rows always use
+// AuthSubscription/AuthOAuthToken (never AuthAPIKey) by construction,
+// so checking kind again in the AuthAPIKey branch would be dead code.
+func costSource(entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *stream.Usage, cliReportedCost *float64) (cost *float64, unbilled bool) {
+	if authMode != executor.AuthAPIKey {
+		return cliReportedCost, true
+	}
+	if entry.Driver == "anthropic" {
+		return cliReportedCost, false
+	}
+	return ledger.Cost(entry.Prices, usage), false
+}
+
 // recordLedger writes one cost_ledger row at the run's terminal point
-// (D-055). AuthAPIKey cost is real marginal spend (Notional=false).
-// AuthSubscription and AuthOAuthToken are billed on the user's existing
-// subscription with no marginal per-call cost, but the CLI still
-// reports the API-equivalent price for its usage — operator decision
-// amends D-013's original NULL-unless-api-key rule: that figure is
-// recorded as-is with Notional=true, so subscription/oauth runs count
-// toward the budget brake instead of staying invisible to it.
+// (D-055) — see costSource for how Cost/Unbilled are decided.
 // errorCode is optional (e.g. errorCodeAuthFailed); blank on ok=true.
 func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool, errorCode string) {
 	if r.ledger == nil {
@@ -886,8 +936,7 @@ func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwc
 			InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens),
 			CacheReadTokens: int(usage.CacheReadTokens), CacheWriteTokens: int(usage.CacheWriteTokens),
 		}
-		e.Cost = usage.CostUSD
-		e.Notional = authMode != executor.AuthAPIKey
+		e.Cost, e.Unbilled = costSource(entry, authMode, e.Usage, usage.CostUSD)
 	}
 	r.ledger.Record(ctx, e)
 }

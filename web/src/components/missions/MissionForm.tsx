@@ -408,10 +408,10 @@ export function MissionForm({
           aria-label="Goal"
           value={goal}
           onChange={(e) => onGoalChange(e.target.value)}
-          placeholder="What should this mission accomplish?"
+          placeholder="What should this mission accomplish? Markdown supported."
           rows={10}
           autoFocus
-          className="min-h-60 text-base"
+          className="min-h-60 resize-y text-base"
         />
 
         {goal.trim() !== '' && (

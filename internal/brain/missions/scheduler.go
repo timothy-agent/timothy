@@ -379,9 +379,9 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 		budgetCurrency = "USD"
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness, environment)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-		t.Goal, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness, environment)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		t.Goal, sc.Name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute,
 		promptOverlay, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment)
 	return err
 }

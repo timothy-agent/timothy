@@ -43,7 +43,7 @@ func (s *Store) SetHub(hub *Hub) {
 	s.hub = hub
 }
 
-const missionColumns = `id, goal, kind, agent_id, phase, status, pause_reason, pause_message,
+const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_reason, pause_message,
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	escalation_route, prompt_overlay,
@@ -59,7 +59,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		pendingPermission              *string
 		spec, progress                 []byte
 	)
-	if err := row.Scan(&m.ID, &m.Goal, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
+	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.EscalationRoute, &m.PromptOverlay,
@@ -122,9 +122,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		budgetCurrency = "USD"
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, $13, $14, $15) RETURNING id`,
-		m.Goal, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')::uuid, $14, $15, $16) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -367,6 +367,26 @@ func (s *Store) SetExploreNotes(ctx context.Context, id, notes string) error {
 	if _, err := db.Exec(ctx, `UPDATE missions SET explore_notes = $2, updated_at = now() WHERE id = $1`,
 		id, notes); err != nil {
 		return fmt.Errorf("missions set explore notes: %w", err)
+	}
+	return nil
+}
+
+// SetNameIfEmpty writes an auto-generated display name without
+// clobbering one already set (a scheduler-fired mission's own
+// template name, or an earlier successful generation) — mirrors
+// session.Store.SetTitleIfEmpty exactly: a plain guarded UPDATE, not
+// state-machine/append-only, since name is display metadata about the
+// row, not a fact about what happened during the mission.
+func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set name: %w", err)
+	}
+	_, err = db.Exec(ctx,
+		`UPDATE missions SET name = $2, updated_at = now() WHERE id = $1 AND name = ''`,
+		id, name)
+	if err != nil {
+		return fmt.Errorf("missions set name: %w", err)
 	}
 	return nil
 }
@@ -832,7 +852,7 @@ type MissionSpend struct {
 // NULL (unpriced calls) contribute 0, same as everywhere else in this
 // codebase that treats "unknown price" as best-effort zero for
 // brake/alert purposes while still recording NULL, never a guess, at
-// write time (D-013). Notional rows (subscription-billed executor
+// write time (D-013). Unbilled rows (subscription-billed executor
 // runs recording the API-equivalent price) are excluded — the brake
 // bounds real marginal spend, and a subscription run costs nothing at
 // the margin. Only currencies with at least one ledger row for this
@@ -844,7 +864,7 @@ func (s *Store) Spend(ctx context.Context, missionID string) (MissionSpend, erro
 		return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT currency, COALESCE(SUM(cost), 0)
-		FROM cost_ledger WHERE mission_id = $1 AND NOT notional GROUP BY currency`, missionID)
+		FROM cost_ledger WHERE mission_id = $1 AND NOT unbilled GROUP BY currency`, missionID)
 	if err != nil {
 		return MissionSpend{}, fmt.Errorf("missions spend: %w", err)
 	}

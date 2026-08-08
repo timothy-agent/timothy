@@ -100,7 +100,15 @@ CREATE TABLE IF NOT EXISTS missions (
     -- provisioning (driver.go's ensureProvisioned) -> base ("").
     -- Sticky once detected (store.SetEnvironment) so a mission never
     -- re-detects mid-run. General missions never set this.
-    environment           text NOT NULL DEFAULT ''
+    environment           text NOT NULL DEFAULT '',
+    -- Short display name, generated once (store.SetNameIfEmpty) the
+    -- same way a chat session's title is (chat.go's autoTitle) — a
+    -- one-shot best-effort gateway call after creation, never blocking
+    -- or failing creation. Scheduler-fired missions get the schedule's
+    -- own name directly, no LLM call. Empty means generation hasn't
+    -- landed yet (or a scheduler mission predates this column); the UI
+    -- falls back to a truncated goal. Never re-summarized once set.
+    name                  text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

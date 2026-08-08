@@ -21,6 +21,8 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 // loadDelegatedFixture returns every non-empty line of a recorded
@@ -470,10 +472,10 @@ func TestDelegatedRunWorker_HappyPath(t *testing.T) {
 		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
 	}
 	if led.entries[0].Cost == nil {
-		t.Fatal("subscription entry Cost = nil, want the CLI-reported notional cost")
+		t.Fatal("subscription entry Cost = nil, want the CLI-reported unbilled cost")
 	}
-	if !led.entries[0].Notional {
-		t.Fatal("subscription entry Notional = false, want true (subscription-billed, not real marginal spend)")
+	if !led.entries[0].Unbilled {
+		t.Fatal("subscription entry Unbilled = false, want true (subscription-billed, not real marginal spend)")
 	}
 	if led.entries[0].Purpose != "executor" || led.entries[0].Agent != "mission-worker" {
 		t.Fatalf("ledger entry purpose/agent = %q/%q, want executor/mission-worker", led.entries[0].Purpose, led.entries[0].Agent)
@@ -772,8 +774,8 @@ func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {
 	if led.entries[0].Cost == nil {
 		t.Fatalf("api_key entry Cost = nil, want a recorded (possibly zero) figure")
 	}
-	if led.entries[0].Notional {
-		t.Fatal("api_key entry Notional = true, want false (real marginal spend)")
+	if led.entries[0].Unbilled {
+		t.Fatal("api_key entry Unbilled = true, want false (real marginal spend)")
 	}
 }
 
@@ -820,10 +822,168 @@ func TestDelegatedRunWorker_OAuthTokenMode_EnvSetAndCostSuppressed(t *testing.T)
 		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
 	}
 	if led.entries[0].Cost == nil {
-		t.Fatal("oauth_token entry Cost = nil, want the CLI-reported notional cost")
+		t.Fatal("oauth_token entry Cost = nil, want the CLI-reported unbilled cost")
 	}
-	if !led.entries[0].Notional {
-		t.Fatal("oauth_token entry Notional = false, want true (subscription-billed, not real marginal spend)")
+	if !led.entries[0].Unbilled {
+		t.Fatal("oauth_token entry Unbilled = false, want true (subscription-billed, not real marginal spend)")
+	}
+}
+
+// TestCostSource is the decision table the D-05x fix hinges on: cost
+// source and Unbilled must key on (authMode, entry.Driver), never on
+// harness name or provider display name — a local Ollama run behind
+// options.anthropic_base_url must never book the CLI's
+// Anthropic-priced figure as real spend.
+func TestCostSource(t *testing.T) {
+	glmPrices := &router.ModelPrices{InputPerMTok: 1, OutputPerMTok: 2}
+	usage := &stream.Usage{InputTokens: 1_000_000, OutputTokens: 500_000}
+	cliCost := 0.34
+
+	tests := []struct {
+		name         string
+		entry        gwclient.ResolvedRouteEntry
+		authMode     executor.AuthMode
+		wantCost     *float64
+		wantUnbilled bool
+	}{
+		{
+			name:         "anthropic api_key trusts the CLI-reported cost, billed",
+			entry:        gwclient.ResolvedRouteEntry{Driver: "anthropic"},
+			authMode:     executor.AuthAPIKey,
+			wantCost:     &cliCost,
+			wantUnbilled: false,
+		},
+		{
+			name:         "non-anthropic api_key (GLM) prices from its own rows, billed",
+			entry:        gwclient.ResolvedRouteEntry{Driver: "openaicompat", Prices: glmPrices},
+			authMode:     executor.AuthAPIKey,
+			wantCost:     ledger.Cost(glmPrices, usage),
+			wantUnbilled: false,
+		},
+		{
+			name:         "non-anthropic api_key with no price row stays unpriced (nil), never the CLI's number",
+			entry:        gwclient.ResolvedRouteEntry{Driver: "openaicompat"},
+			authMode:     executor.AuthAPIKey,
+			wantCost:     nil,
+			wantUnbilled: false,
+		},
+		{
+			name:         "kind=cli subscription auth: CLI-reported cost kept, unbilled",
+			entry:        gwclient.ResolvedRouteEntry{Driver: "claude-cli", Kind: "cli"},
+			authMode:     executor.AuthSubscription,
+			wantCost:     &cliCost,
+			wantUnbilled: true,
+		},
+		{
+			name:         "kind=cli oauth_token auth: CLI-reported cost kept, unbilled",
+			entry:        gwclient.ResolvedRouteEntry{Driver: "claude-cli", Kind: "cli"},
+			authMode:     executor.AuthOAuthToken,
+			wantCost:     &cliCost,
+			wantUnbilled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCost, gotUnbilled := costSource(tt.entry, tt.authMode, usage, &cliCost)
+			if tt.wantCost == nil {
+				if gotCost != nil {
+					t.Fatalf("cost = %v, want nil", *gotCost)
+				}
+			} else {
+				if gotCost == nil {
+					t.Fatalf("cost = nil, want %v", *tt.wantCost)
+				}
+				if *gotCost != *tt.wantCost {
+					t.Fatalf("cost = %v, want %v", *gotCost, *tt.wantCost)
+				}
+			}
+			if gotUnbilled != tt.wantUnbilled {
+				t.Fatalf("unbilled = %v, want %v", gotUnbilled, tt.wantUnbilled)
+			}
+		})
+	}
+}
+
+// TestDelegatedRunWorker_NonAnthropicAPIKey_PricedFromProviderRows is
+// the end-to-end regression for the reported bug: a GLM (openaicompat
+// driver) provider row wired via options.anthropic_base_url, api_key
+// auth. The CLI's own reported total_cost_usd (Anthropic-priced
+// fiction for this provider) must never reach the ledger — cost comes
+// from the provider's configured price row × reported tokens instead.
+func TestDelegatedRunWorker_NonAnthropicAPIKey_PricedFromProviderRows(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	led := &fakeLedger{}
+	entry := gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-glm", ProviderName: "GLM (Z.ai)", Driver: "openaicompat",
+		Model: "glm-4.7", CredentialRef: "GLM_KEY", Usable: true,
+		Prices: &router.ModelPrices{InputPerMTok: 1, OutputPerMTok: 2},
+	}
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, led)
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+	if len(led.entries) != 1 {
+		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
+	}
+	if led.entries[0].Unbilled {
+		t.Fatal("non-anthropic api_key entry Unbilled = true, want false (real marginal spend, just priced from the provider's own rows)")
+	}
+	if led.entries[0].Cost == nil {
+		t.Fatal("non-anthropic api_key entry Cost = nil, want a figure priced from the provider's own rows")
+	}
+	// The schema fixture's total_cost_usd is ~0.0727 (Anthropic-priced);
+	// this provider's own rows price the same tokens differently, so the
+	// booked cost must NOT equal the CLI's raw figure.
+	if *led.entries[0].Cost == 0.07270210000000002 {
+		t.Fatal("booked cost equals the CLI's Anthropic-priced figure — the bug this fix closes")
+	}
+}
+
+// TestDelegatedRunWorker_NonAnthropicAPIKey_NoPriceRowStaysUnpriced
+// covers the no-configured-price case: cost stays nil (D-013) rather
+// than falling back to the CLI's Anthropic-priced number.
+func TestDelegatedRunWorker_NonAnthropicAPIKey_NoPriceRowStaysUnpriced(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	led := &fakeLedger{}
+	entry := gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-ollama", ProviderName: "Local Ollama", Driver: "openaicompat",
+		Model: "qwen3", CredentialRef: "", Usable: true, // no Prices set
+	}
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, led)
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+	if len(led.entries) != 1 {
+		t.Fatalf("ledger entries = %d, want 1", len(led.entries))
+	}
+	if led.entries[0].Unbilled {
+		t.Fatal("non-anthropic api_key entry Unbilled = true, want false")
+	}
+	if led.entries[0].Cost != nil {
+		t.Fatalf("no-price-row entry Cost = %v, want nil (D-013: never guess)", *led.entries[0].Cost)
 	}
 }
 

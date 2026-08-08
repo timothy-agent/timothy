@@ -540,15 +540,16 @@ func (a *API) handleRoleRoutes(w http.ResponseWriter, r *http.Request) {
 // resolved secret value (D-051) — brain resolves it itself when
 // spawning a harness executor.
 type resolveRouteEntry struct {
-	ProviderID    string `json:"provider_id"`
-	ProviderName  string `json:"provider_name,omitempty"`
-	Driver        string `json:"driver,omitempty"`
-	Kind          string `json:"kind,omitempty"`
-	Model         string `json:"model"`
-	CredentialRef string `json:"credential_ref,omitempty"`
-	BaseURL       string `json:"base_url,omitempty"`
-	Usable        bool   `json:"usable"`
-	SkipReason    string `json:"skip_reason,omitempty"`
+	ProviderID    string              `json:"provider_id"`
+	ProviderName  string              `json:"provider_name,omitempty"`
+	Driver        string              `json:"driver,omitempty"`
+	Kind          string              `json:"kind,omitempty"`
+	Model         string              `json:"model"`
+	CredentialRef string              `json:"credential_ref,omitempty"`
+	BaseURL       string              `json:"base_url,omitempty"`
+	Usable        bool                `json:"usable"`
+	SkipReason    string              `json:"skip_reason,omitempty"`
+	Prices        *router.ModelPrices `json:"prices,omitempty"`
 }
 
 // handleResolveRoute reports a route's ordered chain with enough
@@ -583,7 +584,7 @@ func (a *API) handleResolveRoute(w http.ResponseWriter, r *http.Request) {
 			ProviderID: e.ProviderID, ProviderName: e.ProviderName,
 			Driver: e.Driver, Kind: e.Kind, Model: e.Model,
 			CredentialRef: e.CredentialRef, BaseURL: e.BaseURL,
-			Usable: e.Usable, SkipReason: e.SkipReason,
+			Usable: e.Usable, SkipReason: e.SkipReason, Prices: e.Prices,
 		}
 	}
 	writeJSON(w, map[string]any{"route": name, "entries": entries})

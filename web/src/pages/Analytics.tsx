@@ -25,6 +25,7 @@ import type {
 } from '../api/types'
 import { estimateUnpriced, totalEstimate } from '../lib/costEstimate'
 import { compact, formatDuration, money } from '../lib/format'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 
 const ranges = [
   { key: 'today', label: 'Today', days: 0, bucket: 'hour' as const },
@@ -164,7 +165,7 @@ function useHiddenKeys() {
 }
 
 export function Analytics() {
-  const [range, setRange] = useState('7d')
+  const [range, setRange] = useState('today')
   const [data, setData] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -296,19 +297,26 @@ export function Analytics() {
     range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : 'Spend this month'
   const spendHint = range === 'today' ? budgetHint(budget?.day) : range === '30d' ? budgetHint(budget?.month) : undefined
   const spendOriginal = s ? secondaryMoney(s, s.cost) : undefined
-  // notionalAnnotation is the muted "+X <CUR> notional" note beside the
-  // spend tile's value — the metered-price equivalent of subscription/
+  // unbilledAnnotation is the muted "+amount" note beside the spend
+  // tile's value — the metered-price equivalent of subscription/
   // oauth_token executor runs (D-051), excluded from billed spend and
   // shown separately so it's visible without inflating the total.
-  // Always the summary row's OWN currency, no fx conversion (this is
-  // an annotation, not a second headline figure). Omitted entirely when
-  // zero.
-  const notionalAnnotation = s && s.notional_cost > 0 ? `+${money(s.notional_cost, s.currency)} notional` : undefined
+  // Converted into the same display currency as the headline figure
+  // (converted_unbilled_cost, same decorator/target as converted_amount)
+  // when a stored fx rate exists, falling back to the row's own billing
+  // currency otherwise (D-013: never hide the figure for a missing
+  // rate). Omitted entirely when zero.
+  const unbilledAnnotation =
+    s && s.unbilled_cost > 0
+      ? s.converted_unbilled_cost != null && s.converted_currency
+        ? money(s.converted_unbilled_cost, s.converted_currency)
+        : money(s.unbilled_cost, s.currency)
+      : undefined
   const tiles = [
     {
       label: spendLabel,
       value: s ? primaryMoney(s, s.cost) : 'N/A',
-      annotation: notionalAnnotation,
+      annotation: unbilledAnnotation,
       hint: spendOriginal ? `${spendOriginal} billed` : spendHint,
     },
     {
@@ -393,12 +401,16 @@ export function Analytics() {
               <div className="mt-1.5 text-2xl font-semibold tracking-tight">
                 {t.value}
                 {'annotation' in t && t.annotation && (
-                  <span
-                    className="ml-1.5 text-xs font-normal text-muted-foreground"
-                    title="Subscription-billed harness spend, at metered API prices — not billed, excluded from the total."
-                  >
-                    {t.annotation}
-                  </span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          +{t.annotation}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>unbilled</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
               </div>
               {t.hint && <div className="mt-0.5 text-xs text-muted-foreground">{t.hint}</div>}

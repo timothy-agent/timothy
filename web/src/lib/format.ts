@@ -18,10 +18,35 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`
 }
 
-// money labels an amount with its billing currency code rather than
-// assuming "$"/USD — the ledger itself never converts (D-013): this
-// always renders the amount exactly as recorded.
+// missionDisplayName renders a mission's short name when generation
+// landed, falling back to the goal truncated to n runes (default 60)
+// — the same "generation hasn't happened / never will" fallback chat
+// sessions use ('New session'), but goal-derived since a mission's
+// goal is always meaningful text, unlike a fresh empty chat.
+export function missionDisplayName(mission: { name?: string; goal: string }, n = 60): string {
+  if (mission.name) return mission.name
+  const goal = mission.goal
+  return goal.length > n ? `${goal.slice(0, n)}…` : goal
+}
+
+// money renders an amount in its billing currency's own symbol rather
+// than assuming "$"/USD — the ledger itself never converts (D-013):
+// this always renders the amount exactly as recorded. Precision keeps
+// the pre-Intl convention: exact zero gets no decimals, sub-1 amounts
+// get 4 (fractions-of-a-cent costs are common here), everything else
+// gets 2. An unrecognized currency code (typo, future code Intl
+// doesn't know yet) must never throw — falls back to "CODE amount".
 export function money(v: number, currency = 'USD'): string {
-  if (v === 0) return `${currency} 0`
-  return v >= 1 ? `${currency} ${v.toFixed(2)}` : `${currency} ${v.toFixed(4)}`
+  const digits = v === 0 ? 0 : Math.abs(v) >= 1 ? 2 : 4
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      currencyDisplay: 'narrowSymbol',
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(v)
+  } catch {
+    return `${currency} ${v.toFixed(digits)}`
+  }
 }

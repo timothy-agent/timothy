@@ -36,9 +36,9 @@ var groups = map[string]string{
 const notTest = `purpose IS DISTINCT FROM 'test'`
 
 // Summary is the header-tile answer: totals for a range, in one
-// currency. Cost excludes notional rows (subscription/oauth_token
-// executor runs, D-051) via FILTER (WHERE NOT notional) — same as the
-// mission aggregator — so it stays the range's true bill; NotionalCost
+// currency. Cost excludes unbilled rows (subscription/oauth_token
+// executor runs, D-051) via FILTER (WHERE NOT unbilled) — same as the
+// mission aggregator — so it stays the range's true bill; UnbilledCost
 // carries what that excluded spend would have cost at metered API
 // prices, same currency as Cost, never folded into it. Unpriced fields
 // count rows where cost is NULL (D-013: unknown price is recorded as
@@ -50,7 +50,7 @@ const notTest = `purpose IS DISTINCT FROM 'test'`
 type Summary struct {
 	Currency             string  `json:"currency"`
 	Cost                 float64 `json:"cost"`
-	NotionalCost         float64 `json:"notional_cost"`
+	UnbilledCost         float64 `json:"unbilled_cost"`
 	InputTokens          int64   `json:"input_tokens"`
 	OutputTokens         int64   `json:"output_tokens"`
 	CacheReadTokens      int64   `json:"cache_read_tokens"`
@@ -70,8 +70,8 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 		return nil, fmt.Errorf("usage summary: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT currency,
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
-			COALESCE(SUM(cost) FILTER (WHERE notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled), 0),
+			COALESCE(SUM(cost) FILTER (WHERE unbilled), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
@@ -89,7 +89,7 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 	out := []Summary{}
 	for rows.Next() {
 		var s Summary
-		if err := rows.Scan(&s.Currency, &s.Cost, &s.NotionalCost, &s.InputTokens, &s.OutputTokens,
+		if err := rows.Scan(&s.Currency, &s.Cost, &s.UnbilledCost, &s.InputTokens, &s.OutputTokens,
 			&s.CacheReadTokens, &s.CacheWriteTokens, &s.Requests, &s.Errors,
 			&s.UnpricedRequests, &s.UnpricedInputTokens, &s.UnpricedOutputTokens); err != nil {
 			return nil, fmt.Errorf("usage summary: %w", err)
@@ -100,8 +100,8 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 }
 
 // SeriesPoint is one (time bucket, group, currency) cell of a stacked
-// chart. Cost excludes notional rows (FILTER (WHERE NOT notional), same
-// as Summary); NotionalCost carries that excluded spend's metered-price
+// chart. Cost excludes unbilled rows (FILTER (WHERE NOT unbilled), same
+// as Summary); UnbilledCost carries that excluded spend's metered-price
 // equivalent, same currency, never folded into Cost. Unpriced token sums
 // (rows where cost is NULL) let the dashboard estimate what unpriced
 // usage would cost from its advisory catalog — the estimate stays
@@ -111,7 +111,7 @@ type SeriesPoint struct {
 	Group                string    `json:"group"`
 	Currency             string    `json:"currency"`
 	Cost                 float64   `json:"cost"`
-	NotionalCost         float64   `json:"notional_cost"`
+	UnbilledCost         float64   `json:"unbilled_cost"`
 	InputTokens          int64     `json:"input_tokens"`
 	OutputTokens         int64     `json:"output_tokens"`
 	Requests             int64     `json:"requests"`
@@ -138,8 +138,8 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 	}
 	rows, err := db.Query(ctx, `SELECT
 			date_trunc('`+b+`', ts) AS bucket, `+col+`, currency,
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
-			COALESCE(SUM(cost) FILTER (WHERE notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled), 0),
+			COALESCE(SUM(cost) FILTER (WHERE unbilled), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
 			COALESCE(SUM(input_tokens) FILTER (WHERE cost IS NULL), 0),
@@ -155,7 +155,7 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 	out := []SeriesPoint{}
 	for rows.Next() {
 		var p SeriesPoint
-		if err := rows.Scan(&p.Bucket, &p.Group, &p.Currency, &p.Cost, &p.NotionalCost,
+		if err := rows.Scan(&p.Bucket, &p.Group, &p.Currency, &p.Cost, &p.UnbilledCost,
 			&p.InputTokens, &p.OutputTokens, &p.Requests, &p.Errors,
 			&p.UnpricedInputTokens, &p.UnpricedOutputTokens); err != nil {
 			return nil, fmt.Errorf("usage series: %w", err)
@@ -182,8 +182,8 @@ type GroupTotal struct {
 
 // Totals returns one row per group (and currency) summed over the
 // whole range — Series without the time bucket, for tables/rankings
-// rather than time-series charts. Cost excludes notional rows (FILTER
-// (WHERE NOT notional), same as Summary/Series) so a group's ranking
+// rather than time-series charts. Cost excludes unbilled rows (FILTER
+// (WHERE NOT unbilled), same as Summary/Series) so a group's ranking
 // reflects real spend only.
 func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy string) ([]GroupTotal, error) {
 	col, ok := groups[groupBy]
@@ -195,7 +195,7 @@ func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy str
 		return nil, fmt.Errorf("usage totals: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT `+col+`, currency,
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COUNT(*),
 			COALESCE(SUM(input_tokens) FILTER (WHERE cost IS NULL), 0),
@@ -225,9 +225,9 @@ func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy str
 // out per currency (CostByCurrency) rather than summed into one
 // number: a mission that switched providers mid-run can carry spend in
 // more than one billing currency, and this package never sums across
-// currencies. CostByCurrency is billed spend only (notional excluded)
+// currencies. CostByCurrency is billed spend only (unbilled excluded)
 // and equals BilledBrainByCurrency + BilledHarnessByCurrency;
-// NotionalCostByCurrency holds the API-equivalent price of rows billed
+// UnbilledCostByCurrency holds the API-equivalent price of rows billed
 // through a subscription/oauth_token instead (D-051's delegated CLI
 // executor) — a mission's true bill is CostByCurrency alone.
 // BilledHarnessByCurrency is the delegated CLI executor's own billed
@@ -238,7 +238,7 @@ type MissionUsage struct {
 	CostByCurrency          map[string]float64 `json:"cost_by_currency"`
 	BilledBrainByCurrency   map[string]float64 `json:"billed_brain_by_currency"`
 	BilledHarnessByCurrency map[string]float64 `json:"billed_harness_by_currency"`
-	NotionalCostByCurrency  map[string]float64 `json:"notional_cost_by_currency"`
+	UnbilledCostByCurrency  map[string]float64 `json:"unbilled_cost_by_currency"`
 	InputTokens             int64              `json:"input_tokens"`
 	OutputTokens            int64              `json:"output_tokens"`
 	Requests                int64              `json:"requests"`
@@ -272,7 +272,7 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 		CostByCurrency:          map[string]float64{},
 		BilledBrainByCurrency:   map[string]float64{},
 		BilledHarnessByCurrency: map[string]float64{},
-		NotionalCostByCurrency:  map[string]float64{},
+		UnbilledCostByCurrency:  map[string]float64{},
 	}
 	err = db.QueryRow(ctx, `SELECT
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
@@ -287,10 +287,10 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	// (explore/plan/worker/review); harness = the delegated CLI
 	// executor's own billed rows (purpose='executor', D-051).
 	costRows, err := db.Query(ctx, `SELECT currency,
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional AND purpose = 'executor'), 0),
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional AND purpose IS DISTINCT FROM 'executor'), 0),
-			COALESCE(SUM(cost) FILTER (WHERE notional), 0)
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled AND purpose = 'executor'), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled AND purpose IS DISTINCT FROM 'executor'), 0),
+			COALESCE(SUM(cost) FILTER (WHERE unbilled), 0)
 		FROM cost_ledger
 		WHERE mission_id = $1 AND `+notTest+`
 		GROUP BY currency`, missionID)
@@ -299,8 +299,8 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	}
 	for costRows.Next() {
 		var currency string
-		var billed, harness, brain, notional float64
-		if err := costRows.Scan(&currency, &billed, &harness, &brain, &notional); err != nil {
+		var billed, harness, brain, unbilled float64
+		if err := costRows.Scan(&currency, &billed, &harness, &brain, &unbilled); err != nil {
 			costRows.Close()
 			return MissionUsage{}, fmt.Errorf("usage mission: cost by currency: %w", err)
 		}
@@ -313,8 +313,8 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 		if harness != 0 {
 			m.BilledHarnessByCurrency[currency] = harness
 		}
-		if notional != 0 {
-			m.NotionalCostByCurrency[currency] = notional
+		if unbilled != 0 {
+			m.UnbilledCostByCurrency[currency] = unbilled
 		}
 	}
 	if err := costRows.Err(); err != nil {
@@ -364,7 +364,7 @@ type SessionUsage struct {
 }
 
 // TopSessions ranks sessions by real spend only — Cost excludes
-// notional rows (FILTER (WHERE NOT notional), same as
+// unbilled rows (FILTER (WHERE NOT unbilled), same as
 // Summary/Series/Totals), so a subscription-billed executor run never
 // inflates a session into the top-spend table.
 func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit int) ([]SessionUsage, error) {
@@ -376,7 +376,7 @@ func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit 
 		return nil, fmt.Errorf("usage sessions: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT session_id, currency,
-			COALESCE(SUM(cost) FILTER (WHERE NOT notional), 0),
+			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*)
 		FROM cost_ledger
 		WHERE ts >= $1 AND ts < $2 AND session_id IS NOT NULL AND `+notTest+`

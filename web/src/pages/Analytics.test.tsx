@@ -27,7 +27,7 @@ import {
 const summary: UsageSummary = {
   currency: 'USD',
   cost: 2.5,
-  notional_cost: 0,
+  unbilled_cost: 0,
   input_tokens: 1000,
   output_tokens: 500,
   cache_read_tokens: 0,
@@ -67,11 +67,11 @@ beforeEach(() => {
 describe('Analytics budget alert', () => {
   it('shows no banner while spend stays under budget', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
     expect(screen.queryByRole('alert')).toBeNull()
     // The day budget hint only surfaces on the "Today" range.
     fireEvent.click(screen.getByText('Today'))
-    await waitFor(() => expect(screen.getByText('of USD 10.00 budget')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('of $10.00 budget')).toBeInTheDocument())
   })
 
   it('shows a banner naming every window over budget', async () => {
@@ -81,8 +81,8 @@ describe('Analytics budget alert', () => {
     })
     renderPage()
     const banner = await screen.findByRole('alert')
-    expect(banner).toHaveTextContent('Daily budget reached: USD 1.50 spent of USD 1.00.')
-    expect(banner).toHaveTextContent('Monthly budget reached: USD 120.00 spent of USD 100.00.')
+    expect(banner).toHaveTextContent('Daily budget reached: $1.50 spent of $1.00.')
+    expect(banner).toHaveTextContent('Monthly budget reached: $120.00 spent of $100.00.')
   })
 
   it('stays silent when the budget endpoint fails', async () => {
@@ -95,29 +95,46 @@ describe('Analytics budget alert', () => {
 })
 
 describe('Analytics spend tile', () => {
-  it('labels the spend tile after the selected range', async () => {
+  it('defaults to "today" and labels the spend tile after the selected range', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getByText('Spend this week')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByText('Today'))
     await waitFor(() => expect(screen.getByText('Spend today')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('7 days'))
+    await waitFor(() => expect(screen.getByText('Spend this week')).toBeInTheDocument())
 
     fireEvent.click(screen.getByText('30 days'))
     await waitFor(() => expect(screen.getByText('Spend this month')).toBeInTheDocument())
   })
 })
 
-describe('Analytics notional annotation', () => {
-  it('shows the notional annotation beside the spend tile when a notional amount exists', async () => {
-    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, notional_cost: 0.42 }])
+describe('Analytics unbilled spend annotation', () => {
+  it('shows the muted amount beside the spend tile, with an "unbilled" tooltip and no "notional" copy anywhere', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unbilled_cost: 0.42 }])
     renderPage()
-    expect(await screen.findByText('+USD 0.4200 notional')).toBeInTheDocument()
+    const annotation = await screen.findByText('+$0.4200')
+    fireEvent.focus(annotation)
+    expect(await screen.findByText('unbilled')).toBeInTheDocument()
+    expect(screen.queryByText(/notional/i)).toBeNull()
   })
 
-  it('omits the notional annotation when notional_cost is zero', async () => {
-    renderPage() // default `summary` fixture carries notional_cost: 0
-    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
-    expect(screen.queryByText(/notional/)).toBeNull()
+  it('converts the unbilled amount into the display currency when a stored fx rate exists', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([
+      { ...summary, unbilled_cost: 0.42, converted_unbilled_cost: 0.39, converted_currency: 'EUR' },
+    ])
+    renderPage()
+    expect(await screen.findByText('+€0.3900')).toBeInTheDocument()
+  })
+
+  it('falls back to the source-currency unbilled amount when no fx rate is available', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unbilled_cost: 0.42 }])
+    renderPage()
+    expect(await screen.findByText('+$0.4200')).toBeInTheDocument()
+  })
+
+  it('omits the annotation entirely when unbilled_cost is zero', async () => {
+    renderPage() // default `summary` fixture carries unbilled_cost: 0
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/unbilled|notional/)).toBeNull()
   })
 })
 
@@ -127,13 +144,13 @@ describe('Analytics converted spend display', () => {
       { ...summary, currency: 'USD', cost: 2.75, converted_amount: 2.53, converted_currency: 'EUR', rate_as_of: '2026-07-20' },
     ])
     renderPage()
-    await waitFor(() => expect(screen.getByText('EUR 2.53')).toBeInTheDocument())
-    expect(screen.getByText('USD 2.75 billed')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('€2.53')).toBeInTheDocument())
+    expect(screen.getByText('$2.75 billed')).toBeInTheDocument()
   })
 
   it('falls back to the billed amount alone when nothing converted', async () => {
     renderPage() // default `summary` fixture carries no converted_* fields
-    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
     expect(screen.queryByText(/billed/)).toBeNull()
   })
 })
@@ -167,7 +184,7 @@ describe('Analytics unpriced usage', () => {
         group: 'gpt-5.6-sol',
         currency: 'USD',
         cost: 0,
-        notional_cost: 0,
+        unbilled_cost: 0,
         input_tokens: 1_000_000,
         output_tokens: 100_000,
         requests: 4,
@@ -178,12 +195,12 @@ describe('Analytics unpriced usage', () => {
     ])
     renderPage()
     const note = await screen.findByText(/had no configured price/)
-    expect(note).toHaveTextContent('≈USD 8.00 at catalog prices')
+    expect(note).toHaveTextContent('≈$8.00 at catalog prices')
   })
 
   it('stays silent when every call is priced', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getAllByText('USD 2.50').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
     expect(screen.queryByText(/had no configured price/)).toBeNull()
   })
 })
@@ -193,7 +210,7 @@ const providerPoint: UsagePoint = {
   group: 'openai',
   currency: 'USD',
   cost: 1.5,
-  notional_cost: 0,
+  unbilled_cost: 0,
   input_tokens: 100,
   output_tokens: 50,
   requests: 3,
@@ -263,7 +280,7 @@ describe('Analytics zero-cost exclusion', () => {
     group: 'local-llama',
     currency: 'USD',
     cost: 0,
-    notional_cost: 0,
+    unbilled_cost: 0,
     input_tokens: 5_000,
     output_tokens: 2_000,
     requests: 2,

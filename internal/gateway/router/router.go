@@ -550,6 +550,12 @@ type ResolvedRouteEntry struct {
 	BaseURL       string
 	Usable        bool
 	SkipReason    string
+	// Prices is the entry's configured per-Mtok prices, when the
+	// provider has a price row for Model — nil when unpriced (D-013:
+	// never guessed). Lets a delegated executor caller price its own
+	// reported tokens for a non-anthropic provider (D-05x) without a
+	// second round trip.
+	Prices *ModelPrices
 }
 
 // ResolveRoute returns route's chain in stored order, annotated with
@@ -586,6 +592,7 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 			re.Model = row.DefaultModel
 		}
 		re.BaseURL = row.BaseURL
+		re.Prices = s.Prices(row.Name, re.Model)
 		if harness == "" {
 			if _, _, reason := s.entryGate(row, re.Model, required); reason != "" {
 				re.SkipReason = reason

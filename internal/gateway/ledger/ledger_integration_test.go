@@ -59,14 +59,14 @@ func TestRecordWritesRows(t *testing.T) {
 		Provider: "itest-provider", Model: "m1", Route: "coding",
 		LatencyMS: 45, Status: "error", ErrorCode: "timeout",
 	})
-	// Notional: subscription/oauth executor cost, tracked but not billed.
-	notionalCost := 0.2534
+	// Unbilled: subscription/oauth executor cost, tracked but not billed.
+	unbilledCost := 0.2534
 	l.Record(ctx, Entry{
 		Provider: "itest-provider", Model: "m1", Route: "coding",
-		LatencyMS: 500, Status: "ok", Cost: &notionalCost, Notional: true,
+		LatencyMS: 500, Status: "ok", Cost: &unbilledCost, Unbilled: true,
 	})
 
-	var okCount, nullUsage, notionalCount int
+	var okCount, nullUsage, unbilledCount int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
 		WHERE provider = 'itest-provider' AND status = 'ok'
 		AND input_tokens = 100 AND output_tokens = 50 AND cache_read_tokens = 10
@@ -85,18 +85,18 @@ func TestRecordWritesRows(t *testing.T) {
 		t.Fatalf("error rows = %d, want 1", nullUsage)
 	}
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
-		WHERE provider = 'itest-provider' AND cost = 0.2534 AND notional = true`).Scan(&notionalCount); err != nil {
-		t.Fatalf("query notional row: %v", err)
+		WHERE provider = 'itest-provider' AND cost = 0.2534 AND unbilled = true`).Scan(&unbilledCount); err != nil {
+		t.Fatalf("query unbilled row: %v", err)
 	}
-	if notionalCount != 1 {
-		t.Fatalf("notional rows = %d, want 1", notionalCount)
+	if unbilledCount != 1 {
+		t.Fatalf("unbilled rows = %d, want 1", unbilledCount)
 	}
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
-		WHERE provider = 'itest-provider' AND cost = 0.001234 AND notional = false`).Scan(&okCount); err != nil {
-		t.Fatalf("query default-notional row: %v", err)
+		WHERE provider = 'itest-provider' AND cost = 0.001234 AND unbilled = false`).Scan(&okCount); err != nil {
+		t.Fatalf("query default-unbilled row: %v", err)
 	}
 	if okCount != 1 {
-		t.Fatalf("default-notional rows = %d, want 1 (Notional defaults false)", okCount)
+		t.Fatalf("default-unbilled rows = %d, want 1 (Unbilled defaults false)", okCount)
 	}
 }
 

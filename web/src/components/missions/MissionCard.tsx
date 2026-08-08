@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 import type { Mission } from '../../api/types'
+import { missionDisplayName } from '../../lib/format'
 
 const statusColor: Record<Mission['status'], string> = {
   idle: 'bg-muted text-muted-foreground',
@@ -25,7 +26,7 @@ export function MissionCard({ mission }: { mission: Mission }) {
       className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-sm transition hover:border-brand hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="line-clamp-2 text-sm font-semibold">{mission.goal}</span>
+        <span className="line-clamp-2 text-sm font-semibold">{missionDisplayName(mission)}</span>
         <span
           className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${statusColor[mission.status]}`}
         >

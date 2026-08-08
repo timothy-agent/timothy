@@ -42,7 +42,7 @@ func DecorateUsageResponse(body []byte, target string, rates map[string]fxrates.
 // and a "currency" string — Summary, SeriesPoint, GroupTotal,
 // SessionUsage, and BudgetWindow's nested limit all share this exact
 // shape, so one structural match covers every one of them. MissionUsage's
-// cost_by_currency/notional_cost_by_currency are currency-keyed maps
+// cost_by_currency/unbilled_cost_by_currency are currency-keyed maps
 // instead ({"USD": 1.5}, no per-entry currency field to match against)
 // and get their own small special case in decorateObject.
 func decorateAny(v any, target string, rates map[string]fxrates.Rate) {
@@ -65,10 +65,10 @@ func decorateAny(v any, target string, rates map[string]fxrates.Rate) {
 // {amount,currency} object) needs its own decoration path.
 const costByCurrencyKey = "cost_by_currency"
 
-// notionalCostByCurrencyKey is MissionUsage's sibling field for spend
+// unbilledCostByCurrencyKey is MissionUsage's sibling field for spend
 // billed through a subscription/oauth_token executor (D-051) — same
 // currency-keyed map shape, decorated the same way.
-const notionalCostByCurrencyKey = "notional_cost_by_currency"
+const unbilledCostByCurrencyKey = "unbilled_cost_by_currency"
 
 // decorateCostByCurrency adds a parallel "converted_"+convertedKey
 // map next to the given currency-keyed cost map, converting every
@@ -110,8 +110,8 @@ func decorateObject(obj map[string]any, target string, rates map[string]fxrates.
 	if _, ok := obj[costByCurrencyKey]; ok {
 		decorateCostByCurrency(obj, costByCurrencyKey, target, rates)
 	}
-	if _, ok := obj[notionalCostByCurrencyKey]; ok {
-		decorateCostByCurrency(obj, notionalCostByCurrencyKey, target, rates)
+	if _, ok := obj[unbilledCostByCurrencyKey]; ok {
+		decorateCostByCurrency(obj, unbilledCostByCurrencyKey, target, rates)
 	}
 	currency, _ := obj["currency"].(string)
 	if currency == "" || currency == target {
@@ -129,6 +129,17 @@ func decorateObject(obj map[string]any, target string, rates map[string]fxrates.
 	obj["converted_currency"] = target
 	if !rate.AsOf.IsZero() {
 		obj["rate_as_of"] = rate.AsOf.Format("2006-01-02")
+	}
+
+	// unbilled_cost (Summary/SeriesPoint's metered-price-equivalent
+	// scalar for subscription/oauth_token spend, D-051) shares the
+	// object's own currency/target/rate — same conversion, its own
+	// sibling field, so the analytics spend tile's annotation can show
+	// the converted figure exactly like the billed amount does.
+	if unbilledCost, isNum := obj["unbilled_cost"].(float64); isNum && unbilledCost != 0 {
+		if converted, _, ok := fxrates.Convert(unbilledCost, currency, target, rates); ok {
+			obj["converted_unbilled_cost"] = converted
+		}
 	}
 }
 
