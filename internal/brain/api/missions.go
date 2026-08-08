@@ -56,6 +56,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("DELETE /v1/missions/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("GET /v1/missions/{id}/events", a.auth(http.HandlerFunc(h.events)))
 	handle("POST /v1/missions/{id}/resume", a.auth(http.HandlerFunc(h.resume)))
+	handle("POST /v1/missions/{id}/note", a.auth(http.HandlerFunc(h.note)))
 	handle("POST /v1/missions/{id}/cancel", a.auth(http.HandlerFunc(h.cancel)))
 	handle("POST /v1/missions/{id}/permission", a.auth(http.HandlerFunc(h.permission)))
 	handle("GET /v1/missions/{id}/files", a.auth(http.HandlerFunc(h.files)))
@@ -611,6 +612,39 @@ func (h *missionAPI) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// note handles POST /v1/missions/{id}/note: operator guidance injected
+// into a running mission via the existing progress-note pipeline — no
+// state transition, no driver signal. The next worker turn's packet
+// renders it like any other progress note (Render, packet.go), so
+// steering takes effect on its own without waking the mission early.
+func (h *missionAPI) note(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Text == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with a non-empty text field")
+		return
+	}
+	id := r.PathValue("id")
+	m, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	if m.Phase.Terminal() {
+		jsonError(w, http.StatusConflict, "already_finished", missions.ErrTerminal.Error())
+		return
+	}
+	note := missions.NeutralizeSlot(truncateAnswer(body.Text, resumeAnswerCap))
+	if err := h.store.AppendEvent(r.Context(), id, "mission.steered", map[string]any{"note": note}); err != nil {
+		h.log.Warn("mission: record mission.steered event failed", "mission_id", id, "error", err)
+	}
+	if err := h.store.AppendProgress(r.Context(), id, "Operator note: "+note); err != nil {
+		h.log.Warn("mission: record operator note progress failed", "mission_id", id, "error", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // permission answers a mission's pending_permission — the SAME

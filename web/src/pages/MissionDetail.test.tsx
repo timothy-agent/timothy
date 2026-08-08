@@ -13,6 +13,7 @@ vi.mock('../api/client', () => ({
   missionEvents: vi.fn(),
   missionUsage: vi.fn(),
   resumeMission: vi.fn(),
+  sendMissionNote: vi.fn(),
   cancelMission: vi.fn(),
   deleteMission: vi.fn(),
   answerMissionPermission: vi.fn(),
@@ -32,6 +33,7 @@ import {
   missionEvents,
   missionUsage,
   resumeMission,
+  sendMissionNote,
 } from '../api/client'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
@@ -649,6 +651,23 @@ describe('MissionDetail', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     await waitFor(() => expect(resumeMission).toHaveBeenCalledWith('m1'))
+  })
+
+  it('sends a note for a working mission and clears the input on success', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    const input = screen.getByPlaceholderText('Send a note to steer this mission…')
+    fireEvent.change(input, { target: { value: 'focus on staging next' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send note' }))
+    await waitFor(() => expect(sendMissionNote).toHaveBeenCalledWith('m1', 'focus on staging next'))
+    await waitFor(() => expect(input).toHaveValue(''))
+  })
+
+  it('hides the note affordance once the mission is terminal', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'idle' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByPlaceholderText('Send a note to steer this mission…')).toBeNull()
   })
 
   it('surfaces the most recent mission.paused event detail while paused', async () => {

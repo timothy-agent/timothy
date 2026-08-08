@@ -319,6 +319,40 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	}
 }
 
+// TestMissionsNoteMalformedOrEmptyBodyRejected confirms note's text
+// validation happens before ever reaching the store — a degraded pool
+// would surface as 500 (failMission's default) once past validation,
+// so a 400 here proves the handler rejected the request first.
+func TestMissionsNoteMalformedOrEmptyBodyRejected(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	call := func(body io.Reader) int {
+		req := httptest.NewRequest("POST", "/v1/missions/abc/note", body)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := call(strings.NewReader(`{not json`)); code != http.StatusBadRequest {
+		t.Fatalf("note with malformed JSON body = %d, want 400", code)
+	}
+	if code := call(nil); code != http.StatusBadRequest {
+		t.Fatalf("note with no body = %d, want 400", code)
+	}
+	if code := call(strings.NewReader(`{}`)); code != http.StatusBadRequest {
+		t.Fatalf("note with empty JSON body = %d, want 400", code)
+	}
+	if code := call(strings.NewReader(`{"text":""}`)); code != http.StatusBadRequest {
+		t.Fatalf("note with empty text = %d, want 400", code)
+	}
+}
+
 // TestMissionsDecorateTopModels covers decorateTopModels's three
 // degrade paths (nil seam, seam error, no rows) plus the happy path,
 // all against a fake topModels func — no store/ledger involved, since

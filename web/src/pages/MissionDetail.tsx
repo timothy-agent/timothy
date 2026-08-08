@@ -12,6 +12,7 @@ import {
   missionEvents,
   missionUsage,
   resumeMission,
+  sendMissionNote,
 } from '../api/client'
 import type { Mission, MissionEvent, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
@@ -23,6 +24,7 @@ import { GoalSection } from '../components/missions/GoalSection'
 import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -160,6 +162,8 @@ export function MissionDetail() {
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [noteText, setNoteText] = useState('')
+  const [sendingNote, setSendingNote] = useState(false)
   // answeredPermission tracks the pending_permission id the user just
   // decided on, so the card stops being actionable immediately — the
   // decision POST resolves the broker right away, but
@@ -286,6 +290,21 @@ export function MissionDetail() {
     }
   }
 
+  const sendNote = async () => {
+    const text = noteText.trim()
+    if (!text) return
+    setSendingNote(true)
+    try {
+      await sendMissionNote(id, text)
+      setNoteText('')
+      toast.success('Note sent')
+    } catch (err) {
+      toast.error('Could not send note', { description: errText(err) })
+    } finally {
+      setSendingNote(false)
+    }
+  }
+
   const cancel = async () => {
     setBusy(true)
     try {
@@ -404,6 +423,24 @@ export function MissionDetail() {
             )}
             {pauseDetail && (
               <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>
+            )}
+            {!terminalPhases.has(mission.phase) && (
+              <div className="mt-3 flex max-w-md gap-2">
+                <Input
+                  placeholder="Send a note to steer this mission…"
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void sendNote()}
+                  disabled={sendingNote}
+                />
+                <Button
+                  variant="outline"
+                  disabled={sendingNote || !noteText.trim()}
+                  onClick={() => void sendNote()}
+                >
+                  Send note
+                </Button>
+              </div>
             )}
           </div>
           <div className="flex shrink-0 gap-2">

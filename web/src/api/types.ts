@@ -689,6 +689,12 @@ export interface ExecutorSkippedPayload {
   skip_reasons?: string[]
 }
 
+// MissionSteeredPayload is mission.steered's payload — operator
+// guidance injected into a running mission via POST .../note.
+export interface MissionSteeredPayload {
+  note: string
+}
+
 // MissionFile is one entry of a mission workspace's file listing
 // (GET /v1/missions/:id/files). Declared marks files named in the
 // mission's plan artifacts, not the full tree.

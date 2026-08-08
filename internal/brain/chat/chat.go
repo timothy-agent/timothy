@@ -421,26 +421,71 @@ func ClassifyOverGateway(gw Gateway) agents.Classify {
 	}
 }
 
-// TitleOverGateway mirrors autoTitle's mechanism (same "default" role
-// route, same system prompt, same MaxTokens headroom, same rune-safe
-// truncation) as a standalone one-shot call — for callers outside chat
-// (missions naming a mission from its goal) that want a short display
-// name generated the identical way a session's title is, without the
-// session/reply/sensitive-route ceremony a live chat turn carries.
-// Returns "" (never an error) on any failure — best-effort, exactly
-// like autoTitle's own logged-and-dropped failure path; the caller
-// decides what "no name yet" means for its own fallback rendering.
+// titleChatterPrefixes are stock openers a model reaches for when it
+// answers or comments on the request instead of naming it — rejected
+// case-insensitively, but only as whole leading words: "Okta setup"
+// must not trip on "ok".
+var titleChatterPrefixes = []string{
+	"i'll", "i will", "i can", "i would", "sure", "okay", "ok",
+	"let me", "here is", "here's", "certainly", "of course",
+}
+
+// validTitle rejects anything that isn't a short, plain name: empty,
+// over 8 words, over 60 chars, carrying a newline/backtick/code fence,
+// or opening with a chatter prefix — the shape of a model answering or
+// commenting on the request instead of naming it.
+func validTitle(s string) bool {
+	if s == "" || len(s) > 60 {
+		return false
+	}
+	if strings.ContainsAny(s, "\n`") {
+		return false
+	}
+	if len(strings.Fields(s)) > 8 {
+		return false
+	}
+	lower := strings.ToLower(s)
+	for _, p := range titleChatterPrefixes {
+		if lower == p || (strings.HasPrefix(lower, p) && !isWordChar(lower[len(p)])) {
+			return false
+		}
+	}
+	return true
+}
+
+// isWordChar reports whether b continues a word — used to bound a
+// chatter-prefix match at a word boundary.
+func isWordChar(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '\''
+}
+
+// TitleOverGateway mirrors autoTitle's mechanism (same system-prompt/
+// MaxTokens-headroom/rune-safe-truncation shape) as a standalone
+// one-shot call — for callers outside chat (missions naming a mission
+// from its goal) that want a short display name generated the same
+// way a session's title is, without the session/reply/sensitive-route
+// ceremony a live chat turn carries. Titles are summarize-class work
+// (D-049): routed by the "summarize" role, falling back to "default"
+// when unbound, rather than burning the default chain's big model. A
+// rejected reply (validTitle) retries once with the same params;
+// still-invalid or any gateway failure returns "" (never an error) —
+// best-effort, exactly like autoTitle's own logged-and-dropped failure
+// path; the caller decides what "no name yet" means for its own
+// fallback rendering.
 func TitleOverGateway(gw Gateway) func(ctx context.Context, input string) string {
 	return func(ctx context.Context, input string) string {
 		ctx, cancel := context.WithTimeout(ctx, titleTimeout)
 		defer cancel()
 
-		const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
-		route, ok, err := gw.RouteForRole(ctx, "default")
+		const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Do not perform, answer, or comment on the request — output only a short name for it. Reply with only the title.`
+		route, ok, err := gw.RouteForRole(ctx, "summarize")
 		if err != nil || !ok {
-			return ""
+			route, ok, err = gw.RouteForRole(ctx, "default")
+			if err != nil || !ok {
+				return ""
+			}
 		}
-		events, err := gw.Stream(ctx, gwclient.StreamRequest{
+		req := gwclient.StreamRequest{
 			Route:    route,
 			Purpose:  "title",
 			System:   titleSystem,
@@ -449,21 +494,24 @@ func TitleOverGateway(gw Gateway) func(ctx context.Context, input string) string
 			// the first answer token; a tight cap truncates the stream
 			// mid-reasoning and yields an empty title.
 			MaxTokens: 1000,
-		})
-		if err != nil {
-			return ""
 		}
-		var b strings.Builder
-		for ev := range events {
-			if ev.Type == stream.EventChunk {
-				b.WriteString(ev.Text)
+		for attempt := 0; attempt < 2; attempt++ {
+			events, err := gw.Stream(ctx, req)
+			if err != nil {
+				return ""
+			}
+			var b strings.Builder
+			for ev := range events {
+				if ev.Type == stream.EventChunk {
+					b.WriteString(ev.Text)
+				}
+			}
+			title := strings.TrimSpace(strings.Trim(strings.TrimSpace(b.String()), `"'`))
+			if validTitle(title) {
+				return truncateRunes(title, 80)
 			}
 		}
-		title := strings.TrimSpace(strings.Trim(strings.TrimSpace(b.String()), `"'`))
-		if title == "" {
-			return ""
-		}
-		return truncateRunes(title, 80)
+		return ""
 	}
 }
 

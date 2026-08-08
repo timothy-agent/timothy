@@ -7,6 +7,7 @@ import type {
   ExecutorSkippedPayload,
   ExecutorSpawnedPayload,
   MissionEvent,
+  MissionSteeredPayload,
 } from '../../api/types'
 import { formatDuration } from '../../lib/format'
 
@@ -74,6 +75,10 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return detail ? `${base}: ${String(detail)}` : base
   },
   'mission.resumed': () => 'Resumed',
+  'mission.steered': (p) => {
+    const { note } = p as MissionSteeredPayload
+    return <span className="text-amber-400">Operator note: {note}</span>
+  },
   'mission.recovery': () => 'Recovered after a restart',
   'mission.violation': () => 'Policy violation detected',
   'mission.done': () => 'Mission completed',

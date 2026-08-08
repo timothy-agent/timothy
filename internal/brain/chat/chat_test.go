@@ -1580,12 +1580,13 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 	t.Fatal("no title request recorded")
 }
 
-// TestTitleOverGatewayUsesDefaultRoleAndTrimsQuotes mirrors
-// TestAutoTitleUsesDefaultRouteNotClassifyRoute for the standalone
+// TestTitleOverGatewayUsesSummarizeRoleAndTrimsQuotes mirrors
+// TestClassifyOverGatewayResolvesSummarizeRole for the standalone
 // TitleOverGateway constructor (missions naming reuses this instead of
 // autoTitle directly, since a mission has no session/reply at create
-// time) — same "default" role, same quote/whitespace trimming.
-func TestTitleOverGatewayUsesDefaultRoleAndTrimsQuotes(t *testing.T) {
+// time) — titles are summarize-class work (D-049), same quote/
+// whitespace trimming.
+func TestTitleOverGatewayUsesSummarizeRoleAndTrimsQuotes(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents(`"Parse Logs Utility"`)}
 	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
@@ -1598,11 +1599,35 @@ func TestTitleOverGatewayUsesDefaultRoleAndTrimsQuotes(t *testing.T) {
 	if len(gw.requests) != 1 {
 		t.Fatalf("requests = %d, want 1", len(gw.requests))
 	}
-	if gw.requests[0].Route != "default" {
-		t.Fatalf("route = %q, want default", gw.requests[0].Route)
+	if gw.requests[0].Route != "summarize" {
+		t.Fatalf("route = %q, want summarize", gw.requests[0].Route)
 	}
 	if gw.requests[0].Purpose != "title" {
 		t.Fatalf("purpose = %q, want title", gw.requests[0].Purpose)
+	}
+}
+
+// TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound
+// confirms an unbound "summarize" role falls back to "default" rather
+// than giving up — a fresh install may not have seeded a summarize
+// role yet.
+func TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound(t *testing.T) {
+	t.Parallel()
+	gw := &roleGW{
+		fakeGW: fakeGW{events: okEvents("Parse Logs Utility")},
+		routeForRole: func(_ context.Context, role string) (string, bool, error) {
+			if role == "summarize" {
+				return "", false, nil
+			}
+			return role, true, nil
+		},
+	}
+	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	if name != "Parse Logs Utility" {
+		t.Fatalf("name = %q, want Parse Logs Utility", name)
+	}
+	if got := gw.lastRequest().Route; got != "default" {
+		t.Fatalf("route = %q, want default (fallback from unbound summarize)", got)
 	}
 }
 
@@ -1616,6 +1641,115 @@ func TestTitleOverGatewayEmptyOnGatewayError(t *testing.T) {
 	name := TitleOverGateway(gw)(context.Background(), "a goal")
 	if name != "" {
 		t.Fatalf("name = %q, want empty on gateway error", name)
+	}
+}
+
+// TestValidTitle table-tests each rejection class and a set of
+// accepted titles, including a 6-word and a unicode one.
+func TestValidTitle(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"too many words", "one two three four five six seven eight nine", false},
+		{"too long", strings.Repeat("a", 61), false},
+		{"newline", "Parse Logs\nUtility", false},
+		{"backtick", "Parse `Logs` Utility", false},
+		{"chatter i'll", "I'll create a log parser", false},
+		{"chatter i will", "I will build this now", false},
+		{"chatter i can", "I can do that for you", false},
+		{"chatter i would", "I would suggest a CLI", false},
+		{"chatter sure", "Sure, here's a title", false},
+		{"chatter okay", "Okay let's name this", false},
+		{"chatter ok", "Ok here is a name", false},
+		{"chatter let me", "Let me name this for you", false},
+		{"chatter here is", "Here is your title", false},
+		{"chatter here's", "Here's a good name", false},
+		{"chatter certainly", "Certainly, a title follows", false},
+		{"chatter of course", "Of course, here's a name", false},
+		{"chatter case-insensitive", "SURE thing, a title", false},
+		{"bare chatter word", "Ok", false},
+		{"normal short", "Parse Logs Utility", true},
+		{"six words", "Build A Go Log Parser Tool", true},
+		{"unicode", "Résumé Parser Für Verträge", true},
+		{"prefix inside word ok", "Okta Integration Setup", true},
+		{"prefix inside word sure", "Surefire Deploy Checklist", true},
+		{"prefix inside word here", "Heredoc Quoting Fix", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validTitle(tc.in); got != tc.want {
+				t.Fatalf("validTitle(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// titleScriptedGW returns one canned reply per Stream call, in
+// order — for proving TitleOverGateway's one-retry contract, which
+// fakeGW's always-identical-events shape can't exercise.
+type titleScriptedGW struct {
+	fakeGW
+	replies []string
+}
+
+func (g *titleScriptedGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	g.mu.Lock()
+	i := len(g.requests)
+	g.requests = append(g.requests, req)
+	reply := g.replies[min(i, len(g.replies)-1)]
+	g.mu.Unlock()
+	return okEventsChan(reply), nil
+}
+
+func okEventsChan(text string) <-chan stream.StreamEvent {
+	ch := make(chan stream.StreamEvent, len(okEvents(text)))
+	for _, ev := range okEvents(text) {
+		ch <- ev
+	}
+	close(ch)
+	return ch
+}
+
+// TestTitleOverGatewayRetriesOnceOnChatterThenSucceeds confirms a
+// first reply that answers/comments on the request instead of naming
+// it is rejected and retried once with the same params, returning the
+// second reply once it's valid.
+func TestTitleOverGatewayRetriesOnceOnChatterThenSucceeds(t *testing.T) {
+	t.Parallel()
+	gw := &titleScriptedGW{replies: []string{"I'll create a log parser for you", "Parse Logs Utility"}}
+	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	if name != "Parse Logs Utility" {
+		t.Fatalf("name = %q, want Parse Logs Utility", name)
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (one retry)", len(gw.requests))
+	}
+	if gw.requests[0].Route != gw.requests[1].Route || gw.requests[0].Purpose != gw.requests[1].Purpose {
+		t.Fatalf("retry params changed: %+v vs %+v", gw.requests[0], gw.requests[1])
+	}
+}
+
+// TestTitleOverGatewayEmptyWhenBothAttemptsInvalid confirms two
+// consecutive chatter replies exhaust the retry and return "" rather
+// than a chatter string.
+func TestTitleOverGatewayEmptyWhenBothAttemptsInvalid(t *testing.T) {
+	t.Parallel()
+	gw := &titleScriptedGW{replies: []string{"I'll create a log parser", "Sure, here's a title for that"}}
+	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	if name != "" {
+		t.Fatalf("name = %q, want empty after both attempts invalid", name)
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(gw.requests))
 	}
 }
 

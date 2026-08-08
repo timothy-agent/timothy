@@ -203,6 +203,139 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 	}
 }
 
+// TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange confirms
+// POST .../note appends a mission.steered event and an "Operator
+// note: ..." progress note, sanitized/truncated the same way resume's
+// answer is, and leaves phase/status untouched — the note rides the
+// next worker turn's own packet, no driver signal involved.
+func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission note test", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.ApplyTransition(ctx, id, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseExecute, Status: missions.StatusIdle},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":"focus on the staging config next"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("note = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	got, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Phase != missions.PhaseExecute || got.Status != missions.StatusIdle {
+		t.Fatalf("phase/status after note = %s/%s, want unchanged execute/idle", got.Phase, got.Status)
+	}
+	if len(got.Progress) != 1 || !strings.Contains(got.Progress[0].Note, "Operator note: focus on the staging config next") {
+		t.Fatalf("progress = %+v, want one operator note", got.Progress)
+	}
+
+	events, err := store.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var sawSteered bool
+	for _, e := range events {
+		if e.Kind == "mission.steered" {
+			sawSteered = true
+			if !strings.Contains(string(e.Payload), "focus on the staging config next") {
+				t.Fatalf("mission.steered payload = %s, want the note", e.Payload)
+			}
+		}
+	}
+	if !sawSteered {
+		t.Fatalf("events = %+v, want mission.steered", events)
+	}
+}
+
+// TestMissionsNoteUnknownMission confirms an unknown mission id 404s
+// before any store write is attempted.
+func TestMissionsNoteUnknownMission(t *testing.T) {
+	store := testMissionStore(t)
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/00000000-0000-0000-0000-000000000000/note", strings.NewReader(`{"text":"hello"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("note on unknown mission = %d, want 404: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestMissionsNoteEmptyTextRejected confirms an empty/missing text
+// field 400s.
+func TestMissionsNoteEmptyTextRejected(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission note empty test", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":""}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("note with empty text = %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestMissionsNoteTerminalMissionRejected confirms a done/failed
+// mission refuses the note with 409 already_finished rather than
+// silently writing to a mission nothing will ever read again.
+func TestMissionsNoteTerminalMissionRejected(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission note terminal test", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.ApplyTransition(ctx, id, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseDone, Status: missions.StatusIdle},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":"too late"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("note on terminal mission = %d, want 409: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestMissionsCreateResponseCarriesDetectedEnvironment confirms the
 // POST /v1/missions response reflects the row create() actually
 // persisted — the create() handler resolves an omitted coding

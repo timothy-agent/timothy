@@ -941,6 +941,16 @@ export async function cancelMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/cancel`, { method: 'POST' })
 }
 
+// sendMissionNote injects operator guidance into a running mission via
+// the progress-note pipeline — no state transition, picked up by the
+// next worker turn's own packet.
+export async function sendMissionNote(id: string, text: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/note`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+}
+
 export async function deleteMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}`, { method: 'DELETE' })
 }

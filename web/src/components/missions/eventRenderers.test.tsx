@@ -120,6 +120,15 @@ describe('executor.result rendering', () => {
   })
 })
 
+describe('mission.steered rendering', () => {
+  it('renders the operator note as an amber row', () => {
+    render(<div>{renderEvent(event({ note: 'focus on staging next' }, 'mission.steered'))}</div>)
+    const row = screen.getByText(/Operator note: focus on staging next/)
+    expect(row).toBeInTheDocument()
+    expect(row).toHaveClass('text-amber-400')
+  })
+})
+
 describe('executor lifecycle event rendering', () => {
   it('renders executor.spawned with harness, provider/model, and auth mode', () => {
     render(
