@@ -71,7 +71,14 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race ./...
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+          flags: go
+          fail_ci_if_error: false
       - name: Vulnerability scan
         # Pinned, not @latest: a floating version re-resolves (and can
         # change) every run, defeating actions/setup-go's module cache
@@ -148,6 +155,19 @@ jobs:
         run: npm run lint
       - name: Test
         run: npm test
+      # Separate, never-blocking: v8 instrumentation slows the suite
+      # enough to surface timing flakes, so coverage failure must not
+      # fail the gate the plain run already provides.
+      - name: Coverage
+        continue-on-error: true
+        run: npx vitest run --coverage.enabled --coverage.reporter=lcov --testTimeout=20000
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: web/coverage/lcov.info
+          flags: web
+          fail_ci_if_error: false
 
   images:
     needs: changes

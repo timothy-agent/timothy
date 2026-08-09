@@ -1,0 +1,27 @@
+# Coverage is informational: status checks never block a PR — the
+# repo's own gates (tests, lint, canary) decide mergeability.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+flags:
+  go:
+    paths:
+      - internal/
+      - cmd/
+  web:
+    paths:
+      - web/src/
+
+ignore:
+  - "**/testdata/**"
+  - "**/*_test.go"
+  - "web/src/**/*.test.tsx"
+  - "web/src/**/*.test.ts"
+  - "scripts/**"
+  - "deploy/**"
