@@ -657,7 +657,8 @@ export interface SecretRefEntry {
 // tab and the "use existing" pickers on provider/connector forms.
 export async function listSecretRefs(): Promise<SecretRefEntry[]> {
   const { secrets } = await request<{ secrets: SecretRefEntry[] }>('/v1/admin/secrets')
-  return secrets ?? []
+  // referenced_by is normalized here so no consumer ever sees null.
+  return (secrets ?? []).map((s) => ({ ...s, referenced_by: s.referenced_by ?? [] }))
 }
 
 export interface SecretStatus {

@@ -204,7 +204,9 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]secretRefEntry, len(refs))
 	for i, ref := range refs {
-		var referents []referenceInfo
+		// Always a JSON array, never null: the frontend indexes
+		// referenced_by unconditionally.
+		referents := []referenceInfo{}
 		for _, name := range ref.ReferencedBy {
 			referents = append(referents, referenceInfo{Kind: "provider", Name: name})
 		}

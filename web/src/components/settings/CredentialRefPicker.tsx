@@ -8,8 +8,9 @@ export type CredentialMode = 'new' | 'existing'
 // referentLabel renders a ref's used-by hint for the option label — no
 // type-classification of secrets, just what already references it.
 function referentLabel(ref: SecretRefEntry): string {
-  if (ref.referenced_by.length === 0) return ref.name
-  return `${ref.name} (used by ${ref.referenced_by.map((r) => r.name).join(', ')})`
+  const refs = ref.referenced_by ?? []
+  if (refs.length === 0) return ref.name
+  return `${ref.name} (used by ${refs.map((r) => r.name).join(', ')})`
 }
 
 // ModeToggle is the segmented "New credential" / "Use existing"

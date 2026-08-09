@@ -230,36 +230,34 @@ export function ConnectorAdd() {
 
         {isGoogle ? (
           <>
-            <div className="grid gap-5 sm:grid-cols-2">
-              <Field label="OAuth client ID">
-                <Input
-                  value={clientID}
-                  onChange={(e) => setClientID(e.target.value)}
-                  placeholder="….apps.googleusercontent.com"
-                  className="mt-1.5 h-10"
-                />
-              </Field>
-              <div>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="text-sm font-medium text-foreground">OAuth client secret</span>
-                  <CredentialModeToggle mode={clientSecretCredMode} onChange={setClientSecretCredMode} />
-                </div>
-                {clientSecretCredMode === 'existing' ? (
-                  <ExistingCredentialSelect
-                    value={existingClientSecretRef}
-                    onChange={setExistingClientSecretRef}
-                  />
-                ) : (
-                  <Input
-                    type="password"
-                    value={clientSecret}
-                    onChange={(e) => setClientSecret(e.target.value)}
-                    placeholder="GOCSPX-…"
-                    className="h-10"
-                    autoComplete="off"
-                  />
-                )}
+            <Field label="OAuth client ID">
+              <Input
+                value={clientID}
+                onChange={(e) => setClientID(e.target.value)}
+                placeholder="….apps.googleusercontent.com"
+                className="mt-1.5 h-10"
+              />
+            </Field>
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">OAuth client secret</span>
+                <CredentialModeToggle mode={clientSecretCredMode} onChange={setClientSecretCredMode} />
               </div>
+              {clientSecretCredMode === 'existing' ? (
+                <ExistingCredentialSelect
+                  value={existingClientSecretRef}
+                  onChange={setExistingClientSecretRef}
+                />
+              ) : (
+                <Input
+                  type="password"
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder="GOCSPX-…"
+                  className="h-10"
+                  autoComplete="off"
+                />
+              )}
             </div>
             <p className="text-sm text-muted-foreground">
               From a Google Cloud OAuth client (Web application). Add{' '}

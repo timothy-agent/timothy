@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
@@ -102,6 +103,12 @@ func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 	}
 	if len(byName["ORPHAN_KEY"].ReferencedBy) != 0 {
 		t.Fatalf("ORPHAN_KEY referenced_by = %+v, want empty", byName["ORPHAN_KEY"].ReferencedBy)
+	}
+	// An orphaned ref must serialize referenced_by as [], never null —
+	// the frontend indexes it unconditionally, and null once crashed the
+	// credential picker.
+	if !strings.Contains(w.Body.String(), `"referenced_by":[]`) {
+		t.Fatalf("body = %s, want orphaned referenced_by serialized as []", w.Body.String())
 	}
 }
 
