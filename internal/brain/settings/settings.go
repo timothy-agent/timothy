@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -58,13 +59,26 @@ const (
 	// request defaults to when it doesn't specify one (D-051); "" (the
 	// default) means native. Never applies to kind=general missions.
 	ValueCodingExecutor = "coding_executor"
+	// ValueGitBranchPattern is the default branch-name template a coding
+	// mission's Provision expands (missions/branchtemplate.go); ""
+	// defers to missions.DefaultBranchPattern ("{type}/{slug}"), the
+	// original behavior. A mission's own branch_pattern column
+	// overrides this per create request.
+	ValueGitBranchPattern = "git_branch_pattern"
+	// ValueGitCommitStyle is the default commit-message style
+	// ("conventional" or "plain") a mission's unit commits use; "" defers
+	// to missions.CommitStyleConventional, the original behavior. A
+	// mission's own commit_style column overrides this per create
+	// request.
+	ValueGitCommitStyle = "git_commit_style"
 )
 
 var knownValueKeys = map[string]bool{
 	ValueTokenBudget: true, ValueSkillsAllowlist: true,
 	ValueGitAuthorName: true, ValueGitAuthorEmail: true,
 	ValueSensitiveToolRoute: true, ValueDefaultCurrency: true,
-	ValueCodingExecutor: true,
+	ValueCodingExecutor:   true,
+	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -158,6 +172,18 @@ func (s *Store) DefaultCurrency(ctx context.Context) string {
 // mission's create request, "" (native) when unset.
 func (s *Store) CodingExecutor(ctx context.Context) string {
 	return s.Value(ctx, ValueCodingExecutor)
+}
+
+// GitBranchPattern returns the configured default branch-name template,
+// "" (missions.DefaultBranchPattern) when unset.
+func (s *Store) GitBranchPattern(ctx context.Context) string {
+	return s.Value(ctx, ValueGitBranchPattern)
+}
+
+// GitCommitStyle returns the configured default commit-message style,
+// "" (missions.CommitStyleConventional) when unset.
+func (s *Store) GitCommitStyle(ctx context.Context) string {
+	return s.Value(ctx, ValueGitCommitStyle)
 }
 
 // SkillAllowed reports whether the allowlist admits a pack name;
@@ -267,6 +293,16 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			value = ""
 		} else if _, ok := executor.Lookup(value); !ok {
 			return fmt.Errorf("%s: unknown harness %q", key, value)
+		}
+	}
+	if key == ValueGitBranchPattern && value != "" {
+		if err := missions.ValidateBranchPattern(value); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+	}
+	if key == ValueGitCommitStyle && value != "" {
+		if err := missions.ValidateCommitStyle(value); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
 		}
 	}
 	return s.write(ctx, key, s.Value(ctx, key), value)

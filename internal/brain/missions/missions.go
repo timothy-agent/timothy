@@ -21,26 +21,26 @@ type Mission struct {
 	// Store.SetNameIfEmpty. Scheduler-fired missions get the schedule's
 	// own name directly, no LLM call. Empty means generation hasn't
 	// landed yet; the UI falls back to a truncated Goal.
-	Name string `json:"name,omitempty"`
-	Kind string `json:"kind"` // coding | general
+	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind"` // coding | general
 	AgentID string `json:"agent_id,omitempty"`
 	// PromptOverlay is a snapshot of the creating agent's overlay text
 	// at create time — see 0010_missions.sql for why this isn't a live
 	// agent lookup.
-	PromptOverlay string         `json:"prompt_overlay,omitempty"`
-	Phase         Phase          `json:"phase"`
-	Status        Status         `json:"status"`
+	PromptOverlay string `json:"prompt_overlay,omitempty"`
+	Phase         Phase  `json:"phase"`
+	Status        Status `json:"status"`
 	// FailureReason is derived (no column) from this mission's latest
 	// mission.failed event's payload.reason — "cancelled" or
 	// "max_iterations" (statemachine.go) — set only by Store.List/Get for
 	// a phase=failed mission. Empty for every other mission.
-	FailureReason string `json:"failure_reason,omitempty"`
-	PauseReason   PauseReason    `json:"pause_reason,omitempty"`
-	PauseMessage  string         `json:"pause_message,omitempty"`
-	Workspace     string         `json:"workspace,omitempty"`
-	Worktree      string         `json:"worktree,omitempty"`
-	Branch        string         `json:"branch,omitempty"`
-	BaseCommit    string         `json:"base_commit,omitempty"`
+	FailureReason string      `json:"failure_reason,omitempty"`
+	PauseReason   PauseReason `json:"pause_reason,omitempty"`
+	PauseMessage  string      `json:"pause_message,omitempty"`
+	Workspace     string      `json:"workspace,omitempty"`
+	Worktree      string      `json:"worktree,omitempty"`
+	Branch        string      `json:"branch,omitempty"`
+	BaseCommit    string      `json:"base_commit,omitempty"`
 	// RepoURL is the GitHub repo this coding mission was cloned from
 	// (https clone URL) — empty means the self-init'd empty repo
 	// Workspace.Provision otherwise creates. ConnectorID names the
@@ -48,6 +48,14 @@ type Mission struct {
 	// token itself is never stored, only resolved fresh at provisioning.
 	RepoURL     string `json:"repo_url,omitempty"`
 	ConnectorID string `json:"connector_id,omitempty"`
+	// BranchPattern/CommitStyle are this mission's own override of the
+	// settings-configured git strategy defaults (git_branch_pattern/
+	// git_commit_style), snapshotted at create time: "" means "use the
+	// settings default," resolved fresh at provisioning/commit time
+	// (driver.go), never baked in here. See branchtemplate.go for the
+	// template placeholders and style values.
+	BranchPattern string `json:"branch_pattern,omitempty"`
+	CommitStyle   string `json:"commit_style,omitempty"`
 	// OnComplete is the operator's consent-at-create choice for what
 	// happens when this mission reaches phase=done: "" (default) does
 	// nothing, "push" pushes the branch, "push_pr" pushes then opens a
@@ -55,9 +63,9 @@ type Mission struct {
 	// validation); the harness (driver.go) executes it automatically on
 	// the done transition using the SAME push/PR code path the manual
 	// push/pr endpoints use.
-	OnComplete string `json:"on_complete,omitempty"`
-	Spec          Spec           `json:"spec"`
-	Progress      []ProgressNote `json:"progress"`
+	OnComplete string         `json:"on_complete,omitempty"`
+	Spec       Spec           `json:"spec"`
+	Progress   []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's
 	// evidence text — carried from execute into review so a
 	// general mission (whose baseline diff is always empty,

@@ -607,6 +607,11 @@ export interface Mission {
   // turns run under (D-051): "" or absent is native in-process
   // dispatch, "claude-cli"/"pi" name a registered executor.
   harness?: string
+  // branch_pattern/commit_style are this mission's own override of the
+  // settings-configured git strategy defaults; "" or absent means the
+  // settings default applied at provisioning/commit time.
+  branch_pattern?: string
+  commit_style?: string
   // top_model/top_model_provider are decorated onto the list/get
   // response from the cost ledger's top-served-model-per-mission
   // lookup (internal/brain/api/missions.go's decorateTopModels) — the
@@ -788,6 +793,8 @@ export interface MissionTemplate {
   auto_approve_safe?: boolean
   harness?: string
   environment?: string
+  branch_pattern?: string
+  commit_style?: string
 }
 
 // Schedule is a recurring cron trigger that fires mission_template

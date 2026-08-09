@@ -303,6 +303,67 @@ describe('MissionForm — environment select', () => {
   })
 })
 
+describe('MissionForm — git strategy overrides', () => {
+  it('shows branch pattern and commit style in Advanced for a coding mission', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
+
+    expect(screen.getByLabelText('Branch pattern')).toBeInTheDocument()
+    expect(screen.getByLabelText('Commit style')).toBeInTheDocument()
+    expect(screen.getByLabelText('Commit style')).toHaveTextContent('Default (from settings)')
+  })
+
+  it('omits branch pattern and commit style for a general mission', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
+
+    expect(screen.queryByLabelText('Branch pattern')).toBeNull()
+    expect(screen.queryByLabelText('Commit style')).toBeNull()
+  })
+
+  it('submits a typed branch pattern and picked commit style for a coding mission', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm8' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
+    fireEvent.change(screen.getByLabelText('Branch pattern'), {
+      target: { value: '{type}/{login}/{slug}' },
+    })
+    fireEvent.click(screen.getByLabelText('Commit style'))
+    fireEvent.click(await screen.findByText('Plain'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ branch_pattern: '{type}/{login}/{slug}', commit_style: 'plain' }),
+      ),
+    )
+  })
+
+  it('omits branch pattern and commit style from the create payload when left on defaults', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ branch_pattern: undefined, commit_style: undefined }),
+      ),
+    )
+  })
+})
+
 const githubConnector: AdminConnector = {
   id: 'c1',
   name: 'personal-gh',
