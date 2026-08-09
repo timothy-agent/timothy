@@ -205,8 +205,7 @@ func (g *Google) exchange(ctx context.Context, cfg GoogleConfig, form url.Values
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return tokenBundle{}, fmt.Errorf("token endpoint status %d: %s", resp.StatusCode, snippet)
+		return tokenBundle{}, googleTokenError(resp)
 	}
 	var out struct {
 		AccessToken  string `json:"access_token"`
@@ -221,6 +220,32 @@ func (g *Google) exchange(ctx context.Context, cfg GoogleConfig, form url.Values
 		RefreshToken: out.RefreshToken,
 		Expiry:       time.Now().Add(time.Duration(out.ExpiresIn) * time.Second),
 	}, nil
+}
+
+// googleOAuthErrorBody is the token endpoint's error shape
+// (https://www.rfc-editor.org/rfc/rfc6749#section-5.2).
+type googleOAuthErrorBody struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+// googleTokenError maps a non-200 token endpoint response to a human
+// message, never surfacing the raw JSON body. invalid_grant (expired
+// or revoked refresh token — Google's testing-mode apps hit this
+// roughly weekly) gets the reconnect-oriented message; other errors
+// keep the status and Google's error code, nothing more.
+func googleTokenError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var e googleOAuthErrorBody
+	_ = json.Unmarshal(body, &e)
+	if e.Error == "invalid_grant" {
+		return fmt.Errorf("Google authorization expired or was revoked — reconnect to re-authorize. " +
+			"(Testing-mode OAuth apps expire grants roughly weekly.)")
+	}
+	if e.Error != "" {
+		return fmt.Errorf("Google authorization failed (status %d, error %q) — reconnect to re-authorize", resp.StatusCode, e.Error)
+	}
+	return fmt.Errorf("Google authorization failed (status %d)", resp.StatusCode)
 }
 
 func (g *Google) storeBundle(ctx context.Context, ref string, b tokenBundle) error {

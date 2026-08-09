@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -190,6 +191,60 @@ func TestMCPBuildFailures(t *testing.T) {
 	}, func(context.Context, string) (string, error) { return "wrong", nil })
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("bad token build = %v, want 401", err)
+	}
+}
+
+// TestMCPStatusErrorNeverLeaksRawJSON pins the "status + short reason,
+// no raw body" discipline shared with the Google/GitHub error mapping:
+// a JSON error body's message/error field is used verbatim, and a
+// non-JSON body is truncated rather than dumped whole.
+func TestMCPStatusErrorNeverLeaksRawJSON(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "message field",
+			status: http.StatusForbidden,
+			body:   `{"message":"insufficient scope","extra":{"deeply":{"nested":"junk"}}}`,
+			want:   "status 403: insufficient scope",
+		},
+		{
+			name:   "error field",
+			status: http.StatusInternalServerError,
+			body:   `{"error":"internal failure","trace":"huge stack trace blob"}`,
+			want:   "status 500: internal failure",
+		},
+		{
+			name:   "non-json body truncated",
+			status: http.StatusBadGateway,
+			body:   strings.Repeat("x", 500),
+			want:   "status 502: " + strings.Repeat("x", 120) + "…",
+		},
+		{
+			name:   "empty body",
+			status: http.StatusServiceUnavailable,
+			body:   "",
+			want:   "status 503",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := &http.Response{
+				StatusCode: tc.status,
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+			err := mcpStatusError(resp)
+			if err.Error() != tc.want {
+				t.Fatalf("mcpStatusError = %q, want %q", err.Error(), tc.want)
+			}
+			if strings.Contains(err.Error(), "extra") || strings.Contains(err.Error(), "trace") {
+				t.Fatalf("mcpStatusError leaked raw JSON fields: %q", err.Error())
+			}
+		})
 	}
 }
 
