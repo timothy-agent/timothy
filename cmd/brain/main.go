@@ -961,6 +961,12 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	perms := tools.NewPermissions(db, workspace)
 	broker := loop.NewPermBroker()
 	agent := loop.NewAgent(gwc, constrained, perms, outputs, tools.NewAudit(db), store, broker, defs, log)
+	// Mission-driven turns (Request.BuiltinsOnly) get this compiled-in
+	// set only — never connector tools or the chat-only mission tools
+	// registered later in main(), since neither exists yet at this
+	// point. This snapshot never changes at runtime, unlike the shared
+	// registry SwapTools maintains.
+	agent.SetBaseTools(constrained, defs)
 	// Shell dumps grow fast; offload them sooner than the default so a
 	// long command output never bloats the context (D-019).
 	agent.SetOffloadThreshold("shell", 4<<10)
