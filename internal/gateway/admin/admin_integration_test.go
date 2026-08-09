@@ -817,6 +817,95 @@ func TestCreateExcludeFromBootstrapSkipsFixedRoutes(t *testing.T) {
 	}
 }
 
+// TestListSecretsReportsProviderReferents pins ListSecrets' contract:
+// every stored ref comes back with timestamps and the names of every
+// provider whose credential_ref matches it, an orphaned ref reports an
+// empty (never nil, for a clean UI render) referenced_by.
+func TestListSecretsReportsProviderReferents(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+
+	ref := adminMarker + "listed"
+	if err := adm.SetSecret(ctx, ref, "sk-live-value"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	orphan := adminMarker + "orphan"
+	if err := adm.SetSecret(ctx, orphan, "sk-live-value-2"); err != nil {
+		t.Fatalf("SetSecret orphan: %v", err)
+	}
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "listing-provider", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "m1", CredentialRef: ref,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _ = adm.Delete(ctx, id) })
+
+	refs, err := adm.ListSecrets(ctx)
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+	byName := map[string]SecretRef{}
+	for _, r := range refs {
+		byName[r.RefName] = r
+	}
+	got, ok := byName[ref]
+	if !ok {
+		t.Fatalf("ListSecrets missing %s", ref)
+	}
+	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatalf("ref %s timestamps = %+v, want both set", ref, got)
+	}
+	if len(got.ReferencedBy) != 1 || got.ReferencedBy[0] != adminMarker+"listing-provider" {
+		t.Fatalf("ref %s referenced_by = %v, want [%s]", ref, got.ReferencedBy, adminMarker+"listing-provider")
+	}
+	orphanGot, ok := byName[orphan]
+	if !ok {
+		t.Fatalf("ListSecrets missing %s", orphan)
+	}
+	if len(orphanGot.ReferencedBy) != 0 {
+		t.Fatalf("orphan ref referenced_by = %v, want empty", orphanGot.ReferencedBy)
+	}
+}
+
+// TestDeleteSecretRefusesWhileProviderReferencesIt pins the guard added
+// to DeleteSecret: a provider naming refName as credential_ref blocks
+// the delete regardless of the provider's enabled state (a disabled
+// provider still owns the credential), and the row survives; deleting
+// the provider first lets the secret go.
+func TestDeleteSecretRefusesWhileProviderReferencesIt(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+
+	ref := adminMarker + "guarded"
+	if err := adm.SetSecret(ctx, ref, "sk-live-value"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "guard-provider", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "m1", CredentialRef: ref,
+		Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := adm.DeleteSecret(ctx, ref); err == nil || !strings.Contains(err.Error(), "referenced by provider") {
+		t.Fatalf("DeleteSecret while referenced = %v, want in-use refusal naming the provider", err)
+	}
+	if configured, _, err := adm.SecretStatus(ctx, ref); err != nil || !configured {
+		t.Fatalf("SecretStatus after refused delete: configured=%v err=%v, want still configured", configured, err)
+	}
+
+	if err := adm.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete provider: %v", err)
+	}
+	if err := adm.DeleteSecret(ctx, ref); err != nil {
+		t.Fatalf("DeleteSecret after provider removed: %v", err)
+	}
+}
+
 func TestSecretExternalBackendConfig(t *testing.T) {
 	adm, _, _ := testAdmin(t)
 	ctx := t.Context()

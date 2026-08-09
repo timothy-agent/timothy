@@ -8,6 +8,7 @@ import type { AdminProvider, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { ModelInput, type ModelSuggestion } from './ModelInput'
 import { modelCatalog } from './modelCatalog'
 import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
@@ -58,6 +59,11 @@ export function ProviderAdd() {
   const [tested, setTested] = useState(false)
   const [existing, setExisting] = useState<AdminProvider[]>([])
   const [anthropicAuth, setAnthropicAuth] = useState<AnthropicAuthMode>('api_key')
+  // credMode picks between typing a new secret (default) and reusing a
+  // stored ref — only offered for the plain (non-bedrock-split,
+  // non-CLI) API key flow, the common reuse case (e.g. the same
+  // OpenAI-compatible key across two provider rows).
+  const [credMode, setCredMode] = useState<CredentialMode>('new')
 
   useEffect(() => {
     listProviders().then(setExisting, () => undefined)
@@ -80,6 +86,7 @@ export function ProviderAdd() {
     setTest(null)
     setTested(false)
     setAnthropicAuth('api_key')
+    setCredMode('new')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
 
@@ -135,7 +142,12 @@ export function ProviderAdd() {
       access_key_id: stripPaste(accessKeyId.trim()),
       secret_access_key: stripPaste(secretAccessKey.trim()),
     })
-  const hasKey = bedrockSplit ? !!(accessKeyId.trim() && secretAccessKey.trim()) : !!key.trim()
+  const usingExistingCred = !isCli && !bedrockSplit && credMode === 'existing'
+  const hasKey = usingExistingCred
+    ? !!ref.trim()
+    : bedrockSplit
+      ? !!(accessKeyId.trim() && secretAccessKey.trim())
+      : !!key.trim()
 
   // Any edit invalidates a previous test — the config it validated no
   // longer matches what's on screen.
@@ -201,7 +213,7 @@ export function ProviderAdd() {
       )
       return
     }
-    if (isAnthropic && anthropicAuth === 'api_key' && stripPaste(key).startsWith('sk-ant-oat')) {
+    if (!usingExistingCred && isAnthropic && anthropicAuth === 'api_key' && stripPaste(key).startsWith('sk-ant-oat')) {
       setKeyError('This looks like a subscription token — use "Subscription token" instead.')
       return
     }
@@ -213,7 +225,7 @@ export function ProviderAdd() {
     setBusy(true)
     setTest(null)
     try {
-      if (wantsKey && hasKey) {
+      if (wantsKey && hasKey && !usingExistingCred) {
         if (!ref.trim()) throw new Error('a credential reference name is required to store the key')
         await setSecret(ref.trim(), bedrockSplit ? bedrockKeyJSON() : stripPaste(key))
       }
@@ -464,48 +476,72 @@ export function ProviderAdd() {
         )}
         {!isCli && wantsKey && !bedrockSplit && (
           <div>
-            <Field label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}>
-              <Input
-                type="password"
-                value={key}
-                onChange={(e) => {
-                  setKey(e.target.value)
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-sm font-medium text-foreground">
+                {preset.id === 'custom' ? 'API key (optional)' : 'API key'}
+              </span>
+              <CredentialModeToggle
+                mode={credMode}
+                onChange={(m) => {
+                  setCredMode(m)
                   invalidate()
                 }}
-                placeholder={preset.keyPlaceholder ?? 'paste key'}
-                className="mt-1.5 h-10"
-                autoComplete="off"
-                aria-invalid={keyError != null}
               />
-            </Field>
-            {keyError && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
-                <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
-                {keyError}
-              </p>
-            )}
-            {!keyError && (
-              <div className="mt-1.5 space-y-1 text-sm text-muted-foreground">
-                {preset.keyHint && (
-                  <p>
-                    {preset.keyHint}
-                    {preset.keyURL && (
-                      <>
-                        {' '}
-                        <a
-                          href={preset.keyURL}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                        >
-                          Open {preset.name} →
-                        </a>
-                      </>
-                    )}
+            </div>
+            {credMode === 'existing' ? (
+              <ExistingCredentialSelect
+                value={ref}
+                onChange={(v) => {
+                  setRef(v)
+                  setRefEdited(true)
+                  invalidate()
+                }}
+              />
+            ) : (
+              <>
+                <Input
+                  type="password"
+                  value={key}
+                  onChange={(e) => {
+                    setKey(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder={preset.keyPlaceholder ?? 'paste key'}
+                  aria-label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}
+                  className="h-10"
+                  autoComplete="off"
+                  aria-invalid={keyError != null}
+                />
+                {keyError && (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
+                    <HugeiconsIcon icon={AlertCircleIcon} className="size-4 shrink-0" />
+                    {keyError}
                   </p>
                 )}
-                <p>{secretDestination(defaultBackend, ref)}</p>
-              </div>
+                {!keyError && (
+                  <div className="mt-1.5 space-y-1 text-sm text-muted-foreground">
+                    {preset.keyHint && (
+                      <p>
+                        {preset.keyHint}
+                        {preset.keyURL && (
+                          <>
+                            {' '}
+                            <a
+                              href={preset.keyURL}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                            >
+                              Open {preset.name} →
+                            </a>
+                          </>
+                        )}
+                      </p>
+                    )}
+                    <p>{secretDestination(defaultBackend, ref)}</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

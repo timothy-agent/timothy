@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -250,6 +251,73 @@ func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*Resol
 	c.resolved[cacheKey] = resolveCacheEntry{route: &out, exp: time.Now().Add(resolveTTL)}
 	c.mu.Unlock()
 	return &out, nil
+}
+
+// SecretRef mirrors the gateway admin's SecretRef: a stored secret's
+// directory metadata plus the provider names that reference it. Never
+// a value.
+type SecretRef struct {
+	RefName      string    `json:"ref_name"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	ReferencedBy []string  `json:"referenced_by_providers"`
+}
+
+// ListSecrets fetches the gateway's secrets directory (names,
+// timestamps, provider referents) — never a value. Brain's own
+// /v1/admin/secrets handler merges connector referents into this
+// before serving it to the UI.
+func (c *Client) ListSecrets(ctx context.Context) ([]SecretRef, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/internal/admin/secrets", nil)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		Secrets []SecretRef `json:"secrets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("gwclient: decode secrets: %w", err)
+	}
+	return out.Secrets, nil
+}
+
+// DeleteSecret proxies the delete to the gateway, which refuses (in
+// use) while any provider still names refName as its credential_ref.
+// Brain's own handler checks connector references first so a
+// connector-only refusal never round-trips to the gateway at all. On
+// failure it returns the gateway's own status code so the caller can
+// preserve a 409 (in use) rather than flattening every failure to 500.
+func (c *Client) DeleteSecret(ctx context.Context, refName string) (status int, err error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		c.baseURL+"/internal/admin/secrets/"+url.PathEscape(refName), nil)
+	if err != nil {
+		return 0, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return 0, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &body); err == nil && body.Message != "" {
+			return resp.StatusCode, errors.New(body.Message)
+		}
+		return resp.StatusCode, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(raw))
+	}
+	return http.StatusNoContent, nil
 }
 
 // Embed returns one vector per input text via the gateway's

@@ -15,6 +15,7 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets } from './connectorPresets'
+import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText, secretDestination } from './util'
@@ -53,6 +54,14 @@ export function ConnectorAdd() {
   // providers have. createdID tracks that row so a passing test's
   // Add just enables it rather than creating a second one.
   const [createdID, setCreatedID] = useState<string | null>(null)
+  // tokenCredMode/clientSecretCredMode: "new" pastes+stores a fresh
+  // secret (current behavior); "existing" reuses a stored ref instead
+  // — e.g. the same GitHub PAT already used by another connector, or
+  // the same Google OAuth client credentials across gmail/calendar.
+  const [tokenCredMode, setTokenCredMode] = useState<CredentialMode>('new')
+  const [existingTokenRef, setExistingTokenRef] = useState('')
+  const [clientSecretCredMode, setClientSecretCredMode] = useState<CredentialMode>('new')
+  const [existingClientSecretRef, setExistingClientSecretRef] = useState('')
 
   useEffect(() => {
     if (!preset) return
@@ -64,6 +73,10 @@ export function ConnectorAdd() {
     setBusy(false)
     setTest(null)
     setCreatedID(null)
+    setTokenCredMode('new')
+    setExistingTokenRef('')
+    setClientSecretCredMode('new')
+    setExistingClientSecretRef('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
 
@@ -79,6 +92,8 @@ export function ConnectorAdd() {
     setCreatedID(null)
   }
 
+  const usingExistingToken = tokenCredMode === 'existing'
+
   const runTest = async () => {
     if (!slug) {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
@@ -88,8 +103,12 @@ export function ConnectorAdd() {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
       return
     }
-    if (isGitHub && !token.trim()) {
+    if (isGitHub && !usingExistingToken && !token.trim()) {
       toast.error('Token required', { description: 'A personal access token is required to test this connector.' })
+      return
+    }
+    if (usingExistingToken && !existingTokenRef) {
+      toast.error('Credential required', { description: 'Choose an existing credential to reuse.' })
       return
     }
     setBusy(true)
@@ -97,14 +116,16 @@ export function ConnectorAdd() {
     try {
       // Suffix without stuttering: a name already ending in the flavor
       // word ("github", "github-mcp") gets the bare _PAT/_TOKEN suffix.
-      const tokenRef = isGitHub
-        ? refBase.endsWith('GITHUB')
-          ? `${refBase}_PAT`
-          : `${refBase}_GITHUB_PAT`
-        : refBase.endsWith('_MCP')
-          ? `${refBase}_TOKEN`
-          : `${refBase}_MCP_TOKEN`
-      if (token) await setSecret(tokenRef, token.trim())
+      const tokenRef = usingExistingToken
+        ? existingTokenRef
+        : isGitHub
+          ? refBase.endsWith('GITHUB')
+            ? `${refBase}_PAT`
+            : `${refBase}_GITHUB_PAT`
+          : refBase.endsWith('_MCP')
+            ? `${refBase}_TOKEN`
+            : `${refBase}_MCP_TOKEN`
+      if (!usingExistingToken && token) await setSecret(tokenRef, token.trim())
       const id = await createConnector(
         isGitHub
           ? { name: slug, kind: 'github', config: {}, credential_ref: tokenRef, enabled: false }
@@ -112,7 +133,7 @@ export function ConnectorAdd() {
               name: slug,
               kind: 'mcp',
               config: { endpoint: endpoint.trim() },
-              credential_ref: token ? tokenRef : '',
+              credential_ref: usingExistingToken || token ? tokenRef : '',
               enabled: false,
             },
       )
@@ -143,11 +164,13 @@ export function ConnectorAdd() {
     }
   }
 
+  const usingExistingClientSecret = clientSecretCredMode === 'existing'
+
   const submitGoogle = async () => {
     setBusy(true)
     try {
-      const secretRef = `${refBase}_GOOGLE_CLIENT_SECRET`
-      await setSecret(secretRef, clientSecret)
+      const secretRef = usingExistingClientSecret ? existingClientSecretRef : `${refBase}_GOOGLE_CLIENT_SECRET`
+      if (!usingExistingClientSecret) await setSecret(secretRef, clientSecret)
       const id = await createConnector({
         name: slug,
         kind: 'google',
@@ -166,8 +189,13 @@ export function ConnectorAdd() {
     }
   }
 
-  const canTest = slug !== '' && (isGitHub ? token.trim() !== '' : endpoint.trim() !== '')
-  const canSubmitGoogle = slug !== '' && clientID.trim() !== '' && clientSecret !== ''
+  const canTest =
+    slug !== '' &&
+    (isGitHub ? (usingExistingToken ? existingTokenRef !== '' : token.trim() !== '') : endpoint.trim() !== '')
+  const canSubmitGoogle =
+    slug !== '' &&
+    clientID.trim() !== '' &&
+    (usingExistingClientSecret ? existingClientSecretRef !== '' : clientSecret !== '')
 
   return (
     <div className="mt-6 w-full space-y-6">
@@ -211,16 +239,27 @@ export function ConnectorAdd() {
                   className="mt-1.5 h-10"
                 />
               </Field>
-              <Field label="OAuth client secret">
-                <Input
-                  type="password"
-                  value={clientSecret}
-                  onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder="GOCSPX-…"
-                  className="mt-1.5 h-10"
-                  autoComplete="off"
-                />
-              </Field>
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-sm font-medium text-foreground">OAuth client secret</span>
+                  <CredentialModeToggle mode={clientSecretCredMode} onChange={setClientSecretCredMode} />
+                </div>
+                {clientSecretCredMode === 'existing' ? (
+                  <ExistingCredentialSelect
+                    value={existingClientSecretRef}
+                    onChange={setExistingClientSecretRef}
+                  />
+                ) : (
+                  <Input
+                    type="password"
+                    value={clientSecret}
+                    onChange={(e) => setClientSecret(e.target.value)}
+                    placeholder="GOCSPX-…"
+                    className="h-10"
+                    autoComplete="off"
+                  />
+                )}
+              </div>
             </div>
             <p className="text-sm text-muted-foreground">
               From a Google Cloud OAuth client (Web application). Add{' '}
@@ -259,48 +298,66 @@ export function ConnectorAdd() {
               </>
             )}
             <div>
-              <Field
-                label={
-                  isGitHub ? 'Personal access token' : preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'
-                }
-              >
-                <Input
-                  type="password"
-                  value={token}
-                  onChange={(e) => {
-                    setToken(e.target.value)
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">
+                  {isGitHub ? 'Personal access token' : preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'}
+                </span>
+                <CredentialModeToggle
+                  mode={tokenCredMode}
+                  onChange={(m) => {
+                    setTokenCredMode(m)
                     invalidate()
                   }}
-                  placeholder={preset.tokenPlaceholder ?? 'token'}
-                  className="mt-1.5 h-10"
-                  autoComplete="off"
                 />
-              </Field>
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                {preset.tokenHint}
-                {preset.tokenURL && (
-                  <>
-                    {' '}
-                    <a
-                      href={preset.tokenURL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                    >
-                      Create one on GitHub →
-                    </a>
-                  </>
-                )}
-                {!preset.tokenURL && (
-                  <>
-                    {' '}
-                    {secretDestination(
-                      defaultBackend,
-                      isGitHub ? `${refBase}_GITHUB_PAT` : `${refBase}_MCP_TOKEN`,
+              </div>
+              {tokenCredMode === 'existing' ? (
+                <ExistingCredentialSelect
+                  value={existingTokenRef}
+                  onChange={(v) => {
+                    setExistingTokenRef(v)
+                    invalidate()
+                  }}
+                />
+              ) : (
+                <>
+                  <Input
+                    type="password"
+                    value={token}
+                    onChange={(e) => {
+                      setToken(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder={preset.tokenPlaceholder ?? 'token'}
+                    className="h-10"
+                    autoComplete="off"
+                  />
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {preset.tokenHint}
+                    {preset.tokenURL && (
+                      <>
+                        {' '}
+                        <a
+                          href={preset.tokenURL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                        >
+                          Create one on GitHub →
+                        </a>
+                      </>
                     )}
-                  </>
-                )}
-              </p>
+                    {!preset.tokenURL && (
+                      <>
+                        {' '}
+                        {secretDestination(
+                          defaultBackend,
+                          isGitHub ? `${refBase}_GITHUB_PAT` : `${refBase}_MCP_TOKEN`,
+                        )}
+                      </>
+                    )}
+                  </p>
+                </>
+              )}
             </div>
 
             <div

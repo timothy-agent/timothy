@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -111,6 +112,39 @@ func (s *Store) Status(ctx context.Context, refName string) (configured bool, ba
 		return false, "", err
 	}
 	return true, r.backend, nil
+}
+
+// Ref is one secrets-table row's directory metadata — name and
+// timestamps only, never the value or its backend_ref (which can leak
+// the external path an operator otherwise never sees).
+type Ref struct {
+	RefName   string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// List returns every stored ref's directory metadata, ordered by name,
+// for the credentials panel. Never resolves or exposes a value.
+func (s *Store) List(ctx context.Context) ([]Ref, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("secretstore: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT ref_name, created_at, updated_at FROM secrets ORDER BY ref_name`)
+	if err != nil {
+		return nil, fmt.Errorf("secretstore: list: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Ref{}
+	for rows.Next() {
+		var r Ref
+		if err := rows.Scan(&r.RefName, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("secretstore: list: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // externalRef is the backend_ref every write-through secret gets in an

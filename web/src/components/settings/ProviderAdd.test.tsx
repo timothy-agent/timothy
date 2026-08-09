@@ -8,11 +8,19 @@ vi.mock('../../api/client', () => ({
   createProvider: vi.fn(),
   listProviders: vi.fn(),
   listSecretBackends: vi.fn(),
+  listSecretRefs: vi.fn(),
   setSecret: vi.fn(),
   validateProvider: vi.fn(),
 }))
 
-import { createProvider, listProviders, listSecretBackends, setSecret, validateProvider } from '../../api/client'
+import {
+  createProvider,
+  listProviders,
+  listSecretBackends,
+  listSecretRefs,
+  setSecret,
+  validateProvider,
+} from '../../api/client'
 
 // Both openaicompat, but different endpoints — models declared on one
 // must never suggest for the other.
@@ -48,6 +56,7 @@ beforeEach(() => {
   vi.mocked(listSecretBackends).mockResolvedValue([
     { backend: 'db', configured: true, default: true },
   ])
+  vi.mocked(listSecretRefs).mockResolvedValue([])
 })
 
 describe('ProviderAdd model suggestions', () => {
@@ -80,6 +89,55 @@ describe('ProviderAdd key hint links', () => {
   it('renders no link for a preset without a keyURL', async () => {
     renderPage('ollama')
     expect(screen.queryByRole('link', { name: /Open Ollama/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd existing-credential picker', () => {
+  beforeEach(() => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2' })
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createProvider).mockResolvedValue('p-new')
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'ZAI_API_KEY', referenced_by: [{ kind: 'provider', name: 'GLM (Z.ai)' }] },
+    ])
+  })
+
+  it('defaults to New credential with the paste field visible', async () => {
+    renderPage('glm')
+    expect(await screen.findByLabelText('API key')).toBeInTheDocument()
+    expect(screen.queryByLabelText('existing credential')).not.toBeInTheDocument()
+  })
+
+  it('switching to Use existing swaps in the ref picker and lists stored refs', async () => {
+    renderPage('glm')
+    await screen.findByLabelText('API key')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+
+    expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
+    const select = await screen.findByLabelText('existing credential')
+    expect(select).toBeInTheDocument()
+    fireEvent.click(select)
+    expect(await screen.findByRole('option', { name: /ZAI_API_KEY/ })).toBeInTheDocument()
+  })
+
+  it('choosing an existing ref sets credential_ref and skips the secret write on submit', async () => {
+    renderPage('glm')
+    await screen.findByLabelText('API key')
+    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /ZAI_API_KEY/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(validateProvider).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(validateProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'ZAI_API_KEY' })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'ZAI_API_KEY' })
   })
 })
 

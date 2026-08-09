@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
 )
 
@@ -96,4 +99,148 @@ func (a *API) registerSettings(handle func(pattern string, h http.Handler), flag
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})))
+}
+
+// GatewaySecrets is the slice of gwclient.Client the credentials
+// directory needs — an interface at point of use so tests can fake the
+// gateway round trip without a live one. *gwclient.Client satisfies it.
+type GatewaySecrets interface {
+	ListSecrets(ctx context.Context) ([]gwclient.SecretRef, error)
+	DeleteSecret(ctx context.Context, refName string) (status int, err error)
+}
+
+// connectorLister is the slice of connectors.Store the directory
+// needs — *connectors.Store satisfies it.
+type connectorLister interface {
+	List(ctx context.Context) ([]connectors.Connector, error)
+}
+
+// secretRefEntry is the credentials panel's per-ref shape: the
+// gateway's directory metadata plus every referent (provider or
+// connector) across both services, merged here because neither service
+// alone can see both tables. Never a value.
+type secretRefEntry struct {
+	RefName      string          `json:"name"`
+	CreatedAt    any             `json:"created_at,omitempty"`
+	UpdatedAt    any             `json:"updated_at,omitempty"`
+	ReferencedBy []referenceInfo `json:"referenced_by"`
+}
+
+type referenceInfo struct {
+	Kind string `json:"kind"` // "provider" | "connector"
+	Name string `json:"name"`
+}
+
+// registerSecrets mounts brain's own credentials-directory endpoints.
+// GET assembles the gateway's per-ref provider referents with brain's
+// own connector referents (two independent DBs, no new cross-service
+// dependency — see admin_test.go for the design note). DELETE checks
+// connector references itself before forwarding to the gateway, which
+// independently refuses on provider references — each service stays
+// authoritative for the referents it owns. nil gw or conns leaves the
+// surface unmounted.
+func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister) {
+	if gw == nil || conns == nil {
+		return
+	}
+	h := &secretsAPI{gw: gw, connectors: conns}
+	handle("GET /v1/admin/secrets", a.auth(http.HandlerFunc(h.list)))
+	handle("DELETE /v1/admin/secrets/{ref_name}", a.auth(http.HandlerFunc(h.delete)))
+}
+
+type secretsAPI struct {
+	gw         GatewaySecrets
+	connectors connectorLister
+}
+
+// connectorRefs maps every stored secret ref name to the connector
+// names referencing it: each row's credential_ref, plus — for a github
+// connector with commit signing enabled — the derived
+// connectors.SigningKeyRefSuffix ref its private signing key lives
+// under, so the signing key never looks orphaned in the panel or
+// becomes deletable while the connector still signs with it.
+func connectorRefs(ctx context.Context, store connectorLister) (map[string][]string, error) {
+	rows, err := store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, c := range rows {
+		if c.CredentialRef == "" {
+			continue
+		}
+		out[c.CredentialRef] = append(out[c.CredentialRef], c.Name)
+		if c.Kind == "github" {
+			var cfg connectors.GitHubConfig
+			if json.Unmarshal(c.Config, &cfg) == nil && (cfg.SignCommits || cfg.SigningPublicKey != "") {
+				ref := connectors.SigningKeyRefSuffix(c.CredentialRef)
+				out[ref] = append(out[ref], c.Name)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
+	refs, err := h.gw.ListSecrets(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "gateway_unreachable", err.Error())
+		return
+	}
+	byConnector, err := connectorRefs(r.Context(), h.connectors)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		return
+	}
+
+	out := make([]secretRefEntry, len(refs))
+	for i, ref := range refs {
+		var referents []referenceInfo
+		for _, name := range ref.ReferencedBy {
+			referents = append(referents, referenceInfo{Kind: "provider", Name: name})
+		}
+		for _, name := range byConnector[ref.RefName] {
+			referents = append(referents, referenceInfo{Kind: "connector", Name: name})
+		}
+		out[i] = secretRefEntry{
+			RefName: ref.RefName, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
+			ReferencedBy: referents,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
+}
+
+// delete refuses (409) while any connector still names ref_name as its
+// credential_ref, without ever asking the gateway — a connector-only
+// reference is brain's own domain. Otherwise it forwards to the
+// gateway, which independently refuses on provider references.
+func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
+	refName := r.PathValue("ref_name")
+	byConnector, err := connectorRefs(r.Context(), h.connectors)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		return
+	}
+	if names := byConnector[refName]; len(names) > 0 {
+		jsonError(w, http.StatusConflict, "in_use",
+			refName+" is referenced by connector(s) "+joinNames(names))
+		return
+	}
+	status, err := h.gw.DeleteSecret(r.Context(), refName)
+	if err != nil {
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		jsonError(w, status, "delete_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func joinNames(names []string) string {
+	out := names[0]
+	for _, n := range names[1:] {
+		out += ", " + n
+	}
+	return out
 }

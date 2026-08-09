@@ -88,14 +88,99 @@ func (a *Admin) SetSecret(ctx context.Context, refName, value string) error {
 	return nil
 }
 
-// DeleteSecret removes a stored secret value.
+// DeleteSecret removes a stored secret value. Refused while an enabled
+// provider still names refName as its credential_ref — the values a
+// credential unlocks (chat completions) must never start failing
+// silently because its directory entry vanished out from under it.
 func (a *Admin) DeleteSecret(ctx context.Context, refName string) error {
+	providers, err := a.providersReferencing(ctx, refName)
+	if err != nil {
+		return err
+	}
+	if len(providers) > 0 {
+		return fmt.Errorf("%s is referenced by provider(s) %v: %w", refName, providers, ErrInUse)
+	}
 	if err := a.secrets.Delete(ctx, refName); err != nil {
 		return err
 	}
 	a.audit(ctx, "delete", "secret", refName, map[string]bool{"configured": true}, nil)
 	a.reload(ctx)
 	return nil
+}
+
+// providersReferencing returns the names of every provider row whose
+// credential_ref matches refName, regardless of enabled state — a
+// disabled provider still owns the credential and a delete would strand
+// it, so DeleteSecret refuses on any match, not just enabled ones.
+func (a *Admin) providersReferencing(ctx context.Context, refName string) ([]string, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("admin secrets: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT name FROM providers WHERE credential_ref = $1 ORDER BY name`, refName)
+	if err != nil {
+		return nil, fmt.Errorf("admin secrets: referenced by: %w", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("admin secrets: referenced by: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// SecretRef is one stored secret's directory entry: name and
+// timestamps, plus the providers that name it as credential_ref. Values
+// are never included — ListSecrets exists so the UI can show what
+// exists and what would break on delete, nothing more.
+type SecretRef struct {
+	RefName      string    `json:"ref_name"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	ReferencedBy []string  `json:"referenced_by_providers"`
+}
+
+// ListSecrets returns every stored secret's directory metadata with the
+// providers (by name) that reference it. Connector references are
+// brain's own domain (D-057-style split) — the caller (brain's proxy)
+// merges those in; this only ever reports what the gateway's own
+// tables know about.
+func (a *Admin) ListSecrets(ctx context.Context) ([]SecretRef, error) {
+	refs, err := a.secrets.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("admin secrets: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT credential_ref, name FROM providers WHERE credential_ref <> '' ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("admin secrets: referenced by: %w", err)
+	}
+	defer rows.Close()
+	byRef := map[string][]string{}
+	for rows.Next() {
+		var ref, name string
+		if err := rows.Scan(&ref, &name); err != nil {
+			return nil, fmt.Errorf("admin secrets: referenced by: %w", err)
+		}
+		byRef[ref] = append(byRef[ref], name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("admin secrets: referenced by: %w", err)
+	}
+
+	out := make([]SecretRef, len(refs))
+	for i, r := range refs {
+		out[i] = SecretRef{RefName: r.RefName, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+			ReferencedBy: byRef[r.RefName]}
+	}
+	return out, nil
 }
 
 // SetSecretValue stores value under refName through the store-wide

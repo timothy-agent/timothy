@@ -1,0 +1,215 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+)
+
+// fakeGatewaySecrets stubs the gateway round trip so the credentials
+// directory's merge logic can be tested without a live gateway.
+type fakeGatewaySecrets struct {
+	refs       []gwclient.SecretRef
+	listErr    error
+	deleteErr  error
+	deleteCode int
+	deletedRef string
+}
+
+func (f *fakeGatewaySecrets) ListSecrets(context.Context) ([]gwclient.SecretRef, error) {
+	return f.refs, f.listErr
+}
+
+func (f *fakeGatewaySecrets) DeleteSecret(_ context.Context, refName string) (int, error) {
+	f.deletedRef = refName
+	if f.deleteErr != nil {
+		return f.deleteCode, f.deleteErr
+	}
+	return http.StatusNoContent, nil
+}
+
+// fakeConnectorLister stubs connectors.Store's List for the same
+// reason — no DB needed to test the merge/guard logic.
+type fakeConnectorLister struct {
+	rows []connectors.Connector
+	err  error
+}
+
+func (f *fakeConnectorLister) List(context.Context) ([]connectors.Connector, error) {
+	return f.rows, f.err
+}
+
+func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "GITHUB_PAT", ReferencedBy: []string{"github-provider"}},
+		{RefName: "GITHUB_PAT_SIGNING_KEY"},
+		{RefName: "ORPHAN_KEY"},
+	}}
+	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		{Name: "github-mcp", CredentialRef: "GITHUB_PAT"},
+		{Name: "github-signed", Kind: "github", CredentialRef: "GITHUB_PAT", Config: json.RawMessage(`{"sign_commits":true,"signing_public_key":"ssh-ed25519 AAAA"}`)},
+		{Name: "no-cred", CredentialRef: ""},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Secrets []secretRefEntry `json:"secrets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Secrets) != 3 {
+		t.Fatalf("secrets = %+v, want 3 entries", body.Secrets)
+	}
+	byName := map[string]secretRefEntry{}
+	for _, s := range body.Secrets {
+		byName[s.RefName] = s
+	}
+	got := byName["GITHUB_PAT"].ReferencedBy
+	if len(got) != 3 {
+		t.Fatalf("GITHUB_PAT referenced_by = %+v, want provider + 2 connectors", got)
+	}
+	want := map[referenceInfo]bool{
+		{Kind: "provider", Name: "github-provider"}: true,
+		{Kind: "connector", Name: "github-mcp"}:     true,
+		{Kind: "connector", Name: "github-signed"}:  true,
+	}
+	for _, r := range got {
+		if !want[r] {
+			t.Fatalf("unexpected referent %+v in %+v", r, got)
+		}
+	}
+	signKey := byName["GITHUB_PAT_SIGNING_KEY"].ReferencedBy
+	if len(signKey) != 1 || signKey[0] != (referenceInfo{Kind: "connector", Name: "github-signed"}) {
+		t.Fatalf("GITHUB_PAT_SIGNING_KEY referenced_by = %+v, want the signing connector (derived ref must never look orphaned)", signKey)
+	}
+	if len(byName["ORPHAN_KEY"].ReferencedBy) != 0 {
+		t.Fatalf("ORPHAN_KEY referenced_by = %+v, want empty", byName["ORPHAN_KEY"].ReferencedBy)
+	}
+}
+
+func TestListSecretsPropagatesGatewayFailure(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{listErr: errors.New("gateway down")}
+	conns := &fakeConnectorLister{}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
+	}
+}
+
+func TestDeleteSecretRefusesWhenConnectorReferencesIt(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		{Name: "github-mcp", CredentialRef: "GITHUB_PAT"},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GITHUB_PAT", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called (connector guard must short-circuit)", gw.deletedRef)
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Message == "" {
+		t.Fatal("error message empty, want it to list the referencing connector")
+	}
+}
+
+func TestDeleteSecretForwardsOrphanedRefToGateway(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	conns := &fakeConnectorLister{}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/ORPHAN_KEY", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if gw.deletedRef != "ORPHAN_KEY" {
+		t.Fatalf("gateway DeleteSecret called with %q, want ORPHAN_KEY", gw.deletedRef)
+	}
+}
+
+// TestDeleteSecretPropagatesGatewayInUseRefusal covers the other half
+// of the split guard: a provider-only reference is invisible to
+// brain's connector check, so the gateway's own 409 must still surface
+// unchanged.
+func TestDeleteSecretPropagatesGatewayInUseRefusal(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{deleteErr: errors.New("SOME_KEY is referenced by provider(s) [openai]: in use"), deleteCode: http.StatusConflict}
+	conns := &fakeConnectorLister{}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 from the gateway's own refusal", w.Code)
+	}
+}
+
+func TestRegisterSecretsUnmountedWithoutGatewayOrConnectors(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (route unmounted)", w.Code)
+	}
+}

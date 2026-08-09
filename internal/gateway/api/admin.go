@@ -28,6 +28,7 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("DELETE /internal/admin/routes/{name}", http.HandlerFunc(h.deleteRoute))
 	srv.Handle("PUT /internal/admin/routes/{name}/role", http.HandlerFunc(h.setRouteRole))
 	srv.Handle("PATCH /internal/admin/usage/budget", http.HandlerFunc(h.patchBudget))
+	srv.Handle("GET /internal/admin/secrets", http.HandlerFunc(h.listSecrets))
 	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
 	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
 	srv.Handle("GET /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.getSecretStatus))
@@ -263,6 +264,17 @@ func (h *adminAPI) setSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// listSecrets serves the credentials directory: names, timestamps, and
+// which providers reference each one. Never a value.
+func (h *adminAPI) listSecrets(w http.ResponseWriter, r *http.Request) {
+	refs, err := h.adm.ListSecrets(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"secrets": refs})
 }
 
 func (h *adminAPI) deleteSecret(w http.ResponseWriter, r *http.Request) {

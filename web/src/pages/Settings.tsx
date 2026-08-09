@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation, Link } from 'react-router'
 import { AgentsTab } from '../components/settings/AgentsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
+import { CredentialsTab } from '../components/settings/CredentialsTab'
 import { FeaturesTab } from '../components/settings/FeaturesTab'
 import { ProvidersTab } from '../components/settings/ProvidersTab'
 import { RoutesTab } from '../components/settings/RoutesTab'
@@ -17,6 +18,7 @@ const tabs = [
   { key: 'agents', label: 'Agents', render: AgentsTab },
   { key: 'routes', label: 'Routing', render: RoutesTab },
   { key: 'secrets', label: 'Secrets', render: SecretsTab },
+  { key: 'credentials', label: 'Credentials', render: CredentialsTab },
   { key: 'features', label: 'Features', render: FeaturesTab },
 ] as const
 

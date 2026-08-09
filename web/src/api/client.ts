@@ -635,6 +635,31 @@ export async function deleteSecret(refName: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, { method: 'DELETE' })
 }
 
+// SecretReference is one provider or connector naming a credential ref
+// as its credential_ref — the credentials panel's used-by chips.
+export interface SecretReference {
+  kind: 'provider' | 'connector'
+  name: string
+}
+
+// SecretRefEntry is one stored secret's directory entry: name,
+// timestamps (when the row has them), and every referent across both
+// providers and connectors. Never a value — the credentials panel is a
+// directory, not a vault viewer.
+export interface SecretRefEntry {
+  name: string
+  created_at?: string
+  updated_at?: string
+  referenced_by: SecretReference[]
+}
+
+// listSecretRefs lists every stored credential ref for the Credentials
+// tab and the "use existing" pickers on provider/connector forms.
+export async function listSecretRefs(): Promise<SecretRefEntry[]> {
+  const { secrets } = await request<{ secrets: SecretRefEntry[] }>('/v1/admin/secrets')
+  return secrets ?? []
+}
+
 export interface SecretStatus {
   configured: boolean
   backend: string
