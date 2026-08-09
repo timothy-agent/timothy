@@ -103,6 +103,14 @@ type Agent struct {
 	exec   Executor
 	defs   []provider.ToolDef
 
+	// baseExec/baseDefs is the compiled-in-builtins-only surface a
+	// Request.BuiltinsOnly turn resolves to instead of exec/defs: set
+	// once at startup (buildAgent compiles it before any connector or
+	// chat-only mission tool exists) and never swapped afterward, so no
+	// lock is needed reading it alongside toolMu below.
+	baseExec Executor
+	baseDefs []provider.ToolDef
+
 	// forceRouteBySuffix maps a tool name SUFFIX to a resolver for the
 	// route its output must be processed under — e.g. a route chained
 	// only to a local/trusted provider, for tools whose results carry
@@ -159,10 +167,22 @@ func (a *Agent) SwapTools(exec Executor, defs []provider.ToolDef) {
 	a.exec, a.defs = exec, defs
 }
 
-func (a *Agent) toolset() (Executor, []provider.ToolDef) {
+func (a *Agent) toolset(builtinsOnly bool) (Executor, []provider.ToolDef) {
+	if builtinsOnly {
+		return a.baseExec, a.baseDefs
+	}
 	a.toolMu.RLock()
 	defer a.toolMu.RUnlock()
 	return a.exec, a.defs
+}
+
+// SetBaseTools registers the compiled-in-builtins-only tool surface a
+// Request.BuiltinsOnly turn (mission-driven: explore/plan/worker/
+// reviewer) resolves to, instead of the full shared registry
+// (connector tools + chat-only mission tools). Startup-time only —
+// unlike SwapTools' surface, this snapshot never changes at runtime.
+func (a *Agent) SetBaseTools(exec Executor, defs []provider.ToolDef) {
+	a.baseExec, a.baseDefs = exec, defs
 }
 
 // Tools returns the live tool surface (builtins + connector tools,
@@ -170,7 +190,7 @@ func (a *Agent) toolset() (Executor, []provider.ToolDef) {
 // available, like an agent's tools-allowlist picker, without executing
 // anything.
 func (a *Agent) Tools() []provider.ToolDef {
-	_, defs := a.toolset()
+	_, defs := a.toolset(false)
 	return defs
 }
 
@@ -230,6 +250,19 @@ type Request struct {
 	Messages  []provider.Message
 	MissionID string // ledger tag: set when this turn serves a mission, not chat
 
+	// BuiltinsOnly restricts the turn's base tool surface to compiled-in
+	// builtins (calculator, shell, web_search, ...), excluding connector
+	// tools (e.g. a write-capable GitHub MCP token) and the chat-only
+	// mission tools (missions/mission_push). Set by every mission-driven
+	// request (explore/plan/worker/reviewer) — a mission worker must
+	// never side-channel a connector write around the worktree/human-
+	// consented push pipeline, and mission_push is nonsensical inside a
+	// mission turn. Deliberately independent of MissionID (a ledger
+	// attribution tag only) so tool-surface scoping stays an explicit,
+	// intentional choice at each call site rather than inferred.
+	// ExtraTools still layer on top as normal.
+	BuiltinsOnly bool
+
 	// ExtraTools are tool defs available ONLY for this turn, on top of
 	// the agent's shared base set — e.g. the missions package's
 	// mission_status/review_verdict sentinel calls, which chat sessions
@@ -288,7 +321,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		a.waitToolsReady(ctx)
 	}
 
-	exec, defs := a.toolset()
+	exec, defs := a.toolset(req.BuiltinsOnly)
 	defs = filterDefs(defs, req.ToolAllow)
 	if len(req.ExtraTools) > 0 {
 		var extraDefs []provider.ToolDef

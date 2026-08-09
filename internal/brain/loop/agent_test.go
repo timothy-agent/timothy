@@ -966,6 +966,140 @@ func TestSwapToolsChangesSurfaceForNewTurns(t *testing.T) {
 	}
 }
 
+// TestRequestBuiltinsOnlySeesBaseToolsNotConnectorTools confirms a
+// mission-driven turn (Request.BuiltinsOnly) resolves to the
+// SetBaseTools snapshot instead of the shared registry SwapTools
+// maintains — a connector tool (or a chat-only mission tool) present
+// in the shared registry must never be offered to a builtins-only
+// turn, closing the side-channel a mission worker could otherwise use
+// to bypass the worktree/human-consented push pipeline.
+func TestRequestBuiltinsOnlySeesBaseToolsNotConnectorTools(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	// Base tools: just "echo" (testAgent's default).
+	baseReg := tools.NewRegistry()
+	if err := baseReg.Register(&tools.Tool{
+		Name: "echo", Description: "echoes",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Execute:     func(context.Context, json.RawMessage) (string, error) { return "", nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	baseConstrained, err := tools.NewConstrained(baseReg, testToolCalls())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetBaseTools(registryExec{baseConstrained}, []provider.ToolDef{{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`)}})
+
+	// Full/shared registry: adds a connector tool on top via SwapTools.
+	fullReg := tools.NewRegistry()
+	for _, tool := range []*tools.Tool{
+		{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`),
+			Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+		{Name: "github_create_issue", Description: "creates an issue", InputSchema: json.RawMessage(`{"type":"object"}`),
+			Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+	} {
+		if err := fullReg.Register(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fullConstrained, err := tools.NewConstrained(fullReg, testToolCalls())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SwapTools(registryExec{fullConstrained}, []provider.ToolDef{
+		{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Name: "github_create_issue", Description: "creates an issue", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	})
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID: "s1", Route: "default", BuiltinsOnly: true,
+		Messages: []provider.Message{{Role: "user", Content: "go"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	for _, d := range gw.requests[0].Tools {
+		if d.Name == "github_create_issue" {
+			t.Fatalf("connector tool leaked into a BuiltinsOnly request's tool defs: %+v", gw.requests[0].Tools)
+		}
+	}
+	if len(gw.requests[0].Tools) != 1 || gw.requests[0].Tools[0].Name != "echo" {
+		t.Fatalf("BuiltinsOnly request tools = %+v, want only echo", gw.requests[0].Tools)
+	}
+}
+
+// TestRequestWithoutBuiltinsOnlySeesFullSurfaceAfterSwap is
+// TestSwapToolsChangesSurfaceForNewTurns's counterpart: a plain
+// (unflagged, chat-shaped) turn keeps seeing the full shared registry
+// — including connector tools — across a SwapTools/reload cycle, even
+// after SetBaseTools has been called for the mission-only surface.
+func TestRequestWithoutBuiltinsOnlySeesFullSurfaceAfterSwap(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	baseReg := tools.NewRegistry()
+	if err := baseReg.Register(&tools.Tool{
+		Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	baseConstrained, err := tools.NewConstrained(baseReg, testToolCalls())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetBaseTools(registryExec{baseConstrained}, []provider.ToolDef{{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`)}})
+
+	fullReg := tools.NewRegistry()
+	for _, tool := range []*tools.Tool{
+		{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`),
+			Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+		{Name: "github_create_issue", Description: "creates an issue", InputSchema: json.RawMessage(`{"type":"object"}`),
+			Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+	} {
+		if err := fullReg.Register(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fullConstrained, err := tools.NewConstrained(fullReg, testToolCalls())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SwapTools(registryExec{fullConstrained}, []provider.ToolDef{
+		{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Name: "github_create_issue", Description: "creates an issue", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	})
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "go"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	var sawConnector bool
+	for _, d := range gw.requests[0].Tools {
+		if d.Name == "github_create_issue" {
+			sawConnector = true
+		}
+	}
+	if !sawConnector {
+		t.Fatalf("connector tool missing from an unflagged request after SwapTools: %+v", gw.requests[0].Tools)
+	}
+}
+
 // TestForceRouteSwitchesRouteAfterMatchingToolAndStaysSticky pins the
 // sensitive-tool-output routing mechanism: a tool whose name ends with
 // a registered suffix (connector tools are namespaced

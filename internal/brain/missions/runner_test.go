@@ -1094,3 +1094,56 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
+
+// TestMissionRunnerRequestsAreBuiltinsOnly guards the security fix:
+// every loop.Request the native runner builds — worker, explorer,
+// reviewer, planner — must set BuiltinsOnly, so a mission turn's base
+// tool surface never includes connector tools (e.g. a write-capable
+// GitHub MCP token) or the chat-only mission/mission_push tools. A
+// missed phase here would silently reopen the side-channel the fix
+// closes.
+func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
+		t.Fatal("RunWorker's request must set BuiltinsOnly")
+	}
+
+	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"none"}`)},
+	}}
+	r = newTestRunner(agent)
+	if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
+		t.Fatal("ExploreSession's request must set BuiltinsOnly")
+	}
+
+	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+	}}
+	r = newTestRunner(agent)
+	if _, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}, nil); err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
+		t.Fatal("RunReview's request must set BuiltinsOnly")
+	}
+
+	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"do it","verify_cmd":"true"}]}`)},
+	}}
+	r = newTestRunner(agent)
+	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
+		t.Fatal("PlanSession's request must set BuiltinsOnly")
+	}
+}

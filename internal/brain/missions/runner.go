@@ -392,13 +392,14 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	system, user := packet.Render()
 	extra := append([]*tools.Tool{MissionStatusTool()}, r.missionTools(m)...)
 	req := loop.Request{
-		SessionID:  m.SessionID,
-		Route:      workerRoute(m),
-		Agent:      "mission-worker",
-		MissionID:  m.ID,
-		System:     system,
-		Messages:   []provider.Message{{Role: "user", Content: user}},
-		ExtraTools: extra,
+		SessionID:    m.SessionID,
+		Route:        workerRoute(m),
+		Agent:        "mission-worker",
+		MissionID:    m.ID,
+		System:       system,
+		Messages:     []provider.Message{{Role: "user", Content: user}},
+		ExtraTools:   extra,
+		BuiltinsOnly: true,
 		// Schedule-fired missions have nobody watching: asks fail fast
 		// with feedback instead of parking (D-039). UI-created missions
 		// (ScheduleID empty) keep the park-and-answer flow.
@@ -488,14 +489,15 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		extra = append(extra, shell)
 	}
 	req := loop.Request{
-		SessionID:  m.SessionID,
-		Route:      m.Route,
-		Agent:      "mission-explorer",
-		MissionID:  m.ID,
-		System:     system,
-		Messages:   []provider.Message{{Role: "user", Content: user}},
-		ExtraTools: extra,
-		Unattended: m.ScheduleID != "",
+		SessionID:    m.SessionID,
+		Route:        m.Route,
+		Agent:        "mission-explorer",
+		MissionID:    m.ID,
+		System:       system,
+		Messages:     []provider.Message{{Role: "user", Content: user}},
+		ExtraTools:   extra,
+		BuiltinsOnly: true,
+		Unattended:   m.ScheduleID != "",
 	}
 
 	text, args, err := r.runTurn(ctx, req, exploreNotesToolName)
@@ -566,14 +568,15 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
 	req := loop.Request{
-		SessionID:  m.SessionID,
-		Route:      m.ReviewRoute,
-		Agent:      "mission-reviewer",
-		MissionID:  m.ID,
-		System:     system,
-		Messages:   messages,
-		ExtraTools: extra,
-		Unattended: m.ScheduleID != "",
+		SessionID:    m.SessionID,
+		Route:        m.ReviewRoute,
+		Agent:        "mission-reviewer",
+		MissionID:    m.ID,
+		System:       system,
+		Messages:     messages,
+		ExtraTools:   extra,
+		BuiltinsOnly: true,
+		Unattended:   m.ScheduleID != "",
 	}
 	text, args, err := r.runTurn(ctx, req, reviewVerdictToolName)
 	if err != nil {
@@ -698,9 +701,10 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		// it), so the turn's only tool is submit_plan — a planner that
 		// reaches for shell parked a live canary on the permission gate
 		// for ten minutes trying to do the worker's job in plan phase.
-		ToolAllow:  []string{planToolName},
-		ExtraTools: []*tools.Tool{PlanTool()},
-		Unattended: m.ScheduleID != "",
+		ToolAllow:    []string{planToolName},
+		ExtraTools:   []*tools.Tool{PlanTool()},
+		BuiltinsOnly: true,
+		Unattended:   m.ScheduleID != "",
 	}
 	text, args, err := r.runTurn(ctx, req, planToolName)
 	if err != nil {
