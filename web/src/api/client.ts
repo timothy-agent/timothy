@@ -12,6 +12,8 @@ import type {
   ChatEvent,
   ChatRequest,
   EntityGraphData,
+  GitHubIdentity,
+  GitHubRepo,
   GroupTotal,
   LatencyRow,
   MemoryItem,
@@ -762,9 +764,33 @@ export async function deleteConnector(id: string): Promise<void> {
   await request<void>(`/v1/admin/connectors/${id}`, { method: 'DELETE' })
 }
 
-export async function testConnector(id: string): Promise<{ ok: boolean; error?: string }> {
-  return request<{ ok: boolean; error?: string }>(`/v1/admin/connectors/${id}/test`, {
+export async function testConnector(
+  id: string,
+): Promise<{ ok: boolean; error?: string; identity?: GitHubIdentity }> {
+  return request<{ ok: boolean; error?: string; identity?: GitHubIdentity }>(
+    `/v1/admin/connectors/${id}/test`,
+    { method: 'POST' },
+  )
+}
+
+// listConnectorRepos lists every repo a github-kind connector's PAT
+// can see (owner, collaborator, or org member), most recently pushed
+// first — the mission create form's repo picker.
+export async function listConnectorRepos(id: string): Promise<GitHubRepo[]> {
+  const { repos } = await request<{ repos: GitHubRepo[] }>(`/v1/admin/connectors/${id}/repos`)
+  return repos ?? []
+}
+
+// createConnectorRepo creates a new repo through a github-kind
+// connector's PAT, auto-initialized so it has a default branch to
+// clone into a mission workspace.
+export async function createConnectorRepo(
+  id: string,
+  input: { name: string; private: boolean },
+): Promise<GitHubRepo> {
+  return request<GitHubRepo>(`/v1/admin/connectors/${id}/repos`, {
     method: 'POST',
+    body: JSON.stringify(input),
   })
 }
 
@@ -864,6 +890,18 @@ export interface CreateMissionInput {
   // markers, then a goal-keyword heuristic, falling back to base).
   // Only valid when kind === 'coding'.
   environment?: string
+  // repo_url is a GitHub repo's https clone URL: when set, the mission
+  // clones it instead of self-initializing an empty repo. Requires
+  // connector_id (a github-kind connector's PAT authenticates the
+  // clone) and is only valid when kind === 'coding'.
+  repo_url?: string
+  connector_id?: string
+  // on_complete is the operator's consent-at-create choice for what the
+  // harness does automatically once this mission reaches done: omit
+  // (or "") does nothing, "push" pushes the branch, "push_pr" pushes
+  // then opens a pull request. Requires repo_url + connector_id and
+  // kind === 'coding'.
+  on_complete?: '' | 'push' | 'push_pr'
 }
 
 // ExecutorOption is one registered harness's usability on a given
@@ -963,6 +1001,27 @@ export async function answerMissionPermission(
     method: 'POST',
     body: JSON.stringify({ decision }),
   })
+}
+
+// pushMission pushes the mission's branch to its worktree's origin
+// remote. credentialRef is optional: omitted (undefined) resolves a
+// github-connection mission's connector PAT server-side; passing one
+// always overrides.
+export async function pushMission(
+  id: string,
+  credentialRef?: string,
+): Promise<{ branch: string; remote_host: string }> {
+  return request<{ branch: string; remote_host: string }>(`/v1/missions/${id}/push`, {
+    method: 'POST',
+    body: JSON.stringify(credentialRef ? { credential_ref: credentialRef } : {}),
+  })
+}
+
+// openMissionPR pushes (idempotent re-push) then opens a pull request
+// for a github-connection mission — or returns the existing open PR
+// for the same head if GitHub reports one already exists.
+export async function openMissionPR(id: string): Promise<{ url: string; number: number }> {
+  return request<{ url: string; number: number }>(`/v1/missions/${id}/pr`, { method: 'POST' })
 }
 
 export async function listNotifications(): Promise<Notification[]> {

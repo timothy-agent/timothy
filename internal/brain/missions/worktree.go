@@ -19,6 +19,9 @@ const (
 	baseCommitTimeout = 1 * time.Second
 	rollbackTimeout   = 30 * time.Second
 	gitOpTimeout      = 30 * time.Second
+	// cloneTimeout is longer than gitOpTimeout: a real clone crosses the
+	// network and can be a lot bigger than one local git op.
+	cloneTimeout = 120 * time.Second
 
 	unavailableCommit = "(unavailable)"
 
@@ -51,8 +54,15 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 // wholly inside its own workspace dir. The base commit is captured
 // with a tight timeout (degrades to the sentinel "(unavailable)"
 // rather than blocking). Non-coding missions get a plain directory, no
-// git.
-func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind string) (workspace, worktree, branch, baseCommit string, err error) {
+// git. repoURL non-empty clones that repo instead of self-initializing
+// an empty one (see cloneRepo); token authenticates the clone and is
+// required whenever repoURL is set. connIdentity, when non-nil, is the
+// connection's resolved (name, email) — set as this clone's LOCAL git
+// config so its commits are authored as the connection, never the
+// operator's fixed identity; nil (no connector, or identity resolve
+// failed) leaves the clone with no local identity override, falling
+// back to the fixed commitName/commitEmail same as before this existed.
+func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity) (workspace, worktree, branch, baseCommit string, err error) {
 	workspace = filepath.Join(w.root, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
@@ -62,15 +72,82 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind string)
 		return workspace, "", "", "", nil
 	}
 
-	branch = "mission/" + Slug(goal, missionID)
+	branch = CommitType(goal) + "/" + Slug(goal, missionID)
 	worktree = filepath.Join(workspace, "wt")
 
-	if err := w.initSelfRepo(ctx, worktree, branch, missionID); err != nil {
+	if repoURL != "" {
+		if err := w.cloneRepo(ctx, worktree, branch, repoURL, token, connIdentity); err != nil {
+			return "", "", "", "", err
+		}
+	} else if err := w.initSelfRepo(ctx, worktree, branch, missionID); err != nil {
 		return "", "", "", "", err
 	}
 
 	baseCommit = w.captureBaseCommit(ctx, worktree)
 	return workspace, worktree, branch, baseCommit, nil
+}
+
+// GitIdentity is a resolved commit author (name, email) — a
+// connection's identity, threaded from CloneIdentityResolver through
+// Provision to cloneRepo's local git config.
+type GitIdentity struct {
+	Name  string
+	Email string
+}
+
+// cloneRepo clones repoURL's default branch into dir, authenticated
+// via the same ephemeral credential-helper pattern push.go's rawPush
+// uses (username x-access-token, password from an env var, never
+// argv/disk), then creates and checks out the mission's own branch on
+// top of the cloned default branch — mission commits land on
+// "<type>/<slug>" (see CommitType), the same branch shape a self-init'd mission uses,
+// never directly on the repo's default branch. connIdentity, when
+// non-nil, is written as the clone's LOCAL (not global) git config
+// right after — CommitUnit/initSelfRepo read this back so every commit
+// in this worktree is authored as the connection, no token involved.
+func (w *Workspace) cloneRepo(ctx context.Context, dir, branch, repoURL, token string, connIdentity *GitIdentity) error {
+	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
+	defer cancel()
+	helper := `!f() { echo "username=x-access-token"; echo "password=$GIT_CLONE_TOKEN"; }; f`
+	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // repoURL/dir are validated https origins/harness-controlled paths; token travels via env, never argv
+		"-c", "credential.helper=",
+		"-c", "credential.helper="+helper,
+		"clone", "-q", "--single-branch", repoURL, dir)
+	cmd.Env = append(os.Environ(), "GIT_CLONE_TOKEN="+token, "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	scrubbed := strings.ReplaceAll(string(out), token, "***")
+	if err != nil {
+		return fmt.Errorf("worktree: clone: %w: %s", err, scrubbed)
+	}
+	if out, err := runGit(cctx, dir, "checkout", "-q", "-b", branch); err != nil {
+		return fmt.Errorf("worktree: clone: create mission branch: %w: %s", err, out)
+	}
+	if connIdentity != nil {
+		if err := setLocalIdentity(cctx, dir, connIdentity.Name, connIdentity.Email); err != nil {
+			// Never fails provisioning: a clone with no local identity just
+			// falls back to the fixed commitName/commitEmail, same as any
+			// other mission.
+			w.log.Warn("worktree: clone identity config failed; commits fall back to fixed identity", "dir", dir, "error", err)
+		}
+	}
+	return nil
+}
+
+// setLocalIdentity writes user.name/user.email into dir's LOCAL git
+// config (never --global) — scoped to this one clone, never touching
+// the container's shared git config.
+func setLocalIdentity(ctx context.Context, dir, name, email string) error {
+	if name != "" {
+		if out, err := runGit(ctx, dir, "config", "--local", "user.name", name); err != nil {
+			return fmt.Errorf("set user.name: %w: %s", err, out)
+		}
+	}
+	if email != "" {
+		if out, err := runGit(ctx, dir, "config", "--local", "user.email", email); err != nil {
+			return fmt.Errorf("set user.email: %w: %s", err, out)
+		}
+	}
+	return nil
 }
 
 // initSelfRepo creates a brand-new git repo at dir on branch, with one
@@ -159,6 +236,65 @@ func Slug(goal, id string) string {
 	return s
 }
 
+// commitTypeKeywords maps a Conventional Commits type to the keywords
+// that select it — checked in order, first match wins, so more
+// specific types (fix, docs, test, refactor, chore) are tried before
+// the "feat" default.
+var commitTypeKeywords = []struct {
+	typ      string
+	keywords []string
+}{
+	{"fix", []string{"fix", "bug", "broken"}},
+	{"docs", []string{"doc", "readme", "comment"}},
+	{"test", []string{"test"}},
+	{"refactor", []string{"refactor", "rename", "cleanup"}},
+	{"chore", []string{"chore", "bump", "upgrade", "dependency"}},
+}
+
+// CommitType derives a Conventional Commits type from text (a mission
+// goal or unit title) via a small deterministic keyword heuristic — no
+// LLM call. Falls back to "feat" when nothing matches.
+func CommitType(text string) string {
+	lower := strings.ToLower(text)
+	for _, ct := range commitTypeKeywords {
+		for _, kw := range ct.keywords {
+			if strings.Contains(lower, kw) {
+				return ct.typ
+			}
+		}
+	}
+	return "feat"
+}
+
+// maxCommitSubjectLen matches the repo convention (root CLAUDE.md):
+// commit subjects stay at or under 72 chars.
+const maxCommitSubjectLen = 72
+
+// CommitMessage builds a Conventional Commits message for a unit
+// commit: "<type>: <title>" as the subject (type from unitTitle via
+// CommitType, falling back to goal when unitTitle is empty), body
+// unchanged (whatever the caller already put there, e.g. mission
+// id/iteration). The subject is lowercased and trimmed to
+// maxCommitSubjectLen, trailing punctuation removed.
+func CommitMessage(unitTitle, goal, body string) string {
+	title := unitTitle
+	if title == "" {
+		title = goal
+	}
+	typ := CommitType(title)
+	subject := strings.ToLower(strings.TrimSpace(title))
+	subject = strings.TrimRight(subject, ".")
+	prefix := typ + ": "
+	if max := maxCommitSubjectLen - len(prefix); len(subject) > max {
+		subject = strings.TrimRight(subject[:max], " .")
+	}
+	msg := prefix + subject
+	if body != "" {
+		msg += "\n\n" + body
+	}
+	return msg
+}
+
 // Rollback discards uncommitted work: `git checkout -- .` + `git clean
 // -fd` for coding missions, no-op otherwise.
 func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
@@ -176,9 +312,12 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 	return nil
 }
 
-// CommitUnit commits the worktree's current changes, authored under
-// the operator's configured git identity when set (per-field fallback
-// to commitName/commitEmail otherwise), independent of host git config.
+// CommitUnit commits the worktree's current changes. A github-
+// connection mission's clone carries a LOCAL user.name/user.email (set
+// once at Provision time, see cloneRepo/setLocalIdentity) — that takes
+// priority so commits are authored as the connection; otherwise falls
+// back to the operator's configured git identity when set, then
+// commitName/commitEmail, independent of host git config.
 func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) error {
 	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
 	defer cancel()
@@ -196,6 +335,14 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 			}
 		}
 	}
+	if ln, le, ok := localIdentity(cctx, worktree); ok {
+		if ln != "" {
+			name = ln
+		}
+		if le != "" {
+			email = le
+		}
+	}
 	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // name/email may be operator-supplied but travel as -c key=value args, never shell-interpolated; message is driver-built from mission id/iteration, not user input
 		"-c", "user.name="+name, "-c", "user.email="+email,
 		"commit", "-m", message, "--allow-empty")
@@ -204,6 +351,27 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 		return fmt.Errorf("worktree: commit: %w: %s", err, string(out))
 	}
 	return nil
+}
+
+// localIdentity reads worktree's LOCAL (not global) user.name/
+// user.email, as set by setLocalIdentity at clone time for a
+// github-connection mission. ok is false when neither key is set
+// locally (a self-init'd or non-connector mission) — never an error,
+// since "no local identity" is the normal case.
+func localIdentity(ctx context.Context, worktree string) (name, email string, ok bool) {
+	name, nameOK := gitConfigLocal(ctx, worktree, "user.name")
+	email, emailOK := gitConfigLocal(ctx, worktree, "user.email")
+	return name, email, nameOK || emailOK
+}
+
+func gitConfigLocal(ctx context.Context, worktree, key string) (string, bool) {
+	cmd := exec.CommandContext(ctx, "git", "config", "--local", "--get", key) //nolint:gosec // key is always a fixed literal ("user.name"/"user.email"), never user input
+	cmd.Dir = worktree
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
 }
 
 // Teardown removes the workspace. Every coding mission's repo lives

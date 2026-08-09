@@ -7,6 +7,7 @@ import type {
   ExecutorSkippedPayload,
   ExecutorSpawnedPayload,
   MissionEvent,
+  MissionPROpenedPayload,
   MissionSteeredPayload,
 } from '../../api/types'
 import { formatDuration } from '../../lib/format'
@@ -97,6 +98,17 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.push_failed': (p) => {
     const { reason } = asRecord(p)
     return `Push failed: ${String(reason ?? 'unknown reason')}`
+  },
+  'mission.pr_opened': (p) => {
+    const { url, number } = p as MissionPROpenedPayload
+    return (
+      <span>
+        Pull request opened:{' '}
+        <a href={url} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foreground">
+          #{number}
+        </a>
+      </span>
+    )
   },
   'executor.spawned': (p) => {
     const { harness, provider, model, auth_mode } = p as ExecutorSpawnedPayload

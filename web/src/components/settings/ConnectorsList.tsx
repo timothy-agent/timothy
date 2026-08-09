@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { listConnectors, patchConnector, testConnector } from '../../api/client'
-import type { AdminConnector } from '../../api/types'
+import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
@@ -110,7 +110,9 @@ function ConnectorCard({
 }) {
   const preset = connectorPresets.find((p) => matchesPreset(connector, p)) ?? unknownPreset
   const [testing, setTesting] = useState(false)
-  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
+    null,
+  )
 
   const toggle = (enabled: boolean) => {
     patchConnector(connector.id, { enabled }).then(onChanged, (err: unknown) =>
@@ -151,14 +153,20 @@ function ConnectorCard({
       <div className="truncate text-xs text-muted-foreground">
         {connector.kind === 'mcp'
           ? String(connector.config.endpoint ?? '')
-          : (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')}
+          : connector.kind === 'google'
+            ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
+            : 'Identity for mission use, no chat tools'}
       </div>
 
       {test && (
         <div
           className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
         >
-          {test.ok ? 'Connection OK' : `Failed: ${test.error}`}
+          {test.ok
+            ? test.identity
+              ? `Connected as ${test.identity.login} (${test.identity.email})`
+              : 'Connection OK'
+            : `Failed: ${test.error}`}
         </div>
       )}
 
@@ -174,12 +182,16 @@ function ConnectorCard({
   )
 }
 
-function matchesPreset(c: AdminConnector, p: { kind: 'mcp' | 'google'; scopes?: string[]; endpoint?: string }) {
+function matchesPreset(
+  c: AdminConnector,
+  p: { kind: 'mcp' | 'google' | 'github'; scopes?: string[]; endpoint?: string },
+) {
   if (p.kind !== c.kind) return false
   if (c.kind === 'google') {
     const scopes = JSON.stringify(c.config.scopes ?? '')
     return p.scopes?.every((s) => scopes.includes(s)) ?? false
   }
+  if (c.kind === 'github') return true
   const endpoint = String(c.config.endpoint ?? '')
   return !!p.endpoint && endpoint.startsWith(p.endpoint)
 }

@@ -25,6 +25,40 @@ describe('mission.unit_verified rendering', () => {
   })
 })
 
+describe('mission.pushed rendering', () => {
+  it('names the branch and remote host', () => {
+    expect(renderEvent(event({ branch: 'mission/x', remote_host: 'github.com' }, 'mission.pushed'))).toBe(
+      'Pushed mission/x to github.com',
+    )
+  })
+})
+
+describe('mission.push_failed rendering', () => {
+  it('names the failure reason', () => {
+    expect(renderEvent(event({ reason: 'push rejected' }, 'mission.push_failed'))).toBe(
+      'Push failed: push rejected',
+    )
+  })
+
+  it('falls back to "unknown reason" when the payload has none', () => {
+    expect(renderEvent(event({}, 'mission.push_failed'))).toBe('Push failed: unknown reason')
+  })
+})
+
+describe('mission.pr_opened rendering', () => {
+  it('renders a link to the PR number', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ url: 'https://github.com/octocat/hello-world/pull/9', number: 9 }, 'mission.pr_opened'),
+        )}
+      </div>,
+    )
+    const link = screen.getByRole('link', { name: '#9' })
+    expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world/pull/9')
+  })
+})
+
 describe('executor.result rendering', () => {
   const resultPayload = (cost_usd: number | null, cost_usd_billed = false) => ({
     status: 'ok',

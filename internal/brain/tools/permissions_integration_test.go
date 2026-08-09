@@ -59,6 +59,23 @@ func TestResolveNoGrantAsks(t *testing.T) {
 	}
 }
 
+// TestResolveMissionPushAsksWithoutGrant proves mission_push (unlike
+// missions, which is exempt) always falls through to "no standing
+// grant" and asks — it is deliberately absent from Permissions.exempt
+// (see NewPermissions) so a chat session's model can never talk its
+// way into an auto-approved push.
+func TestResolveMissionPushAsksWithoutGrant(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	res, err := p.Resolve(t.Context(), sid, "mission_push", json.RawMessage(`{"id":"m1"}`))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Decision != DecisionAsk {
+		t.Fatalf("res = %+v, want ask", res)
+	}
+}
+
 func TestResolveSessionGrantAllows(t *testing.T) {
 	p, sid := integrationPermissions(t)
 

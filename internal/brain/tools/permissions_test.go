@@ -190,6 +190,22 @@ func TestResolveShortCircuits(t *testing.T) {
 		}
 	})
 
+	// missions is a pure read (status snapshot/list) and exempt, same
+	// reasoning as web_search; mission_push must never be exempt (see
+	// TestResolveMissionPushAsksWithoutGrant, the integration
+	// counterpart proving its full no-grant path) — this only pins the
+	// exempt-map membership the short-circuit above depends on.
+	t.Run("missions tool exempt", func(t *testing.T) {
+		t.Parallel()
+		res, err := p.Resolve(ctx, "s1", "missions", json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Resolve(missions): %v", err)
+		}
+		if res.Decision != DecisionAllow {
+			t.Fatalf("Resolve(missions) = %+v, want allow", res)
+		}
+	})
+
 	t.Run("destructive forces ask", func(t *testing.T) {
 		t.Parallel()
 		res, err := p.Resolve(ctx, "s1", "shell", json.RawMessage(`{"command":"rm -rf build/"}`))

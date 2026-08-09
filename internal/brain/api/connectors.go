@@ -23,6 +23,8 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
 	handle("DELETE /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("POST /v1/admin/connectors/{id}/test", a.auth(http.HandlerFunc(h.test)))
+	handle("GET /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.listRepos)))
+	handle("POST /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.createRepo)))
 	if goog != nil {
 		handle("POST /v1/admin/connectors/{id}/oauth/start", a.auth(http.HandlerFunc(h.oauthStart)))
 		// The callback is Google redirecting the user's browser — no
@@ -114,6 +116,48 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// listRepos serves GET /v1/admin/connectors/{id}/repos: every repo the
+// connector's PAT can see, for the mission-create repo picker.
+// Non-github-kind (or unbuildable) connectors 400/422 via failConnector
+// (ErrUnsupported maps to 422 there — kept as 400 here since a picker
+// asking a non-github connector for repos is caller error, not an
+// infra condition).
+func (h *connectorAPI) listRepos(w http.ResponseWriter, r *http.Request) {
+	repos, err := h.mgr.ListRepos(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failConnector(w, err)
+		return
+	}
+	if repos == nil {
+		repos = []connectors.GitHubRepo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+}
+
+// createRepo serves POST /v1/admin/connectors/{id}/repos body
+// {"name","private"}: creates a new repo through the connector's PAT,
+// auto-initialized so it has a default branch to clone.
+func (h *connectorAPI) createRepo(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name    string `json:"name"`
+		Private bool   `json:"private"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if req.Name == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "name is required")
+		return
+	}
+	repo, err := h.mgr.CreateRepo(r.Context(), r.PathValue("id"), req.Name, req.Private)
+	if err != nil {
+		failConnector(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, repo)
+}
+
 func (h *connectorAPI) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.mgr.Store().Delete(r.Context(), r.PathValue("id")); err != nil {
 		failConnector(w, err)
@@ -124,12 +168,19 @@ func (h *connectorAPI) delete(w http.ResponseWriter, r *http.Request) {
 
 // test mirrors the provider test endpoint's shape: 200 with {ok,
 // error} for probe outcomes so the UI renders failures inline; HTTP
-// errors only for unknown ids and unbuildable kinds.
+// errors only for unknown ids and unbuildable kinds. A successful
+// github-kind test also carries the resolved identity (D-057): the
+// connector has no tools to prove itself with, so identity is the
+// evidence a working PAT was configured.
 func (h *connectorAPI) test(w http.ResponseWriter, r *http.Request) {
-	err := h.mgr.Test(r.Context(), r.PathValue("id"))
+	identity, err := h.mgr.TestIdentity(r.Context(), r.PathValue("id"))
 	switch {
 	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		out := map[string]any{"ok": true}
+		if identity != nil {
+			out["identity"] = identity
+		}
+		writeJSON(w, http.StatusOK, out)
 	case errors.Is(err, connectors.ErrNotFound), errors.Is(err, connectors.ErrUnsupported):
 		failConnector(w, err)
 	default:

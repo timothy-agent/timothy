@@ -41,6 +41,21 @@ type Mission struct {
 	Worktree      string         `json:"worktree,omitempty"`
 	Branch        string         `json:"branch,omitempty"`
 	BaseCommit    string         `json:"base_commit,omitempty"`
+	// RepoURL is the GitHub repo this coding mission was cloned from
+	// (https clone URL) — empty means the self-init'd empty repo
+	// Workspace.Provision otherwise creates. ConnectorID names the
+	// github-kind connectors row whose PAT authenticated the clone; the
+	// token itself is never stored, only resolved fresh at provisioning.
+	RepoURL     string `json:"repo_url,omitempty"`
+	ConnectorID string `json:"connector_id,omitempty"`
+	// OnComplete is the operator's consent-at-create choice for what
+	// happens when this mission reaches phase=done: "" (default) does
+	// nothing, "push" pushes the branch, "push_pr" pushes then opens a
+	// pull request. Only ever set at create time (api/missions.go's
+	// validation); the harness (driver.go) executes it automatically on
+	// the done transition using the SAME push/PR code path the manual
+	// push/pr endpoints use.
+	OnComplete string `json:"on_complete,omitempty"`
 	Spec          Spec           `json:"spec"`
 	Progress      []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's

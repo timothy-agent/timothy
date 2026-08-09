@@ -9,7 +9,9 @@ import {
   listMissionFiles,
   listProviders,
   listSessions,
+  openMissionPR,
   patchBudget,
+  pushMission,
   usageBudget,
 } from './client'
 import type { ChatEvent } from './types'
@@ -315,5 +317,47 @@ describe('mission artifacts and push', () => {
     expect(err.status).toBe(404)
     expect(err.code).toBe('no_workspace')
     expect(err.message).toBe('no workspace')
+  })
+
+  it('pushMission posts an empty body when credentialRef is omitted', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const body = { branch: 'mission/x', remote_host: 'github.com' }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await pushMission('m1')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions/m1/push')
+    expect(fetchMock.mock.calls[0][1]?.body).toBe('{}')
+    expect(r).toEqual(body)
+  })
+
+  it('pushMission posts credential_ref when provided', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ branch: 'b', remote_host: 'h' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await pushMission('m1', 'my-ref')
+
+    expect(fetchMock.mock.calls[0][1]?.body).toBe(JSON.stringify({ credential_ref: 'my-ref' }))
+  })
+
+  it('openMissionPR posts to the pr endpoint and returns url/number', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const body = { url: 'https://github.com/octocat/hello-world/pull/9', number: 9 }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await openMissionPR('m1')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions/m1/pr')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    expect(r).toEqual(body)
   })
 })

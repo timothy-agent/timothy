@@ -224,24 +224,133 @@ func (m *Manager) SensitiveNames(ctx context.Context) ([]string, error) {
 // connectivity check, so a connector can be verified before it is
 // switched on. The ephemeral source is closed either way.
 func (m *Manager) Test(ctx context.Context, id string) error {
+	_, err := m.TestIdentity(ctx, id)
+	return err
+}
+
+// identifier is the optional Source capability that reports who a
+// credential authenticates as (github-kind today). Type-asserted so
+// kinds without an identity concept (mcp, google) are untouched.
+type identifier interface {
+	Identity(ctx context.Context) (GitHubIdentity, error)
+}
+
+// TestIdentity is Test plus, for a kind that can report one (github),
+// the resolved identity — the evidence a working credential was
+// configured, since the connector serves no tools to prove itself
+// with otherwise. identity is nil for kinds with no identity concept.
+func (m *Manager) TestIdentity(ctx context.Context, id string) (*GitHubIdentity, error) {
 	c, err := m.rows.Get(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	b, ok := m.builders[c.Kind]
 	if !ok {
-		return fmt.Errorf("connector kind %s has no builder yet: %w", c.Kind, ErrUnsupported)
+		return nil, fmt.Errorf("connector kind %s has no builder yet: %w", c.Kind, ErrUnsupported)
 	}
 	tctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
 	src, err := b(tctx, c, m.resolve)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
 			m.log.Warn("connector close failed", "connector", c.Name, "error", err)
 		}
 	}()
-	return src.Test(tctx)
+
+	idr, ok := src.(identifier)
+	if !ok {
+		return nil, src.Test(tctx)
+	}
+	identity, err := idr.Identity(tctx)
+	if err != nil {
+		return nil, err
+	}
+	return &identity, nil
+}
+
+// repoSource is the optional Source capability that lists/creates
+// GitHub repos and opens pull requests (github-kind today).
+// Type-asserted so kinds without a repo concept (mcp, google) are
+// untouched, mirroring identifier.
+type repoSource interface {
+	ListRepos(ctx context.Context) ([]GitHubRepo, error)
+	CreateRepo(ctx context.Context, name string, private bool) (GitHubRepo, error)
+	GetRepo(ctx context.Context, owner, repo string) (GitHubRepo, error)
+	CreatePR(ctx context.Context, owner, repo, title, head, base, body string) (GitHubPR, error)
+}
+
+// buildRepoSource resolves connector id, builds it fresh (same shape as
+// TestIdentity), and returns it asserted to repoSource — ErrUnsupported
+// for an unknown kind or a kind with no repo concept.
+func (m *Manager) buildRepoSource(ctx context.Context, id string) (repoSource, func(), error) {
+	c, err := m.rows.Get(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	b, ok := m.builders[c.Kind]
+	if !ok {
+		return nil, nil, fmt.Errorf("connector kind %s has no builder yet: %w", c.Kind, ErrUnsupported)
+	}
+	tctx, cancel := context.WithTimeout(ctx, testTimeout)
+	src, err := b(tctx, c, m.resolve)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	closeFn := func() {
+		cancel()
+		if err := src.Close(); err != nil {
+			m.log.Warn("connector close failed", "connector", c.Name, "error", err)
+		}
+	}
+	rs, ok := src.(repoSource)
+	if !ok {
+		closeFn()
+		return nil, nil, fmt.Errorf("connector kind %s has no repos to list: %w", c.Kind, ErrUnsupported)
+	}
+	return rs, closeFn, nil
+}
+
+// ListRepos lists every repo the connector's credential can see.
+func (m *Manager) ListRepos(ctx context.Context, id string) ([]GitHubRepo, error) {
+	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFn()
+	return rs.ListRepos(ctx)
+}
+
+// CreateRepo creates a new repo through the connector's credential.
+func (m *Manager) CreateRepo(ctx context.Context, id, name string, private bool) (GitHubRepo, error) {
+	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	if err != nil {
+		return GitHubRepo{}, err
+	}
+	defer closeFn()
+	return rs.CreateRepo(ctx, name, private)
+}
+
+// GetRepo resolves owner/repo's metadata through the connector's
+// credential — the PR flow's default_branch lookup.
+func (m *Manager) GetRepo(ctx context.Context, id, owner, repo string) (GitHubRepo, error) {
+	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	if err != nil {
+		return GitHubRepo{}, err
+	}
+	defer closeFn()
+	return rs.GetRepo(ctx, owner, repo)
+}
+
+// CreatePR opens a pull request through the connector's credential.
+func (m *Manager) CreatePR(ctx context.Context, id, owner, repo, title, head, base, body string) (GitHubPR, error) {
+	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	if err != nil {
+		return GitHubPR{}, err
+	}
+	defer closeFn()
+	return rs.CreatePR(ctx, owner, repo, title, head, base, body)
 }

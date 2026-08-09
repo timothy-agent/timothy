@@ -21,6 +21,8 @@ vi.mock('../api/client', () => ({
   listSchedules: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
+  pushMission: vi.fn(),
+  openMissionPR: vi.fn(),
 }))
 
 import {
@@ -32,6 +34,8 @@ import {
   listSchedules,
   missionEvents,
   missionUsage,
+  openMissionPR,
+  pushMission,
   resumeMission,
   sendMissionNote,
 } from '../api/client'
@@ -415,6 +419,29 @@ describe('MissionDetail environment pill', () => {
   })
 })
 
+describe('MissionDetail on_complete badge', () => {
+  it('shows the auto-push badge when on_complete is push', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, on_complete: 'push' })
+    renderPage()
+    expect(await screen.findByText('auto-push')).toBeTruthy()
+    expect(screen.queryByText('auto-PR')).toBeNull()
+  })
+
+  it('shows the auto-PR badge when on_complete is push_pr', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, on_complete: 'push_pr' })
+    renderPage()
+    expect(await screen.findByText('auto-PR')).toBeTruthy()
+    expect(screen.queryByText('auto-push')).toBeNull()
+  })
+
+  it('omits both badges when on_complete is empty', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('auto-push')).toBeNull()
+    expect(screen.queryByText('auto-PR')).toBeNull()
+  })
+})
+
 describe('MissionDetail', () => {
   it('renders mission header, plan, and progress', async () => {
     renderPage()
@@ -427,6 +454,25 @@ describe('MissionDetail', () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText(/Allow/)).toBeNull()
+  })
+
+  it('shows a linked GitHub origin beside the branch when repo_url is set', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      repo_url: 'https://github.com/octocat/hello-world.git',
+    })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    const link = screen.getByRole('link', { name: 'octocat/hello-world' })
+    expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world')
+    expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('omits the GitHub origin link when repo_url is not set', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByRole('link', { name: /octocat/ })).toBeNull()
   })
 
   it('shows the generated name in the header instead of the goal when set', async () => {
@@ -731,14 +777,14 @@ describe('MissionDetail', () => {
   it('hides delete for a non-terminal mission', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete mission' })).toBeNull()
   })
 
   it('shows delete for a done mission and deletes on confirm', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
     await screen.findByText('Fix the login bug')
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete mission' }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteMission).toHaveBeenCalledWith('m1'))
@@ -822,5 +868,101 @@ describe('MissionDetail', () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText(/Recurring ·/)).toBeNull()
+  })
+})
+
+describe('MissionDetail push/PR (github-connection missions)', () => {
+  it('shows Push branch and Push & open PR only for a mission with connector_id', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Push & open PR' })).toBeTruthy()
+  })
+
+  it('omits the push/PR buttons for a mission without connector_id', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Push & open PR' })).toBeNull()
+  })
+
+  it('pushes the branch on click', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
+    vi.mocked(pushMission).mockResolvedValue({ branch: 'mission/fix-login', remote_host: 'github.com' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => expect(pushMission).toHaveBeenCalledWith('m1'))
+  })
+
+  it('opens a PR on click and shows the resulting chip immediately', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      connector_id: 'conn-1',
+      repo_url: 'https://github.com/octocat/hello-world.git',
+    })
+    vi.mocked(openMissionPR).mockResolvedValue({
+      url: 'https://github.com/octocat/hello-world/pull/9',
+      number: 9,
+    })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Push & open PR' }))
+    await waitFor(() => expect(openMissionPR).toHaveBeenCalledWith('m1'))
+
+    const link = await screen.findByRole('link', { name: 'PR #9' })
+    expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world/pull/9')
+  })
+
+  it('renders the PR chip from a prior mission.pr_opened event on load, with no click needed', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.pr_opened',
+        payload: { url: 'https://github.com/octocat/hello-world/pull/12', number: 12 },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    const link = await screen.findByRole('link', { name: 'PR #12' })
+    expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world/pull/12')
+  })
+
+  it('shows an error toast when the push fails', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
+    vi.mocked(pushMission).mockRejectedValue(new Error('push failed'))
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => expect(pushMission).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: 'Push branch' })).not.toBeDisabled()
+  })
+
+  it('hides Push & open PR once a PR exists, keeping the push button and the PR chip', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.pr_opened',
+        payload: { url: 'https://github.com/octocat/hello-world/pull/12', number: 12 },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    await screen.findByRole('link', { name: 'PR #12' })
+
+    expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Push & open PR' })).toBeNull()
   })
 })

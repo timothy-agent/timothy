@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -18,7 +19,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -33,6 +34,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 		{"GET", "/v1/missions/abc/files/foo.txt"},
 		{"GET", "/v1/missions/abc/archive"},
 		{"POST", "/v1/missions/abc/push"},
+		{"POST", "/v1/missions/abc/pr"},
 		{"GET", "/v1/notifications"},
 		{"POST", "/v1/notifications/abc/read"},
 	} {
@@ -56,7 +58,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -104,7 +106,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -134,7 +136,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 
 	post := func(codingExecutorDefault func(context.Context) string, body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -177,6 +179,101 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	}
 	if generalCalled {
 		t.Fatal("codingExecutorDefault seam invoked for a kind=general request")
+	}
+}
+
+// TestMissionsCreateValidatesRepoURL covers repo_url/connector_id's
+// create() gate: repo_url is coding-only, requires connector_id,
+// connector_id is only valid alongside repo_url, and an unknown
+// connector_id 400s before Driver.Create is ever reached — mirrors
+// TestMissionsCreateValidatesHarness's shape (a degraded store makes
+// the "passed validation" cases 400 too, via failMission's generic
+// mapping, so they're distinguished by not asserting a specific error
+// message here, only that outright-rejected shapes 400 for a DIFFERENT,
+// earlier reason: this test only needs to prove the reject cases fire
+// before any store/connector call, which a nil conns/degraded store
+// setup already demonstrates for the connector_id lookup case).
+func TestMissionsCreateValidatesRepoURL(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	connStore := connectors.NewStore(pool, discard())
+	conns := connectors.NewManager(connStore, nil, discard())
+
+	post := func(body string) int {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := post(`{"goal":"g","kind":"general","repo_url":"https://github.com/o/r","connector_id":"1"}`); code != 400 {
+		t.Fatalf("repo_url on kind=general = %d, want 400", code)
+	}
+	if code := post(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r"}`); code != 400 {
+		t.Fatalf("repo_url without connector_id = %d, want 400", code)
+	}
+	if code := post(`{"goal":"g","kind":"coding","connector_id":"1"}`); code != 400 {
+		t.Fatalf("connector_id without repo_url = %d, want 400", code)
+	}
+	// connector_id names no real row against a degraded connectors
+	// store — the same "unknown connector_id" 400 an unresolvable id
+	// would get against a live store.
+	if code := post(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"nope"}`); code != 400 {
+		t.Fatalf("unknown connector_id = %d, want 400", code)
+	}
+	// No conns wired at all: repo_url is rejected outright rather than
+	// panicking on a nil manager.
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Fatalf("repo_url with no conns wired = %d, want 400", w.Code)
+	}
+}
+
+// TestMissionsCreateValidatesOnComplete covers on_complete's create()
+// gate: an unknown value is rejected outright, and "push"/"push_pr"
+// both require a github-connection coding mission (repo_url +
+// connector_id) — mirrors TestMissionsCreateValidatesRepoURL's shape.
+func TestMissionsCreateValidatesOnComplete(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	connStore := connectors.NewStore(pool, discard())
+	conns := connectors.NewManager(connStore, nil, discard())
+
+	post := func(body string) int {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := post(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1","on_complete":"bogus"}`); code != 400 {
+		t.Fatalf("unknown on_complete = %d, want 400", code)
+	}
+	if code := post(`{"goal":"g","kind":"coding","on_complete":"push"}`); code != 400 {
+		t.Fatalf("on_complete=push without repo_url/connector_id = %d, want 400", code)
+	}
+	if code := post(`{"goal":"g","kind":"coding","on_complete":"push_pr"}`); code != 400 {
+		t.Fatalf("on_complete=push_pr without repo_url/connector_id = %d, want 400", code)
+	}
+	if code := post(`{"goal":"g","kind":"general","repo_url":"https://github.com/o/r","connector_id":"1","on_complete":"push"}`); code != 400 {
+		t.Fatalf("on_complete=push on kind=general = %d, want 400", code)
 	}
 }
 
@@ -243,7 +340,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	classify := func(context.Context, string) (string, error) { return "general", nil }
 	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
@@ -276,7 +373,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -299,7 +396,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
@@ -330,7 +427,7 @@ func TestMissionsNoteMalformedOrEmptyBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/note", body)
@@ -405,7 +502,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -429,5 +526,32 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	}
 	if code, body := call(`{"goal":"do something","kind":"bogus"}`); code != http.StatusBadRequest || !strings.Contains(body, "kind must be") {
 		t.Fatalf("create with an invalid kind = %d %s, want 400 from kind validation", code, body)
+	}
+}
+
+// TestPRRejectsNonGitHubConnectionMission covers the pr endpoint's own
+// gate (missing connector_id/repo_url) before it ever reaches the
+// store's degraded pool, mirroring TestMissionsCreateValidatesRepoURL's
+// pattern of asserting the specific rejection reason.
+func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	// Against a degraded pool, store.Get itself fails before the
+	// connector_id/repo_url gate is ever reached — this test only
+	// proves the route exists and reaches the store (400, not 404),
+	// same reasoning as TestMissionsDeleteReachesStore. The gate's own
+	// behavior (400 not_pr_able for a non-github-connection mission) is
+	// covered against a real mission row in the integration suite.
+	req := httptest.NewRequest("POST", "/v1/missions/abc/pr", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST pr against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -54,6 +55,35 @@ const defaultTokenBudget = 60_000
 // (session.SensitiveTools, chat/memoryd/compactor) both key off this
 // same list, so a tool added here is covered everywhere at once.
 var sensitiveToolSuffixes = []string{"gmail_read", "gmail_read_attachment"}
+
+// builtinToolSet guards the compiled-in tool slice buildAgent
+// returns: the connector reload goroutine reads it (via
+// conns.SetOnReload's closure) on its own timer, concurrently with
+// main()'s later append of the mission tools once missionStore is
+// built — a plain slice variable shared across those two goroutines
+// would race on that append. add appends under lock and returns the
+// current snapshot for the caller to pass straight to swapAgentTools.
+type builtinToolSet struct {
+	mu    sync.Mutex
+	tools []*tools.Tool
+}
+
+func newBuiltinToolSet(initial []*tools.Tool) *builtinToolSet {
+	return &builtinToolSet{tools: initial}
+}
+
+func (b *builtinToolSet) add(t ...*tools.Tool) []*tools.Tool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tools = append(b.tools, t...)
+	return append([]*tools.Tool(nil), b.tools...)
+}
+
+func (b *builtinToolSet) snapshot() []*tools.Tool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]*tools.Tool(nil), b.tools...)
+}
 
 const (
 	serviceName = "brain"
@@ -174,11 +204,12 @@ func main() {
 	fxStore := fxrates.NewStore(app.DB)
 	go fxrates.NewFetcher(fxStore, settings.AllowedCurrencies(), app.Log).Run(ctx)
 
-	agent, broker, outputs, builtinSet, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore)
+	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
 	}
+	builtinSet := newBuiltinToolSet(builtins)
 	go runOutputGC(ctx, outputs, app.Log)
 
 	secrets, err := buildSecretStore(app.DB, app.Log)
@@ -193,11 +224,12 @@ func main() {
 	conns, goog := buildConnectors(app.DB, secrets, app.Log)
 	if conns != nil {
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil))
+		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
 		}
 		conns.SetOnReload(func(context.Context) {
-			swapAgentTools(agent, builtinSet, conns, app.Log, toolCalls)
+			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
 		})
 		go runConnectorReload(ctx, conns, app.Log)
 		app.AddCheck("connectors", func() httpserver.Check {
@@ -245,9 +277,41 @@ func main() {
 		}
 		return name
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, app.Log)
+	}
+	// Chat-facing mission tools (D-0xx: "is mission X done?" / "push
+	// mission X"): registered here, not inside buildAgent, since both
+	// need missionStore (built above, after buildAgent) and mission_push
+	// additionally needs conns+secrets for its push token resolver.
+	// missionStore nil (WORKSPACES unset) means neither tool is
+	// registered at all, matching the nil-gating pattern buildMissions
+	// itself already uses. A recompile+swap applies them to the live
+	// agent immediately rather than waiting for the next connector
+	// reload (which may never come if no connectors are configured).
+	if missionStore != nil {
+		missionAdapter := missionToolStore{missionStore}
+		newTools := []*tools.Tool{builtin.Missions(missionAdapter, missionAdapter)}
+		if conns != nil && secrets != nil {
+			resolvePushToken := func(ctx context.Context, connectorID string) (string, error) {
+				c, err := conns.Store().Get(ctx, connectorID)
+				if err != nil {
+					return "", fmt.Errorf("resolve connector %s: %w", connectorID, err)
+				}
+				return secrets.Resolve(ctx, c.CredentialRef)
+			}
+			completer := missionCompleterAdapter{missionStore, missions.NewCompleter(missionWorkspace, missionStore, nil, connsPRSource{conns})}
+			newTools = append(newTools, builtin.MissionPush(missionAdapter, completer, resolvePushToken))
+		}
+		current := builtinSet.add(newTools...)
+		if conns != nil {
+			swapAgentTools(agent, current, conns, app.Log, toolCalls)
+		} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+			app.Log.Warn("mission tool registration failed; agent keeps its previous tool surface", "error", err)
+		} else {
+			agent.SwapTools(constrained, defs)
+		}
 	}
 	app.AddCheck("sandbox", func() httpserver.Check {
 		if err := missionSandbox.Health(ctx); err != nil {
@@ -494,7 +558,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -542,6 +606,59 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetCapacityGate(sandboxMgr)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
+	if conns != nil && secrets != nil {
+		// A repo_url mission's clone token: resolve connector_id straight
+		// to its credential_ref's secret value, same as resolveSecret does
+		// for the push endpoint — no need to build a full connector
+		// Source just to read one credential.
+		driver.SetCloneTokenResolver(func(ctx context.Context, connectorID string) (string, error) {
+			c, err := conns.Store().Get(ctx, connectorID)
+			if err != nil {
+				return "", fmt.Errorf("resolve connector %s: %w", connectorID, err)
+			}
+			return secrets.Resolve(ctx, c.CredentialRef)
+		})
+		// A repo_url mission's clone commit identity: reuse the same
+		// TestIdentity path Settings' connector test button calls, so
+		// commits inside the clone are authored as the connection, not the
+		// operator's fixed identity. Best-effort at the driver layer
+		// (SetCloneIdentityResolver's caller already treats a resolve
+		// error as WARN-and-fall-back, never a provisioning failure).
+		driver.SetCloneIdentityResolver(func(ctx context.Context, connectorID string) (string, string, error) {
+			identity, err := conns.TestIdentity(ctx, connectorID)
+			if err != nil {
+				return "", "", err
+			}
+			if identity == nil {
+				return "", "", fmt.Errorf("connector %s has no identity to resolve", connectorID)
+			}
+			name := identity.Name
+			if name == "" {
+				name = identity.Login
+			}
+			return name, identity.Email, nil
+		})
+	}
+	if conns != nil && secrets != nil {
+		// The auto-fire-on-done hook's push token: resolve connector_id
+		// straight to its credential_ref's secret value, same as the
+		// clone token resolver above and the push endpoint's own
+		// resolvePushToken — the on_complete path never has an explicit
+		// credential_ref override, only ever the mission's own connector.
+		resolvePushToken := func(ctx context.Context, connectorID string) (string, error) {
+			c, err := conns.Store().Get(ctx, connectorID)
+			if err != nil {
+				return "", fmt.Errorf("resolve connector %s: %w", connectorID, err)
+			}
+			return secrets.Resolve(ctx, c.CredentialRef)
+		}
+		driver.SetCompleter(missions.NewCompleter(workspace, store, resolvePushToken, connsPRSource{conns}))
+		driver.SetPushFailedNotifier(func(ctx context.Context, missionID, message string) {
+			if err := notifier.NotifyMessage(ctx, missionID, "push_failed", message); err != nil {
+				log.Warn("driver: on_complete push_failed notification failed", "mission_id", missionID, "error", err)
+			}
+		})
+	}
 
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
 	// routeExists backs DefaultCodingRoute's preference check for a
@@ -555,6 +672,123 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, routeExists, flags.CodingExecutor, log)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace, hub
+}
+
+// connsPRSource adapts *connectors.Manager to missions.PRSource for the
+// driver's on_complete auto-fire hook — missions has no compile-time
+// dependency on the connectors package, same reasoning as
+// CloneTokenResolver's closure-based wiring above.
+type connsPRSource struct {
+	conns *connectors.Manager
+}
+
+func (c connsPRSource) DefaultBranch(ctx context.Context, connectorID, owner, repo string) (string, error) {
+	repoInfo, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
+	if err != nil {
+		return "", err
+	}
+	return repoInfo.DefaultBranch, nil
+}
+
+func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, title, head, base, body string) (string, int, error) {
+	created, err := c.conns.CreatePR(ctx, connectorID, owner, repo, title, head, base, body)
+	if err != nil {
+		return "", 0, err
+	}
+	return created.HTMLURL, created.Number, nil
+}
+
+// toMissionRecord adapts a missions.Mission into the builtin package's
+// own MissionRecord shape — see MissionRecord's doc comment for why
+// builtin can't import missions.Mission directly. NotPushable is
+// precomputed here since missions.NotPushable also lives in the
+// missions package.
+func toMissionRecord(m missions.Mission) builtin.MissionRecord {
+	passed := 0
+	for _, u := range m.Spec.Units {
+		if u.Passes {
+			passed++
+		}
+	}
+	return builtin.MissionRecord{
+		ID: m.ID, Name: m.Name, Goal: m.Goal, Kind: m.Kind,
+		Phase: string(m.Phase), Status: string(m.Status), Iteration: m.Iteration,
+		Harness: m.Harness, RepoURL: m.RepoURL, Branch: m.Branch, ConnectorID: m.ConnectorID,
+		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
+		UnitsPassed: passed, UnitsTotal: len(m.Spec.Units),
+		PauseReason: string(m.PauseReason), PauseMessage: m.PauseMessage,
+		OnComplete:        m.OnComplete,
+		NotPushableReason: missions.NotPushable(m),
+	}
+}
+
+// missionToolStore adapts *missions.Store to the builtin package's
+// missions/mission_push tool interfaces (missionLister,
+// missionEventReader) — a thin translation layer since builtin cannot
+// import missions.Mission/missions.Event directly (import cycle, see
+// MissionRecord's doc comment).
+type missionToolStore struct {
+	store *missions.Store
+}
+
+func (a missionToolStore) ListMissions(ctx context.Context, limit int) ([]builtin.MissionRecord, error) {
+	all, err := a.store.List(ctx, missions.ListFilter{Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]builtin.MissionRecord, len(all))
+	for i, m := range all {
+		out[i] = toMissionRecord(m)
+	}
+	return out, nil
+}
+
+func (a missionToolStore) GetMission(ctx context.Context, id string) (builtin.MissionRecord, error) {
+	m, err := a.store.Get(ctx, id)
+	if err != nil {
+		return builtin.MissionRecord{}, err
+	}
+	return toMissionRecord(m), nil
+}
+
+func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]builtin.MissionEvent, error) {
+	evs, err := a.store.Events(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]builtin.MissionEvent, len(evs))
+	for i, e := range evs {
+		out[i] = builtin.MissionEvent{Kind: e.Kind, Payload: e.Payload}
+	}
+	return out, nil
+}
+
+// missionCompleterAdapter adapts *missions.Completer to the builtin
+// package's missionCompleter interface — mission_push's push/PR calls
+// go through the exact same Completer the button/auto-fire paths use.
+// It re-Gets the mission by id from the real store before calling
+// Completer, so Completer always acts on the authoritative
+// missions.Mission (worktree, full spec for PRBody, ...) rather than a
+// partial copy shuttled through builtin.MissionRecord.
+type missionCompleterAdapter struct {
+	store     *missions.Store
+	completer *missions.Completer
+}
+
+func (a missionCompleterAdapter) PushMissionBranch(ctx context.Context, id, token string) (string, error) {
+	m, err := a.store.Get(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("no mission found with id %q", id)
+	}
+	return a.completer.PushBranch(ctx, m, token)
+}
+
+func (a missionCompleterAdapter) OpenMissionPR(ctx context.Context, id, token string) (string, int, error) {
+	m, err := a.store.Get(ctx, id)
+	if err != nil {
+		return "", 0, fmt.Errorf("no mission found with id %q", id)
+	}
+	return a.completer.OpenPR(ctx, m, token)
 }
 
 // credResolveTimeout bounds one credential_ref resolution the delegated

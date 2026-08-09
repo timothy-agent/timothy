@@ -108,7 +108,27 @@ CREATE TABLE IF NOT EXISTS missions (
     -- own name directly, no LLM call. Empty means generation hasn't
     -- landed yet (or a scheduler mission predates this column); the UI
     -- falls back to a truncated goal. Never re-summarized once set.
-    name                  text NOT NULL DEFAULT ''
+    name                  text NOT NULL DEFAULT '',
+    -- A coding mission can clone an existing GitHub repo instead of
+    -- self-initializing an empty one (Workspace.Provision): repo_url is
+    -- the repo's https clone URL, connector_id names the github-kind
+    -- connectors row whose PAT authenticates the clone. Both empty
+    -- (the default) is the existing self-init behavior; repo_url
+    -- without a connector_id is rejected at create time (api/missions.go)
+    -- -- v1 has no anonymous-clone path. The clone auth token itself is
+    -- never persisted here or anywhere else: it's resolved fresh from
+    -- connector_id's credential_ref at provisioning time only.
+    repo_url              text NOT NULL DEFAULT '',
+    connector_id          text NOT NULL DEFAULT '',
+    -- Consent-at-create for the mission's auto-completion action: ''
+    -- (default) does nothing when the mission reaches done; 'push'
+    -- pushes the branch; 'push_pr' pushes then opens a pull request.
+    -- Chosen by the operator at create time (api/missions.go), never
+    -- decided by the model -- keeps the pushes-stay-human invariant:
+    -- the harness only ever executes a choice a human already made.
+    -- Requires repo_url+connector_id and kind='coding', same guards as
+    -- the manual push/pr endpoints.
+    on_complete           text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

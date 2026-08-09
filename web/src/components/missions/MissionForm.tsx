@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import {
   classifyMission,
+  createConnectorRepo,
   createMission,
   createSchedule,
   type ExecutorOption,
   getMissionExecutorOptions,
   getSettings,
+  listConnectorRepos,
+  listConnectors,
   patchSchedule,
+  testConnector,
 } from '../../api/client'
-import type { AdminAgent, Schedule } from '../../api/types'
+import type { AdminAgent, AdminConnector, GitHubIdentity, GitHubRepo, Schedule } from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
 import { slugify } from '../settings/AgentForm'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
@@ -18,6 +23,7 @@ import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Calendar } from '../ui/calendar'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -26,7 +32,22 @@ import { Textarea } from '../ui/textarea'
 import { errText } from '../settings/util'
 import { envIcon } from '../icons/EnvIcons'
 
+type RepoSource = 'none' | 'github'
+
 type Kind = 'coding' | 'general'
+
+type OnComplete = '' | 'push' | 'push_pr'
+
+// Sentinel for the Deployment Select — Radix Select.Item rejects an
+// empty string value, so the "do nothing" choice (the wire value '')
+// is represented by this sentinel on the Select itself.
+const ON_COMPLETE_NONE = '__none__'
+
+const onCompleteChoices: { value: string; label: string }[] = [
+  { value: ON_COMPLETE_NONE, label: 'Nothing' },
+  { value: 'push', label: 'Push branch when done' },
+  { value: 'push_pr', label: 'Push and open a PR when done' },
+]
 
 const kindCopy: Record<Kind, string> = {
   coding: 'Coding · branches from repo',
@@ -156,6 +177,76 @@ export function MissionForm({
   const [environment, setEnvironment] = useState('')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // Repository source: 'none' self-initializes an empty repo (the
+  // existing coding-mission default); 'github' clones an existing repo
+  // (or a brand-new one) through a github-kind connector.
+  const [repoSource, setRepoSource] = useState<RepoSource>('none')
+  const [githubConnectors, setGithubConnectors] = useState<AdminConnector[] | null>(null)
+  const [connectorID, setConnectorID] = useState('')
+  const [repos, setRepos] = useState<GitHubRepo[] | null>(null)
+  const [reposLoading, setReposLoading] = useState(false)
+  const [reposError, setReposError] = useState<string | null>(null)
+  const [repoQuery, setRepoQuery] = useState('')
+  const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null)
+  const [connIdentity, setConnIdentity] = useState<GitHubIdentity | null>(null)
+  const [repoPickerOpen, setRepoPickerOpen] = useState(false)
+  const [newRepo, setNewRepo] = useState(false)
+  const [newRepoName, setNewRepoName] = useState('')
+  const [newRepoPrivate, setNewRepoPrivate] = useState(true)
+
+  // Consent-at-create for the mission's auto-completion action —
+  // resets whenever the GitHub source is unpicked, since on_complete is
+  // only ever valid alongside repo_url/connector_id.
+  const [onComplete, setOnComplete] = useState<OnComplete>('')
+  useEffect(() => {
+    if (repoSource !== 'github') setOnComplete('')
+  }, [repoSource])
+
+  // Fetch github-kind connectors once the operator picks the GitHub
+  // source — most missions never touch this, so it's not loaded
+  // upfront with agents/routes.
+  useEffect(() => {
+    if (repoSource !== 'github' || githubConnectors !== null) return
+    listConnectors()
+      .then((all) => setGithubConnectors(all.filter((c) => c.kind === 'github' && c.enabled)))
+      .catch(() => setGithubConnectors([]))
+  }, [repoSource, githubConnectors])
+
+  // Fetch the connector's repo list whenever it changes — best-effort,
+  // an error surfaces inline rather than blocking the form.
+  useEffect(() => {
+    if (repoSource !== 'github' || !connectorID) {
+      setRepos(null)
+      return
+    }
+    setReposLoading(true)
+    setReposError(null)
+    listConnectorRepos(connectorID)
+      .then(setRepos)
+      .catch((err) => setReposError(errText(err)))
+      .finally(() => setReposLoading(false))
+  }, [repoSource, connectorID])
+
+  // Resolve the connection's GitHub identity so the Deployment section
+  // can say who commits and PRs will be authored as — best-effort, an
+  // unresolved identity just hides the line.
+  useEffect(() => {
+    if (repoSource !== 'github' || !connectorID) {
+      setConnIdentity(null)
+      return
+    }
+    testConnector(connectorID)
+      .then((res) => setConnIdentity(res.identity ?? null))
+      .catch(() => setConnIdentity(null))
+  }, [repoSource, connectorID])
+
+  const filteredRepos = useMemo(() => {
+    if (!repos) return []
+    const q = repoQuery.trim().toLowerCase()
+    if (!q) return repos
+    return repos.filter((r) => r.full_name.toLowerCase().includes(q))
+  }, [repos, repoQuery])
 
   // Live executor pairing/usability preview: coding-only, refetched
   // whenever the kind flips to coding or the route selection changes.
@@ -299,12 +390,28 @@ export function MissionForm({
     setCronError(null)
   }
 
+  // A GitHub source is only meaningful once it can actually resolve to
+  // a clone URL: an existing repo picked, or a new-repo name typed.
+  const githubSourceReady =
+    repoSource !== 'github' ||
+    !!connectorID && (newRepo ? newRepoName.trim() !== '' : !!selectedRepo)
+
   const canSubmit =
     mode === 'edit'
       ? scheduleName.trim() !== '' && goal.trim() !== '' && validCronShape(cron)
-      : goal.trim() !== '' && (!repeat || validCronShape(cron))
+      : goal.trim() !== '' && (!repeat || validCronShape(cron)) && githubSourceReady
 
   const submitMission = async () => {
+    let repoURL: string | undefined
+    if (kind === 'coding' && repoSource === 'github' && connectorID) {
+      const repo = newRepo
+        ? await createConnectorRepo(connectorID, {
+            name: newRepoName.trim(),
+            private: newRepoPrivate,
+          })
+        : selectedRepo
+      repoURL = repo?.clone_url
+    }
     const { id } = await createMission({
       goal: goal.trim(),
       kind,
@@ -317,6 +424,9 @@ export function MissionForm({
       auto_approve_safe: autoApproveSafe,
       harness: kind === 'coding' ? harness || undefined : undefined,
       environment: kind === 'coding' ? environment || undefined : undefined,
+      repo_url: repoURL,
+      connector_id: repoURL ? connectorID : undefined,
+      on_complete: repoURL && onComplete ? onComplete : undefined,
     })
     toast.success('Mission created')
     onDone({ kind: 'mission', id })
@@ -429,6 +539,211 @@ export function MissionForm({
           </p>
         )}
       </section>
+
+      {kind === 'coding' && mode === 'create' && !repeat && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold">Repository</h2>
+            <p className="text-sm text-muted-foreground">
+              Work in a fresh scratch repo, or clone an existing GitHub repo.
+            </p>
+          </div>
+
+          <div className="inline-flex rounded-lg bg-muted p-1 text-sm">
+            <button
+              type="button"
+              onClick={() => setRepoSource('none')}
+              aria-pressed={repoSource === 'none'}
+              className={`rounded-md px-3 py-1.5 font-medium transition ${
+                repoSource === 'none' ? 'bg-background shadow-sm' : 'text-muted-foreground'
+              }`}
+            >
+              None
+            </button>
+            <button
+              type="button"
+              onClick={() => setRepoSource('github')}
+              aria-pressed={repoSource === 'github'}
+              className={`rounded-md px-3 py-1.5 font-medium transition ${
+                repoSource === 'github' ? 'bg-background shadow-sm' : 'text-muted-foreground'
+              }`}
+            >
+              GitHub
+            </button>
+          </div>
+
+          {repoSource === 'github' && (
+            <div className="space-y-3 rounded-lg border border-border p-4">
+              {githubConnectors === null ? (
+                <p className="text-sm text-muted-foreground">Loading connectors…</p>
+              ) : githubConnectors.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No GitHub connectors configured yet.{' '}
+                  <Link to="/settings/connectors" className="underline underline-offset-2">
+                    Add one in Settings → Connectors
+                  </Link>
+                  .
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mission-connector">Connector</Label>
+                    <Select
+                      value={connectorID}
+                      onValueChange={(v) => {
+                        setConnectorID(v)
+                        setSelectedRepo(null)
+                        setRepoQuery('')
+                      }}
+                    >
+                      <SelectTrigger id="mission-connector" className="w-full">
+                        <SelectValue placeholder="Choose a connector" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {githubConnectors.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {connectorID && !newRepo && (
+                    <div className="space-y-1.5">
+                      <Label>Repository</Label>
+                      <Popover open={repoPickerOpen} onOpenChange={setRepoPickerOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            className="w-full justify-start font-normal"
+                            disabled={reposLoading}
+                          >
+                            {reposLoading
+                              ? 'Loading repos…'
+                              : (selectedRepo?.full_name ?? 'Choose a repository')}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
+                          <Command shouldFilter={false}>
+                            <CommandInput
+                              placeholder="Filter repositories…"
+                              value={repoQuery}
+                              onValueChange={setRepoQuery}
+                            />
+                            <CommandList>
+                              <CommandEmpty>
+                                {reposError ? `Could not load repos: ${reposError}` : 'No matches.'}
+                              </CommandEmpty>
+                              {filteredRepos.map((r) => (
+                                <CommandItem
+                                  key={r.full_name}
+                                  value={r.full_name}
+                                  onSelect={() => {
+                                    setSelectedRepo(r)
+                                    setRepoPickerOpen(false)
+                                  }}
+                                >
+                                  <span className="truncate">{r.full_name}</span>
+                                  {r.private && (
+                                    <Badge variant="outline" className="ml-auto shrink-0">
+                                      Private
+                                    </Badge>
+                                  )}
+                                </CommandItem>
+                              ))}
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+
+                  {connectorID && (
+                    <label
+                      htmlFor="mission-new-repo"
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <input
+                        id="mission-new-repo"
+                        type="checkbox"
+                        checked={newRepo}
+                        onChange={(e) => {
+                          setNewRepo(e.target.checked)
+                          setSelectedRepo(null)
+                        }}
+                      />
+                      New repository
+                    </label>
+                  )}
+
+                  {connectorID && newRepo && (
+                    <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="mission-new-repo-name">Name</Label>
+                        <Input
+                          id="mission-new-repo-name"
+                          value={newRepoName}
+                          onChange={(e) => setNewRepoName(e.target.value)}
+                          placeholder="my-new-repo"
+                        />
+                      </div>
+                      <label
+                        htmlFor="mission-new-repo-private"
+                        className="flex items-end gap-2 pb-2 text-sm"
+                      >
+                        <input
+                          id="mission-new-repo-private"
+                          type="checkbox"
+                          checked={newRepoPrivate}
+                          onChange={(e) => setNewRepoPrivate(e.target.checked)}
+                        />
+                        Private
+                      </label>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {repoSource === 'github' && githubSourceReady && (
+            <div className="space-y-1.5">
+              <Label htmlFor="mission-on-complete">Deployment</Label>
+              <Select
+                value={onComplete || ON_COMPLETE_NONE}
+                onValueChange={(v) =>
+                  setOnComplete(v === ON_COMPLETE_NONE ? '' : (v as OnComplete))
+                }
+              >
+                <SelectTrigger id="mission-on-complete" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {onCompleteChoices.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                What happens automatically when the mission finishes. A human always chooses this
+                up front — the model never decides.
+              </p>
+              {connIdentity && (
+                <p className="text-xs text-muted-foreground">
+                  Commits and pull requests will be authored as{' '}
+                  <span className="font-medium text-foreground">
+                    {connIdentity.name || connIdentity.login}
+                  </span>{' '}
+                  ({connIdentity.email})
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="space-y-3">
         <div>

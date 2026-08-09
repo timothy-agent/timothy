@@ -10,6 +10,7 @@ import {
   setSecret,
   testConnector,
 } from '../../api/client'
+import type { GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
@@ -27,11 +28,11 @@ function slugify(v: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-// ConnectorAdd is preset-aware and its own page: MCP presets are
-// created, tested, and enabled in one go with Add gated on a passing
-// test (same contract as adding a provider); Google presets take the
-// OAuth client and hand off to Google's consent screen instead — there
-// is no unsaved test to run before that redirect.
+// ConnectorAdd is preset-aware and its own page: MCP and github presets
+// are created, tested, and enabled in one go with Add gated on a
+// passing test (same contract as adding a provider); Google presets
+// take the OAuth client and hand off to Google's consent screen
+// instead — there is no unsaved test to run before that redirect.
 export function ConnectorAdd() {
   const { presetId } = useParams()
   const navigate = useNavigate()
@@ -44,9 +45,11 @@ export function ConnectorAdd() {
   const [clientID, setClientID] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [busy, setBusy] = useState(false)
-  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
+    null,
+  )
   // The connector row is created (disabled) as part of testing an MCP
-  // preset — there's no unsaved-config validate endpoint like
+  // or github preset — there's no unsaved-config validate endpoint like
   // providers have. createdID tracks that row so a passing test's
   // Add just enables it rather than creating a second one.
   const [createdID, setCreatedID] = useState<string | null>(null)
@@ -66,6 +69,7 @@ export function ConnectorAdd() {
 
   if (!preset) return <Navigate to="/settings/connectors" replace />
   const isGoogle = preset.kind === 'google'
+  const isGitHub = preset.kind === 'github'
   const slug = slugify(name)
   const refBase = slug.toUpperCase().replace(/-/g, '_')
   const tested = test?.ok === true
@@ -80,22 +84,38 @@ export function ConnectorAdd() {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
-    if (!endpoint.trim()) {
+    if (!isGitHub && !endpoint.trim()) {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
+      return
+    }
+    if (isGitHub && !token.trim()) {
+      toast.error('Token required', { description: 'A personal access token is required to test this connector.' })
       return
     }
     setBusy(true)
     setTest(null)
     try {
-      const tokenRef = `${refBase}_MCP_TOKEN`
+      // Suffix without stuttering: a name already ending in the flavor
+      // word ("github", "github-mcp") gets the bare _PAT/_TOKEN suffix.
+      const tokenRef = isGitHub
+        ? refBase.endsWith('GITHUB')
+          ? `${refBase}_PAT`
+          : `${refBase}_GITHUB_PAT`
+        : refBase.endsWith('_MCP')
+          ? `${refBase}_TOKEN`
+          : `${refBase}_MCP_TOKEN`
       if (token) await setSecret(tokenRef, token.trim())
-      const id = await createConnector({
-        name: slug,
-        kind: 'mcp',
-        config: { endpoint: endpoint.trim() },
-        credential_ref: token ? tokenRef : '',
-        enabled: false,
-      })
+      const id = await createConnector(
+        isGitHub
+          ? { name: slug, kind: 'github', config: {}, credential_ref: tokenRef, enabled: false }
+          : {
+              name: slug,
+              kind: 'mcp',
+              config: { endpoint: endpoint.trim() },
+              credential_ref: token ? tokenRef : '',
+              enabled: false,
+            },
+      )
       setCreatedID(id)
       setTest(await testConnector(id))
     } catch (err) {
@@ -110,7 +130,11 @@ export function ConnectorAdd() {
     setBusy(true)
     try {
       await patchConnector(createdID, { enabled: true })
-      toast.success('Connector added', { description: `${slug} is connected and tools are servable.` })
+      toast.success('Connector added', {
+        description: isGitHub
+          ? `${slug} is connected; its identity is ready for mission use.`
+          : `${slug} is connected and tools are servable.`,
+      })
       navigate('/settings/connectors')
     } catch (err) {
       toast.error('Could not enable connector', { description: errText(err) })
@@ -142,7 +166,7 @@ export function ConnectorAdd() {
     }
   }
 
-  const canTest = slug !== '' && endpoint.trim() !== ''
+  const canTest = slug !== '' && (isGitHub ? token.trim() !== '' : endpoint.trim() !== '')
   const canSubmitGoogle = slug !== '' && clientID.trim() !== '' && clientSecret !== ''
 
   return (
@@ -216,22 +240,30 @@ export function ConnectorAdd() {
           </>
         ) : (
           <>
-            <Field label="Endpoint">
-              <Input
-                value={endpoint}
-                onChange={(e) => {
-                  setEndpoint(e.target.value)
-                  invalidate()
-                }}
-                placeholder="https://…/mcp"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            {preset.endpointHint && (
-              <p className="-mt-3 text-sm text-muted-foreground">{preset.endpointHint}</p>
+            {!isGitHub && (
+              <>
+                <Field label="Endpoint">
+                  <Input
+                    value={endpoint}
+                    onChange={(e) => {
+                      setEndpoint(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder="https://…/mcp"
+                    className="mt-1.5 h-10"
+                  />
+                </Field>
+                {preset.endpointHint && (
+                  <p className="-mt-3 text-sm text-muted-foreground">{preset.endpointHint}</p>
+                )}
+              </>
             )}
             <div>
-              <Field label={preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'}>
+              <Field
+                label={
+                  isGitHub ? 'Personal access token' : preset.id === 'custom-mcp' ? 'Bearer token (optional)' : 'Bearer token'
+                }
+              >
                 <Input
                   type="password"
                   value={token}
@@ -245,8 +277,29 @@ export function ConnectorAdd() {
                 />
               </Field>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                {preset.tokenHint ? `${preset.tokenHint} ` : ''}
-                {secretDestination(defaultBackend, `${refBase}_MCP_TOKEN`)}
+                {preset.tokenHint}
+                {preset.tokenURL && (
+                  <>
+                    {' '}
+                    <a
+                      href={preset.tokenURL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                    >
+                      Create one on GitHub →
+                    </a>
+                  </>
+                )}
+                {!preset.tokenURL && (
+                  <>
+                    {' '}
+                    {secretDestination(
+                      defaultBackend,
+                      isGitHub ? `${refBase}_GITHUB_PAT` : `${refBase}_MCP_TOKEN`,
+                    )}
+                  </>
+                )}
               </p>
             </div>
 
@@ -264,7 +317,9 @@ export function ConnectorAdd() {
                 {busy
                   ? 'Testing connection…'
                   : tested
-                    ? 'Connection OK, tools are servable.'
+                    ? isGitHub && test?.identity
+                      ? `Connected as ${test.identity.login} (${test.identity.email}), ${test.identity.scopes}.`
+                      : 'Connection OK, tools are servable.'
                     : test && !test.ok
                       ? `Connection failed: ${test.error}. The connector was saved disabled, fix and retry.`
                       : 'Not tested yet, run a test before adding.'}

@@ -9,6 +9,33 @@ import { RecurringSchedules } from '../components/missions/RecurringSchedules'
 import { Button } from '../components/ui/button'
 import { subscribeEvents } from '../lib/events'
 
+// notificationSeverityClasses colors the banner by notification kind —
+// same green/amber/red convention MissionCard's statusColor uses for
+// mission status chips. Any kind not listed here (unanticipated future
+// kind) falls back to the existing amber styling.
+const notificationSeverityClasses: Record<string, string> = {
+  done: 'border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200',
+  error:
+    'border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200',
+  paused:
+    'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
+  waiting_for_input:
+    'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
+}
+
+const notificationDismissClasses: Record<string, string> = {
+  done: 'text-green-700 hover:text-green-900 dark:text-green-400 dark:hover:text-green-200',
+  error: 'text-red-700 hover:text-red-900 dark:text-red-400 dark:hover:text-red-200',
+  paused: 'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200',
+  waiting_for_input:
+    'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200',
+}
+
+const defaultSeverityClasses =
+  'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200'
+const defaultDismissClasses =
+  'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200'
+
 export function Missions() {
   const navigate = useNavigate()
   const [missions, setMissions] = useState<Mission[]>([])
@@ -54,7 +81,7 @@ export function Missions() {
           {unread.map((n) => (
             <div
               key={n.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+              className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${notificationSeverityClasses[n.kind] ?? defaultSeverityClasses}`}
             >
               <button
                 type="button"
@@ -67,7 +94,7 @@ export function Missions() {
               <button
                 type="button"
                 onClick={() => dismiss(n.id)}
-                className="shrink-0 text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200"
+                className={`shrink-0 ${notificationDismissClasses[n.kind] ?? defaultDismissClasses}`}
                 aria-label="Dismiss"
               >
                 <HugeiconsIcon icon={CancelCircleIcon} className="size-4" />

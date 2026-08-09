@@ -563,6 +563,17 @@ export interface Mission {
   worktree?: string
   branch?: string
   base_commit?: string
+  // repo_url is the GitHub repo this coding mission was cloned from
+  // (https clone URL) — absent means the self-init'd empty repo.
+  // connector_id names the github-kind connector whose PAT
+  // authenticated the clone; only present alongside repo_url.
+  repo_url?: string
+  connector_id?: string
+  // on_complete is the operator's consent-at-create choice for what the
+  // harness does automatically when this mission reaches done: '' does
+  // nothing, 'push' pushes the branch, 'push_pr' pushes then opens a
+  // pull request. Only ever set at create time, never by the model.
+  on_complete?: '' | 'push' | 'push_pr'
   // explore_notes is set once, at the end of the explore phase
   // (driver.go's runExplore) — absent/empty for a mission created
   // before the explore phase existed, or one that hasn't reached it
@@ -695,6 +706,14 @@ export interface MissionSteeredPayload {
   note: string
 }
 
+// MissionPROpenedPayload is mission.pr_opened's payload — recorded by
+// POST .../pr once a pull request is opened (or an existing one for
+// the same head is found instead).
+export interface MissionPROpenedPayload {
+  url: string
+  number: number
+}
+
 // MissionFile is one entry of a mission workspace's file listing
 // (GET /v1/missions/:id/files). Declared marks files named in the
 // mission's plan artifacts, not the full tree.
@@ -715,12 +734,15 @@ export interface Notification {
 }
 
 // AdminConnector is one third-party integration the agent can call as
-// tools (MCP server or Google account). config is kind-specific; the
-// credential_ref names where its secret/tokens live.
+// tools (MCP server or Google account), or — for kind 'github' — an
+// identity/credential connector with no tools of its own (mission
+// flows and Settings resolve a GitHub identity from its PAT; chat
+// tools stay on the MCP-based GitHub connector). config is
+// kind-specific; the credential_ref names where its secret/tokens live.
 export interface AdminConnector {
   id: string
   name: string
-  kind: 'mcp' | 'google'
+  kind: 'mcp' | 'google' | 'github'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
@@ -728,6 +750,27 @@ export interface AdminConnector {
   // privacy-floor route (session.SensitiveTools), same as gmail_read
   // is pinned today — additive, connector-wide, no code change needed.
   sensitive: boolean
+}
+
+// GitHubIdentity is what a github-kind connector's test resolves:
+// which account its PAT authenticates as.
+export interface GitHubIdentity {
+  login: string
+  name: string
+  email: string
+  scopes: string
+}
+
+// GitHubRepo is one repo a github-kind connector's PAT can see or
+// create (GET/POST /v1/admin/connectors/:id/repos) — the mission
+// create form's repo picker/create-new flow.
+export interface GitHubRepo {
+  full_name: string
+  private: boolean
+  default_branch: string
+  html_url: string
+  clone_url: string
+  pushed_at: string
 }
 
 // MissionTemplate is the frozen mission-creation payload a schedule

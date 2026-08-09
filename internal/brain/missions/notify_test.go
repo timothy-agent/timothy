@@ -2,6 +2,30 @@ package missions
 
 import "testing"
 
+func TestComposeMessage(t *testing.T) {
+	cases := []struct {
+		name        string
+		kind, title string
+		reason      string
+		want        string
+	}{
+		{"done", "done", "Fix the login bug", "", "Mission - Fix the login bug is done"},
+		{"failed", "error", "Fix the login bug", "max_iterations", "Mission - Fix the login bug is failed"},
+		{"failed no reason", "error", "Fix the login bug", "", "Mission - Fix the login bug is failed"},
+		{"cancelled", "error", "Fix the login bug", "cancelled", "Mission - Fix the login bug is cancelled"},
+		{"paused", "paused", "Fix the login bug", "", "Mission - Fix the login bug is paused, needs your intervention."},
+		{"waiting_for_input", "waiting_for_input", "Fix the login bug", "", "Mission - Fix the login bug is waiting for your input."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := composeMessage(tc.kind, tc.title, tc.reason)
+			if got != tc.want {
+				t.Fatalf("composeMessage(%q, %q, %q) = %q, want %q", tc.kind, tc.title, tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsActionableTransition(t *testing.T) {
 	cases := []struct {
 		name          string

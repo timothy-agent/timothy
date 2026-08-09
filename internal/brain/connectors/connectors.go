@@ -20,8 +20,11 @@ import (
 
 // kinds whitelists what the manager can actually build. google
 // arrives with the OAuth phase; the panel shows it once a builder
-// registers.
-var kinds = map[string]bool{"mcp": true, "google": true}
+// registers. github is identity/credential-only (D-057): it serves no
+// chat tools in this slice, existing purely so mission flows (clone,
+// push, PR) and Settings can resolve a GitHub identity from a PAT; the
+// MCP-based GitHub connector keeps serving GitHub chat tools.
+var kinds = map[string]bool{"mcp": true, "google": true, "github": true}
 
 // credentialRefPattern matches the gateway's: names and paths only,
 // never anything that could be a pasted secret.

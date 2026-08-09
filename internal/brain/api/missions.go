@@ -8,13 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
@@ -43,11 +43,11 @@ import (
 // provider/model per mission id from the cost ledger (D-05x's
 // ledger.Aggregator.TopModelByMission) for the list response's
 // top_model decoration — nil (no ledger wiring) omits the field.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error)) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -63,6 +63,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("GET /v1/missions/{id}/files/{path...}", a.auth(http.HandlerFunc(h.download)))
 	handle("GET /v1/missions/{id}/archive", a.auth(http.HandlerFunc(h.archive)))
 	handle("POST /v1/missions/{id}/push", a.auth(http.HandlerFunc(h.push)))
+	handle("POST /v1/missions/{id}/pr", a.auth(http.HandlerFunc(h.pr)))
 	handle("GET /v1/notifications", a.auth(http.HandlerFunc(h.notifications)))
 	handle("POST /v1/notifications/{id}/read", a.auth(http.HandlerFunc(h.markRead)))
 }
@@ -102,6 +103,12 @@ type missionAPI struct {
 	// from the cost ledger; nil (no ledger wiring) omits top_model/
 	// top_model_provider from list/get responses entirely.
 	topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error)
+	// conns is the connector control plane: create() validates
+	// connector_id names an enabled github-kind connector before
+	// accepting repo_url. nil (no secret store, connectors disabled)
+	// makes repo_url mission creation unavailable, same 400 shape as any
+	// other rejected connector_id.
+	conns *connectors.Manager
 	// perms answers a mission's pending_permission — the same
 	// PermissionResolver chat sessions use (A.perms), never a
 	// mission-specific broker.
@@ -255,6 +262,21 @@ type createMissionRequest struct {
 	// unattended, so auto-approving DangerSafe shell calls is the
 	// sensible default; destructive commands always ask regardless.
 	AutoApproveSafe *bool `json:"auto_approve_safe"`
+	// RepoURL is a GitHub repo's https clone URL: when set, the mission
+	// clones it instead of self-initializing an empty repo. Mutually
+	// exclusive with a future repo_path option and coding-only, same as
+	// Harness/Environment. Requires ConnectorID — v1 has no anonymous
+	// clone path.
+	RepoURL string `json:"repo_url"`
+	// ConnectorID names a github-kind connectors row whose PAT
+	// authenticates the clone; only meaningful alongside RepoURL.
+	ConnectorID string `json:"connector_id"`
+	// OnComplete is the operator's consent-at-create choice for what
+	// happens when this mission reaches done: "" (default), "push", or
+	// "push_pr". Requires RepoURL+ConnectorID (a github-connection
+	// mission) and kind=coding — a model never decides this, only the
+	// human choosing it here.
+	OnComplete string `json:"on_complete"`
 }
 
 // create validates the request, resolves route/review_route/budget
@@ -313,6 +335,42 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		// explicit request; "" stays "" (base) when nothing matches.
 		req.Environment, _ = missions.DetectEnvironment("", req.Goal)
 	}
+	switch {
+	case req.RepoURL != "" && req.Kind != "coding":
+		jsonError(w, http.StatusBadRequest, "bad_request", "repo_url is only valid for kind=coding missions")
+		return
+	case req.RepoURL != "" && req.ConnectorID == "":
+		jsonError(w, http.StatusBadRequest, "bad_request", "connector_id is required with repo_url")
+		return
+	case req.RepoURL == "" && req.ConnectorID != "":
+		jsonError(w, http.StatusBadRequest, "bad_request", "connector_id is only valid alongside repo_url")
+		return
+	case req.RepoURL != "":
+		if h.conns == nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", "connectors are not enabled")
+			return
+		}
+		c, err := h.conns.Store().Get(r.Context(), req.ConnectorID)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", "unknown connector_id")
+			return
+		}
+		if c.Kind != "github" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "connector_id must name a github-kind connector")
+			return
+		}
+	}
+	switch req.OnComplete {
+	case "":
+	case "push", "push_pr":
+		if req.Kind != "coding" || req.RepoURL == "" || req.ConnectorID == "" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "on_complete requires repo_url and connector_id on a kind=coding mission")
+			return
+		}
+	default:
+		jsonError(w, http.StatusBadRequest, "bad_request", `on_complete must be "", "push", or "push_pr"`)
+		return
+	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
 	// mission created without an explicit agent still needs a real
@@ -367,6 +425,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		Route: req.Route, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
+		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
@@ -787,74 +846,231 @@ func (h *missionAPI) archive(w http.ResponseWriter, r *http.Request) {
 // check, not a secret-store lookup.
 var pushRefPattern = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,128}$`)
 
-// push pushes the mission's branch to its worktree's origin remote,
-// authenticated with the resolved credential_ref. Guards (kind,
-// branch, worktree presence) are Go code, never a prompt — only coding
-// missions with a live worktree are ever pushable.
+// pushTokenError is the sentinel resolvePushToken returns on any
+// resolution failure, carrying the exact HTTP status/code/message the
+// caller should surface — push and pr share this one resolution path,
+// so both endpoints report identical errors for identical causes.
+type pushTokenError struct {
+	status  int
+	code    string
+	message string
+}
+
+func (e *pushTokenError) Error() string { return e.message }
+
+// resolvePushToken resolves the token that authenticates a push:
+// credentialRef (from the request body) when non-empty always wins —
+// an explicit override — otherwise, a github-connection mission (m has
+// a connector_id) resolves the connector's own PAT; a mission with
+// neither is a 400, not a fall-through to "no credential configured".
+func (h *missionAPI) resolvePushToken(ctx context.Context, m missions.Mission, credentialRef string) (string, error) {
+	if credentialRef != "" {
+		if !pushRefPattern.MatchString(credentialRef) {
+			return "", &pushTokenError{http.StatusBadRequest, "bad_request", "credential_ref must match ^[A-Za-z0-9_./-]{1,128}$"}
+		}
+		if h.resolveSecret == nil {
+			return "", &pushTokenError{http.StatusNotFound, "not_found", "secret store not configured"}
+		}
+		token, err := h.resolveSecret(ctx, credentialRef)
+		if err != nil {
+			if errors.Is(err, secretstore.ErrNotFound) {
+				return "", &pushTokenError{http.StatusNotFound, "secret_not_found", "no secret configured for that credential_ref"}
+			}
+			return "", &pushTokenError{http.StatusBadGateway, "push_failed", "failed to resolve credential"}
+		}
+		return token, nil
+	}
+	if m.ConnectorID == "" {
+		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "credential_ref is required and must match ^[A-Za-z0-9_./-]{1,128}$"}
+	}
+	if h.conns == nil {
+		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "connectors are not enabled"}
+	}
+	c, err := h.conns.Store().Get(ctx, m.ConnectorID)
+	if err != nil {
+		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "unknown connector_id"}
+	}
+	if c.Kind != "github" {
+		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "connector_id must name a github-kind connector"}
+	}
+	if !c.Enabled {
+		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "connector is disabled"}
+	}
+	if h.resolveSecret == nil {
+		return "", &pushTokenError{http.StatusNotFound, "not_found", "secret store not configured"}
+	}
+	token, err := h.resolveSecret(ctx, c.CredentialRef)
+	if err != nil {
+		return "", &pushTokenError{http.StatusBadGateway, "push_failed", "failed to resolve connector credential"}
+	}
+	return token, nil
+}
+
+// pushMissionBranch pushes m's branch to its worktree's origin remote
+// with token, recording mission.pushed/mission.push_failed either way —
+// missions.Completer.PushBranch does the actual push and event
+// recording, the SAME code the driver's auto-fire-on-done hook calls,
+// so a manual push and an auto-fired push can never diverge in what
+// they do or which events land on the Timeline. Event-record failures
+// here are logged, never turned into a failed response — the push
+// itself already succeeded or failed on its own terms.
+func (h *missionAPI) pushMissionBranch(ctx context.Context, m missions.Mission, token string) (host string, err error) {
+	host, err = h.completer().PushBranch(ctx, m, token)
+	if err != nil && !errors.Is(err, missions.ErrRemoteUnsupported) && !errors.Is(err, missions.ErrPushRejected) {
+		h.log.Warn("mission: push failed", "mission_id", m.ID, "error", err)
+	}
+	return host, err
+}
+
+// completer builds a missions.Completer wired to this handler's own
+// workspace/store — cheap, stateless besides those two pointers, so a
+// fresh one per call is simplest; the driver holds its own long-lived
+// Completer for the auto-fire path.
+func (h *missionAPI) completer() *missions.Completer {
+	return missions.NewCompleter(h.workspace, h.store, nil, h.prSource())
+}
+
+// prSource adapts h.conns (nil-safe) to missions.PRSource.
+func (h *missionAPI) prSource() missions.PRSource {
+	if h.conns == nil {
+		return nil
+	}
+	return connsPRSource{h.conns}
+}
+
+// connsPRSource adapts *connectors.Manager to missions.PRSource — the
+// PR endpoint's own adapter; the driver's SetPRSource wiring in
+// cmd/brain/main.go builds an equivalent one.
+type connsPRSource struct {
+	conns *connectors.Manager
+}
+
+func (c connsPRSource) DefaultBranch(ctx context.Context, connectorID, owner, repo string) (string, error) {
+	repoInfo, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
+	if err != nil {
+		return "", err
+	}
+	return repoInfo.DefaultBranch, nil
+}
+
+func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, title, head, base, body string) (string, int, error) {
+	created, err := c.conns.CreatePR(ctx, connectorID, owner, repo, title, head, base, body)
+	if err != nil {
+		return "", 0, err
+	}
+	return created.HTMLURL, created.Number, nil
+}
+
+// pushStatusCode maps a Push error to the HTTP status/code pair the
+// push/pr endpoints both report — shared so a rejected/unsupported
+// remote reads identically from either entry point.
+func pushStatusCode(err error) (status int, code string) {
+	switch {
+	case errors.Is(err, missions.ErrRemoteUnsupported):
+		return http.StatusBadRequest, "remote_unsupported"
+	case errors.Is(err, missions.ErrPushRejected):
+		return http.StatusConflict, "push_rejected"
+	default:
+		return http.StatusBadGateway, "push_failed"
+	}
+}
+
+// push pushes the mission's branch to its worktree's origin remote.
+// credential_ref in the body is optional for a github-connection
+// mission (absent resolves the connector's own PAT); required
+// otherwise. Guards (kind, branch, worktree presence) are Go code,
+// never a prompt — only coding missions with a live worktree are ever
+// pushable.
 func (h *missionAPI) push(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
 		failMission(w, err)
 		return
 	}
-	if m.Kind != "coding" {
-		jsonError(w, http.StatusBadRequest, "not_pushable", "only coding missions can be pushed")
-		return
-	}
-	if m.Branch == "" {
-		jsonError(w, http.StatusBadRequest, "not_pushable", "mission has no branch")
-		return
-	}
-	if _, err := os.Stat(m.Worktree); err != nil {
-		jsonError(w, http.StatusBadRequest, "not_pushable", "mission worktree is not available")
+	if reason := missions.NotPushable(m); reason != "" {
+		jsonError(w, http.StatusBadRequest, "not_pushable", reason)
 		return
 	}
 	var req struct {
 		CredentialRef string `json:"credential_ref"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if !pushRefPattern.MatchString(req.CredentialRef) {
-		jsonError(w, http.StatusBadRequest, "bad_request", "credential_ref is required and must match ^[A-Za-z0-9_./-]{1,128}$")
-		return
-	}
-	if h.resolveSecret == nil {
-		jsonError(w, http.StatusNotFound, "not_found", "secret store not configured")
-		return
-	}
-	token, err := h.resolveSecret(r.Context(), req.CredentialRef)
+	token, err := h.resolvePushToken(r.Context(), m, req.CredentialRef)
 	if err != nil {
-		if errors.Is(err, secretstore.ErrNotFound) {
-			jsonError(w, http.StatusNotFound, "secret_not_found", "no secret configured for that credential_ref")
+		var te *pushTokenError
+		if errors.As(err, &te) {
+			jsonError(w, te.status, te.code, te.message)
 			return
 		}
-		jsonError(w, http.StatusBadGateway, "push_failed", "failed to resolve credential")
+		jsonError(w, http.StatusBadGateway, "push_failed", err.Error())
 		return
 	}
-	host, pushErr := h.workspace.Push(r.Context(), m.Worktree, m.Branch, token)
+	host, pushErr := h.pushMissionBranch(r.Context(), m, token)
 	if pushErr != nil {
-		reason := "push failed"
-		status, code := http.StatusBadGateway, "push_failed"
-		switch {
-		case errors.Is(pushErr, missions.ErrRemoteUnsupported):
-			status, code = http.StatusBadRequest, "remote_unsupported"
-			reason = "remote unsupported"
-		case errors.Is(pushErr, missions.ErrPushRejected):
-			status, code = http.StatusConflict, "push_rejected"
-			reason = "push rejected"
-		}
-		if err := h.store.AppendEvent(r.Context(), m.ID, "mission.push_failed", map[string]any{"reason": reason}); err != nil {
-			h.log.Warn("mission: record push_failed event failed", "mission_id", m.ID, "error", err)
-		}
+		status, code := pushStatusCode(pushErr)
 		jsonError(w, status, code, pushErr.Error())
 		return
 	}
-	if err := h.store.AppendEvent(r.Context(), m.ID, "mission.pushed", map[string]any{"branch": m.Branch, "remote_host": host}); err != nil {
-		h.log.Warn("mission: record pushed event failed", "mission_id", m.ID, "error", err)
-	}
 	writeJSON(w, http.StatusOK, map[string]string{"branch": m.Branch, "remote_host": host})
+}
+
+// pr handles POST /v1/missions/{id}/pr: github-connection missions
+// only (400 otherwise). missions.Completer.OpenPR does the actual push,
+// default-branch lookup, PR create, and mission.pr_opened event
+// recording — the SAME code the driver's auto-fire-on-done hook calls
+// for on_complete="push_pr", so a manual PR and an auto-fired one can
+// never diverge. A re-call that finds the existing PR (CreatePR's
+// already-exists path) still appends a SECOND mission.pr_opened event,
+// tolerated as a harmless duplicate (the Timeline shows one extra
+// identical row) rather than adding a "did we already record this PR"
+// lookup.
+func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
+	m, err := h.store.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	if m.ConnectorID == "" || m.RepoURL == "" {
+		jsonError(w, http.StatusBadRequest, "not_pr_able", "only github-connection missions can open a pull request")
+		return
+	}
+	if reason := missions.NotPushable(m); reason != "" {
+		jsonError(w, http.StatusBadRequest, "not_pushable", reason)
+		return
+	}
+	if h.conns == nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "connectors are not enabled")
+		return
+	}
+	if _, _, ok := missions.ParseGitHubRepoURL(m.RepoURL); !ok {
+		jsonError(w, http.StatusBadRequest, "bad_request", "mission repo_url is not a recognizable github https clone URL")
+		return
+	}
+
+	token, err := h.resolvePushToken(r.Context(), m, "")
+	if err != nil {
+		var te *pushTokenError
+		if errors.As(err, &te) {
+			jsonError(w, te.status, te.code, te.message)
+			return
+		}
+		jsonError(w, http.StatusBadGateway, "push_failed", err.Error())
+		return
+	}
+	url, number, err := h.completer().OpenPR(r.Context(), m, token)
+	if err != nil {
+		if errors.Is(err, missions.ErrRemoteUnsupported) || errors.Is(err, missions.ErrPushRejected) {
+			status, code := pushStatusCode(err)
+			jsonError(w, status, code, err.Error())
+			return
+		}
+		jsonError(w, http.StatusBadGateway, "pr_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"url": url, "number": number})
 }
 
 func (h *missionAPI) notifications(w http.ResponseWriter, r *http.Request) {

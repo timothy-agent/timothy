@@ -252,6 +252,41 @@ func TestMissionHarnessRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionOnCompleteRoundTrips covers on_complete: a first-class
+// column snapshotted at create time, same shape as Harness above — ""
+// (do nothing) is the default when a mission omits it.
+func TestMissionOnCompleteRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "on-complete", Kind: "coding", Route: "default",
+		RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1", OnComplete: "push_pr",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.OnComplete != "push_pr" {
+		t.Fatalf("OnComplete = %q, want push_pr", m.OnComplete)
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-on-complete", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.OnComplete != "" {
+		t.Fatalf("OnComplete = %q, want empty when not set", m2.OnComplete)
+	}
+}
+
 func TestMissionNameRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

@@ -79,18 +79,21 @@ describe('Missions board', () => {
     expect(screen.getByText('working')).toBeTruthy()
   })
 
-  it('shows an unread notification strip', async () => {
+  it('shows an unread notification strip, colored amber for paused', async () => {
     const note: Notification = {
       id: 'n1',
       mission_id: 'm1',
       kind: 'paused',
-      message: 'mission m1 is now paused',
+      message: 'Mission - Fix the login bug is paused, needs your intervention.',
       read: false,
       created_at: '2026-01-01T00:00:00Z',
     }
     vi.mocked(listNotifications).mockResolvedValue([note])
     renderPage()
-    expect(await screen.findByText('mission m1 is now paused')).toBeTruthy()
+    const banner = await screen.findByText(
+      'Mission - Fix the login bug is paused, needs your intervention.',
+    )
+    expect(banner.closest('div')).toHaveClass('border-amber-200')
   })
 
   it('does not show read notifications', async () => {
@@ -98,14 +101,76 @@ describe('Missions board', () => {
       id: 'n1',
       mission_id: 'm1',
       kind: 'done',
-      message: 'mission m1 is now done',
+      message: 'Mission - Fix the login bug is done',
       read: true,
       created_at: '2026-01-01T00:00:00Z',
     }
     vi.mocked(listNotifications).mockResolvedValue([note])
     renderPage()
     await waitFor(() => expect(listNotifications).toHaveBeenCalled())
-    expect(screen.queryByText('mission m1 is now done')).toBeNull()
+    expect(screen.queryByText('Mission - Fix the login bug is done')).toBeNull()
+  })
+
+  it('colors a done notification green', async () => {
+    const note: Notification = {
+      id: 'n1',
+      mission_id: 'm1',
+      kind: 'done',
+      message: 'Mission - Fix the login bug is done',
+      read: false,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(listNotifications).mockResolvedValue([note])
+    renderPage()
+    const banner = await screen.findByText('Mission - Fix the login bug is done')
+    expect(banner.closest('div')).toHaveClass('border-green-200')
+  })
+
+  it('colors an error notification red', async () => {
+    const note: Notification = {
+      id: 'n1',
+      mission_id: 'm1',
+      kind: 'error',
+      message: 'Mission - Fix the login bug is failed',
+      read: false,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(listNotifications).mockResolvedValue([note])
+    renderPage()
+    const banner = await screen.findByText('Mission - Fix the login bug is failed')
+    expect(banner.closest('div')).toHaveClass('border-red-200')
+  })
+
+  it('colors a cancelled (error kind) notification red', async () => {
+    const note: Notification = {
+      id: 'n1',
+      mission_id: 'm1',
+      kind: 'error',
+      message: 'Mission - Fix the login bug is cancelled',
+      read: false,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(listNotifications).mockResolvedValue([note])
+    renderPage()
+    const banner = await screen.findByText('Mission - Fix the login bug is cancelled')
+    expect(banner.closest('div')).toHaveClass('border-red-200')
+  })
+
+  it('colors a waiting_for_input notification amber', async () => {
+    const note: Notification = {
+      id: 'n1',
+      mission_id: 'm1',
+      kind: 'waiting_for_input',
+      message: 'Mission - Fix the login bug is waiting for your input.',
+      read: false,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(listNotifications).mockResolvedValue([note])
+    renderPage()
+    const banner = await screen.findByText(
+      'Mission - Fix the login bug is waiting for your input.',
+    )
+    expect(banner.closest('div')).toHaveClass('border-amber-200')
   })
 
   it('navigates to the new mission page', async () => {

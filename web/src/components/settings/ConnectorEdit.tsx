@@ -11,7 +11,7 @@ import {
   setSecret,
   testConnector,
 } from '../../api/client'
-import type { AdminConnector } from '../../api/types'
+import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -32,7 +32,9 @@ export function ConnectorEdit() {
 
   const [connector, setConnector] = useState<AdminConnector | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
+    null,
+  )
   const [testing, setTesting] = useState(false)
   const [token, setToken] = useState('')
   const [savingToken, setSavingToken] = useState(false)
@@ -74,7 +76,8 @@ export function ConnectorEdit() {
     if (!connector || !token) return
     setSavingToken(true)
     try {
-      const ref = connector.credential_ref || `${connector.name.toUpperCase().replace(/-/g, '_')}_MCP_TOKEN`
+      const suffix = connector.kind === 'github' ? '_GITHUB_PAT' : '_MCP_TOKEN'
+      const ref = connector.credential_ref || `${connector.name.toUpperCase().replace(/-/g, '_')}${suffix}`
       await setSecret(ref, token.trim())
       if (!connector.credential_ref) await patchConnector(connector.id, { credential_ref: ref })
       setToken('')
@@ -164,7 +167,9 @@ export function ConnectorEdit() {
             {testing
               ? 'Testing connection…'
               : test?.ok
-                ? 'Connection OK, tools are servable.'
+                ? connector.kind === 'github' && test.identity
+                  ? `Connected as ${test.identity.login} (${test.identity.email}), ${test.identity.scopes}.`
+                  : 'Connection OK, tools are servable.'
                 : test && !test.ok
                   ? `Failed: ${test.error}`
                   : 'Not tested yet.'}
@@ -186,9 +191,15 @@ export function ConnectorEdit() {
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+              {connector.kind === 'github' ? (
+                'Identity for mission clone/push/PR use, no chat tools.'
+              ) : (
+                <>
+                  Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+                </>
+              )}
             </p>
-            <Field label="Rotate bearer token">
+            <Field label={connector.kind === 'github' ? 'Rotate personal access token' : 'Rotate bearer token'}>
               <div className="mt-1.5 flex gap-2">
                 <Input
                   type="password"

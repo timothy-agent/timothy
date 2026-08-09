@@ -17,12 +17,13 @@ func TestOnTransitionWritesNotificationOnActionableTransition(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-1", Kind: "general"})
+	goal := marker + "notify-1"
+	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := n.OnTransition(ctx, id, StatusWorking, StatusPaused); err != nil {
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusPaused, ""); err != nil {
 		t.Fatalf("OnTransition: %v", err)
 	}
 	notes, err := n.List(ctx)
@@ -48,11 +49,12 @@ func TestOnTransitionSilentOnNonActionable(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-2", Kind: "general"})
+	goal := marker + "notify-2"
+	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, id, StatusIdle, StatusWorking); err != nil {
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusIdle, StatusWorking, ""); err != nil {
 		t.Fatalf("OnTransition: %v", err)
 	}
 	notes, err := n.List(ctx)
@@ -71,7 +73,8 @@ func TestSendOncePerMissionDedupes(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-3", Kind: "general"})
+	goal := marker + "notify-3"
+	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -79,7 +82,7 @@ func TestSendOncePerMissionDedupes(t *testing.T) {
 	// A worker re-asking permission every command still produces
 	// exactly ONE inbox row, not one per re-ask.
 	for i := 0; i < 3; i++ {
-		if err := n.OnTransition(ctx, id, StatusWorking, StatusWaitingForInput); err != nil {
+		if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusWaitingForInput, ""); err != nil {
 			t.Fatalf("OnTransition[%d]: %v", i, err)
 		}
 	}
@@ -103,11 +106,12 @@ func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-4", Kind: "general"})
+	goal := marker + "notify-4"
+	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, id, StatusWorking, StatusPaused); err != nil {
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusPaused, ""); err != nil {
 		t.Fatalf("OnTransition: %v", err)
 	}
 	if err := n.ClearMission(ctx, id); err != nil {
@@ -126,7 +130,7 @@ func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
 	// A NEW notification for the same mission after clearing is not
 	// suppressed by the dedup logic (the prior one is read, so the
 	// NOT EXISTS ... AND NOT read guard doesn't see it).
-	if err := n.OnTransition(ctx, id, StatusWorking, StatusDone); err != nil {
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusDone, ""); err != nil {
 		t.Fatalf("OnTransition after clear: %v", err)
 	}
 	notes, err = n.List(ctx)
@@ -149,11 +153,12 @@ func TestMarkRead(t *testing.T) {
 	ctx := context.Background()
 	n := testNotifier(t, store)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "notify-5", Kind: "general"})
+	goal := marker + "notify-5"
+	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, id, StatusWorking, StatusError); err != nil {
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusError, ""); err != nil {
 		t.Fatalf("OnTransition: %v", err)
 	}
 	notes, err := n.List(ctx)

@@ -1,4 +1,9 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import {
+  ArrowLeft01Icon,
+  CloudUploadIcon,
+  Delete02Icon,
+  GitPullRequestCreateIcon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
@@ -11,10 +16,12 @@ import {
   listSchedules,
   missionEvents,
   missionUsage,
+  openMissionPR,
+  pushMission,
   resumeMission,
   sendMissionNote,
 } from '../api/client'
-import type { Mission, MissionEvent, MissionUsage, Schedule } from '../api/types'
+import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
@@ -64,6 +71,17 @@ function formatDate(v?: string): string {
   return new Date(v).toLocaleString()
 }
 
+// githubFullName/githubHTMLURL derive the display label and browsable
+// link straight from repo_url's https clone URL — the mission row only
+// stores the clone URL, never a separate html_url.
+function githubFullName(repoURL: string): string {
+  return repoURL.replace(/^https?:\/\/[^/]+\//, '').replace(/\.git$/, '')
+}
+
+function githubHTMLURL(repoURL: string): string {
+  return repoURL.replace(/\.git$/, '')
+}
+
 // turnStats derives the detail view's Turns/Processing figures purely
 // from the mission.turn events the page already fetches — one event
 // per phase run (driver.go's Advance), so counting them is an honest
@@ -85,6 +103,19 @@ function turnStats(events: MissionEvent[]): { turns: number; processingMs: numbe
 
 const resumableStatuses = new Set(['paused', 'waiting_for_input'])
 const terminalPhases = new Set(['done', 'failed'])
+
+// latestPROpened finds the most recent mission.pr_opened event so the
+// PR chip persists across reloads — the timeline is the durable record
+// of a PR having been opened, the immediate POST response is only the
+// optimistic first paint.
+function latestPROpened(events: MissionEvent[]): MissionPROpenedPayload | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind === 'mission.pr_opened') {
+      return events[i].payload as MissionPROpenedPayload
+    }
+  }
+  return null
+}
 
 // latestExecutorProgress finds the most recent executor.progress event
 // so the phase header can show a lightweight live indicator — these
@@ -164,6 +195,14 @@ export function MissionDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [sendingNote, setSendingNote] = useState(false)
+  const [pushing, setPushing] = useState(false)
+  const [openingPR, setOpeningPR] = useState(false)
+  // prInfo is the immediate response from a successful "Push & open PR"
+  // click — shown right away, before the mission.pr_opened event has
+  // necessarily made it into the fetched timeline (refresh() below is
+  // fire-and-forget). latestPROpened(events) is the durable source once
+  // the timeline catches up or the page reloads.
+  const [prInfo, setPRInfo] = useState<MissionPROpenedPayload | null>(null)
   // answeredPermission tracks the pending_permission id the user just
   // decided on, so the card stops being actionable immediately — the
   // decision POST resolves the broker right away, but
@@ -245,6 +284,14 @@ export function MissionDetail() {
 
   const canResume = resumableStatuses.has(mission.status)
   const canCancel = !terminalPhases.has(mission.phase)
+  // isGitHubConnection: a coding mission cloned through a connector —
+  // gets the two-button push affordance; every other mission keeps the
+  // existing single push flow (currently: none rendered — see slice 3
+  // notes). prChip prefers the optimistic click response over the
+  // timeline so it appears the instant the PR is opened, falling back
+  // to the durable mission.pr_opened event on reload/cross-tab.
+  const isGitHubConnection = !!mission.connector_id
+  const prChip = prInfo ?? latestPROpened(events)
 
   const { turns, processingMs } = turnStats(events)
   const executorActivity = terminalPhases.has(mission.phase) ? null : latestExecutorProgress(events)
@@ -315,6 +362,33 @@ export function MissionDetail() {
       toast.error('Could not cancel mission', { description: errText(err) })
     } finally {
       setBusy(false)
+    }
+  }
+
+  const push = async () => {
+    setPushing(true)
+    try {
+      const { branch, remote_host } = await pushMission(id)
+      toast.success(`Pushed ${branch} to ${remote_host}`)
+      refresh()
+    } catch (err) {
+      toast.error('Could not push branch', { description: errText(err) })
+    } finally {
+      setPushing(false)
+    }
+  }
+
+  const openPR = async () => {
+    setOpeningPR(true)
+    try {
+      const pr = await openMissionPR(id)
+      setPRInfo(pr)
+      toast.success(`Pull request #${pr.number} opened`)
+      refresh()
+    } catch (err) {
+      toast.error('Could not open pull request', { description: errText(err) })
+    } finally {
+      setOpeningPR(false)
     }
   }
 
@@ -414,6 +488,32 @@ export function MissionDetail() {
             {mission.branch && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {mission.branch} @ {mission.base_commit?.slice(0, 8)}
+                {mission.repo_url && (
+                  <>
+                    {' · '}
+                    <a
+                      href={githubHTMLURL(mission.repo_url)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      {githubFullName(mission.repo_url)}
+                    </a>
+                  </>
+                )}
+                {prChip && (
+                  <>
+                    {' · '}
+                    <a
+                      href={prChip.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      PR #{prChip.number}
+                    </a>
+                  </>
+                )}
               </p>
             )}
             {schedule && (
@@ -443,23 +543,70 @@ export function MissionDetail() {
               </div>
             )}
           </div>
-          <div className="flex shrink-0 gap-2">
-            {canResume && (
-              <Button variant="outline" disabled={busy} onClick={() => void resume()}>
-                Resume
-              </Button>
-            )}
-            {canCancel && (
-              <Button variant="destructive" disabled={busy} onClick={() => void cancel()}>
-                Cancel
-              </Button>
-            )}
-            {terminalPhases.has(mission.phase) && (
-              <Button variant="destructive" disabled={busy} onClick={() => setConfirmDelete(true)}>
-                Delete
-              </Button>
-            )}
-          </div>
+          <TooltipProvider>
+            <div className="flex shrink-0 gap-2">
+              {isGitHubConnection && mission.branch && (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        aria-label="Push branch"
+                        disabled={pushing}
+                        onClick={() => void push()}
+                      >
+                        <HugeiconsIcon icon={CloudUploadIcon} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Push branch to GitHub</TooltipContent>
+                  </Tooltip>
+                  {!prChip && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          aria-label="Push & open PR"
+                          disabled={openingPR}
+                          onClick={() => void openPR()}
+                        >
+                          <HugeiconsIcon icon={GitPullRequestCreateIcon} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Push and open a pull request</TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
+              )}
+              {canResume && (
+                <Button variant="outline" disabled={busy} onClick={() => void resume()}>
+                  Resume
+                </Button>
+              )}
+              {canCancel && (
+                <Button variant="destructive" disabled={busy} onClick={() => void cancel()}>
+                  Cancel
+                </Button>
+              )}
+              {terminalPhases.has(mission.phase) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="destructive"
+                      size="icon"
+                      aria-label="Delete mission"
+                      disabled={busy}
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      <HugeiconsIcon icon={Delete02Icon} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete mission</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </TooltipProvider>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {usage &&
@@ -498,6 +645,19 @@ export function MissionDetail() {
                 </Badge>
               )
             })()}
+          {mission.on_complete === 'push' && (
+            <Badge variant="secondary" title="This mission pushes its branch automatically when it finishes">
+              auto-push
+            </Badge>
+          )}
+          {mission.on_complete === 'push_pr' && (
+            <Badge
+              variant="secondary"
+              title="This mission pushes its branch and opens a pull request automatically when it finishes"
+            >
+              auto-PR
+            </Badge>
+          )}
           {usage && usage.requests > 0 && (
             <Badge variant="secondary">
               {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok

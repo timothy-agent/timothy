@@ -64,8 +64,16 @@ describe('Connectors tab', () => {
     renderTab()
     expect(await screen.findByText('Your connectors · 1')).toBeTruthy()
     expect(screen.getByText('calendar')).toBeTruthy()
-    for (const name of ['Gmail', 'Google Calendar', 'GitHub']) {
-      expect(screen.getByRole('button', { name: new RegExp(name) })).toBeTruthy()
+    // Accessible names concatenate the tile's title and description
+    // (e.g. "GmailRead, search, and send email"), so match the title as
+    // a strict prefix up to where its description begins.
+    for (const [name, description] of [
+      ['Gmail', 'Read'],
+      ['Google Calendar', 'List'],
+      ['GitHub MCP', 'Issues'],
+      ['GitHub', 'Identity'],
+    ]) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${name}${description}`) })).toBeTruthy()
     }
   })
 
@@ -110,7 +118,7 @@ describe('Connectors tab', () => {
     vi.mocked(patchConnector).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /GitHub/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^GitHub MCPIssues/ }))
     fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), {
       target: { value: 'ghp_abc' },
     })
@@ -123,7 +131,7 @@ describe('Connectors tab', () => {
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('c2', { enabled: true }))
     expect(setSecret).toHaveBeenCalledWith('GITHUB_MCP_TOKEN', 'ghp_abc')
     expect(createConnector).toHaveBeenCalledWith({
-      name: 'github',
+      name: 'github-mcp',
       kind: 'mcp',
       config: { endpoint: 'https://api.githubcopilot.com/mcp/' },
       credential_ref: 'GITHUB_MCP_TOKEN',
@@ -137,7 +145,7 @@ describe('Connectors tab', () => {
     vi.mocked(testConnector).mockResolvedValue({ ok: false, error: 'status 401' })
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /GitHub/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^GitHub MCPIssues/ }))
     fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), {
       target: { value: 'bad-token' },
     })
@@ -147,7 +155,7 @@ describe('Connectors tab', () => {
     expect(patchConnector).not.toHaveBeenCalled()
     expect((screen.getByRole('button', { name: 'Add connector' }) as HTMLButtonElement).disabled).toBe(true)
     expect(createConnector).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'github', enabled: false }),
+      expect.objectContaining({ name: 'github-mcp', enabled: false }),
     )
   })
 

@@ -106,7 +106,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if flags != nil {
 		codingExecutorDefault = flags.CodingExecutor
 	}
-	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveExecutorOptions, nameMission, topModels)
+	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveExecutorOptions, nameMission, topModels, conns)
 	a.registerSchedules(srv.Handle, missionStore)
 	a.registerEvents(srv.Handle, hub)
 	a.registerTranscribe(srv.Handle, whisperClient, whisperURL)

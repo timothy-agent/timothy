@@ -314,6 +314,125 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	}
 }
 
+// codingWorktree inits a real git repo with one commit — coding
+// missions run BaselineDiff/CommitUnit against a real worktree even
+// with a scripted Runner, so on_complete tests (which need Kind=coding
+// for NotPushable to accept them) need a real git dir, not merely a
+// TempDir. Returns the dir and its HEAD commit hash for BaseCommit.
+func codingWorktree(t *testing.T) (dir, baseCommit string) {
+	t.Helper()
+	requireGitForPush(t)
+	dir = t.TempDir()
+	gitRun(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "seed.txt")
+	gitRun(t, dir, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
+	return dir, strings.TrimSpace(gitRun(t, dir, "rev-parse", "HEAD"))
+}
+
+// TestDriverFiresOnCompletePushPROnDone proves a coding mission with
+// on_complete="push_pr" fires exactly one push and one PR create the
+// moment it reaches phase=done — the SAME Completer the manual push/pr
+// API endpoints use, wired via Driver.SetCompleter.
+func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
+	store := newFakeStore()
+	dir, base := codingWorktree(t)
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8,
+		Worktree: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		OnComplete: "push_pr",
+	})
+	runner := &scriptedRunner{
+		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	pusher := &fakeBranchPusher{host: "github.com"}
+	pr := &fakePRSource{defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
+	d.SetCompleter(&Completer{workspace: pusher, store: store, resolveToken: func(ctx context.Context, connectorID string) (string, error) {
+		return "dummy-token", nil
+	}, pr: pr})
+
+	// explore -> plan -> execute -> review -> done: 4 Advance calls.
+	driveN(t, d, "m1", 4)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone {
+		t.Fatalf("mission phase = %q, want done", m.Phase)
+	}
+	if pusher.pushCalls != 1 {
+		t.Fatalf("Push called %d times, want exactly 1", pusher.pushCalls)
+	}
+	if pr.createCalls != 1 {
+		t.Fatalf("CreatePR called %d times, want exactly 1", pr.createCalls)
+	}
+	events := store.events["m1"]
+	var pushed, prOpened int
+	for _, e := range events {
+		switch e.Kind {
+		case "mission.pushed":
+			pushed++
+		case "mission.pr_opened":
+			prOpened++
+		}
+	}
+	if pushed != 1 || prOpened != 1 {
+		t.Fatalf("events pushed=%d pr_opened=%d, want exactly 1 each", pushed, prOpened)
+	}
+}
+
+// TestDriverOnCompleteFailureLeavesMissionDoneAndNotifies proves a
+// failed auto-fire (push rejected) never un-dones the mission — it
+// stays phase=done — and fires the wired push-failed notifier exactly
+// once.
+func TestDriverOnCompleteFailureLeavesMissionDoneAndNotifies(t *testing.T) {
+	store := newFakeStore()
+	dir, base := codingWorktree(t)
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8,
+		Worktree: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		OnComplete: "push",
+	})
+	runner := &scriptedRunner{
+		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	pusher := &fakeBranchPusher{err: ErrPushRejected}
+	d.SetCompleter(&Completer{workspace: pusher, store: store, resolveToken: func(ctx context.Context, connectorID string) (string, error) {
+		return "dummy-token", nil
+	}})
+	var notified []string
+	d.SetPushFailedNotifier(func(ctx context.Context, missionID, message string) {
+		notified = append(notified, message)
+	})
+
+	driveN(t, d, "m1", 4)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone || m.Status != StatusDone {
+		t.Fatalf("mission after failed auto-fire = %+v, want it to stay done/done", m)
+	}
+	if len(notified) != 1 {
+		t.Fatalf("push-failed notifications = %d, want exactly 1", len(notified))
+	}
+	var pushFailed int
+	for _, e := range store.events["m1"] {
+		if e.Kind == "mission.push_failed" {
+			pushFailed++
+		}
+	}
+	if pushFailed != 1 {
+		t.Fatalf("mission.push_failed events = %d, want exactly 1", pushFailed)
+	}
+}
+
 // TestDriverExploreStoresNotesAndAdvances confirms the explore phase
 // stores ExploreSession's findings on the mission, emits
 // mission.explore_complete, and advances to plan.
@@ -1654,5 +1773,26 @@ func TestDriverAdvanceDiscardsTurnOnConcurrentTerminal(t *testing.T) {
 			t.Fatalf("sandboxRemove.Remove calls = %v, want exactly one call for m1", remover.calls())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestFailedReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		events []EventDraft
+		want   string
+	}{
+		{"no events", nil, ""},
+		{"no mission.failed event", []EventDraft{{Kind: "mission.progress"}}, ""},
+		{"cancelled", []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "cancelled"}}}, "cancelled"},
+		{"max_iterations", []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": "x"}}}, "max_iterations"},
+		{"missing reason key", []EventDraft{{Kind: "mission.failed", Payload: map[string]any{}}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := failedReason(tc.events); got != tc.want {
+				t.Fatalf("failedReason(%+v) = %q, want %q", tc.events, got, tc.want)
+			}
+		})
 	}
 }

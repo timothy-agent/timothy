@@ -29,7 +29,7 @@ const driveTimeBound = 4 * time.Hour
 // every successful ApplyTransition; notify.go's Notifier satisfies it
 // (added in M3). nil is valid — M2 has no notifications wired yet.
 type notifier interface {
-	OnTransition(ctx context.Context, missionID string, before, after Status) error
+	OnTransition(ctx context.Context, m Mission, before, after Status, reason string) error
 }
 
 // sessionCreator opens the hidden, non-chat-facing session every
@@ -134,6 +134,35 @@ type Driver struct {
 	// admitted, same as before this existed.
 	capacity capacityChecker
 
+	// resolveCloneToken resolves a github-kind connector_id to the PAT
+	// that authenticates ensureProvisioned's clone (see SetCloneTokenResolver)
+	// — nil-safe: unset means a mission with repo_url set fails
+	// provisioning (surfaced as an infra pause, same as any other
+	// provisioning error), since there would be no way to authenticate
+	// the clone.
+	resolveCloneToken CloneTokenResolver
+
+	// resolveCloneIdentity resolves a github-kind connector_id to the
+	// commit identity (name, email) ensureProvisioned sets as the
+	// clone's local git config (see SetCloneIdentityResolver) — nil-safe:
+	// unset, or a resolve error, just leaves the clone with no local
+	// identity override (commits fall back to the operator's fixed
+	// identity), never fails provisioning.
+	resolveCloneIdentity CloneIdentityResolver
+
+	// completer runs a mission's recorded on_complete choice
+	// (push/push_pr) once it reaches phase=done (see SetCompleter,
+	// fireOnComplete) — nil-safe: unset (no connectors/secrets wired)
+	// just means the auto-fire hook never runs, same as a mission whose
+	// on_complete is "".
+	completer *Completer
+
+	// notifyPushFailed fires a best-effort notification when the
+	// auto-fire hook's push/PR attempt fails (see SetPushFailedNotifier)
+	// — nil-safe: unset just skips the notification, the mission.push_failed
+	// event (Completer.PushBranch's own append) is still recorded either way.
+	notifyPushFailed func(ctx context.Context, missionID, message string)
+
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
 	// rework. Process-local by design: lost on restart is acceptable —
@@ -189,6 +218,76 @@ func (d *Driver) SetFXRates(store fxRateSource) {
 // parameter) for the same reason SetFXRates is.
 func (d *Driver) SetCapacityGate(gate capacityChecker) {
 	d.capacity = gate
+}
+
+// CloneTokenResolver resolves a mission's connector_id to the PAT that
+// authenticates ensureProvisioned's clone — api/missions.go validates
+// connector_id names a github-kind connector at create time; this
+// resolves the connector's credential_ref fresh at provisioning time,
+// the same "never persist the token" discipline push.go's credential_ref
+// resolution already follows.
+type CloneTokenResolver func(ctx context.Context, connectorID string) (string, error)
+
+// SetCloneTokenResolver wires the resolver ensureProvisioned uses to
+// authenticate a repo_url mission's clone — a setter (not a NewDriver
+// parameter) for the same reason SetAgentResolver is.
+func (d *Driver) SetCloneTokenResolver(resolve CloneTokenResolver) {
+	d.resolveCloneToken = resolve
+}
+
+// CloneIdentityResolver resolves a mission's connector_id to the
+// commit identity (name, email) ensureProvisioned's clone is authored
+// as — the identity counterpart of CloneTokenResolver, resolved fresh
+// at provisioning time (never persisted on the mission row).
+type CloneIdentityResolver func(ctx context.Context, connectorID string) (name, email string, err error)
+
+// SetCloneIdentityResolver wires the resolver ensureProvisioned uses to
+// set a repo_url mission's clone local git identity — a setter (not a
+// NewDriver parameter) for the same reason SetAgentResolver is.
+func (d *Driver) SetCloneIdentityResolver(resolve CloneIdentityResolver) {
+	d.resolveCloneIdentity = resolve
+}
+
+// SetCompleter wires the Completer the driver's auto-fire-on-done hook
+// (fireOnComplete) runs a mission's on_complete choice through — a
+// setter (not a NewDriver parameter) for the same reason SetAgentResolver
+// is: cmd/brain/main.go builds it after the Driver, once connectors/
+// secrets are available.
+func (d *Driver) SetCompleter(c *Completer) {
+	d.completer = c
+}
+
+// SetPushFailedNotifier wires the best-effort notification fired when
+// the auto-fire hook's push/PR attempt fails — a setter for the same
+// reason SetCompleter is.
+func (d *Driver) SetPushFailedNotifier(notify func(ctx context.Context, missionID, message string)) {
+	d.notifyPushFailed = notify
+}
+
+// fireOnComplete runs a mission's recorded on_complete choice
+// (push/push_pr) exactly once, right after its own ApplyTransition into
+// phase=done succeeds — the SAME Completer code the manual push/pr API
+// endpoints use, so an auto-fired push/PR can never diverge from what a
+// human clicking the button gets. Failure never un-dones the mission:
+// Completer.RunOnComplete already appended mission.push_failed (via
+// PushBranch/OpenPR's own error path); this only additionally fires a
+// best-effort notification so the operator hears about it, mirroring
+// notify.go's own best-effort webhook fan-out. No retry — one attempt,
+// the manual push/pr endpoints remain available.
+func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) {
+	if d.completer == nil || m.OnComplete == "" {
+		return
+	}
+	// Detached from ctx: the mission is already terminal, so this must
+	// not be cancelled by a request winding down (same reasoning as
+	// removeSandbox).
+	rctx := context.Background()
+	if err := d.completer.RunOnComplete(rctx, m); err != nil {
+		d.log.Error("driver: on_complete auto-fire failed", "mission_id", id, "on_complete", m.OnComplete, "error", err)
+		if d.notifyPushFailed != nil {
+			d.notifyPushFailed(rctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, m.OnComplete, err.Error()))
+		}
+	}
 }
 
 // removeSandbox best-effort tears down a mission's sandbox container in
@@ -265,7 +364,31 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 		d.grantSessionDefaults(ctx, m)
 	}
 	if d.workspace != nil && m.Workspace == "" && m.Worktree == "" {
-		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind)
+		var token string
+		var connIdentity *GitIdentity
+		if m.RepoURL != "" {
+			if d.resolveCloneToken == nil {
+				return m, fmt.Errorf("provision: mission has repo_url but no clone token resolver is configured")
+			}
+			t, err := d.resolveCloneToken(ctx, m.ConnectorID)
+			if err != nil {
+				return m, fmt.Errorf("provision: resolve clone token: %w", err)
+			}
+			token = t
+			// Identity resolve failure never fails provisioning: it just
+			// leaves the clone with no local identity override, falling
+			// back to the fixed commitName/commitEmail (worktree.go's
+			// CommitUnit).
+			if d.resolveCloneIdentity != nil {
+				name, email, err := d.resolveCloneIdentity(ctx, m.ConnectorID)
+				if err != nil {
+					d.log.Warn("driver: resolve clone identity failed; commits fall back to fixed identity", "mission_id", m.ID, "error", err)
+				} else {
+					connIdentity = &GitIdentity{Name: name, Email: email}
+				}
+			}
+		}
+		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
@@ -454,8 +577,15 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		delete(d.gatekeepers, id)
 		d.removeSandbox(id)
 	}
+	if t.Next.Phase == PhaseDone {
+		// m is the pre-transition snapshot (re-fetched above, before this
+		// round's ApplyTransition) — RepoURL/ConnectorID/OnComplete/
+		// Branch/Worktree never change after create, so it's safe to
+		// reuse here rather than a third Get.
+		d.fireOnComplete(ctx, id, m)
+	}
 	if d.notify != nil {
-		if err := d.notify.OnTransition(ctx, id, before, t.Next.Status); err != nil {
+		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
 			d.log.Warn("driver: notify failed", "mission_id", id, "error", err)
 		}
 	}
@@ -530,7 +660,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		d.removeSandbox(id)
 	}
 	if d.notify != nil {
-		if err := d.notify.OnTransition(ctx, id, before, t.Next.Status); err != nil {
+		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
 			d.log.Warn("driver: notify failed", "mission_id", id, "error", err)
 		}
 	}
@@ -774,7 +904,13 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	switch verdict.Outcome {
 	case "done":
 		if m.Worktree != "" {
-			if err := d.workspace.CommitUnit(ctx, m.Worktree, "mission "+m.ID+" iteration "+fmt.Sprint(m.Iteration)); err != nil {
+			var unitTitle string
+			if unit, _ := currentUnit(m.Spec); unit != nil {
+				unitTitle = unit.Title
+			}
+			body := "mission " + m.ID + " iteration " + fmt.Sprint(m.Iteration)
+			msg := CommitMessage(unitTitle, m.Goal, body)
+			if err := d.workspace.CommitUnit(ctx, m.Worktree, msg); err != nil {
 				d.log.Warn("driver: commit unit failed", "mission_id", m.ID, "error", err)
 			}
 		}
@@ -1127,6 +1263,22 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// failedReason pulls payload["reason"] off a transition's mission.failed
+// event, if any — the notifier's cheapest source for distinguishing
+// "cancelled" from an ordinary failure, since Step already built this
+// event this same round rather than requiring a second store query.
+func failedReason(events []EventDraft) string {
+	for _, ev := range events {
+		if ev.Kind != "mission.failed" {
+			continue
+		}
+		if reason, ok := ev.Payload["reason"].(string); ok {
+			return reason
+		}
+	}
+	return ""
 }
 
 // gitLogSince returns a capped, one-line-per-commit log of everything

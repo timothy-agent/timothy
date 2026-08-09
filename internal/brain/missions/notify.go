@@ -55,21 +55,49 @@ func isActionableTransition(before, after Status) (kind string, ok bool) {
 	}
 }
 
+// composeMessage builds the operator-facing notification text for an
+// actionable transition: the mission's display title (PRTitle's own
+// name-vs-truncated-goal fallback, reused here so the two surfaces
+// never diverge) plus wording keyed on kind, with "failed" replaced by
+// "cancelled" when reason is the cancel state machine's own marker
+// (see statemachine.go's InputCancel branch, the only place that
+// reason is set).
+func composeMessage(kind, title, reason string) string {
+	switch kind {
+	case string(StatusDone):
+		return fmt.Sprintf("Mission - %s is done", title)
+	case string(StatusError):
+		if reason == "cancelled" {
+			return fmt.Sprintf("Mission - %s is cancelled", title)
+		}
+		return fmt.Sprintf("Mission - %s is failed", title)
+	case string(StatusPaused):
+		return fmt.Sprintf("Mission - %s is paused, needs your intervention.", title)
+	case string(StatusWaitingForInput):
+		return fmt.Sprintf("Mission - %s is waiting for your input.", title)
+	default:
+		return fmt.Sprintf("Mission - %s is now %s", title, kind)
+	}
+}
+
 // OnTransition is called by Driver after ApplyTransition succeeds, with
-// the before/after Status. Durable channel: a notifications row is
-// always written for a qualifying transition. Best-effort fan-out:
-// webhook POST of a generic JSON payload; failure only logs, never
-// blocks or loses the notification.
-func (n *Notifier) OnTransition(ctx context.Context, missionID string, before, after Status) error {
+// the mission (for its title), the before/after Status, and — only
+// populated on a transition into StatusError — the mission.failed
+// event's reason (e.g. "cancelled"), read from the same Transition.Events
+// the driver already has in hand rather than a second query. Durable
+// channel: a notifications row is always written for a qualifying
+// transition. Best-effort fan-out: webhook POST of a generic JSON
+// payload; failure only logs, never blocks or loses the notification.
+func (n *Notifier) OnTransition(ctx context.Context, m Mission, before, after Status, reason string) error {
 	kind, ok := isActionableTransition(before, after)
 	if !ok {
 		return nil
 	}
-	message := fmt.Sprintf("mission %s is now %s", missionID, kind)
-	if err := n.sendOncePerMission(ctx, missionID, kind, message); err != nil {
+	message := composeMessage(kind, PRTitle(m), reason)
+	if err := n.sendOncePerMission(ctx, m.ID, kind, message); err != nil {
 		return fmt.Errorf("notify: %w", err)
 	}
-	n.fanOut(ctx, missionID, kind, message)
+	n.fanOut(ctx, m.ID, kind, message)
 	return nil
 }
 
@@ -132,6 +160,19 @@ func (n *Notifier) fanOut(ctx context.Context, missionID, kind, message string) 
 	if resp.StatusCode >= 300 {
 		n.log.Warn("notify: webhook returned non-2xx", "status", resp.StatusCode)
 	}
+}
+
+// NotifyMessage fires a notification for an event OnTransition's own
+// before/after Status classification doesn't cover — used by the
+// driver's on_complete auto-fire hook (fireOnComplete) to surface a
+// failed automatic push/PR, the same durable-inbox-row-plus-best-effort-
+// webhook shape OnTransition itself uses.
+func (n *Notifier) NotifyMessage(ctx context.Context, missionID, kind, message string) error {
+	if err := n.sendOncePerMission(ctx, missionID, kind, message); err != nil {
+		return fmt.Errorf("notify: %w", err)
+	}
+	n.fanOut(ctx, missionID, kind, message)
+	return nil
 }
 
 // ClearMission marks unread rows read once the mission advances past

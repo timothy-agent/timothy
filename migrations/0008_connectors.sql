@@ -6,7 +6,7 @@
 CREATE TABLE IF NOT EXISTS connectors (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text UNIQUE NOT NULL,
-    kind           text NOT NULL CHECK (kind IN ('mcp', 'google')),
+    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github')),
     -- kind-specific settings: mcp → {transport, endpoint, headers},
     -- google → {scopes}. OAuth tokens NEVER live here; they go to the
     -- secrets table under credential_ref.

@@ -89,6 +89,11 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// there is nothing for a prompt to guard that the tool
 			// doesn't already enforce harder.
 			"write_file": true,
+			// missions is a pure read over the missions store (status
+			// snapshot / list) — zero side effects, same reasoning as
+			// web_search. mission_push is deliberately NOT here: it must
+			// always ask (see MissionPush's doc comment).
+			"missions": true,
 		},
 	}
 }
