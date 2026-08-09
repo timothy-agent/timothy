@@ -22,6 +22,8 @@ export interface ConnectorPreset {
 
 export const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
 export const calendarScope = 'https://www.googleapis.com/auth/calendar'
+export const driveScope = 'https://www.googleapis.com/auth/drive.readonly'
+export const docsScopes = ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive.file']
 
 export const connectorPresets: ConnectorPreset[] = [
   {
@@ -41,6 +43,24 @@ export const connectorPresets: ConnectorPreset[] = [
     logo: 'googlecalendar',
     brandColor: '#4285F4',
     scopes: [calendarScope],
+  },
+  {
+    id: 'google-drive',
+    name: 'Google Drive',
+    kind: 'google',
+    description: 'Search and read files (read-only)',
+    logo: 'googledrive',
+    brandColor: '#0F9D58',
+    scopes: [driveScope],
+  },
+  {
+    id: 'google-docs',
+    name: 'Google Docs',
+    kind: 'google',
+    description: 'Read, create, and append to docs',
+    logo: 'googledocs',
+    brandColor: '#4285F4',
+    scopes: docsScopes,
   },
   {
     id: 'github',

@@ -70,6 +70,8 @@ describe('Connectors tab', () => {
     for (const [name, description] of [
       ['Gmail', 'Read'],
       ['Google Calendar', 'List'],
+      ['Google Drive', 'Search'],
+      ['Google Docs', 'Read, create'],
       ['GitHub MCP', 'Issues'],
       ['GitHub', 'Identity'],
     ]) {
@@ -291,5 +293,34 @@ describe('Connectors tab', () => {
       }),
     )
     expect(connectorOAuthStart).toHaveBeenCalledWith('c3')
+  })
+
+  it('adds a Google Drive connector with the read-only scope and hands off to Google consent', async () => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createConnector).mockResolvedValue('c4')
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://accounts.google.com/o/oauth2/v2/auth?x=3')
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: /^Google DriveSearch/ }))
+    fireEvent.change(await screen.findByPlaceholderText('….apps.googleusercontent.com'), {
+      target: { value: 'cid.apps.googleusercontent.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('GOCSPX-…'), { target: { value: 'GOCSPX-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect Google' }))
+
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=3'),
+    )
+    expect(createConnector).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'google-drive',
+        kind: 'google',
+        credential_ref: 'GOOGLE_DRIVE_GOOGLE_OAUTH',
+        config: expect.objectContaining({
+          scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+        }),
+      }),
+    )
+    expect(connectorOAuthStart).toHaveBeenCalledWith('c4')
   })
 })
