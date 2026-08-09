@@ -1224,6 +1224,61 @@ func TestDriverProvisionFallsBackToDefaultBranchPattern(t *testing.T) {
 	}
 }
 
+// TestDriverProvisionThreadsSigningKeyFromIdentityResolver proves a
+// CloneIdentityResolver returning a non-empty SigningKey reaches the
+// clone's LOCAL git config (user.signingkey/gpg.format/commit.gpgsign)
+// — the resolver-to-Provision wiring ensureProvisioned's clone path
+// depends on, independent of worktree.go's own signing test which
+// covers Provision/cloneRepo directly without a Driver in the loop.
+func TestDriverProvisionThreadsSigningKeyFromIdentityResolver(t *testing.T) {
+	requireGitForPush(t)
+	bare := t.TempDir()
+	gitRun(t, bare, "init", "-q", "--bare", "-b", "main")
+	seed := t.TempDir()
+	gitRun(t, seed, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, seed, "add", "README.md")
+	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
+	gitRun(t, seed, "remote", "add", "origin", bare)
+	gitRun(t, seed, "push", "-q", "origin", "main")
+
+	privatePEM, _ := testSigningKeypair(t)
+
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
+		RepoURL: bare, ConnectorID: "conn1",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	})
+	sessions := &fakeSessionCreator{}
+	wsRoot := t.TempDir()
+	workspace := NewWorkspace(wsRoot, nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetCloneTokenResolver(func(context.Context, string) (string, error) { return "dummy-token", nil })
+	d.SetCloneIdentityResolver(func(context.Context, string) (ResolvedIdentity, error) {
+		return ResolvedIdentity{Name: "conn-bot", Email: "conn-bot@example.com", Login: "conn-bot", SigningKey: privatePEM}, nil
+	})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Worktree == "" {
+		t.Fatal("Advance did not provision a worktree")
+	}
+	keyPath := filepath.Join(m.Workspace, signingKeyFileName)
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("signing key file missing: %v", err)
+	}
+	got, ok := gitConfigLocal(context.Background(), m.Worktree, "user.signingkey")
+	if !ok || got != keyPath {
+		t.Fatalf("local user.signingkey = %q (ok=%v), want %q", got, ok, keyPath)
+	}
+}
+
 // TestDriverEffectiveCommitStylePrecedence confirms mission override >
 // settings default > CommitMessage's own conventional default.
 func TestDriverEffectiveCommitStylePrecedence(t *testing.T) {

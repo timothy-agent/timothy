@@ -88,7 +88,7 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoUR
 	worktree = filepath.Join(workspace, "wt")
 
 	if repoURL != "" {
-		if err := w.cloneRepo(ctx, worktree, branch, repoURL, token, connIdentity); err != nil {
+		if err := w.cloneRepo(ctx, workspace, worktree, branch, repoURL, token, connIdentity); err != nil {
 			return "", "", "", "", err
 		}
 	} else if err := w.initSelfRepo(ctx, worktree, branch, missionID); err != nil {
@@ -102,11 +102,15 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoUR
 // GitIdentity is a resolved commit author (name, email), plus the
 // connection's GitHub login — threaded from CloneIdentityResolver
 // through Provision to cloneRepo's local git config (Name/Email) and to
-// the {login} branch-pattern placeholder (Login).
+// the {login} branch-pattern placeholder (Login). SigningKey, when
+// non-empty, is the connector's SSH signing PRIVATE key (OpenSSH PEM),
+// resolved fresh at provisioning time same as Name/Email — never
+// persisted on the mission row.
 type GitIdentity struct {
-	Name  string
-	Email string
-	Login string
+	Name       string
+	Email      string
+	Login      string
+	SigningKey string
 }
 
 // branchDate is the mission-creation date substituted for the {date}
@@ -114,6 +118,11 @@ type GitIdentity struct {
 func branchDate() string {
 	return time.Now().UTC().Format("20060102")
 }
+
+// signingKeyFileName is the SSH signing private key's filename inside
+// the mission's workspace dir, a sibling of wt/ (never inside the
+// worktree itself, so it's never accidentally committed/pushed).
+const signingKeyFileName = "signing_key"
 
 // cloneRepo clones repoURL's default branch into dir, authenticated
 // via the same ephemeral credential-helper pattern push.go's rawPush
@@ -125,7 +134,21 @@ func branchDate() string {
 // non-nil, is written as the clone's LOCAL (not global) git config
 // right after — CommitUnit/initSelfRepo read this back so every commit
 // in this worktree is authored as the connection, no token involved.
-func (w *Workspace) cloneRepo(ctx context.Context, dir, branch, repoURL, token string, connIdentity *GitIdentity) error {
+// connIdentity.SigningKey non-empty additionally writes the private key
+// to workspaceDir/signing_key (0600) and points the clone's LOCAL git
+// config at it (gpg.format=ssh, user.signingkey, commit.gpgsign=true),
+// so CommitUnit's ordinary `git commit` signs every commit — no
+// separate signing code path.
+//
+// D-058: the signing key file lives inside the mission's workspace dir,
+// which sandboxd mounts WHOLE (not just wt/) into every mission's
+// sandbox container (see internal/sandboxd/api.go's validWorkdir
+// comment) — so this key is readable by model-authored shell commands
+// in this mission's sandbox, and by any other mission's sandbox
+// sharing the same workspace volume. Accepted for the single-operator
+// posture, same class as D-054's executor auth-state volume; revisited
+// together with agentguard provisioning (U5b).
+func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, repoURL, token string, connIdentity *GitIdentity) error {
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
 	helper := `!f() { echo "username=x-access-token"; echo "password=$GIT_CLONE_TOKEN"; }; f`
@@ -149,6 +172,34 @@ func (w *Workspace) cloneRepo(ctx context.Context, dir, branch, repoURL, token s
 			// other mission.
 			w.log.Warn("worktree: clone identity config failed; commits fall back to fixed identity", "dir", dir, "error", err)
 		}
+		if connIdentity.SigningKey != "" {
+			if err := setLocalSigning(cctx, workspaceDir, dir, connIdentity.SigningKey); err != nil {
+				// Never fails provisioning: a clone with no signing config
+				// just makes unsigned commits, same as before this feature
+				// existed.
+				w.log.Warn("worktree: clone signing config failed; commits go unsigned", "dir", dir, "error", err)
+			}
+		}
+	}
+	return nil
+}
+
+// setLocalSigning writes connIdentity's SSH signing private key to
+// workspaceDir/signing_key (0600, outside the worktree) and points
+// dir's LOCAL git config at it so every subsequent commit is SSH-signed.
+func setLocalSigning(ctx context.Context, workspaceDir, dir, privateKeyPEM string) error {
+	keyPath := filepath.Join(workspaceDir, signingKeyFileName)
+	if err := os.WriteFile(keyPath, []byte(privateKeyPEM), 0o600); err != nil {
+		return fmt.Errorf("write signing key: %w", err)
+	}
+	if out, err := runGit(ctx, dir, "config", "--local", "gpg.format", "ssh"); err != nil {
+		return fmt.Errorf("set gpg.format: %w: %s", err, out)
+	}
+	if out, err := runGit(ctx, dir, "config", "--local", "user.signingkey", keyPath); err != nil {
+		return fmt.Errorf("set user.signingkey: %w: %s", err, out)
+	}
+	if out, err := runGit(ctx, dir, "config", "--local", "commit.gpgsign", "true"); err != nil {
+		return fmt.Errorf("set commit.gpgsign: %w: %s", err, out)
 	}
 	return nil
 }

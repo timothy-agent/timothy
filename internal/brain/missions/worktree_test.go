@@ -2,6 +2,9 @@ package missions
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"os"
@@ -9,7 +12,30 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
+
+// testSigningKeypair generates a fresh ed25519 SSH signing keypair for
+// tests — the same OpenSSH-PEM-private / authorized_keys-public shapes
+// connectors.generateSigningKeypair produces, without importing that
+// package (this is missions, a different package tree).
+func testSigningKeypair(t *testing.T) (privatePEM, publicLine string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatalf("marshal private key: %v", err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("derive public key: %v", err)
+	}
+	return string(pem.EncodeToMemory(block)), string(ssh.MarshalAuthorizedKey(sshPub))
+}
 
 func TestCommitType(t *testing.T) {
 	cases := []struct {
@@ -361,6 +387,91 @@ func TestProvisionClonesRepoWithConnIdentity(t *testing.T) {
 	}
 }
 
+// TestProvisionClonesRepoWithSigningKey proves a connection identity
+// carrying an SSH signing key lands as the clone's LOCAL git config
+// (gpg.format=ssh, user.signingkey, commit.gpgsign=true), the key file
+// is written outside the worktree at 0600, and a subsequent CommitUnit
+// produces a commit `git verify-commit`/`log --format=%G?` reports as
+// Good — a real round-trip, not just config-value assertions (per the
+// repo's real-shell-tests-for-composed-commands convention).
+func TestProvisionClonesRepoWithSigningKey(t *testing.T) {
+	requireGit(t)
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not found on PATH; skipping")
+	}
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	bare := t.TempDir()
+	gitRun(t, bare, "init", "-q", "--bare", "-b", "main")
+	seed := t.TempDir()
+	gitRun(t, seed, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, seed, "add", "README.md")
+	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
+	gitRun(t, seed, "remote", "add", "origin", bare)
+	gitRun(t, seed, "push", "-q", "origin", "main")
+
+	privatePEM, publicLine := testSigningKeypair(t)
+	identity := &GitIdentity{Name: "conn-bot", Email: "conn-bot@example.com", SigningKey: privatePEM}
+	workspace, worktree, _, _, err := w.Provision(ctx, "mission-signing", "Fix the login bug", "coding", bare, "dummy-token", identity, "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	keyPath := filepath.Join(workspace, signingKeyFileName)
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("signing key file missing: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("signing key file perms = %o, want 0600", info.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(worktree, signingKeyFileName)); err == nil {
+		t.Fatal("signing key file must not live inside the worktree")
+	}
+
+	for key, want := range map[string]string{
+		"gpg.format":      "ssh",
+		"user.signingkey": keyPath,
+		"commit.gpgsign":  "true",
+	} {
+		got, ok := gitConfigLocal(ctx, worktree, key)
+		if !ok || got != want {
+			t.Fatalf("local %s = %q (ok=%v), want %q", key, got, ok, want)
+		}
+	}
+
+	// allowed_signers so `git log --format=%G?`/`verify-commit` can
+	// actually verify the signature, not just record that one exists.
+	allowedSigners := filepath.Join(t.TempDir(), "allowed_signers")
+	if err := os.WriteFile(allowedSigners, []byte(identity.Email+" "+publicLine+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runGit(ctx, worktree, "config", "--local", "gpg.ssh.allowedSignersFile", allowedSigners); err != nil {
+		t.Fatalf("set allowedSignersFile: %v: %s", err, out)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CommitUnit(ctx, worktree, "signed commit"); err != nil {
+		t.Fatalf("CommitUnit: %v", err)
+	}
+
+	cmd := exec.Command("git", "log", "-1", "--format=%G?")
+	cmd.Dir = worktree
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "G" {
+		t.Fatalf("commit signature status = %q, want %q (Good)", got, "G")
+	}
+}
+
 // TestCloneRepoScrubsTokenFromError mirrors push_test.go's
 // TestRawPushScrubsTokenFromError: a clone against a nonexistent remote
 // fails fast (no network touched), proving the error path never leaks
@@ -368,9 +479,10 @@ func TestProvisionClonesRepoWithConnIdentity(t *testing.T) {
 func TestCloneRepoScrubsTokenFromError(t *testing.T) {
 	requireGit(t)
 	w := newTestWorkspace(t)
-	dir := filepath.Join(t.TempDir(), "wt")
+	workspaceDir := t.TempDir()
+	dir := filepath.Join(workspaceDir, "wt")
 	const token = "super-secret-clone-token"
-	err := w.cloneRepo(context.Background(), dir, "mission/x", "/does/not/exist", token, nil)
+	err := w.cloneRepo(context.Background(), workspaceDir, dir, "mission/x", "/does/not/exist", token, nil)
 	if err == nil {
 		t.Fatal("cloneRepo against a nonexistent remote should fail")
 	}

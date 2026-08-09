@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -455,7 +456,7 @@ func main() {
 	ledgerAgg := ledger.NewAggregator(app.DB)
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
-		agentReg, conns, goog, agent, missionStore, missionDriver, missionNotifier,
+		agentReg, conns, goog, secrets, agent, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -626,19 +627,35 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		// operator's fixed identity. Best-effort at the driver layer
 		// (SetCloneIdentityResolver's caller already treats a resolve
 		// error as WARN-and-fall-back, never a provisioning failure).
-		driver.SetCloneIdentityResolver(func(ctx context.Context, connectorID string) (string, string, string, error) {
+		driver.SetCloneIdentityResolver(func(ctx context.Context, connectorID string) (missions.ResolvedIdentity, error) {
 			identity, err := conns.TestIdentity(ctx, connectorID)
 			if err != nil {
-				return "", "", "", err
+				return missions.ResolvedIdentity{}, err
 			}
 			if identity == nil {
-				return "", "", "", fmt.Errorf("connector %s has no identity to resolve", connectorID)
+				return missions.ResolvedIdentity{}, fmt.Errorf("connector %s has no identity to resolve", connectorID)
 			}
 			name := identity.Name
 			if name == "" {
 				name = identity.Login
 			}
-			return name, identity.Email, identity.Login, nil
+			result := missions.ResolvedIdentity{Name: name, Email: identity.Email, Login: identity.Login}
+			// Signing key resolution is best-effort: a connector row with
+			// sign_commits set but a deleted/missing secret must never fail
+			// provisioning, just fall back to unsigned commits (same as
+			// SetCloneIdentityResolver's own resolve-error contract).
+			if c, err := conns.Store().Get(ctx, connectorID); err == nil {
+				var cfg connectors.GitHubConfig
+				if json.Unmarshal(c.Config, &cfg) == nil && cfg.SignCommits {
+					key, err := secrets.Resolve(ctx, connectors.SigningKeyRefSuffix(c.CredentialRef))
+					if err != nil {
+						log.Warn("driver: signing key resolve failed; commits go unsigned", "connector_id", connectorID, "error", err)
+					} else {
+						result.SigningKey = key
+					}
+				}
+			}
+			return result, nil
 		})
 	}
 	if conns != nil && secrets != nil {

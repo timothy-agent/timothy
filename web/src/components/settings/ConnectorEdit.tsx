@@ -97,6 +97,26 @@ export function ConnectorEdit() {
       .catch((err: unknown) => toast.error('Could not update connector', { description: errText(err) }))
   }
 
+  const [signingBusy, setSigningBusy] = useState(false)
+  const toggleSignCommits = async (sign_commits: boolean) => {
+    if (!connector) return
+    setSigningBusy(true)
+    try {
+      await patchConnector(connector.id, { config: { ...connector.config, sign_commits } })
+      refresh()
+    } catch (err) {
+      toast.error('Could not update connector', { description: errText(err) })
+    } finally {
+      setSigningBusy(false)
+    }
+  }
+  const copyPublicKey = async () => {
+    const key = connector?.config.signing_public_key
+    if (typeof key !== 'string') return
+    await navigator.clipboard.writeText(key)
+    toast.success('Public key copied')
+  }
+
   const reconnectGoogle = async () => {
     if (!connector) return
     setOAuthBusy(true)
@@ -226,6 +246,63 @@ export function ConnectorEdit() {
                 </Button>
               </div>
             </Field>
+          </div>
+        )}
+
+        {connector.kind === 'github' && (
+          <div className="space-y-3 border-t border-border pt-5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Sign commits</div>
+                <p className="text-sm text-muted-foreground">
+                  SSH-sign every mission commit made through this connector with a key Timothy
+                  generates, so they show "Verified" on GitHub.
+                </p>
+              </div>
+              <Toggle
+                on={Boolean(connector.config.sign_commits)}
+                onChange={(v) => void toggleSignCommits(v)}
+                label={`${connector.name} sign commits`}
+              />
+            </div>
+            {Boolean(connector.config.sign_commits) && (
+              <div className="space-y-2">
+                {typeof connector.config.signing_public_key === 'string' &&
+                connector.config.signing_public_key ? (
+                  <>
+                    <Field label="Signing public key">
+                      <div className="mt-1.5 flex gap-2">
+                        <textarea
+                          readOnly
+                          value={connector.config.signing_public_key}
+                          rows={3}
+                          className="h-auto flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                        />
+                        <Button variant="outline" onClick={() => void copyPublicKey()}>
+                          Copy
+                        </Button>
+                      </div>
+                    </Field>
+                    <p className="text-sm text-muted-foreground">
+                      Paste this into GitHub as a{' '}
+                      <a
+                        href="https://github.com/settings/ssh/new"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                      >
+                        new SSH key →
+                      </a>{' '}
+                      with key type <span className="font-medium">Signing Key</span>.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {signingBusy ? 'Generating key…' : 'No public key yet.'}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

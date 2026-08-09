@@ -1,23 +1,29 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
 // registerConnectors mounts brain's own integration control plane —
 // served locally like the settings routes, not proxied: connectors
 // are brain's domain (their tools execute in the agent loop). nil mgr
 // leaves the surface unmounted (no master key, connectors disabled).
-func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google) {
+// secrets, when nil, just skips signing-key generation on a
+// sign_commits create/patch — same as any other secret-store-gated
+// feature elsewhere in brain.
+func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store) {
 	if mgr == nil {
 		return
 	}
-	h := &connectorAPI{mgr: mgr, goog: goog}
+	h := &connectorAPI{mgr: mgr, goog: goog, secrets: secrets}
 	handle("GET /v1/admin/connectors", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/connectors", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -36,8 +42,9 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 }
 
 type connectorAPI struct {
-	mgr  *connectors.Manager
-	goog *connectors.Google
+	mgr     *connectors.Manager
+	goog    *connectors.Google
+	secrets *secretstore.Store
 }
 
 // oauthStart begins the OAuth dance and returns the URL the browser
@@ -95,6 +102,14 @@ func (h *connectorAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if c.Kind == "github" {
+		cfg, err := h.ensureGitHubSigningKey(r.Context(), c.CredentialRef, c.Config)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		c.Config = cfg
+	}
 	id, err := h.mgr.Store().Create(r.Context(), c)
 	if err != nil {
 		failConnector(w, err)
@@ -109,11 +124,54 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if patch.Config != nil {
+		existing, err := h.mgr.Store().Get(r.Context(), r.PathValue("id"))
+		if err != nil {
+			failConnector(w, err)
+			return
+		}
+		if existing.Kind == "github" {
+			credentialRef := existing.CredentialRef
+			if patch.CredentialRef != nil {
+				credentialRef = *patch.CredentialRef
+			}
+			cfg, err := h.ensureGitHubSigningKey(r.Context(), credentialRef, *patch.Config)
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+				return
+			}
+			patch.Config = &cfg
+		}
+	}
 	if err := h.mgr.Store().Patch(r.Context(), r.PathValue("id"), patch); err != nil {
 		failConnector(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ensureGitHubSigningKey decodes raw as a GitHubConfig, generates and
+// persists an SSH signing keypair when sign_commits is newly true and
+// no key exists yet (connectors.EnsureSigningKey is idempotent), and
+// re-encodes the result. secrets nil (no master key configured) leaves
+// sign_commits set but never generates a key — same degrade as any
+// other secret-store-gated feature.
+func (h *connectorAPI) ensureGitHubSigningKey(ctx context.Context, credentialRef string, raw json.RawMessage) (json.RawMessage, error) {
+	if h.secrets == nil || len(raw) == 0 {
+		return raw, nil
+	}
+	var cfg connectors.GitHubConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if !cfg.SignCommits || cfg.SigningPublicKey != "" {
+		return raw, nil
+	}
+	next, err := connectors.EnsureSigningKey(ctx, h.secrets, credentialRef, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(next)
 }
 
 // listRepos serves GET /v1/admin/connectors/{id}/repos: every repo the

@@ -144,6 +144,67 @@ describe('Connectors tab', () => {
     expect(screen.getByText(/Paste a new personal access token below/)).toBeTruthy()
   })
 
+  it('toggles sign commits on a github connector and patches its config', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(patchConnector).mockResolvedValue()
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    const toggle = await screen.findByRole('switch', { name: 'personal-gh sign commits' })
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('gh1', { config: { sign_commits: true } }),
+    )
+  })
+
+  it('shows the signing public key with a GitHub link once sign_commits is on', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: { sign_commits: true, signing_public_key: 'ssh-ed25519 AAAAC3Nz… timothy' },
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAAC3Nz… timothy')).toBeTruthy()
+    const link = screen.getByRole('link', { name: /new SSH key/ })
+    expect(link.getAttribute('href')).toBe('https://github.com/settings/ssh/new')
+    expect(screen.getByText(/Signing Key/)).toBeTruthy()
+  })
+
+  it('does not show the public key block when sign_commits is off', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    await screen.findByRole('switch', { name: 'personal-gh sign commits' })
+    expect(screen.queryByRole('link', { name: /new SSH key/ })).toBeNull()
+  })
+
   it('shows the OAuth outcome banners from the callback redirect', async () => {
     renderTab('/settings/connectors?oauth_connected=personal')
     expect(await screen.findByText(/Google account connected to “personal”/)).toBeTruthy()

@@ -23,9 +23,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # and a missing binary fails a verify_cmd with a misleading exit code
 # instead of a clear "not found". git is required by coding missions:
 # the missions engine execs `git worktree add`, `git diff`, rollback,
-# and teardown inside this container.
+# and teardown inside this container. openssh-keygen provides
+# ssh-keygen, which git invokes for SSH commit signing/verification
+# (`git commit -S`/`git verify-commit` with gpg.format=ssh).
 FROM alpine:3.22.2 AS runtime-shell
-RUN apk add --no-cache curl git
+RUN apk add --no-cache curl git openssh-keygen
 COPY --from=build /out/app /app
 COPY skills/ /skills/
 RUN mkdir -p /workspace /attachments && chown nobody:nobody /workspace /attachments

@@ -250,12 +250,26 @@ func (d *Driver) SetCloneTokenResolver(resolve CloneTokenResolver) {
 	d.resolveCloneToken = resolve
 }
 
+// ResolvedIdentity is what CloneIdentityResolver resolves for a
+// mission's connector_id: the commit identity ensureProvisioned's clone
+// is authored as, plus (when the connector has SSH commit signing
+// enabled) the private signing key. A struct, not more return values,
+// since SigningKey is the second field added after (name, email, login)
+// — the shape CloneIdentityResolver started with.
+type ResolvedIdentity struct {
+	Name       string
+	Email      string
+	Login      string
+	SigningKey string
+}
+
 // CloneIdentityResolver resolves a mission's connector_id to the
-// commit identity (name, email, GitHub login) ensureProvisioned's clone
-// is authored as — the identity counterpart of CloneTokenResolver,
-// resolved fresh at provisioning time (never persisted on the mission
-// row). login backs the {login} branch-pattern placeholder.
-type CloneIdentityResolver func(ctx context.Context, connectorID string) (name, email, login string, err error)
+// commit identity ensureProvisioned's clone is authored as — the
+// identity counterpart of CloneTokenResolver, resolved fresh at
+// provisioning time (never persisted on the mission row). Login backs
+// the {login} branch-pattern placeholder; SigningKey (when non-empty)
+// is the connector's SSH signing private key.
+type CloneIdentityResolver func(ctx context.Context, connectorID string) (ResolvedIdentity, error)
 
 // SetCloneIdentityResolver wires the resolver ensureProvisioned uses to
 // set a repo_url mission's clone local git identity — a setter (not a
@@ -410,11 +424,11 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 			// back to the fixed commitName/commitEmail (worktree.go's
 			// CommitUnit).
 			if d.resolveCloneIdentity != nil {
-				name, email, login, err := d.resolveCloneIdentity(ctx, m.ConnectorID)
+				identity, err := d.resolveCloneIdentity(ctx, m.ConnectorID)
 				if err != nil {
 					d.log.Warn("driver: resolve clone identity failed; commits fall back to fixed identity", "mission_id", m.ID, "error", err)
 				} else {
-					connIdentity = &GitIdentity{Name: name, Email: email, Login: login}
+					connIdentity = &GitIdentity{Name: identity.Name, Email: identity.Email, Login: identity.Login, SigningKey: identity.SigningKey}
 				}
 			}
 		}
