@@ -102,6 +102,48 @@ describe('Connectors tab', () => {
     )
   })
 
+  it('renders a Reconnect button and the failure message for a failed google test', async () => {
+    vi.mocked(testConnector).mockResolvedValue({
+      ok: false,
+      error: 'Google authorization expired or was revoked — reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)',
+    })
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://accounts.google.com/o/oauth2/v2/auth?x=2')
+
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/Failed: Google authorization expired or was revoked/)).toBeTruthy()
+    const reconnect = screen.getByRole('button', { name: 'Reconnect' })
+    fireEvent.click(reconnect)
+
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=2'),
+    )
+    expect(connectorOAuthStart).toHaveBeenCalledWith(calendarConnector.id)
+  })
+
+  it('keeps the plain Test connection button for a non-google connector test failure', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(testConnector).mockResolvedValue({ ok: false, error: 'GitHub token invalid or expired — replace the PAT' })
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/Failed: GitHub token invalid or expired/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeTruthy()
+    expect(screen.getByText(/Paste a new personal access token below/)).toBeTruthy()
+  })
+
   it('shows the OAuth outcome banners from the callback redirect', async () => {
     renderTab('/settings/connectors?oauth_connected=personal')
     expect(await screen.findByText(/Google account connected to “personal”/)).toBeTruthy()

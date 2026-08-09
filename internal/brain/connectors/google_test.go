@@ -547,6 +547,62 @@ func TestCalendarToolsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGoogleTokenErrorMapping pins the "typed, human message, no raw
+// JSON body" discipline for the OAuth token endpoint's error
+// responses: invalid_grant (expired or revoked refresh token — the
+// case Google's testing-mode apps hit weekly) gets the reconnect-
+// oriented message, other oauth errors keep the status and Google's
+// error code without ever leaking the raw JSON body.
+func TestGoogleTokenErrorMapping(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "invalid_grant expired refresh token",
+			status: http.StatusBadRequest,
+			body:   `{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`,
+			want:   "Google authorization expired or was revoked — reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)",
+		},
+		{
+			name:   "invalid_grant revoked",
+			status: http.StatusBadRequest,
+			body:   `{"error":"invalid_grant","error_description":"Token has been revoked."}`,
+			want:   "Google authorization expired or was revoked — reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)",
+		},
+		{
+			name:   "other oauth error keeps status and code",
+			status: http.StatusBadRequest,
+			body:   `{"error":"invalid_client","error_description":"The OAuth client was not found."}`,
+			want:   `Google authorization failed (status 400, error "invalid_client") — reconnect to re-authorize`,
+		},
+		{
+			name:   "generic 500 with no parseable error",
+			status: http.StatusInternalServerError,
+			body:   `<html>Internal Server Error</html>`,
+			want:   "Google authorization failed (status 500)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := &http.Response{
+				StatusCode: tc.status,
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+			err := googleTokenError(resp)
+			if err.Error() != tc.want {
+				t.Fatalf("googleTokenError = %q, want %q", err.Error(), tc.want)
+			}
+			if strings.Contains(err.Error(), "error_description") {
+				t.Fatalf("googleTokenError leaked raw JSON: %q", err.Error())
+			}
+		})
+	}
+}
+
 func TestGoogleSourceTestRefreshesToken(t *testing.T) {
 	t.Parallel()
 	f := &fakeGoogle{}

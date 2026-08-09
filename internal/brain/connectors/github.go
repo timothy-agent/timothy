@@ -266,7 +266,7 @@ func fetchGitHubRepo(ctx context.Context, client *http.Client, token, owner, rep
 }
 
 // createGitHubPR issues POST /repos/{owner}/{repo}/pulls. The error
-// returned on a non-201 response embeds the response body verbatim so
+// returned on a non-201 response embeds GitHub's parsed message(s) so
 // CreatePR's own already-exists check (githubPRAlreadyExistsMarker) can
 // match against it.
 func createGitHubPR(ctx context.Context, client *http.Client, token, owner, repo, title, head, base, body string) (GitHubPR, error) {
@@ -431,12 +431,37 @@ func githubRequest(ctx context.Context, client *http.Client, token, path string)
 	return resp, nil
 }
 
+// githubErrorBody is the subset of GitHub's error response this
+// package reads: {"message": "..."} on virtually every non-2xx reply,
+// plus the per-field "errors[].message" a 422 validation failure adds
+// (e.g. CreatePR's already-exists detail, see
+// githubPRAlreadyExistsMarker).
+type githubErrorBody struct {
+	Message string `json:"message"`
+	Errors  []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
 // githubStatusError reports a non-200 GitHub response without ever
-// including the request (and thus the token).
+// including the request (and thus the token) or the raw response
+// body: 401 gets a fixed reconnect-oriented message, other statuses
+// keep the status code plus GitHub's parsed message field(s), if any.
 func githubStatusError(resp *http.Response) error {
-	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("github: bad or expired token (401): %s", snippet)
+		return fmt.Errorf("GitHub token invalid or expired — replace the PAT")
 	}
-	return fmt.Errorf("github: status %d: %s", resp.StatusCode, snippet)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var e githubErrorBody
+	_ = json.Unmarshal(body, &e)
+	msg := e.Message
+	for _, sub := range e.Errors {
+		if sub.Message != "" {
+			msg += ": " + sub.Message
+		}
+	}
+	if msg != "" {
+		return fmt.Errorf("github: status %d: %s", resp.StatusCode, msg)
+	}
+	return fmt.Errorf("github: status %d", resp.StatusCode)
 }

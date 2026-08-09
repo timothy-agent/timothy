@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,7 +96,7 @@ func TestFetchGitHubIdentity(t *testing.T) {
 					_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
 				}
 			},
-			wantErr: "401",
+			wantErr: "invalid or expired",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,6 +114,60 @@ func TestFetchGitHubIdentity(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("identity = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGitHubStatusErrorMapping pins the "status + short reason, no raw
+// JSON body" discipline: 401 always gets the fixed reconnect message
+// (never the raw body), other statuses keep GitHub's parsed message
+// field(s), and no raw JSON structure ever leaks into the error text.
+func TestGitHubStatusErrorMapping(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "401 bad or expired token",
+			status: http.StatusUnauthorized,
+			body:   `{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest"}`,
+			want:   "GitHub token invalid or expired — replace the PAT",
+		},
+		{
+			name:   "403 forbidden keeps github's message",
+			status: http.StatusForbidden,
+			body:   `{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest"}`,
+			want:   "github: status 403: Resource not accessible by personal access token",
+		},
+		{
+			name:   "404 not found keeps github's message",
+			status: http.StatusNotFound,
+			body:   `{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}`,
+			want:   "github: status 404: Not Found",
+		},
+		{
+			name:   "500 with no parseable message",
+			status: http.StatusInternalServerError,
+			body:   `not json at all`,
+			want:   "github: status 500",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := &http.Response{
+				StatusCode: tc.status,
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+			err := githubStatusError(resp)
+			if err.Error() != tc.want {
+				t.Fatalf("githubStatusError = %q, want %q", err.Error(), tc.want)
+			}
+			if strings.Contains(err.Error(), "documentation_url") {
+				t.Fatalf("githubStatusError leaked raw JSON: %q", err.Error())
 			}
 		})
 	}

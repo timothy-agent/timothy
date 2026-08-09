@@ -189,8 +189,7 @@ func (s *mcpSource) rpc(ctx context.Context, method string, params, result any) 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("%s: status %d: %s", method, resp.StatusCode, snippet)
+		return fmt.Errorf("%s: %w", method, mcpStatusError(resp))
 	}
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		s.sessionID = sid
@@ -231,6 +230,39 @@ func (s *mcpSource) rpc(ctx context.Context, method string, params, result any) 
 		}
 	}
 	return nil
+}
+
+// mcpErrorBody is the shape an MCP server's non-2xx body may carry;
+// {"message"} and {"error"} both appear across servers in practice.
+type mcpErrorBody struct {
+	Message string `json:"message"`
+	Error   string `json:"error"`
+}
+
+// mcpStatusError reports a non-2xx transport response: status code
+// plus a short reason, never a raw JSON (or arbitrary HTML/text)
+// body. A JSON error body's message/error field is used verbatim if
+// present; otherwise a short truncated snippet stands in, since a
+// server's error shape is not standardized like Google's or GitHub's.
+func mcpStatusError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var e mcpErrorBody
+	if json.Unmarshal(body, &e) == nil {
+		if e.Message != "" {
+			return fmt.Errorf("status %d: %s", resp.StatusCode, e.Message)
+		}
+		if e.Error != "" {
+			return fmt.Errorf("status %d: %s", resp.StatusCode, e.Error)
+		}
+	}
+	snippet := strings.TrimSpace(string(body))
+	if len(snippet) > 120 {
+		snippet = snippet[:120] + "…"
+	}
+	if snippet == "" {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return fmt.Errorf("status %d: %s", resp.StatusCode, snippet)
 }
 
 // notify posts a JSON-RPC notification (no id, no response body

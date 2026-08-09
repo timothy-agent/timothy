@@ -174,10 +174,22 @@ export function ConnectorEdit() {
                   ? `Failed: ${test.error}`
                   : 'Not tested yet.'}
           </span>
-          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
-            {testing ? 'Testing…' : 'Test connection'}
-          </Button>
+          {test && !test.ok && connector.kind === 'google' ? (
+            <Button size="sm" variant="outline" disabled={oauthBusy} onClick={() => void reconnectGoogle()}>
+              {oauthBusy ? 'Redirecting…' : 'Reconnect'}
+            </Button>
+          ) : (
+            <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
+              {testing ? 'Testing…' : 'Test connection'}
+            </Button>
+          )}
         </div>
+
+        {test && !test.ok && connector.kind === 'github' && (
+          <p className="-mt-3 text-sm text-muted-foreground">
+            Paste a new personal access token below to replace it.
+          </p>
+        )}
 
         {connector.kind === 'google' ? (
           <div className="space-y-3">
