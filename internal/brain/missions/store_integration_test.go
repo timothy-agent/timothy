@@ -287,6 +287,45 @@ func TestMissionOnCompleteRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionGitStrategyRoundTrips covers branch_pattern/commit_style:
+// first-class columns snapshotted at create time, same shape as Harness
+// above — "" (use the settings default) is the default when a mission
+// omits them.
+func TestMissionGitStrategyRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "git-strategy", Kind: "coding", Route: "default",
+		BranchPattern: "{type}/{login}/{slug}", CommitStyle: "plain",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.BranchPattern != "{type}/{login}/{slug}" {
+		t.Fatalf("BranchPattern = %q, want {type}/{login}/{slug}", m.BranchPattern)
+	}
+	if m.CommitStyle != "plain" {
+		t.Fatalf("CommitStyle = %q, want plain", m.CommitStyle)
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-git-strategy", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.BranchPattern != "" || m2.CommitStyle != "" {
+		t.Fatalf("BranchPattern/CommitStyle = %q/%q, want empty when not set", m2.BranchPattern, m2.CommitStyle)
+	}
+}
+
 func TestMissionNameRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

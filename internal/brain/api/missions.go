@@ -277,6 +277,13 @@ type createMissionRequest struct {
 	// mission) and kind=coding — a model never decides this, only the
 	// human choosing it here.
 	OnComplete string `json:"on_complete"`
+	// BranchPattern/CommitStyle override the settings-configured git
+	// strategy defaults for this mission alone; "" (the default) applies
+	// the settings default at provisioning/commit time. Validated the
+	// same way settings.Store.SetValue validates the global default —
+	// only known placeholders/styles, never model-decided.
+	BranchPattern string `json:"branch_pattern"`
+	CommitStyle   string `json:"commit_style"`
 }
 
 // create validates the request, resolves route/review_route/budget
@@ -371,6 +378,16 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", `on_complete must be "", "push", or "push_pr"`)
 		return
 	}
+	if req.BranchPattern != "" {
+		if err := missions.ValidateBranchPattern(req.BranchPattern); err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
+	if err := missions.ValidateCommitStyle(req.CommitStyle); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
 	// mission created without an explicit agent still needs a real
@@ -426,6 +443,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
+		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {

@@ -1151,6 +1151,103 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	}
 }
 
+// TestDriverProvisionUsesMissionBranchPatternOverSettings confirms the
+// precedence order ensureProvisioned resolves: a mission's own
+// BranchPattern wins over the settings-configured default.
+func TestDriverProvisionUsesMissionBranchPatternOverSettings(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "Fix the login bug", Kind: "coding", BranchPattern: "custom/{slug}",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	})
+	sessions := &fakeSessionCreator{}
+	wsRoot := t.TempDir()
+	workspace := NewWorkspace(wsRoot, nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetGitBranchPattern(func(context.Context) string { return "settings/{slug}" })
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if got, want := m.Branch, "custom/fix-the-login-bug"; got != want {
+		t.Fatalf("Branch = %q, want %q (mission override should win over settings)", got, want)
+	}
+}
+
+// TestDriverProvisionFallsBackToSettingsBranchPattern confirms the
+// settings default applies when the mission itself carries no override.
+func TestDriverProvisionFallsBackToSettingsBranchPattern(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	})
+	sessions := &fakeSessionCreator{}
+	wsRoot := t.TempDir()
+	workspace := NewWorkspace(wsRoot, nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetGitBranchPattern(func(context.Context) string { return "settings/{slug}" })
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if got, want := m.Branch, "settings/fix-the-login-bug"; got != want {
+		t.Fatalf("Branch = %q, want %q (settings default should apply)", got, want)
+	}
+}
+
+// TestDriverProvisionFallsBackToDefaultBranchPattern confirms
+// DefaultBranchPattern applies when neither the mission nor settings
+// carry an override — the original "<type>/<slug>" behavior.
+func TestDriverProvisionFallsBackToDefaultBranchPattern(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	})
+	sessions := &fakeSessionCreator{}
+	wsRoot := t.TempDir()
+	workspace := NewWorkspace(wsRoot, nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if got, want := m.Branch, "fix/fix-the-login-bug"; got != want {
+		t.Fatalf("Branch = %q, want %q (default pattern should apply)", got, want)
+	}
+}
+
+// TestDriverEffectiveCommitStylePrecedence confirms mission override >
+// settings default > CommitMessage's own conventional default.
+func TestDriverEffectiveCommitStylePrecedence(t *testing.T) {
+	cases := []struct {
+		name          string
+		missionStyle  string
+		settingsStyle func(context.Context) string
+		want          string
+	}{
+		{"mission override wins", CommitStylePlain, func(context.Context) string { return CommitStyleConventional }, CommitStylePlain},
+		{"settings default applies", "", func(context.Context) string { return CommitStylePlain }, CommitStylePlain},
+		{"no override, no settings: conventional default", "", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Driver{gitCommitStyle: tc.settingsStyle, log: slog.Default()}
+			got := d.effectiveCommitStyle(context.Background(), Mission{CommitStyle: tc.missionStyle})
+			if got != tc.want {
+				t.Fatalf("effectiveCommitStyle = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned confirms
 // ensureProvisioned is a no-op (no new session, no re-grant) once a
 // mission already has both — the ordinary case for every mission

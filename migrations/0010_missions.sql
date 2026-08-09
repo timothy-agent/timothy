@@ -128,7 +128,16 @@ CREATE TABLE IF NOT EXISTS missions (
     -- the harness only ever executes a choice a human already made.
     -- Requires repo_url+connector_id and kind='coding', same guards as
     -- the manual push/pr endpoints.
-    on_complete           text NOT NULL DEFAULT ''
+    on_complete           text NOT NULL DEFAULT '',
+    -- This mission's own override of the settings-configured git
+    -- strategy defaults (settings.ValueGitBranchPattern/
+    -- ValueGitCommitStyle): '' (the default) means "use the settings
+    -- default," resolved fresh at provisioning/commit time
+    -- (internal/brain/missions/driver.go), never baked in here.
+    -- branch_pattern is a validated template (internal/brain/missions/
+    -- branchtemplate.go); commit_style is 'conventional' or 'plain'.
+    branch_pattern        text NOT NULL DEFAULT '',
+    commit_style          text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

@@ -45,39 +45,54 @@ func TestCommitType(t *testing.T) {
 
 func TestCommitMessage(t *testing.T) {
 	cases := []struct {
-		name, unitTitle, goal, body, want string
+		name, unitTitle, goal, body, style, want string
 	}{
 		{
 			"unit title used when present",
-			"Fix the broken login flow", "Some other goal", "body text",
+			"Fix the broken login flow", "Some other goal", "body text", "",
 			"fix: fix the broken login flow\n\nbody text",
 		},
 		{
 			"falls back to goal when no unit title",
-			"", "Refactor the auth module", "body text",
+			"", "Refactor the auth module", "body text", "",
 			"refactor: refactor the auth module\n\nbody text",
 		},
 		{
 			"no body omits the blank separator",
-			"Add tests for parser", "goal", "",
+			"Add tests for parser", "goal", "", "",
 			"test: add tests for parser",
 		},
 		{
 			"trailing period trimmed",
-			"Add dark mode.", "goal", "",
+			"Add dark mode.", "goal", "", "",
 			"feat: add dark mode",
 		},
 		{
 			"long title trimmed to 72 chars",
-			strings.Repeat("a", 100), "goal", "",
+			strings.Repeat("a", 100), "goal", "", "",
 			"feat: " + strings.Repeat("a", 66),
+		},
+		{
+			"empty style defaults to conventional",
+			"Fix the broken login flow", "goal", "", CommitStyleConventional,
+			"fix: fix the broken login flow",
+		},
+		{
+			"plain style omits the type prefix",
+			"Fix the broken login flow", "goal", "body text", CommitStylePlain,
+			"fix the broken login flow\n\nbody text",
+		},
+		{
+			"plain style still trims to 72 chars",
+			strings.Repeat("a", 100), "goal", "", CommitStylePlain,
+			strings.Repeat("a", 72),
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CommitMessage(tc.unitTitle, tc.goal, tc.body)
+			got := CommitMessage(tc.unitTitle, tc.goal, tc.body, tc.style)
 			if got != tc.want {
-				t.Fatalf("CommitMessage(%q, %q, %q) = %q, want %q", tc.unitTitle, tc.goal, tc.body, got, tc.want)
+				t.Fatalf("CommitMessage(%q, %q, %q, %q) = %q, want %q", tc.unitTitle, tc.goal, tc.body, tc.style, got, tc.want)
 			}
 			subject := strings.SplitN(got, "\n", 2)[0]
 			if len(subject) > maxCommitSubjectLen {
@@ -148,7 +163,7 @@ func TestProvisionCodingMissionSelfInitsRepo(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, branch, baseCommit, err := w.Provision(ctx, "mission-self", "Fix the login bug", "coding", "", "", nil)
+	workspace, worktree, branch, baseCommit, err := w.Provision(ctx, "mission-self", "Fix the login bug", "coding", "", "", nil, "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -202,7 +217,7 @@ func TestProvisionSelfInitRollbackAndCommitUnit(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	_, worktree, _, _, err := w.Provision(ctx, "mission-self-2", "Add a feature", "coding", "", "", nil)
+	_, worktree, _, _, err := w.Provision(ctx, "mission-self-2", "Add a feature", "coding", "", "", nil, "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -260,7 +275,7 @@ func TestProvisionClonesRepo(t *testing.T) {
 	gitRun(t, seed, "remote", "add", "origin", bare)
 	gitRun(t, seed, "push", "-q", "origin", "main")
 
-	workspace, worktree, branch, baseCommit, err := w.Provision(ctx, "mission-clone", "Fix the login bug", "coding", bare, "dummy-token", nil)
+	workspace, worktree, branch, baseCommit, err := w.Provision(ctx, "mission-clone", "Fix the login bug", "coding", bare, "dummy-token", nil, "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -312,7 +327,7 @@ func TestProvisionClonesRepoWithConnIdentity(t *testing.T) {
 	gitRun(t, seed, "push", "-q", "origin", "main")
 
 	identity := &GitIdentity{Name: "conn-bot", Email: "conn-bot@example.com"}
-	_, worktree, _, _, err := w.Provision(ctx, "mission-conn-identity", "Fix the login bug", "coding", bare, "dummy-token", identity)
+	_, worktree, _, _, err := w.Provision(ctx, "mission-conn-identity", "Fix the login bug", "coding", bare, "dummy-token", identity, "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -372,7 +387,7 @@ func TestTeardownRemovesSelfInitRepo(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, _, _, err := w.Provision(ctx, "mission-self-3", "Teardown test", "coding", "", "", nil)
+	workspace, worktree, _, _, err := w.Provision(ctx, "mission-self-3", "Teardown test", "coding", "", "", nil, "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}

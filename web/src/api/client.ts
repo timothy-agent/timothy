@@ -902,6 +902,12 @@ export interface CreateMissionInput {
   // then opens a pull request. Requires repo_url + connector_id and
   // kind === 'coding'.
   on_complete?: '' | 'push' | 'push_pr'
+  // branch_pattern/commit_style override the settings-configured git
+  // strategy defaults for this mission alone; omit (or "") applies the
+  // settings default. See FeaturesTab's git strategy cards for the
+  // placeholder/style reference.
+  branch_pattern?: string
+  commit_style?: string
 }
 
 // ExecutorOption is one registered harness's usability on a given

@@ -604,6 +604,8 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
 	driver.SetFXRates(fxStore)
 	driver.SetCapacityGate(sandboxMgr)
+	driver.SetGitBranchPattern(flags.GitBranchPattern)
+	driver.SetGitCommitStyle(flags.GitCommitStyle)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 	if conns != nil && secrets != nil {
@@ -624,19 +626,19 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		// operator's fixed identity. Best-effort at the driver layer
 		// (SetCloneIdentityResolver's caller already treats a resolve
 		// error as WARN-and-fall-back, never a provisioning failure).
-		driver.SetCloneIdentityResolver(func(ctx context.Context, connectorID string) (string, string, error) {
+		driver.SetCloneIdentityResolver(func(ctx context.Context, connectorID string) (string, string, string, error) {
 			identity, err := conns.TestIdentity(ctx, connectorID)
 			if err != nil {
-				return "", "", err
+				return "", "", "", err
 			}
 			if identity == nil {
-				return "", "", fmt.Errorf("connector %s has no identity to resolve", connectorID)
+				return "", "", "", fmt.Errorf("connector %s has no identity to resolve", connectorID)
 			}
 			name := identity.Name
 			if name == "" {
 				name = identity.Login
 			}
-			return name, identity.Email, nil
+			return name, identity.Email, identity.Login, nil
 		})
 	}
 	if conns != nil && secrets != nil {
