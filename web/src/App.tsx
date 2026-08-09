@@ -1,5 +1,6 @@
 import {
   Analytics01Icon,
+  ArrowRight01Icon,
   Brain02Icon,
   BubbleChatIcon,
   GithubIcon,
@@ -42,10 +43,15 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from './components/ui/sidebar'
 import { TooltipProvider } from './components/ui/tooltip'
+import { cn } from './lib/utils'
 import { useSessions } from './lib/sessions'
 import { usePendingMemories } from './lib/memory'
 import { playAlertSound, unlockAudio } from './lib/alertSound'
@@ -61,7 +67,7 @@ import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
 import { Research } from './pages/Research'
-import { Settings } from './pages/Settings'
+import { Settings, settingsAreas } from './pages/Settings'
 
 const nav = [
   { label: 'Home', href: '/', icon: Home01Icon },
@@ -84,13 +90,14 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 // breadcrumbFor turns the current path into the header's breadcrumb
-// trail — static per top-level page, with a "Settings / <tab>" split
+// trail — static per top-level page, with a "Settings / <area>" split
 // for the one section that has sub-pages.
 function breadcrumbFor(pathname: string): string[] {
   const match = nav.find((n) => isActive(pathname, n.href))
   if (pathname.startsWith('/settings/')) {
-    const tab = pathname.split('/')[2]
-    if (tab) return ['Settings', tab.charAt(0).toUpperCase() + tab.slice(1)]
+    const key = pathname.split('/')[2]
+    const area = settingsAreas.find((a) => a.key === key)
+    if (area) return ['Settings', area.label]
   }
   return [match?.label ?? 'Timothy']
 }
@@ -114,6 +121,20 @@ function AppSidebar({
   onToken: () => void
 }) {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const { state: sidebarState, isMobile } = useSidebar()
+  // Settings starts expanded whenever we're already on a settings
+  // route (deep link or in-app nav), and stays however the user last
+  // toggled it otherwise — same "sticky until touched" feel as the
+  // rest of the sidebar's collapse state.
+  const [settingsOpen, setSettingsOpen] = useState(() => pathname.startsWith('/settings'))
+  useEffect(() => {
+    if (pathname.startsWith('/settings')) setSettingsOpen(true)
+  }, [pathname])
+  // Icon-collapsed mode hides the submenu entirely (no room for it),
+  // so a click there jumps straight to the first area instead of
+  // toggling an invisible expand state.
+  const iconCollapsed = sidebarState === 'collapsed' && !isMobile
 
   return (
     <Sidebar collapsible="icon">
@@ -132,22 +153,62 @@ function AppSidebar({
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {nav.map((item) => (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
-                    <Link to={item.href}>
+              {nav.map((item) =>
+                item.href === '/settings' ? (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      isActive={isActive(pathname, item.href)}
+                      tooltip={item.label}
+                      onClick={() =>
+                        iconCollapsed
+                          ? navigate(`/settings/${settingsAreas[0].key}`)
+                          : setSettingsOpen((open) => !open)
+                      }
+                    >
                       <HugeiconsIcon icon={item.icon} />
                       <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                  {item.href === '/memory' && pendingMemories > 0 && (
-                    <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
-                  )}
-                  {item.href === '/chat' && pendingPermissions > 0 && (
-                    <SidebarMenuBadge>{pendingPermissions}</SidebarMenuBadge>
-                  )}
-                </SidebarMenuItem>
-              ))}
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        className={cn(
+                          'ml-auto size-3.5! transition-transform group-data-[collapsible=icon]:hidden',
+                          settingsOpen && 'rotate-90',
+                        )}
+                      />
+                    </SidebarMenuButton>
+                    {settingsOpen && (
+                      <SidebarMenuSub>
+                        {settingsAreas.map((area) => (
+                          <SidebarMenuSubItem key={area.key}>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={pathname.startsWith(`/settings/${area.key}`)}
+                            >
+                              <Link to={`/settings/${area.key}`}>
+                                <span>{area.label}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                      </SidebarMenuSub>
+                    )}
+                  </SidebarMenuItem>
+                ) : (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
+                      <Link to={item.href}>
+                        <HugeiconsIcon icon={item.icon} />
+                        <span>{item.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    {item.href === '/memory' && pendingMemories > 0 && (
+                      <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
+                    )}
+                    {item.href === '/chat' && pendingPermissions > 0 && (
+                      <SidebarMenuBadge>{pendingPermissions}</SidebarMenuBadge>
+                    )}
+                  </SidebarMenuItem>
+                ),
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

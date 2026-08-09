@@ -106,16 +106,18 @@ beforeEach(() => {
   ])
 })
 
-describe('Settings tabs', () => {
-  it('routes to the active tab', async () => {
+describe('Settings pages', () => {
+  it('renders the area as its own page with a heading', async () => {
     renderPage('/settings/secrets')
     expect(await screen.findByText('HashiCorp Vault')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Secrets' })).toBeTruthy()
     expect(screen.queryByText('Your providers')).toBeNull()
   })
 
-  it('defaults to Providers', async () => {
+  it('redirects /settings to providers', async () => {
     renderPage('/settings')
     expect(await screen.findByText('healthy')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Providers' })).toBeTruthy()
   })
 })
 
