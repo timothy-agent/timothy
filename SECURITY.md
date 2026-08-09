@@ -1,6 +1,6 @@
 # Security Policy
 
-Timothy is a self-hosted assistant that holds provider API keys, OAuth grants, and personal data, and runs model-directed code in sandboxes — security reports are taken seriously.
+Timothy holds provider API keys, OAuth grants, and personal data, and it runs model-directed code in sandboxes. Vulnerabilities in any of that are worth reporting.
 
 ## Reporting a vulnerability
 
@@ -8,7 +8,7 @@ Please do **not** open a public GitHub issue for security problems.
 
 Instead, use one of:
 
-- **GitHub private vulnerability reporting** (preferred): [Report a vulnerability](https://github.com/timothy-agent/timothy/security/advisories/new) — creates a private advisory only maintainers can see.
+- **GitHub private vulnerability reporting** (preferred): [Report a vulnerability](https://github.com/timothy-agent/timothy/security/advisories/new). This creates a private advisory only maintainers can see.
 - **Email**: [sumonmselim@gmail.com](mailto:sumonmselim@gmail.com) with a description, reproduction steps, and impact assessment.
 
 You can expect an acknowledgment within a few days. Please practice coordinated disclosure: give us a reasonable window to ship a fix before any public write-up.
