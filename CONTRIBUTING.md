@@ -19,7 +19,7 @@ Use the [GitHub issue tracker](https://github.com/timothy-agent/timothy/issues).
 
 ## Development setup
 
-Everything runs in Docker — no host Go or Node toolchain required. See the [README](README.md) for the full build-from-source guide. The short version:
+Everything runs in Docker; no host Go or Node toolchain is required. See the [README](README.md) for the full build-from-source guide. The short version:
 
 ```sh
 cp deploy/env.example deploy/.env   # set POSTGRES_PASSWORD
@@ -42,7 +42,7 @@ Before sending a pull request:
 
 1. Work against the latest `main`.
 2. Check open and recently merged PRs for overlap.
-3. For significant changes, open an issue first to discuss the approach — this avoids wasted work.
+3. For significant changes, open an issue first to discuss the approach, so your time isn't wasted on a direction we can't merge.
 
 When submitting:
 
@@ -56,11 +56,11 @@ When submitting:
 
 ### Project invariants
 
-A few rules are enforced in review and are not up for relaxation — see [CLAUDE.md](CLAUDE.md) for the full list. Highlights:
+A few rules are enforced in review and are not up for relaxation. See [CLAUDE.md](CLAUDE.md) for the full list. Highlights:
 
 - Append-only stores stay append-only (`session_events`, `mission_events`, `memories`).
 - Safety invariants (allowlists, ceilings, permission gates) live in Go code, never in a prompt.
-- Secrets are referenced by name (`credential_ref`) only — raw values never appear in the database, API responses, logs, or frontend.
+- Secrets are referenced by name (`credential_ref`) only; raw values never appear in the database, API responses, logs, or frontend.
 - Unknown prices are recorded as NULL, never guessed.
 - No speculative abstractions: no interface with one implementation, no config nothing reads.
 - Never edit an already-applied migration (except during the pre-release window, per maintainer direction).
