@@ -382,6 +382,27 @@ func workerRoute(m Mission) string {
 	return m.Route
 }
 
+// oversightRoute picks the route explore/plan/replan turns run on:
+// PlanRoute when set ("GLM plans, local executes" — oversight runs on a
+// stronger route while Route stays the worker's cheap/local route),
+// otherwise Route unchanged (empty PlanRoute is exact current behavior).
+func oversightRoute(m Mission) string {
+	if m.PlanRoute != "" {
+		return m.PlanRoute
+	}
+	return m.Route
+}
+
+// reviewRoute picks the route a review turn runs on. Precedence:
+// ReviewRoute (the existing, already-shipped review-only override) >
+// PlanRoute (review is an oversight phase too) > Route.
+func reviewRoute(m Mission) string {
+	if m.ReviewRoute != "" {
+		return m.ReviewRoute
+	}
+	return oversightRoute(m)
+}
+
 // RunWorker seeds a fresh session (packet only, no prior transcript)
 // and enforces the sentinel ladder: a present, well-formed
 // mission_status call is trusted directly; a missing or invalid one
@@ -490,7 +511,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	}
 	req := loop.Request{
 		SessionID:    m.SessionID,
-		Route:        m.Route,
+		Route:        oversightRoute(m),
 		Agent:        "mission-explorer",
 		MissionID:    m.ID,
 		System:       system,
@@ -569,7 +590,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
 	req := loop.Request{
 		SessionID:    m.SessionID,
-		Route:        m.ReviewRoute,
+		Route:        reviewRoute(m),
 		Agent:        "mission-reviewer",
 		MissionID:    m.ID,
 		System:       system,
@@ -691,7 +712,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	}
 	req := loop.Request{
 		SessionID: m.SessionID,
-		Route:     m.Route,
+		Route:     oversightRoute(m),
 		Agent:     "mission-planner",
 		MissionID: m.ID,
 		System:    system,

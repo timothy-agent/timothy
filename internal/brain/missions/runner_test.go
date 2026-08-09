@@ -261,6 +261,34 @@ func TestRunReviewParsesVerdictAndCarriesGatekeeperState(t *testing.T) {
 	}
 }
 
+// TestRunReviewRoutePrecedence pins review's route precedence at the
+// request level: ReviewRoute > PlanRoute > Route.
+func TestRunReviewRoutePrecedence(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"route alone", Mission{ID: "m1", Route: "mini"}, "mini"},
+		{"plan_route beats route", Mission{ID: "m1", Route: "mini", PlanRoute: "strong"}, "strong"},
+		{"review_route beats plan_route and route", Mission{ID: "m1", Route: "mini", PlanRoute: "strong", ReviewRoute: "reviewer"}, "reviewer"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+				{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+			}}
+			r := newTestRunner(agent)
+			if _, _, err := r.RunReview(context.Background(), tc.m, ReviewPacket{Goal: "goal"}, nil); err != nil {
+				t.Fatalf("RunReview: %v", err)
+			}
+			if got := agent.requests[0].Route; got != tc.want {
+				t.Fatalf("reviewer request route = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestRunReviewPacketRendersArtifactsGoalAndEvidence covers the
 // research-mission review gap: reviewers used to reject every round
 // for "missing goal" / "missing artifact" because neither was in
@@ -401,6 +429,22 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 	// base surface (shell, write_file, ...) is filtered out entirely.
 	if allow := agent.requests[0].ToolAllow; len(allow) != 1 || allow[0] != planToolName {
 		t.Fatalf("planner ToolAllow = %v, want [%s]", allow, planToolName)
+	}
+}
+
+// TestPlanSessionUsesPlanRoute confirms a mission's plan phase runs on
+// PlanRoute when set, instead of Route.
+func TestPlanSessionUsesPlanRoute(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "mini", PlanRoute: "strong", Goal: "fix bug"}
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if got := agent.requests[0].Route; got != "strong" {
+		t.Fatalf("planner request route = %q, want plan_route", got)
 	}
 }
 
@@ -745,6 +789,51 @@ func TestWorkerRoute(t *testing.T) {
 	}
 }
 
+// TestOversightRoute pins explore/plan/replan's route resolution:
+// PlanRoute wins when set, Route otherwise — exact current behavior
+// when PlanRoute is empty.
+func TestOversightRoute(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"empty plan_route falls back to route", Mission{Route: "mini"}, "mini"},
+		{"plan_route wins when set", Mission{Route: "mini", PlanRoute: "strong"}, "strong"},
+		{"review_route never consulted", Mission{Route: "mini", ReviewRoute: "reviewer-only"}, "mini"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := oversightRoute(tc.m); got != tc.want {
+				t.Fatalf("oversightRoute = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReviewRoute pins review's route precedence: ReviewRoute (the
+// existing, already-shipped review-only override) beats PlanRoute,
+// which beats Route.
+func TestReviewRoute(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"no overrides falls back to route", Mission{Route: "mini"}, "mini"},
+		{"plan_route wins over route", Mission{Route: "mini", PlanRoute: "strong"}, "strong"},
+		{"review_route wins over plan_route", Mission{Route: "mini", PlanRoute: "strong", ReviewRoute: "reviewer"}, "reviewer"},
+		{"review_route wins over route alone", Mission{Route: "mini", ReviewRoute: "reviewer"}, "reviewer"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reviewRoute(tc.m); got != tc.want {
+				t.Fatalf("reviewRoute = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunWorkerUsesEscalatedRoute(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
@@ -945,6 +1034,22 @@ func TestExploreSessionSentinelPresent(t *testing.T) {
 	}
 	if agent.call != 1 {
 		t.Fatalf("expected exactly one turn when the sentinel is present, got %d", agent.call)
+	}
+}
+
+// TestExploreSessionUsesPlanRoute confirms explore runs on PlanRoute
+// when set, instead of Route.
+func TestExploreSessionUsesPlanRoute(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "mini", PlanRoute: "strong", Goal: "test"}
+	if _, err := r.ExploreSession(context.Background(), m); err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	if got := agent.requests[0].Route; got != "strong" {
+		t.Fatalf("explorer request route = %q, want plan_route", got)
 	}
 }
 

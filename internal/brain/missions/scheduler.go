@@ -53,11 +53,15 @@ type Schedule struct {
 // MissionTemplate is applied verbatim as a new mission's initial
 // columns each time its schedule fires.
 type MissionTemplate struct {
-	Goal           string   `json:"goal"`
-	Kind           string   `json:"kind"`
-	AgentID        string   `json:"agent_id"`
-	Route          string   `json:"route"`
-	ReviewRoute    string   `json:"review_route"`
+	Goal        string `json:"goal"`
+	Kind        string `json:"kind"`
+	AgentID     string `json:"agent_id"`
+	Route       string `json:"route"`
+	ReviewRoute string `json:"review_route"`
+	// PlanRoute, when set, is the route explore/plan/replan/review run
+	// on instead of Route (see missions.Mission.PlanRoute). "" means
+	// Route covers everything.
+	PlanRoute      string   `json:"plan_route,omitempty"`
 	MaxIterations  int      `json:"max_iterations"`
 	BudgetAmount   *float64 `json:"budget_amount,omitempty"`
 	BudgetCurrency string   `json:"budget_currency,omitempty"`
@@ -379,9 +383,9 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 		budgetCurrency = "USD"
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness, environment)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-		t.Goal, sc.Name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness, environment)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		t.Goal, sc.Name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
 		promptOverlay, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment)
 	return err
 }
@@ -426,7 +430,13 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 		}
 	}
 	if t.ReviewRoute == "" {
-		t.ReviewRoute = defaultRoute
+		// Same masking guard as the create handler: an explicit
+		// plan_route covers review unless review_route was set itself.
+		if t.PlanRoute != "" {
+			t.ReviewRoute = t.PlanRoute
+		} else {
+			t.ReviewRoute = defaultRoute
+		}
 	}
 	if t.Kind == "coding" && t.Harness == "" && codingExecutorDefault != nil {
 		t.Harness = codingExecutorDefault(ctx)

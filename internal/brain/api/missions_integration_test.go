@@ -381,6 +381,45 @@ func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateCarriesPlanRoute confirms a create request's
+// plan_route reaches the created mission row (both the create
+// response and a subsequent store read) — mirrors
+// TestMissionsCreateResponseCarriesDetectedEnvironment's round-trip
+// shape for the new field.
+func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
+	store := testMissionStore(t)
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	body := `{"goal":"itest-api-mission plan route round trip","kind":"general","route":"mini","plan_route":"strong"}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	var created missions.Mission
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.PlanRoute != "strong" {
+		t.Fatalf("create response plan_route = %q, want %q", created.PlanRoute, "strong")
+	}
+
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.PlanRoute != "strong" {
+		t.Fatalf("stored plan_route = %q, want %q", got.PlanRoute, "strong")
+	}
+}
+
 // TestMissionsCreateGeneratesNameAsync confirms a successful naming
 // call lands on the row via SetNameIfEmpty without create having to
 // wait for it — the create response itself carries no name yet (the

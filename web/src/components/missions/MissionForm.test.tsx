@@ -761,6 +761,84 @@ describe('MissionForm — create mode, repeat on schedule', () => {
   })
 })
 
+describe('MissionForm — plan route', () => {
+  it('renders the Plan route select in Advanced, defaulted to "Same as execute route"', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
+    await screen.findByLabelText('Review route')
+
+    expect(screen.getByLabelText('Plan route')).toBeInTheDocument()
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as execute route')
+  })
+
+  it('submits plan_route when a route other than the default is picked', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm13' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
+    await screen.findByLabelText('Review route')
+
+    fireEvent.click(screen.getByLabelText('Plan route'))
+    fireEvent.click(await screen.findByText('careful'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ plan_route: 'careful' })),
+    )
+  })
+
+  it('omits plan_route from the create payload when left on the default', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm14' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ plan_route: undefined })),
+    )
+  })
+
+  it('hydrates plan_route from the schedule template in edit mode', async () => {
+    const scheduleWithPlanRoute: Schedule = {
+      ...schedule,
+      mission_template: { ...schedule.mission_template, plan_route: 'careful' },
+    }
+    renderForm(
+      <MissionForm mode="edit" schedule={scheduleWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
+    )
+
+    await screen.findByDisplayValue('weekly-digest')
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('careful')
+  })
+
+  it('submits the hydrated plan_route unchanged on save', async () => {
+    vi.mocked(patchSchedule).mockResolvedValue(schedule)
+    const scheduleWithPlanRoute: Schedule = {
+      ...schedule,
+      mission_template: { ...schedule.mission_template, plan_route: 'careful' },
+    }
+    renderForm(
+      <MissionForm mode="edit" schedule={scheduleWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
+    )
+
+    await screen.findByDisplayValue('weekly-digest')
+    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+
+    await waitFor(() =>
+      expect(patchSchedule).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({
+          mission_template: expect.objectContaining({ plan_route: 'careful' }),
+        }),
+      ),
+    )
+  })
+})
+
 describe('MissionForm — edit mode', () => {
   it('prefills from the schedule, chip locked to the template kind', async () => {
     renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)

@@ -590,6 +590,9 @@ export interface Mission {
   budget_currency?: string
   route: string
   review_route: string
+  // plan_route, when set, is the route explore/plan/replan/review run
+  // on instead of route — "" means route covers everything.
+  plan_route?: string
   escalation_route?: string
   pending_permission?: string
   pending_permission_tool?: string
@@ -787,6 +790,9 @@ export interface MissionTemplate {
   agent_id?: string
   route?: string
   review_route?: string
+  // plan_route, when set, is the route explore/plan/replan/review run
+  // on instead of route — "" means route covers everything.
+  plan_route?: string
   max_iterations?: number
   budget_amount?: number
   budget_currency?: string

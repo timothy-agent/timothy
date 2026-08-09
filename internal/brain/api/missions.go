@@ -231,6 +231,12 @@ type createMissionRequest struct {
 	AgentID     string `json:"agent_id"`
 	Route       string `json:"route"`
 	ReviewRoute string `json:"review_route"`
+	// PlanRoute, when set, is the route explore/plan/replan/review run
+	// on instead of Route (see missions.Mission.PlanRoute for full
+	// precedence). "" is the default: Route covers everything, exact
+	// prior behavior. Not defaulted from an agent's route/review_route —
+	// there is no agent-level plan_route equivalent.
+	PlanRoute string `json:"plan_route"`
 	// EscalationRoute, when set, is where worker turns move after a
 	// failure or rework. Empty keeps escalation off — never defaulted,
 	// so a route change is always an explicit choice.
@@ -426,7 +432,16 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.ReviewRoute == "" {
-		req.ReviewRoute = defaultRoute
+		// Review is an oversight phase: an explicit plan_route covers it
+		// unless review_route itself was set. Defaulting to defaultRoute
+		// here would bake a masking value into the row and plan_route
+		// would never reach review (runner precedence: review_route >
+		// plan_route > route).
+		if req.PlanRoute != "" {
+			req.ReviewRoute = req.PlanRoute
+		} else {
+			req.ReviewRoute = defaultRoute
+		}
 	}
 
 	autoApproveSafe := true
@@ -439,7 +454,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
-		Route: req.Route, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
+		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,

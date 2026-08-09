@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS missions (
     budget_currency       char(3) NOT NULL DEFAULT 'USD',
     route                 text NOT NULL DEFAULT '',
     review_route          text NOT NULL DEFAULT '',
+    -- PlanRoute, when set, is the route oversight phases (explore, plan,
+    -- replan) run on instead of route -- "GLM plans, local executes":
+    -- worker/execute turns keep running on route while oversight runs on
+    -- a stronger model. '' (the default) means route covers everything,
+    -- exact prior behavior. review_route still overrides for review
+    -- specifically: precedence there is review_route > plan_route >
+    -- route (internal/brain/missions/runner.go's reviewRoute).
+    plan_route            text NOT NULL DEFAULT '',
     pending_permission    text,
     schedule_id           uuid,
     created_at            timestamptz NOT NULL DEFAULT now(),

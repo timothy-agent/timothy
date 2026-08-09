@@ -62,6 +62,7 @@ function hasNonDefaults(t: Schedule['mission_template']): boolean {
     t.agent_id ||
     t.route ||
     t.review_route ||
+    t.plan_route ||
     t.budget_amount != null ||
     t.harness ||
     t.environment ||
@@ -182,6 +183,7 @@ export function MissionForm({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [route, setRoute] = useState('')
   const [reviewRoute, setReviewRoute] = useState('')
+  const [planRoute, setPlanRoute] = useState('')
   const [escalationRoute, setEscalationRoute] = useState('')
   const [budget, setBudget] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('USD')
@@ -317,6 +319,7 @@ export function MissionForm({
     setShowAdvanced(hasNonDefaults(schedule.mission_template))
     setRoute(schedule.mission_template.route ?? '')
     setReviewRoute(schedule.mission_template.review_route ?? '')
+    setPlanRoute(schedule.mission_template.plan_route ?? '')
     setMaxIterations(
       schedule.mission_template.max_iterations != null
         ? String(schedule.mission_template.max_iterations)
@@ -435,6 +438,7 @@ export function MissionForm({
       agent_id: agentID || undefined,
       route: route || undefined,
       review_route: reviewRoute || undefined,
+      plan_route: planRoute || undefined,
       escalation_route: escalationRoute || undefined,
       budget_amount: budget ? Number(budget) : undefined,
       budget_currency: budget ? budgetCurrency : undefined,
@@ -461,6 +465,7 @@ export function MissionForm({
         agent_id: agentID || undefined,
         route: route || undefined,
         review_route: reviewRoute || undefined,
+        plan_route: planRoute || undefined,
         max_iterations: maxIterations ? Number(maxIterations) : undefined,
         budget_amount: budget ? Number(budget) : undefined,
         budget_currency: budget ? budgetCurrency : undefined,
@@ -487,6 +492,7 @@ export function MissionForm({
         agent_id: agentID || undefined,
         route: route || undefined,
         review_route: reviewRoute || undefined,
+        plan_route: planRoute || undefined,
         max_iterations: maxIterations ? Number(maxIterations) : undefined,
         budget_amount: budget ? Number(budget) : undefined,
         budget_currency: budget ? budgetCurrency : undefined,
@@ -1042,6 +1048,38 @@ export function MissionForm({
                     </SelectContent>
                   </Select>
                 )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-plan-route">Plan route</Label>
+                {routes === null ? (
+                  <Input
+                    id="mission-plan-route"
+                    value={planRoute}
+                    onChange={(e) => setPlanRoute(e.target.value)}
+                    placeholder="Same as execute route"
+                  />
+                ) : (
+                  <Select
+                    value={planRoute || ROUTE_DEFAULT}
+                    onValueChange={(v) => setPlanRoute(v === ROUTE_DEFAULT ? '' : v)}
+                  >
+                    <SelectTrigger id="mission-plan-route" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ROUTE_DEFAULT}>Same as execute route</SelectItem>
+                      {enabledRoutes.map((r) => (
+                        <SelectItem key={r.name} value={r.name}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Explore, plan, and review run on this route instead of the execute route above —
+                  e.g. a strong model plans while a cheap/local route executes.
+                </p>
               </div>
               {mode === 'create' && !repeat && (
                 <div className="space-y-1.5">

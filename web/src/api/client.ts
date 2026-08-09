@@ -901,6 +901,9 @@ export interface CreateMissionInput {
   agent_id?: string
   route?: string
   review_route?: string
+  // plan_route, when set, is the route explore/plan/replan/review run
+  // on instead of route — omit (or "") to use route for everything.
+  plan_route?: string
   escalation_route?: string
   max_iterations?: number
   budget_amount?: number

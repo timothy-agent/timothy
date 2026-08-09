@@ -484,6 +484,8 @@ export function MissionDetail() {
               {mission.budget_amount != null && (
                 <span>budget {money(mission.budget_amount, mission.budget_currency ?? 'USD')}</span>
               )}
+              {mission.route && <span>route: {mission.route}</span>}
+              {mission.plan_route && <span>plan route: {mission.plan_route}</span>}
             </div>
             {mission.branch && (
               <p className="mt-1 text-xs text-muted-foreground">

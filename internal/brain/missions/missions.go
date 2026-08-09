@@ -88,6 +88,15 @@ type Mission struct {
 	BudgetCurrency string   `json:"budget_currency,omitempty"`
 	Route          string   `json:"route"`
 	ReviewRoute    string   `json:"review_route"`
+	// PlanRoute, when non-empty, is the route oversight phases (explore,
+	// plan, replan) run on instead of Route — "GLM plans, local
+	// executes": the oversight phases can run on a strong model while
+	// Route stays the cheap/local worker route. Empty means Route covers
+	// everything, exactly as before this field existed. Precedence for
+	// review specifically is ReviewRoute > PlanRoute > Route (see
+	// oversightRoute) — ReviewRoute is the more specific, already-shipped
+	// override, so it still wins.
+	PlanRoute string `json:"plan_route,omitempty"`
 	// EscalationRoute, when non-empty, is the route worker turns switch
 	// to after a worker failure or review rework — instead of burning
 	// iterations on a model that already proved too weak for the unit.

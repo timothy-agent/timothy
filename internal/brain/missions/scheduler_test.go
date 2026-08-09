@@ -91,16 +91,17 @@ func TestResolveTemplateDefaults(t *testing.T) {
 	budget := 5.0
 
 	cases := []struct {
-		name        string
-		template    MissionTemplate
-		resolve     AgentResolver
-		routeExists func(context.Context, string) bool
-		codingExec  func(context.Context) string
-		wantRoute   string
-		wantReview  string
-		wantBudget  *float64
-		wantOverlay string
-		wantHarness string
+		name          string
+		template      MissionTemplate
+		resolve       AgentResolver
+		routeExists   func(context.Context, string) bool
+		codingExec    func(context.Context) string
+		wantRoute     string
+		wantReview    string
+		wantPlanRoute string
+		wantBudget    *float64
+		wantOverlay   string
+		wantHarness   string
 	}{
 		{
 			name:       "nil resolver falls back to the default role's route",
@@ -190,6 +191,27 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			wantRoute:   "explicit",
 			wantReview:  "default",
 		},
+		{
+			// No agent-level plan_route equivalent exists: a template's
+			// plan_route passes through completely untouched, never
+			// defaulted from the resolved agent or the default role.
+			name:     "plan_route passes through untouched, no agent-level default",
+			template: MissionTemplate{Goal: "g", AgentID: "briefing", PlanRoute: "strong"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{Route: "fast", ReviewRoute: "careful"}, true
+			},
+			wantRoute:     "fast",
+			wantReview:    "careful",
+			wantPlanRoute: "strong",
+		},
+		{
+			name:          "empty template plan_route stays empty",
+			template:      MissionTemplate{Goal: "g", AgentID: "a1"},
+			resolve:       nil,
+			wantRoute:     "default",
+			wantReview:    "default",
+			wantPlanRoute: "",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -211,6 +233,9 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			}
 			if got.ReviewRoute != tc.wantReview {
 				t.Errorf("ReviewRoute = %q, want %q", got.ReviewRoute, tc.wantReview)
+			}
+			if got.PlanRoute != tc.wantPlanRoute {
+				t.Errorf("PlanRoute = %q, want %q", got.PlanRoute, tc.wantPlanRoute)
 			}
 			if (got.BudgetAmount == nil) != (tc.wantBudget == nil) {
 				t.Errorf("BudgetAmount = %v, want %v", got.BudgetAmount, tc.wantBudget)
