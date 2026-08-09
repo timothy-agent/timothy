@@ -64,7 +64,9 @@ function hasNonDefaults(t: Schedule['mission_template']): boolean {
     t.review_route ||
     t.budget_amount != null ||
     t.harness ||
-    t.environment
+    t.environment ||
+    t.branch_pattern ||
+    t.commit_style
   )
 }
 
@@ -103,6 +105,17 @@ const environmentChoices: { value: string; label: string }[] = [
   { value: 'python', label: 'Python' },
   { value: 'java', label: 'Java' },
   { value: 'php', label: 'PHP' },
+]
+
+// Sentinel for the commit-style Select's "apply the settings default"
+// choice — wire value stays '' (omit commit_style from the create
+// payload) to match the API's own empty-means-default semantics.
+const COMMIT_STYLE_DEFAULT = '__default__'
+
+const commitStyleChoices: { value: string; label: string }[] = [
+  { value: COMMIT_STYLE_DEFAULT, label: 'Default (from settings)' },
+  { value: 'conventional', label: 'Conventional' },
+  { value: 'plain', label: 'Plain' },
 ]
 
 // expiresAt is stored as the wire-compatible 'YYYY-MM-DDTHH:mm' string the
@@ -175,6 +188,8 @@ export function MissionForm({
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
   const [harness, setHarness] = useState('')
   const [environment, setEnvironment] = useState('')
+  const [branchPattern, setBranchPattern] = useState('')
+  const [commitStyle, setCommitStyle] = useState('')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -315,6 +330,8 @@ export function MissionForm({
     setBudgetCurrency(schedule.mission_template.budget_currency || 'USD')
     setHarness(schedule.mission_template.harness ?? '')
     setEnvironment(schedule.mission_template.environment ?? '')
+    setBranchPattern(schedule.mission_template.branch_pattern ?? '')
+    setCommitStyle(schedule.mission_template.commit_style ?? '')
     setExpiresAt(schedule.expires_at ? schedule.expires_at.slice(0, 16) : '')
     setCronError(null)
   }, [mode, schedule])
@@ -424,6 +441,8 @@ export function MissionForm({
       auto_approve_safe: autoApproveSafe,
       harness: kind === 'coding' ? harness || undefined : undefined,
       environment: kind === 'coding' ? environment || undefined : undefined,
+      branch_pattern: kind === 'coding' ? branchPattern.trim() || undefined : undefined,
+      commit_style: kind === 'coding' ? commitStyle || undefined : undefined,
       repo_url: repoURL,
       connector_id: repoURL ? connectorID : undefined,
       on_complete: repoURL && onComplete ? onComplete : undefined,
@@ -448,6 +467,8 @@ export function MissionForm({
         auto_approve_safe: autoApproveSafe,
         harness: kind === 'coding' ? harness || undefined : undefined,
         environment: kind === 'coding' ? environment || undefined : undefined,
+        branch_pattern: kind === 'coding' ? branchPattern.trim() || undefined : undefined,
+        commit_style: kind === 'coding' ? commitStyle || undefined : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
     })
@@ -473,6 +494,12 @@ export function MissionForm({
         harness: schedule.mission_template.kind === 'coding' ? harness || undefined : undefined,
         environment:
           schedule.mission_template.kind === 'coding' ? environment || undefined : undefined,
+        branch_pattern:
+          schedule.mission_template.kind === 'coding'
+            ? branchPattern.trim() || undefined
+            : undefined,
+        commit_style:
+          schedule.mission_template.kind === 'coding' ? commitStyle || undefined : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
     })
@@ -1044,6 +1071,37 @@ export function MissionForm({
                       </SelectContent>
                     </Select>
                   )}
+                </div>
+              )}
+              {kind === 'coding' && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-branch-pattern">Branch pattern</Label>
+                  <Input
+                    id="mission-branch-pattern"
+                    value={branchPattern}
+                    onChange={(e) => setBranchPattern(e.target.value)}
+                    placeholder="Default (from settings)"
+                  />
+                </div>
+              )}
+              {kind === 'coding' && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-commit-style">Commit style</Label>
+                  <Select
+                    value={commitStyle || COMMIT_STYLE_DEFAULT}
+                    onValueChange={(v) => setCommitStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)}
+                  >
+                    <SelectTrigger id="mission-commit-style" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {commitStyleChoices.map((c) => (
+                        <SelectItem key={c.value} value={c.value}>
+                          {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               )}
               <div className="space-y-1.5">

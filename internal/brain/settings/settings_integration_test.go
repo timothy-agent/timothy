@@ -234,3 +234,38 @@ func TestCodingExecutorSetting(t *testing.T) {
 		t.Fatalf("CodingExecutor after native = %q, want empty (native normalizes to \"\")", got)
 	}
 }
+
+func TestGitStrategySettings(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if got := s.GitBranchPattern(ctx); got != "" {
+		t.Fatalf("GitBranchPattern default = %q, want empty (built-in default)", got)
+	}
+	if got := s.GitCommitStyle(ctx); got != "" {
+		t.Fatalf("GitCommitStyle default = %q, want empty (built-in default)", got)
+	}
+
+	if err := s.SetValue(ctx, ValueGitBranchPattern, "{type}/{login}/{slug}"); err != nil {
+		t.Fatalf("SetValue branch pattern: %v", err)
+	}
+	if got := s.GitBranchPattern(ctx); got != "{type}/{login}/{slug}" {
+		t.Fatalf("GitBranchPattern after set = %q", got)
+	}
+	if err := s.SetValue(ctx, ValueGitBranchPattern, "{unknown}/{slug}"); err == nil {
+		t.Fatal("unknown placeholder accepted")
+	}
+	if err := s.SetValue(ctx, ValueGitBranchPattern, "../{slug}"); err == nil {
+		t.Fatal("traversal pattern accepted")
+	}
+
+	if err := s.SetValue(ctx, ValueGitCommitStyle, "plain"); err != nil {
+		t.Fatalf("SetValue commit style: %v", err)
+	}
+	if got := s.GitCommitStyle(ctx); got != "plain" {
+		t.Fatalf("GitCommitStyle after set = %q, want plain", got)
+	}
+	if err := s.SetValue(ctx, ValueGitCommitStyle, "loud"); err == nil {
+		t.Fatal("unknown commit style accepted")
+	}
+}

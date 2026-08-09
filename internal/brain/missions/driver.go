@@ -150,6 +150,21 @@ type Driver struct {
 	// identity), never fails provisioning.
 	resolveCloneIdentity CloneIdentityResolver
 
+	// gitBranchPattern resolves the settings-configured default branch
+	// pattern (see SetGitBranchPattern) — consulted by ensureProvisioned
+	// only when the mission's own BranchPattern is empty (mission
+	// override > settings > worktree.go's DefaultBranchPattern). nil-safe:
+	// unset falls straight through to Provision's own DefaultBranchPattern
+	// fallback, same as before this setting existed.
+	gitBranchPattern func(ctx context.Context) string
+
+	// gitCommitStyle resolves the settings-configured default commit
+	// style (see SetGitCommitStyle) — consulted by runExecute only when
+	// the mission's own CommitStyle is empty (mission override > settings
+	// > CommitStyleConventional). nil-safe: unset falls straight through
+	// to CommitMessage's own conventional-style default.
+	gitCommitStyle func(ctx context.Context) string
+
 	// completer runs a mission's recorded on_complete choice
 	// (push/push_pr) once it reaches phase=done (see SetCompleter,
 	// fireOnComplete) — nil-safe: unset (no connectors/secrets wired)
@@ -236,16 +251,31 @@ func (d *Driver) SetCloneTokenResolver(resolve CloneTokenResolver) {
 }
 
 // CloneIdentityResolver resolves a mission's connector_id to the
-// commit identity (name, email) ensureProvisioned's clone is authored
-// as — the identity counterpart of CloneTokenResolver, resolved fresh
-// at provisioning time (never persisted on the mission row).
-type CloneIdentityResolver func(ctx context.Context, connectorID string) (name, email string, err error)
+// commit identity (name, email, GitHub login) ensureProvisioned's clone
+// is authored as — the identity counterpart of CloneTokenResolver,
+// resolved fresh at provisioning time (never persisted on the mission
+// row). login backs the {login} branch-pattern placeholder.
+type CloneIdentityResolver func(ctx context.Context, connectorID string) (name, email, login string, err error)
 
 // SetCloneIdentityResolver wires the resolver ensureProvisioned uses to
 // set a repo_url mission's clone local git identity — a setter (not a
 // NewDriver parameter) for the same reason SetAgentResolver is.
 func (d *Driver) SetCloneIdentityResolver(resolve CloneIdentityResolver) {
 	d.resolveCloneIdentity = resolve
+}
+
+// SetGitBranchPattern wires the live settings getter ensureProvisioned
+// falls back to when a mission's own BranchPattern is empty — a setter
+// (not a NewDriver parameter) for the same reason SetAgentResolver is.
+func (d *Driver) SetGitBranchPattern(get func(ctx context.Context) string) {
+	d.gitBranchPattern = get
+}
+
+// SetGitCommitStyle wires the live settings getter runExecute falls
+// back to when a mission's own CommitStyle is empty — a setter for the
+// same reason SetGitBranchPattern is.
+func (d *Driver) SetGitCommitStyle(get func(ctx context.Context) string) {
+	d.gitCommitStyle = get
 }
 
 // SetCompleter wires the Completer the driver's auto-fire-on-done hook
@@ -380,15 +410,19 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 			// back to the fixed commitName/commitEmail (worktree.go's
 			// CommitUnit).
 			if d.resolveCloneIdentity != nil {
-				name, email, err := d.resolveCloneIdentity(ctx, m.ConnectorID)
+				name, email, login, err := d.resolveCloneIdentity(ctx, m.ConnectorID)
 				if err != nil {
 					d.log.Warn("driver: resolve clone identity failed; commits fall back to fixed identity", "mission_id", m.ID, "error", err)
 				} else {
-					connIdentity = &GitIdentity{Name: name, Email: email}
+					connIdentity = &GitIdentity{Name: name, Email: email, Login: login}
 				}
 			}
 		}
-		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity)
+		branchPattern := m.BranchPattern
+		if branchPattern == "" && d.gitBranchPattern != nil {
+			branchPattern = d.gitBranchPattern(ctx)
+		}
+		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity, branchPattern)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
@@ -881,6 +915,18 @@ func restorePassedUnits(spec *Spec, prior Spec) {
 	}
 }
 
+// effectiveCommitStyle resolves the precedence mission override >
+// settings default > CommitMessage's own conventional-style default.
+func (d *Driver) effectiveCommitStyle(ctx context.Context, m Mission) string {
+	if m.CommitStyle != "" {
+		return m.CommitStyle
+	}
+	if d.gitCommitStyle != nil {
+		return d.gitCommitStyle(ctx)
+	}
+	return ""
+}
+
 func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	packet, err := d.packet(ctx, m)
 	if err != nil {
@@ -909,7 +955,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 				unitTitle = unit.Title
 			}
 			body := "mission " + m.ID + " iteration " + fmt.Sprint(m.Iteration)
-			msg := CommitMessage(unitTitle, m.Goal, body)
+			msg := CommitMessage(unitTitle, m.Goal, body, d.effectiveCommitStyle(ctx, m))
 			if err := d.workspace.CommitUnit(ctx, m.Worktree, msg); err != nil {
 				d.log.Warn("driver: commit unit failed", "mission_id", m.ID, "error", err)
 			}

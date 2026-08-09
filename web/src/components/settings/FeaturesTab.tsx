@@ -71,6 +71,8 @@ export function FeaturesTab() {
       {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <GitBranchPatternCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <GitCommitStyleCard values={values} onError={setError} onSaved={refresh} />}
       <NotificationSoundCard />
     </div>
   )
@@ -212,6 +214,114 @@ function DefaultCodingExecutorCard({
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
         New coding missions delegate to this harness unless overridden at creation time.
+      </p>
+    </div>
+  )
+}
+
+// GitBranchPatternCard picks the default branch-name template new
+// coding missions expand at provisioning time — mirrors
+// DefaultCurrencyCard's shape, a free-text input since the template
+// language (placeholders) isn't a fixed choice list.
+function GitBranchPatternCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [pattern, setPattern] = useState(values.git_branch_pattern ?? '')
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ git_branch_pattern: pattern.trim() })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Default branch pattern</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Pattern
+          <Input
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
+            placeholder="{type}/{slug}"
+            className="w-72"
+            aria-label="Default branch pattern"
+          />
+        </label>
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Placeholders: <code>{'{type}'}</code> (fix/feat/docs/…), <code>{'{slug}'}</code> (from the
+        goal), <code>{'{login}'}</code> (GitHub login, empty for non-github missions),{' '}
+        <code>{'{date}'}</code> (YYYYMMDD). Empty uses <code>{'{type}/{slug}'}</code>.
+      </p>
+    </div>
+  )
+}
+
+const COMMIT_STYLE_DEFAULT = '__default__'
+
+// GitCommitStyleCard picks the default commit-message style new
+// missions' unit commits use — mirrors DefaultCodingExecutorCard's
+// shape, a fixed choice list.
+function GitCommitStyleCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [style, setStyle] = useState(values.git_commit_style ?? '')
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ git_commit_style: style })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Default commit style</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <span>Style</span>
+          <Select
+            value={style || COMMIT_STYLE_DEFAULT}
+            onValueChange={(v) => setStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)}
+          >
+            <SelectTrigger className="h-10 w-56" aria-label="Default commit style">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={COMMIT_STYLE_DEFAULT}>Conventional (default)</SelectItem>
+              <SelectItem value="plain">Plain</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Conventional: <code>type: subject</code>. Plain: the unit title as-is, no type prefix.
       </p>
     </div>
   )

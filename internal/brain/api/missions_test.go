@@ -277,6 +277,47 @@ func TestMissionsCreateValidatesOnComplete(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateValidatesGitStrategy covers create()'s
+// branch_pattern/commit_style gate: an invalid pattern/style is
+// rejected outright (a distinct error body, before Driver.Create is
+// ever reached), while a valid one passes validation and reaches the
+// (degraded) store — same generic 400 failMission maps every
+// unrecognized store error to, mirroring
+// TestMissionsCreateValidatesHarness's shape.
+func TestMissionsCreateValidatesGitStrategy(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+
+	post := func(body string) (int, string) {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		b, _ := io.ReadAll(w.Result().Body)
+		return w.Code, string(b)
+	}
+
+	if code, body := post(`{"goal":"g","kind":"coding","branch_pattern":"{unknown}/{slug}"}`); code != 400 || !strings.Contains(body, "unknown placeholder") {
+		t.Fatalf("unknown placeholder: code=%d body=%q, want 400 with an unknown-placeholder message", code, body)
+	}
+	if code, body := post(`{"goal":"g","kind":"coding","branch_pattern":"../{slug}"}`); code != 400 || !strings.Contains(body, "branch pattern") {
+		t.Fatalf("traversal pattern: code=%d body=%q, want 400 with a branch-pattern message", code, body)
+	}
+	if code, body := post(`{"goal":"g","kind":"coding","commit_style":"loud"}`); code != 400 || !strings.Contains(body, "commit style") {
+		t.Fatalf("unknown commit style: code=%d body=%q, want 400 with a commit-style message", code, body)
+	}
+	// Valid values pass validation and reach the degraded store —
+	// failMission's generic 400, not a git-strategy-specific message.
+	if code, body := post(`{"goal":"g","kind":"coding","branch_pattern":"{type}/{login}/{slug}","commit_style":"plain"}`); code != 400 || strings.Contains(body, "branch pattern") || strings.Contains(body, "commit style") {
+		t.Fatalf("valid git strategy fields: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	}
+}
+
 // TestClassifyKind exercises classifyKind's parsing and its bias to
 // "coding" for anything short of an unambiguous "general" reply —
 // nil classify, a classify error, and a garbage reply must all land on

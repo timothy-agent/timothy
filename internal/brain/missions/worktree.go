@@ -62,7 +62,12 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 // operator's fixed identity; nil (no connector, or identity resolve
 // failed) leaves the clone with no local identity override, falling
 // back to the fixed commitName/commitEmail same as before this existed.
-func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity) (workspace, worktree, branch, baseCommit string, err error) {
+// branchPattern is the already-resolved effective template (mission
+// override > settings > DefaultBranchPattern, resolved by the caller);
+// empty falls back to DefaultBranchPattern here so every existing call
+// site (tests, any caller not yet passing one) keeps the original
+// "<type>/<slug>" shape.
+func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern string) (workspace, worktree, branch, baseCommit string, err error) {
 	workspace = filepath.Join(w.root, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
@@ -72,7 +77,14 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoUR
 		return workspace, "", "", "", nil
 	}
 
-	branch = CommitType(goal) + "/" + Slug(goal, missionID)
+	if branchPattern == "" {
+		branchPattern = DefaultBranchPattern
+	}
+	login := ""
+	if connIdentity != nil {
+		login = connIdentity.Login
+	}
+	branch = ExpandBranchPattern(branchPattern, CommitType(goal), Slug(goal, missionID), login, branchDate())
 	worktree = filepath.Join(workspace, "wt")
 
 	if repoURL != "" {
@@ -87,12 +99,20 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoUR
 	return workspace, worktree, branch, baseCommit, nil
 }
 
-// GitIdentity is a resolved commit author (name, email) — a
-// connection's identity, threaded from CloneIdentityResolver through
-// Provision to cloneRepo's local git config.
+// GitIdentity is a resolved commit author (name, email), plus the
+// connection's GitHub login — threaded from CloneIdentityResolver
+// through Provision to cloneRepo's local git config (Name/Email) and to
+// the {login} branch-pattern placeholder (Login).
 type GitIdentity struct {
 	Name  string
 	Email string
+	Login string
+}
+
+// branchDate is the mission-creation date substituted for the {date}
+// branch-pattern placeholder, formatted YYYYMMDD.
+func branchDate() string {
+	return time.Now().UTC().Format("20060102")
 }
 
 // cloneRepo clones repoURL's default branch into dir, authenticated
@@ -270,21 +290,26 @@ func CommitType(text string) string {
 // commit subjects stay at or under 72 chars.
 const maxCommitSubjectLen = 72
 
-// CommitMessage builds a Conventional Commits message for a unit
-// commit: "<type>: <title>" as the subject (type from unitTitle via
-// CommitType, falling back to goal when unitTitle is empty), body
-// unchanged (whatever the caller already put there, e.g. mission
-// id/iteration). The subject is lowercased and trimmed to
-// maxCommitSubjectLen, trailing punctuation removed.
-func CommitMessage(unitTitle, goal, body string) string {
+// CommitMessage builds a unit commit message in the given style
+// (empty defaults to CommitStyleConventional, same as every call site
+// before commit styles existed): "conventional" produces "<type>:
+// <title>" as the subject (type from unitTitle via CommitType, falling
+// back to goal when unitTitle is empty); "plain" uses the title as-is,
+// no type prefix. Both styles lowercase-and-trim the same way,
+// trimming to maxCommitSubjectLen with trailing punctuation removed;
+// body is unchanged (whatever the caller already put there, e.g.
+// mission id/iteration).
+func CommitMessage(unitTitle, goal, body, style string) string {
 	title := unitTitle
 	if title == "" {
 		title = goal
 	}
-	typ := CommitType(title)
 	subject := strings.ToLower(strings.TrimSpace(title))
 	subject = strings.TrimRight(subject, ".")
-	prefix := typ + ": "
+	prefix := ""
+	if style != CommitStylePlain {
+		prefix = CommitType(title) + ": "
+	}
 	if max := maxCommitSubjectLen - len(prefix); len(subject) > max {
 		subject = strings.TrimRight(subject[:max], " .")
 	}
