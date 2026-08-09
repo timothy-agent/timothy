@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -60,8 +61,11 @@ func TestAskGateSerializesConcurrentWaiters(t *testing.T) {
 	var order []int
 	orderCh := make(chan int, n)
 	start := make(chan struct{})
+	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
+		wg.Add(1)
 		go func(i int) {
+			defer wg.Done()
 			<-start
 			release, ok := g.lock(t.Context(), key)
 			if !ok {
@@ -87,6 +91,10 @@ func TestAskGateSerializesConcurrentWaiters(t *testing.T) {
 	if len(order) != n {
 		t.Fatalf("completed = %d, want %d", len(order), n)
 	}
+
+	// The orderCh send happens before release() — wait for the
+	// goroutines themselves, or the last release races the assertion.
+	wg.Wait()
 
 	g.mu.Lock()
 	left := len(g.entries)
