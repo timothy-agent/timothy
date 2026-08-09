@@ -30,7 +30,10 @@ var adminRoutePatterns = []string{
 	"DELETE /v1/admin/routes/{name}",
 	"PUT /v1/admin/routes/{name}/role",
 	"PUT /v1/admin/secrets/{ref_name}",
-	"DELETE /v1/admin/secrets/{ref_name}",
+	// DELETE /v1/admin/secrets/{ref_name} is deliberately NOT proxied:
+	// registerSecrets serves it locally (connector-reference guard
+	// before forwarding), and net/http's ServeMux panics on a duplicate
+	// pattern — the two registrations must never coexist.
 	"GET /v1/admin/secrets/{ref_name}",
 	"GET /v1/admin/secret-backends",
 	"PUT /v1/admin/secret-backends/default",
@@ -137,10 +140,13 @@ type referenceInfo struct {
 // dependency — see admin_test.go for the design note). DELETE checks
 // connector references itself before forwarding to the gateway, which
 // independently refuses on provider references — each service stays
-// authoritative for the referents it owns. nil gw or conns leaves the
-// surface unmounted.
+// authoritative for the referents it owns. nil gw leaves the surface
+// unmounted; nil conns (connectors disabled — no master key) still
+// mounts it, minus the connector-reference guard, because DELETE has
+// no proxied fallback (see adminRoutePatterns) and the gateway's own
+// provider guard still applies.
 func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister) {
-	if gw == nil || conns == nil {
+	if gw == nil {
 		return
 	}
 	h := &secretsAPI{gw: gw, connectors: conns}
@@ -160,6 +166,9 @@ type secretsAPI struct {
 // under, so the signing key never looks orphaned in the panel or
 // becomes deletable while the connector still signs with it.
 func connectorRefs(ctx context.Context, store connectorLister) (map[string][]string, error) {
+	if store == nil {
+		return map[string][]string{}, nil
+	}
 	rows, err := store.List(ctx)
 	if err != nil {
 		return nil, err

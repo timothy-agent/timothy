@@ -198,6 +198,42 @@ func TestDeleteSecretPropagatesGatewayInUseRefusal(t *testing.T) {
 	}
 }
 
+// TestSecretsRoutesCoexistWithAdminProxy pins the boot path that once
+// panicked: registerAdmin's proxied patterns and registerSecrets'
+// local ones share the /v1/admin/secrets namespace, and net/http's
+// ServeMux panics on any duplicate — both must register side by side.
+func TestSecretsRoutesCoexistWithAdminProxy(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	m := http.NewServeMux()
+	a.registerAdmin(m.Handle, http.NotFoundHandler())
+	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{})
+}
+
+// TestRegisterSecretsMountsWithoutConnectors pins that a nil connector
+// lister (connectors disabled) still serves DELETE — it has no proxied
+// fallback, so unmounting it here would remove secret deletion
+// entirely; only the connector-reference guard drops out.
+func TestRegisterSecretsMountsWithoutConnectors(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (delete must survive disabled connectors)", w.Code)
+	}
+	if gw.deletedRef != "SOME_KEY" {
+		t.Fatalf("gateway DeleteSecret called with %q, want SOME_KEY", gw.deletedRef)
+	}
+}
+
 func TestRegisterSecretsUnmountedWithoutGatewayOrConnectors(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
