@@ -412,6 +412,23 @@ func main() {
 			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
 		}
 	})
+	if missionDriver != nil {
+		// Same mc.Extract entry point chat's own MemoryExtract rides,
+		// fed the mission's curated digest instead of a chat turn's
+		// residue — missions/memory.go builds the digest, this closure
+		// only owns the flag gate, timeout, and error logging, exactly
+		// like chat's own wiring above.
+		missionDriver.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
+			if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
+				return
+			}
+			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
+			defer cancel()
+			if _, err := mc.Extract(ectx, sessionID, seq, text, route); err != nil {
+				app.Log.Warn("mission memory extraction failed", "session_id", sessionID, "error", err)
+			}
+		})
+	}
 	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) []string {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return nil

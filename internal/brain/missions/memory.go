@@ -1,0 +1,158 @@
+package missions
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// memoryExtractedKind marks that a mission's one terminal extraction
+// pass has already fired — the append-only idempotency record
+// extractMissionMemory checks before running, since mission_events has
+// no other way to record "this already happened" (D-idempotent-event,
+// same pattern mission.review_skipped/mission.turn already use for
+// non-transition bookkeeping).
+const memoryExtractedKind = "mission.memory_extracted"
+
+// MemoryExtract posts one mission's curated digest to memoryd for
+// long-term memory extraction — the same signature and fire-and-forget
+// contract as chat.MemoryExtract (see chat.go), so cmd/brain/main.go
+// wires both through the identical mc.Extract call. seq is always 0: a
+// mission's extraction is not tied to any session_events sequence
+// number the way a chat turn's is, and memoryd's source_seq is opaque
+// bookkeeping it never dereferences into the missions log.
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string)
+
+// alreadyExtracted reports whether events already carries a
+// mission.memory_extracted record — checked before every extraction
+// attempt so a re-drive (sweep.go's boot-time recovery, or a Signal
+// racing an Advance) can never fire the pass twice for the same
+// mission.
+func alreadyExtracted(events []Event) bool {
+	for _, ev := range events {
+		if ev.Kind == memoryExtractedKind {
+			return true
+		}
+	}
+	return false
+}
+
+// extractMissionMemory runs the mission's one terminal extraction pass:
+// called by Advance/Signal exactly when a transition's Next.Phase is
+// terminal (done or failed). Nil memory client, or a mission with no
+// hidden session, skips silently — matching the nil-gated dependency
+// pattern the rest of the driver's optional hooks use (fireOnComplete,
+// notify). Extraction failures can never fail or block the mission
+// transition: MemoryExtract's own contract (see its doc comment) is
+// fire-and-forget, so nothing here can return an error to the caller
+// even in principle.
+func (d *Driver) extractMissionMemory(ctx context.Context, id string, terminal Phase, failureReason string) {
+	if d.memory == nil {
+		return
+	}
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		d.log.Warn("driver: memory extraction: reload mission failed", "mission_id", id, "error", err)
+		return
+	}
+	if m.SessionID == "" {
+		return
+	}
+	events, err := d.store.Events(ctx, id)
+	if err != nil {
+		d.log.Warn("driver: memory extraction: load events failed", "mission_id", id, "error", err)
+		return
+	}
+	if alreadyExtracted(events) {
+		return
+	}
+	digest := buildDigest(m, events, terminal, failureReason)
+	// The idempotency record must land BEFORE dispatch, not after: the
+	// extraction call itself is fire-and-forget (no completion signal
+	// this function can wait on), so appending after would leave the
+	// exact race window this guard exists to close — a re-drive landing
+	// between dispatch and a not-yet-appended event would fire a second
+	// pass. Marking the attempt (not "succeeded") is the same commitment
+	// AppendEvent's other bookkeeping-only callers make.
+	if err := d.store.AppendEvent(ctx, id, memoryExtractedKind, map[string]any{"terminal": string(terminal)}); err != nil {
+		d.log.Warn("driver: memory extraction: record event failed", "mission_id", id, "error", err)
+		return
+	}
+	go d.memory(context.Background(), m.SessionID, 0, digest, "") //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
+}
+
+// buildDigest assembles the curated extraction input: goal, title,
+// kind, explore notes, per-unit outcomes (title/status/verify evidence
+// summary only, never shell output), the review verdict (or
+// review_skipped), and the terminal state/failure reason. Deliberately
+// excludes anything resembling the raw transcript — build-log noise
+// (tool_execution payloads, mission.turn timings) never appears here.
+func buildDigest(m Mission, events []Event, terminal Phase, failureReason string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "mission goal: %s\n", m.Goal)
+	if m.Name != "" {
+		fmt.Fprintf(&b, "mission title: %s\n", m.Name)
+	}
+	fmt.Fprintf(&b, "mission kind: %s\n", m.Kind)
+	if m.ExploreNotes != "" {
+		b.WriteString("\nexplore notes:\n")
+		b.WriteString(m.ExploreNotes)
+		b.WriteString("\n")
+	}
+	if len(m.Spec.Units) > 0 {
+		b.WriteString("\nunits:\n")
+		for _, u := range m.Spec.Units {
+			status := "not verified"
+			if u.Passes {
+				status = "passed"
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", u.Title, status)
+		}
+	}
+	if decision, findings, ok := lastReviewVerdict(events); ok {
+		fmt.Fprintf(&b, "\nreview verdict: %s\n", decision)
+		if findings != "" {
+			fmt.Fprintf(&b, "review findings: %s\n", findings)
+		}
+	} else if reviewSkipped(events) {
+		b.WriteString("\nreview: skipped (harness checks alone established the unit)\n")
+	}
+	fmt.Fprintf(&b, "\nterminal state: %s\n", terminal)
+	if terminal == PhaseFailed && failureReason != "" {
+		fmt.Fprintf(&b, "failure reason: %s\n", failureReason)
+	}
+	return b.String()
+}
+
+// lastReviewVerdict scans events for the most recent
+// mission.review_verdict, returning its decision/findings. ok=false
+// when review never ran this mission.
+func lastReviewVerdict(events []Event) (decision, findings string, ok bool) {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != "mission.review_verdict" {
+			continue
+		}
+		var payload struct {
+			Decision string `json:"decision"`
+			Findings string `json:"findings"`
+		}
+		if err := json.Unmarshal(events[i].Payload, &payload); err != nil {
+			return "", "", false
+		}
+		return payload.Decision, payload.Findings, true
+	}
+	return "", "", false
+}
+
+// reviewSkipped reports whether any mission.review_skipped event fired
+// — the non-coding fast path that bypasses LLM review entirely on
+// harness evidence (driver.go's trySkipReview).
+func reviewSkipped(events []Event) bool {
+	for _, ev := range events {
+		if ev.Kind == "mission.review_skipped" {
+			return true
+		}
+	}
+	return false
+}

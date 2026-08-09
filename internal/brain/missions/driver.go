@@ -69,6 +69,7 @@ type driverStore interface {
 	Get(ctx context.Context, id string) (Mission, error)
 	ApplyTransition(ctx context.Context, id string, t Transition) error
 	AppendEvent(ctx context.Context, id, kind string, payload map[string]any) error
+	Events(ctx context.Context, id string) ([]Event, error)
 	SetSpec(ctx context.Context, id string, spec Spec) error
 	SetSession(ctx context.Context, id, sessionID string) error
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
@@ -177,6 +178,11 @@ type Driver struct {
 	// — nil-safe: unset just skips the notification, the mission.push_failed
 	// event (Completer.PushBranch's own append) is still recorded either way.
 	notifyPushFailed func(ctx context.Context, missionID, message string)
+
+	// memory wires the memoryd extraction hook (see SetMemoryExtract) —
+	// nil-safe: unset skips extraction entirely, same as chat's own
+	// MemoryExtract field.
+	memory MemoryExtract
 
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
@@ -306,6 +312,15 @@ func (d *Driver) SetCompleter(c *Completer) {
 // reason SetCompleter is.
 func (d *Driver) SetPushFailedNotifier(notify func(ctx context.Context, missionID, message string)) {
 	d.notifyPushFailed = notify
+}
+
+// SetMemoryExtract wires the memoryd extraction hook fired once a
+// mission reaches a terminal phase (see extractMissionMemory) — a
+// setter (not a NewDriver parameter) for the same reason SetCompleter
+// is. Optional — nil (today's default) leaves missions extracting
+// nothing into memory.
+func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
+	d.memory = fn
 }
 
 // fireOnComplete runs a mission's recorded on_complete choice
@@ -624,6 +639,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if t.Next.Phase.Terminal() {
 		delete(d.gatekeepers, id)
 		d.removeSandbox(id)
+		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
 	}
 	if t.Next.Phase == PhaseDone {
 		// m is the pre-transition snapshot (re-fetched above, before this
@@ -706,6 +722,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	if t.Next.Phase.Terminal() {
 		delete(d.gatekeepers, id)
 		d.removeSandbox(id)
+		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {

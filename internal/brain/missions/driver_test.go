@@ -128,6 +128,14 @@ func (f *fakeStore) AppendEvent(ctx context.Context, id, kind string, payload ma
 	return nil
 }
 
+func (f *fakeStore) Events(ctx context.Context, id string) ([]Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]Event, len(f.events[id]))
+	copy(out, f.events[id])
+	return out, nil
+}
+
 func (f *fakeStore) SetSpec(ctx context.Context, id string, spec Spec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
