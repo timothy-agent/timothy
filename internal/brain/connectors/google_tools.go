@@ -32,8 +32,14 @@ func (g *Google) Builder() Builder {
 		if src.hasScope("calendar") {
 			src.toolList = append(src.toolList, src.calendarListEvents(), src.calendarCreateEvent())
 		}
+		if src.hasExactScope(driveReadonlyScope) {
+			src.toolList = append(src.toolList, src.driveSearch(), src.driveRead())
+		}
+		if src.hasExactScope(documentsScope) {
+			src.toolList = append(src.toolList, src.docsRead(), src.docsCreate(), src.docsAppend())
+		}
 		if len(src.toolList) == 0 {
-			return nil, fmt.Errorf("google %s: no known scopes (want gmail and/or calendar)", c.Name)
+			return nil, fmt.Errorf("google %s: no known scopes (want gmail, calendar, drive, and/or docs)", c.Name)
 		}
 		return src, nil
 	}
@@ -69,24 +75,54 @@ func (s *googleSource) hasScope(service string) bool {
 	return false
 }
 
+// hasExactScope reports whether one of the connector's granted scopes
+// is exactly want. Unlike hasScope's substring match (fine for
+// "gmail"/"calendar", which never collide), drive.readonly and
+// drive.file share the "drive" substring — an exact match keeps a
+// docs-only connector (drive.file) from also enabling the broader
+// Drive search/read tools it never consented to.
+func (s *googleSource) hasExactScope(want string) bool {
+	for _, sc := range s.cfg.Scopes {
+		if sc == want {
+			return true
+		}
+	}
+	return false
+}
+
 // api performs one authenticated Google API call and decodes the JSON
 // response into out (nil out discards the body).
 func (s *googleSource) api(ctx context.Context, method, apiURL string, body, out any) error {
-	token, err := s.g.token(ctx, s.cfg, s.ref)
+	resp, err := s.rawAPI(ctx, method, apiURL, body)
 	if err != nil {
 		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// rawAPI performs one authenticated Google API call and returns the
+// raw response for callers that need non-JSON bytes (Drive export/
+// download). Callers must close the response body.
+func (s *googleSource) rawAPI(ctx context.Context, method, apiURL string, body any) (*http.Response, error) {
+	token, err := s.g.token(ctx, s.cfg, s.ref)
+	if err != nil {
+		return nil, err
 	}
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reader = strings.NewReader(string(raw))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, apiURL, reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
@@ -94,17 +130,26 @@ func (s *googleSource) api(ctx context.Context, method, apiURL string, body, out
 	}
 	resp, err := s.g.Client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("google api status %d: %s", resp.StatusCode, snippet)
+		defer func() { _ = resp.Body.Close() }()
+		return nil, googleAPIError(resp)
 	}
-	if out == nil {
-		return nil
+	return resp, nil
+}
+
+// googleAPIError maps a non-2xx Drive/Docs/Gmail/Calendar API response
+// to a human message: 401 (expired/revoked access token slipping past
+// the refresh — e.g. a scope the stored grant no longer covers) gets a
+// reconnect-oriented message, other statuses keep the status code plus
+// a body snippet, same discipline as googleTokenError.
+func googleAPIError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("Google authorization expired or was revoked — reconnect to re-authorize")
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return fmt.Errorf("google api status %d: %s", resp.StatusCode, snippet)
 }
 
 // --- Gmail ---
@@ -533,6 +578,303 @@ func (s *googleSource) calendarCreateEvent() *tools.Tool {
 				return "", err
 			}
 			return "event created: " + res.HTMLLink, nil
+		},
+	}
+}
+
+// --- Drive ---
+
+// driveReadMaxResult bounds drive_read's returned text — Drive
+// documents and downloaded/converted files have no inherent size
+// cap, and an unbounded file could blow the loop's context budget.
+// Same convention as webFetchMaxResult.
+const driveReadMaxResult = 64 << 10
+
+// driveExportMimeTypes maps a Google-native file's mimeType to the
+// export format requested from Drive's files.export endpoint — a
+// text-friendly rendering for each editor type Drive can hold.
+var driveExportMimeTypes = map[string]string{
+	"application/vnd.google-apps.document":     "text/markdown",
+	"application/vnd.google-apps.spreadsheet":  "text/csv",
+	"application/vnd.google-apps.presentation": "text/plain",
+}
+
+func (s *googleSource) driveSearch() *tools.Tool {
+	return &tools.Tool{
+		Name: "drive_search",
+		Description: `Search Google Drive by file name or content. query is matched
+against file names and, for supported formats, document content
+(Drive's "fullText contains" search). Returns up to max_results
+(default 20) files as id, name, mimeType, modifiedTime, webViewLink.
+Use drive_read with an id to read a file's content.`,
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"query":{"type":"string","description":"words to match against file name and content"},
+			"max_results":{"type":"integer","minimum":1,"maximum":50}
+		},"required":["query"],"additionalProperties":false}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var in struct {
+				Query      string `json:"query"`
+				MaxResults int    `json:"max_results"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			if in.MaxResults <= 0 {
+				in.MaxResults = 20
+			}
+			escaped := strings.ReplaceAll(in.Query, `\`, `\\`)
+			escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+			q := url.Values{
+				"q":        {fmt.Sprintf("fullText contains '%s' or name contains '%s'", escaped, escaped)},
+				"pageSize": {fmt.Sprint(in.MaxResults)},
+				"fields":   {"files(id,name,mimeType,modifiedTime,webViewLink)"},
+			}
+			var res struct {
+				Files []struct {
+					ID           string `json:"id"`
+					Name         string `json:"name"`
+					MimeType     string `json:"mimeType"`
+					ModifiedTime string `json:"modifiedTime"`
+					WebViewLink  string `json:"webViewLink"`
+				} `json:"files"`
+			}
+			if err := s.api(ctx, http.MethodGet,
+				s.g.DriveBase+"/files?"+q.Encode(), nil, &res); err != nil {
+				return "", err
+			}
+			if len(res.Files) == 0 {
+				return "no files matched", nil
+			}
+			var b strings.Builder
+			for _, f := range res.Files {
+				fmt.Fprintf(&b, "id: %s\nname: %s\nmimeType: %s\nmodifiedTime: %s\nwebViewLink: %s\n\n",
+					f.ID, f.Name, f.MimeType, f.ModifiedTime, f.WebViewLink)
+			}
+			return strings.TrimRight(b.String(), "\n"), nil
+		},
+	}
+}
+
+func (s *googleSource) driveRead() *tools.Tool {
+	return &tools.Tool{
+		Name:        "drive_read",
+		Description: "Read a Drive file's content by id (from drive_search). Google Docs/Sheets/Slides export to text/markdown/CSV; other formats (PDF, Office documents, ...) download and convert to markdown. Long content is truncated.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"id":{"type":"string","description":"Drive file id"}
+		},"required":["id"],"additionalProperties":false}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var in struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			var meta struct {
+				Name     string `json:"name"`
+				MimeType string `json:"mimeType"`
+			}
+			if err := s.api(ctx, http.MethodGet,
+				s.g.DriveBase+"/files/"+url.PathEscape(in.ID)+"?fields=name,mimeType", nil, &meta); err != nil {
+				return "", err
+			}
+
+			var text string
+			if exportType, ok := driveExportMimeTypes[meta.MimeType]; ok {
+				resp, err := s.rawAPI(ctx, http.MethodGet,
+					s.g.DriveBase+"/files/"+url.PathEscape(in.ID)+"/export?mimeType="+url.QueryEscape(exportType), nil)
+				if err != nil {
+					return "", err
+				}
+				defer func() { _ = resp.Body.Close() }()
+				raw, err := io.ReadAll(io.LimitReader(resp.Body, driveReadMaxResult+1))
+				if err != nil {
+					return "", fmt.Errorf("read export: %w", err)
+				}
+				text = string(raw)
+			} else {
+				resp, err := s.rawAPI(ctx, http.MethodGet,
+					s.g.DriveBase+"/files/"+url.PathEscape(in.ID)+"?alt=media", nil)
+				if err != nil {
+					return "", err
+				}
+				defer func() { _ = resp.Body.Close() }()
+				raw, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return "", fmt.Errorf("download file: %w", err)
+				}
+				text, err = markitdown.Convert(ctx, s.g.Client, s.g.MarkItDownURL, meta.Name, meta.MimeType, raw)
+				if err != nil {
+					return "", err
+				}
+			}
+			if len(text) > driveReadMaxResult {
+				text = text[:driveReadMaxResult] + "\n\n[truncated: file continues]"
+			}
+			return fmt.Sprintf("name: %s\nmimeType: %s\n\n%s", meta.Name, meta.MimeType, text), nil
+		},
+	}
+}
+
+// --- Docs ---
+
+// docsReadMaxResult bounds docs_read's returned text, same convention
+// as driveReadMaxResult.
+const docsReadMaxResult = 64 << 10
+
+// docsParagraphText flattens one Docs StructuralElement's paragraph
+// (if present) to its plain text run.
+func docsParagraphText(el docsStructuralElement) string {
+	if el.Paragraph == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, pe := range el.Paragraph.Elements {
+		if pe.TextRun != nil {
+			b.WriteString(pe.TextRun.Content)
+		}
+	}
+	return b.String()
+}
+
+type docsStructuralElement struct {
+	Paragraph *struct {
+		Elements []struct {
+			TextRun *struct {
+				Content string `json:"content"`
+			} `json:"textRun"`
+		} `json:"elements"`
+	} `json:"paragraph"`
+}
+
+func (s *googleSource) docsRead() *tools.Tool {
+	return &tools.Tool{
+		Name:        "docs_read",
+		Description: "Read a Google Doc's content by id (from drive_search, or a doc's id from its URL/docs_create's result). Returns the document title and body as plain text. Long documents are truncated.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"id":{"type":"string","description":"Google Doc id"}
+		},"required":["id"],"additionalProperties":false}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var in struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			var doc struct {
+				Title string `json:"title"`
+				Body  struct {
+					Content []docsStructuralElement `json:"content"`
+				} `json:"body"`
+			}
+			if err := s.api(ctx, http.MethodGet,
+				s.g.DocsBase+"/documents/"+url.PathEscape(in.ID), nil, &doc); err != nil {
+				return "", err
+			}
+			var b strings.Builder
+			for _, el := range doc.Body.Content {
+				b.WriteString(docsParagraphText(el))
+			}
+			text := strings.TrimRight(b.String(), "\n")
+			if len(text) > docsReadMaxResult {
+				text = text[:docsReadMaxResult] + "\n\n[truncated: document continues]"
+			}
+			return fmt.Sprintf("title: %s\n\n%s", doc.Title, text), nil
+		},
+	}
+}
+
+func (s *googleSource) docsCreate() *tools.Tool {
+	return &tools.Tool{
+		Name:        "docs_create",
+		Description: "Create a new Google Doc with a title and initial body text. Returns the new doc's id and webViewLink. Use only when the user asked for a new document.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"title":{"type":"string"},
+			"body":{"type":"string","description":"initial plain-text body, empty for a blank doc"}
+		},"required":["title"],"additionalProperties":false}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var in struct {
+				Title, Body string
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			var doc struct {
+				DocumentID string `json:"documentId"`
+			}
+			if err := s.api(ctx, http.MethodPost,
+				s.g.DocsBase+"/documents", map[string]string{"title": in.Title}, &doc); err != nil {
+				return "", err
+			}
+			if in.Body != "" {
+				update := map[string]any{
+					"requests": []map[string]any{
+						{"insertText": map[string]any{
+							"location": map[string]any{"index": 1},
+							"text":     in.Body,
+						}},
+					},
+				}
+				if err := s.api(ctx, http.MethodPost,
+					s.g.DocsBase+"/documents/"+url.PathEscape(doc.DocumentID)+":batchUpdate", update, nil); err != nil {
+					return "", err
+				}
+			}
+			return fmt.Sprintf("created doc id %s, webViewLink https://docs.google.com/document/d/%s/edit",
+				doc.DocumentID, doc.DocumentID), nil
+		},
+	}
+}
+
+func (s *googleSource) docsAppend() *tools.Tool {
+	return &tools.Tool{
+		Name:        "docs_append",
+		Description: "Append text to the end of an existing Google Doc. Use only when the user asked to add to a document; the change is immediate and visible to anyone viewing it.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{
+			"id":{"type":"string","description":"Google Doc id"},
+			"text":{"type":"string","description":"text to append at the end of the document"}
+		},"required":["id","text"],"additionalProperties":false}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var in struct {
+				ID, Text string
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			var doc struct {
+				Body struct {
+					Content []struct {
+						EndIndex int `json:"endIndex"`
+					} `json:"content"`
+				} `json:"body"`
+			}
+			if err := s.api(ctx, http.MethodGet,
+				s.g.DocsBase+"/documents/"+url.PathEscape(in.ID)+"?fields=body.content.endIndex", nil, &doc); err != nil {
+				return "", err
+			}
+			// The document's last structural element's endIndex points
+			// just past the final newline; inserting there is Docs'
+			// documented "end of body" position. A blank/new document
+			// still has one element (endIndex 1) so this always resolves.
+			endIndex := 1
+			if n := len(doc.Body.Content); n > 0 {
+				endIndex = doc.Body.Content[n-1].EndIndex - 1
+			}
+			if endIndex < 1 {
+				endIndex = 1
+			}
+			update := map[string]any{
+				"requests": []map[string]any{
+					{"insertText": map[string]any{
+						"location": map[string]any{"index": endIndex},
+						"text":     in.Text,
+					}},
+				},
+			}
+			if err := s.api(ctx, http.MethodPost,
+				s.g.DocsBase+"/documents/"+url.PathEscape(in.ID)+":batchUpdate", update, nil); err != nil {
+				return "", err
+			}
+			return "appended to doc " + in.ID, nil
 		},
 	}
 }

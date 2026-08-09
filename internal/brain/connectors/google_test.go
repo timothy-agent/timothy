@@ -68,13 +68,16 @@ func (f *fakeSecrets) Set(_ context.Context, ref, value string) error {
 	return nil
 }
 
-// fakeGoogle serves the token endpoint plus minimal Gmail/Calendar.
+// fakeGoogle serves the token endpoint plus minimal Gmail/Calendar/
+// Drive/Docs.
 type fakeGoogle struct {
-	mu         sync.Mutex
-	tokenForms []url.Values
-	gmailSent  []string // raw rfc822 payloads
-	events     []map[string]any
-	authTokens []string // Authorization headers seen on API calls
+	mu          sync.Mutex
+	tokenForms  []url.Values
+	gmailSent   []string // raw rfc822 payloads
+	events      []map[string]any
+	authTokens  []string // Authorization headers seen on API calls
+	docsCreated []map[string]any
+	batchUpdate []map[string]any // raw batchUpdate request bodies, per doc id
 }
 
 func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
@@ -179,6 +182,84 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{"id":"ev-1","htmlLink":"https://cal/ev-1"}`))
 	})
+	mux.HandleFunc("GET /files", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if !strings.Contains(r.URL.Query().Get("q"), "budget") {
+			_, _ = w.Write([]byte(`{"files":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"files":[{"id":"d1","name":"Q3 Budget","mimeType":"application/vnd.google-apps.spreadsheet","modifiedTime":"2026-07-01T00:00:00Z","webViewLink":"https://drive/d1"}]}`))
+	})
+	mux.HandleFunc("GET /files/{id}", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		id := r.PathValue("id")
+		if r.URL.Query().Get("alt") == "media" {
+			// Binary (non-Google-native) file download, routed through markitdown.
+			if id != "bin1" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			raw, err := os.ReadFile("testdata/sample.pdf")
+			if err != nil {
+				t.Fatalf("read fixture: %v", err)
+			}
+			_, _ = w.Write(raw)
+			return
+		}
+		switch id {
+		case "d1":
+			_, _ = w.Write([]byte(`{"name":"Q3 Budget","mimeType":"application/vnd.google-apps.spreadsheet"}`))
+		case "bin1":
+			_, _ = w.Write([]byte(`{"name":"receipt.pdf","mimeType":"application/pdf"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	mux.HandleFunc("GET /files/{id}/export", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.PathValue("id") != "d1" || r.URL.Query().Get("mimeType") != "text/csv" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte("category,amount\nrent,2000\n"))
+	})
+	mux.HandleFunc("GET /documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.PathValue("id") != "doc1" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.Contains(r.URL.Query().Get("fields"), "endIndex") {
+			_, _ = w.Write([]byte(`{"body":{"content":[{"endIndex":15}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"title":"Meeting Notes","body":{"content":[
+			{"paragraph":{"elements":[{"textRun":{"content":"Line one.\n"}}]}},
+			{"paragraph":{"elements":[{"textRun":{"content":"Line two.\n"}}]}}
+		]}}`))
+	})
+	mux.HandleFunc("POST /documents", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.mu.Lock()
+		f.docsCreated = append(f.docsCreated, in)
+		f.mu.Unlock()
+		_, _ = w.Write([]byte(`{"documentId":"newdoc1"}`))
+	})
+	mux.HandleFunc("POST /documents/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, ":batchUpdate") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		record(r)
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.mu.Lock()
+		f.batchUpdate = append(f.batchUpdate, in)
+		f.mu.Unlock()
+		_, _ = w.Write([]byte(`{}`))
+	})
 	// Fakes the markitdown sidecar: echoes back a recognizable marker
 	// plus the filename/mimetype headers it was called with, so tests
 	// can assert gmail_read/gmail_read_attachment actually reached it
@@ -197,6 +278,10 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 }
 
 const bothScopes = `["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar"]`
+
+// driveDocsScopes covers both new services, mirroring bothScopes' role
+// for gmail+calendar in the round-trip tests below.
+const driveDocsScopes = `["https://www.googleapis.com/auth/drive.readonly","https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file"]`
 
 func googleRow(scopes string) Connector {
 	return Connector{
@@ -217,6 +302,8 @@ func testGoogle(t *testing.T, f *fakeGoogle, row Connector) (*Google, *fakeSecre
 	g.TokenURL = srv.URL + "/token"
 	g.GmailBase = srv.URL
 	g.CalendarBase = srv.URL
+	g.DriveBase = srv.URL
+	g.DocsBase = srv.URL
 	g.MarkItDownURL = srv.URL
 	return g, secrets
 }
@@ -346,6 +433,9 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 		{`["https://www.googleapis.com/auth/gmail.modify"]`, 4},
 		{`["https://www.googleapis.com/auth/calendar"]`, 2},
 		{bothScopes, 6},
+		{`["https://www.googleapis.com/auth/drive.readonly"]`, 2},
+		{`["https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file"]`, 3},
+		{driveDocsScopes, 5},
 	} {
 		row := googleRow(tc.scopes)
 		g, _ := testGoogle(t, f, row)
@@ -368,6 +458,22 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 func connectedSource(t *testing.T, f *fakeGoogle) (Source, *fakeSecrets) {
 	t.Helper()
 	row := googleRow(bothScopes)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{
+		AccessToken: "at-live", RefreshToken: "rt-1", Expiry: time.Now().Add(time.Hour),
+	})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+	src, err := g.Builder()(t.Context(), row, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	return src, secrets
+}
+
+func connectedDriveDocsSource(t *testing.T, f *fakeGoogle) (Source, *fakeSecrets) {
+	t.Helper()
+	row := googleRow(driveDocsScopes)
 	g, secrets := testGoogle(t, f, row)
 	//nolint:gosec // G117: fake token fixture.
 	live, _ := json.Marshal(tokenBundle{
@@ -547,6 +653,129 @@ func TestCalendarToolsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDriveSearchHappyPath(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedDriveDocsSource(t, f)
+
+	out, err := toolByName(t, src, "drive_search").Execute(t.Context(), json.RawMessage(`{"query":"budget"}`))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if !strings.Contains(out, "id: d1") || !strings.Contains(out, "Q3 Budget") ||
+		!strings.Contains(out, "spreadsheet") || !strings.Contains(out, "https://drive/d1") {
+		t.Fatalf("search = %q", out)
+	}
+
+	out, err = toolByName(t, src, "drive_search").Execute(t.Context(), json.RawMessage(`{"query":"nothing-matches"}`))
+	if err != nil || !strings.Contains(out, "no files matched") {
+		t.Fatalf("empty search = (%q, %v)", out, err)
+	}
+}
+
+// TestDriveReadExportsGoogleNativeFile pins the export path: a
+// Google-native file (here a Sheet) is exported via Drive's
+// files.export endpoint, not downloaded raw or sent through
+// markitdown.
+func TestDriveReadExportsGoogleNativeFile(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedDriveDocsSource(t, f)
+
+	out, err := toolByName(t, src, "drive_read").Execute(t.Context(), json.RawMessage(`{"id":"d1"}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(out, "name: Q3 Budget") || !strings.Contains(out, "category,amount") ||
+		!strings.Contains(out, "rent,2000") {
+		t.Fatalf("read = %q", out)
+	}
+}
+
+// TestDriveReadDownloadsAndConvertsBinaryFile pins the non-native path:
+// a binary file (PDF) is downloaded via alt=media and handed to
+// markitdown, same as gmail_read_attachment's PDF handling.
+func TestDriveReadDownloadsAndConvertsBinaryFile(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedDriveDocsSource(t, f)
+
+	out, err := toolByName(t, src, "drive_read").Execute(t.Context(), json.RawMessage(`{"id":"bin1"}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(out, "name: receipt.pdf") ||
+		!strings.Contains(out, "converted(filename=receipt.pdf, mimetype=application/pdf)") {
+		t.Fatalf("read = %q, want it routed through markitdown", out)
+	}
+}
+
+func TestDocsReadFlattensBodyToText(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedDriveDocsSource(t, f)
+
+	out, err := toolByName(t, src, "docs_read").Execute(t.Context(), json.RawMessage(`{"id":"doc1"}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(out, "title: Meeting Notes") || !strings.Contains(out, "Line one.") ||
+		!strings.Contains(out, "Line two.") {
+		t.Fatalf("read = %q", out)
+	}
+}
+
+func TestDocsCreateWithInitialBody(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedDriveDocsSource(t, f)
+
+	out, err := toolByName(t, src, "docs_create").Execute(t.Context(),
+		json.RawMessage(`{"title":"New Doc","body":"hello world"}`))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !strings.Contains(out, "newdoc1") || !strings.Contains(out, "https://docs.google.com/document/d/newdoc1/edit") {
+		t.Fatalf("create = %q", out)
+	}
+	if len(f.docsCreated) != 1 || f.docsCreated[0]["title"] != "New Doc" {
+		t.Fatalf("created payload = %+v", f.docsCreated)
+	}
+	if len(f.batchUpdate) != 1 {
+		t.Fatalf("expected one batchUpdate call for the initial body, got %d", len(f.batchUpdate))
+	}
+}
+
+func TestDocsAppendInsertsAtEndIndex(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedDriveDocsSource(t, f)
+
+	out, err := toolByName(t, src, "docs_append").Execute(t.Context(),
+		json.RawMessage(`{"id":"doc1","text":"more text"}`))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if !strings.Contains(out, "doc1") {
+		t.Fatalf("append = %q", out)
+	}
+	if len(f.batchUpdate) != 1 {
+		t.Fatalf("expected one batchUpdate call, got %d", len(f.batchUpdate))
+	}
+	reqs, _ := f.batchUpdate[0]["requests"].([]any)
+	if len(reqs) != 1 {
+		t.Fatalf("batchUpdate requests = %+v", f.batchUpdate[0])
+	}
+	insertText, _ := reqs[0].(map[string]any)["insertText"].(map[string]any)
+	loc, _ := insertText["location"].(map[string]any)
+	if loc["index"] != float64(14) { // doc1's fake endIndex 15, minus 1
+		t.Fatalf("insertText location = %+v", insertText)
+	}
+	if insertText["text"] != "more text" {
+		t.Fatalf("insertText text = %+v", insertText)
+	}
+}
+
 // TestGoogleTokenErrorMapping pins the "typed, human message, no raw
 // JSON body" discipline for the OAuth token endpoint's error
 // responses: invalid_grant (expired or revoked refresh token — the
@@ -598,6 +827,46 @@ func TestGoogleTokenErrorMapping(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "error_description") {
 				t.Fatalf("googleTokenError leaked raw JSON: %q", err.Error())
+			}
+		})
+	}
+}
+
+// TestGoogleAPIErrorMapping pins the same "typed, human message" rule
+// for Drive/Docs/Gmail/Calendar API calls (as opposed to the OAuth
+// token endpoint, covered by TestGoogleTokenErrorMapping): a 401 from
+// a Google API call gets a reconnect-oriented message, other statuses
+// keep the status plus a body snippet.
+func TestGoogleAPIErrorMapping(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "401 unauthorized",
+			status: http.StatusUnauthorized,
+			body:   `{"error":{"code":401,"message":"Invalid Credentials"}}`,
+			want:   "Google authorization expired or was revoked — reconnect to re-authorize",
+		},
+		{
+			name:   "404 not found keeps status and body snippet",
+			status: http.StatusNotFound,
+			body:   `{"error":{"code":404,"message":"File not found"}}`,
+			want:   `google api status 404: {"error":{"code":404,"message":"File not found"}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := &http.Response{
+				StatusCode: tc.status,
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+			err := googleAPIError(resp)
+			if err.Error() != tc.want {
+				t.Fatalf("googleAPIError = %q, want %q", err.Error(), tc.want)
 			}
 		})
 	}

@@ -45,6 +45,14 @@ const (
 	googleTokenURL = "https://oauth2.googleapis.com/token"
 	gmailBase      = "https://gmail.googleapis.com"
 	calendarBase   = "https://www.googleapis.com/calendar/v3"
+	driveBase      = "https://www.googleapis.com/drive/v3"
+	docsBase       = "https://docs.googleapis.com/v1"
+
+	// driveReadonlyScope/documentsScope gate the Drive and Docs tool
+	// sets in Builder — exact matches (see hasExactScope) since
+	// drive.readonly and drive.file (Docs' scope) share a substring.
+	driveReadonlyScope = "https://www.googleapis.com/auth/drive.readonly"
+	documentsScope     = "https://www.googleapis.com/auth/documents"
 
 	// oauthStateTTL bounds how long a started OAuth dance may take.
 	oauthStateTTL = 10 * time.Minute
@@ -67,6 +75,8 @@ type Google struct {
 	TokenURL     string
 	GmailBase    string
 	CalendarBase string
+	DriveBase    string
+	DocsBase     string
 	// MarkItDownURL is the markitdown sidecar's base address (compose-
 	// internal, e.g. http://markitdown:8000); empty disables HTML-only
 	// body rendering and PDF attachment reading with a clear error
@@ -89,6 +99,7 @@ func NewGoogle(secrets SecretRW, rows rowSource, publicURL string, log *slog.Log
 		Secrets: secrets, Rows: rows, Client: &http.Client{}, PublicURL: publicURL, Log: log,
 		AuthURL: googleAuthURL, TokenURL: googleTokenURL,
 		GmailBase: gmailBase, CalendarBase: calendarBase,
+		DriveBase: driveBase, DocsBase: docsBase,
 		states: map[string]oauthState{},
 	}
 }
