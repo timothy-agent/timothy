@@ -88,11 +88,33 @@ via the existing `--env-file` Make targets.
 - No speculative abstractions: no interface with one implementation,
   no config nothing reads.
 
+## Git workflow
+
+- Never commit to `main`. Branch off an updated `main`:
+  `git checkout main && git pull && git checkout -b <type>/<short-description>`.
+- Branch names: `<type>/<short-description>`, kebab-case, matching the
+  commit type of the work (`feat/mission-follow-up`,
+  `fix/ledger-budget-test-isolation`, `docs/git-workflow`).
+- Commits are Conventional Commits:
+  `<type>[optional scope]: <short description>` with types
+  `feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert`.
+  Subject ≤72 chars, lowercase, imperative, no trailing period. Body
+  explains WHY, not what. Breaking changes get a `BREAKING CHANGE:`
+  footer. No vague subjects ("fix stuff", "WIP", "update").
+- One logical change per commit; run
+  `make build test vet lint` (and the web suite when `web/` changed)
+  before committing. `make canary` before merging any harness change.
+- PRs: title = the conventional commit subject; body = Why / What /
+  Verification. Squash-merge to main; the squash subject keeps the
+  conventional format (history reads `type(scope): subject (#PR)`).
+  Delete the branch on merge. Stacked PRs name their base PR in the
+  body and are retargeted after it merges.
+- No AI/tool attribution anywhere: commits, PR bodies, comments.
+- Never force-push shared branches; resolve conflicts by merging
+  `main` into the branch (squash-merge discards branch history anyway).
+
 ## Conventions
 
-- Conventional Commits, subject ≤72 chars, lowercase, body explains
-  WHY. No AI/tool attribution anywhere: commits, PRs, comments.
-- Branches `feat/<short-description>`; never commit to main.
 - Go: wrap errors with `%w`; sentinel errors + `errors.Is`; interfaces
   at point of use, none for a single implementation; table-driven
   tests; integration tests behind `//go:build integration`; race
