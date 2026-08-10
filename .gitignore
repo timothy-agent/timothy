@@ -16,8 +16,6 @@ web/coverage/
 
 # Local-only development docs
 docs/
-AGENTS.md
-CLAUDE.md
 
 # Editor / agent tooling
 .idea/
