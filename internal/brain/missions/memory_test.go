@@ -276,3 +276,107 @@ func TestDriverSkipsExtractionWhenNoSession(t *testing.T) {
 		t.Fatalf("extraction calls with no hidden session = %d, want 0", got)
 	}
 }
+
+// recordingNameMission is a nameMission fake that records every goal
+// it was called with, synchronized so tests can assert on it after the
+// driver's dispatching goroutine has had a chance to run.
+type recordingNameMission struct {
+	mu    sync.Mutex
+	calls []string // goal per call
+	name  string   // name to return; "" simulates a generation failure
+}
+
+func (r *recordingNameMission) fn() func(context.Context, string) string {
+	return func(ctx context.Context, goal string) string {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.calls = append(r.calls, goal)
+		return r.name
+	}
+}
+
+func (r *recordingNameMission) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+// waitForNameCalls polls count() until it reaches want or the deadline
+// passes — the backfill dispatch is `go d.nameMission(...)`, same
+// allowance waitForCalls gives extraction's own dispatch goroutine.
+func waitForNameCalls(t *testing.T, r *recordingNameMission, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.count() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("nameMission calls = %d, want %d", r.count(), want)
+}
+
+func TestBackfillMissionNameFillsEmptyName(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseDone, Status: StatusDone})
+	d := testDriver(store, &scriptedRunner{})
+	rec := &recordingNameMission{name: "Nice Name"}
+	d.SetNameMission(rec.fn())
+
+	d.backfillMissionName(context.Background(), "m1")
+	waitForNameCalls(t, rec, 1)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m, _ := store.Get(context.Background(), "m1"); m.Name == "Nice Name" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("mission name was never backfilled")
+}
+
+func TestBackfillMissionNameSkipsWhenAlreadyNamed(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Name: "Already Named", Phase: PhaseDone, Status: StatusDone})
+	d := testDriver(store, &scriptedRunner{})
+	rec := &recordingNameMission{name: "Nice Name"}
+	d.SetNameMission(rec.fn())
+
+	d.backfillMissionName(context.Background(), "m1")
+	time.Sleep(20 * time.Millisecond)
+	if got := rec.count(); got != 0 {
+		t.Fatalf("nameMission calls for an already-named mission = %d, want 0", got)
+	}
+}
+
+func TestBackfillMissionNameSkipsWhenNilFn(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseDone, Status: StatusDone})
+	d := testDriver(store, &scriptedRunner{}) // no SetNameMission call: d.nameMission stays nil
+
+	d.backfillMissionName(context.Background(), "m1")
+	time.Sleep(20 * time.Millisecond)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Name != "" {
+		t.Fatalf("mission name = %q, want empty (nil nameMission must never fire)", m.Name)
+	}
+}
+
+func TestBackfillMissionNameSkipsSaveWhenGenerationEmpty(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseDone, Status: StatusDone})
+	d := testDriver(store, &scriptedRunner{})
+	rec := &recordingNameMission{name: ""} // simulates a generation failure
+	d.SetNameMission(rec.fn())
+
+	d.backfillMissionName(context.Background(), "m1")
+	waitForNameCalls(t, rec, 1)
+
+	time.Sleep(20 * time.Millisecond)
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Name != "" {
+		t.Fatalf("mission name = %q, want empty (empty generation must not write)", m.Name)
+	}
+}

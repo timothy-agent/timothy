@@ -136,7 +136,10 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 // TestBudgetStatusIgnoresOtherCurrencySpend confirms a budget in one
 // currency never gets checked against spend recorded in another —
 // comparing across currencies would need a guessed FX rate, which
-// this codebase never does.
+// this codebase never does. The budget is denominated in XTS (the ISO
+// 4217 code reserved for testing) rather than USD: the test runs
+// against the live ledger, and a USD budget would count real same-day
+// spend (canary missions, title calls) as contamination.
 func TestBudgetStatusIgnoresOtherCurrencySpend(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -172,8 +175,8 @@ func TestBudgetStatusIgnoresOtherCurrencySpend(t *testing.T) {
 		}
 	}()
 
-	// A USD day budget with a huge headroom; all the spend below is EUR.
-	if err := s.Set(ctx, "day", &BudgetLimit{Amount: 1e9, Currency: "USD"}); err != nil {
+	// An XTS day budget with a huge headroom; all the spend below is EUR.
+	if err := s.Set(ctx, "day", &BudgetLimit{Amount: 1e9, Currency: "XTS"}); err != nil {
 		t.Fatalf("set day: %v", err)
 	}
 
@@ -194,7 +197,7 @@ func TestBudgetStatusIgnoresOtherCurrencySpend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.Day.Currency != "USD" || status.Day.Spend != 0 || status.Day.Over {
-		t.Fatalf("day = %+v, want USD currency, zero spend, not over (EUR spend must not count)", status.Day)
+	if status.Day.Currency != "XTS" || status.Day.Spend != 0 || status.Day.Over {
+		t.Fatalf("day = %+v, want XTS currency, zero spend, not over (EUR spend must not count)", status.Day)
 	}
 }

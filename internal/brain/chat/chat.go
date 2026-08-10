@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
@@ -431,11 +432,11 @@ var titleChatterPrefixes = []string{
 }
 
 // validTitle rejects anything that isn't a short, plain name: empty,
-// over 8 words, over 60 chars, carrying a newline/backtick/code fence,
+// over 8 words, over 60 runes, carrying a newline/backtick/code fence,
 // or opening with a chatter prefix — the shape of a model answering or
 // commenting on the request instead of naming it.
 func validTitle(s string) bool {
-	if s == "" || len(s) > 60 {
+	if s == "" || utf8.RuneCountInString(s) > 60 {
 		return false
 	}
 	if strings.ContainsAny(s, "\n`") {
@@ -471,8 +472,10 @@ func isWordChar(b byte) bool {
 // still-invalid or any gateway failure returns "" (never an error) —
 // best-effort, exactly like autoTitle's own logged-and-dropped failure
 // path; the caller decides what "no name yet" means for its own
-// fallback rendering.
-func TitleOverGateway(gw Gateway) func(ctx context.Context, input string) string {
+// fallback rendering. Every failure path logs through log (message
+// prefix "title") so a silently-unnamed mission is diagnosable — log
+// must be non-nil, same as Service's own s.logger.
+func TitleOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, input string) string {
 	return func(ctx context.Context, input string) string {
 		ctx, cancel := context.WithTimeout(ctx, titleTimeout)
 		defer cancel()
@@ -481,7 +484,12 @@ func TitleOverGateway(gw Gateway) func(ctx context.Context, input string) string
 		route, ok, err := gw.RouteForRole(ctx, "summarize")
 		if err != nil || !ok {
 			route, ok, err = gw.RouteForRole(ctx, "default")
-			if err != nil || !ok {
+			if err != nil {
+				log.Warn("title: route lookup failed", "error", err)
+				return ""
+			}
+			if !ok {
+				log.Warn("title: no route bound for summarize or default")
 				return ""
 			}
 		}
@@ -498,17 +506,29 @@ func TitleOverGateway(gw Gateway) func(ctx context.Context, input string) string
 		for attempt := 0; attempt < 2; attempt++ {
 			events, err := gw.Stream(ctx, req)
 			if err != nil {
+				log.Warn("title: stream failed", "error", err)
 				return ""
 			}
 			var b strings.Builder
+			var streamErr *stream.StreamError
 			for ev := range events {
-				if ev.Type == stream.EventChunk {
+				switch ev.Type {
+				case stream.EventChunk:
 					b.WriteString(ev.Text)
+				case stream.EventError:
+					streamErr = ev.Err
 				}
 			}
 			title := strings.TrimSpace(strings.Trim(strings.TrimSpace(b.String()), `"'`))
+			title, _, _ = strings.Cut(title, "\n")
+			title = strings.TrimSpace(title)
 			if validTitle(title) {
 				return truncateRunes(title, 80)
+			}
+			if title != "" {
+				log.Warn("title: rejected by validTitle", "title", truncateRunes(title, 80))
+			} else if streamErr != nil {
+				log.Warn("title: stream error event", "code", streamErr.Code, "message", streamErr.Message)
 			}
 		}
 		return ""

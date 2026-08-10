@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1589,7 +1590,7 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 func TestTitleOverGatewayUsesSummarizeRoleAndTrimsQuotes(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents(`"Parse Logs Utility"`)}
-	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	name := TitleOverGateway(gw, discard())(context.Background(), "write a Go CLI that parses logs")
 	if name != "Parse Logs Utility" {
 		t.Fatalf("name = %q, want quotes trimmed to Parse Logs Utility", name)
 	}
@@ -1622,7 +1623,7 @@ func TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound(t *testing.T
 			return role, true, nil
 		},
 	}
-	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	name := TitleOverGateway(gw, discard())(context.Background(), "write a Go CLI that parses logs")
 	if name != "Parse Logs Utility" {
 		t.Fatalf("name = %q, want Parse Logs Utility", name)
 	}
@@ -1638,7 +1639,7 @@ func TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound(t *testing.T
 func TestTitleOverGatewayEmptyOnGatewayError(t *testing.T) {
 	t.Parallel()
 	gw := &erroringGW{}
-	name := TitleOverGateway(gw)(context.Background(), "a goal")
+	name := TitleOverGateway(gw, discard())(context.Background(), "a goal")
 	if name != "" {
 		t.Fatalf("name = %q, want empty on gateway error", name)
 	}
@@ -1675,6 +1676,8 @@ func TestValidTitle(t *testing.T) {
 		{"normal short", "Parse Logs Utility", true},
 		{"six words", "Build A Go Log Parser Tool", true},
 		{"unicode", "Résumé Parser Für Verträge", true},
+		{"cjk within rune limit", strings.Repeat("日", 21), true},
+		{"over 60 runes multibyte", strings.Repeat("日", 61), false},
 		{"prefix inside word ok", "Okta Integration Setup", true},
 		{"prefix inside word sure", "Surefire Deploy Checklist", true},
 		{"prefix inside word here", "Heredoc Quoting Fix", true},
@@ -1722,7 +1725,7 @@ func okEventsChan(text string) <-chan stream.StreamEvent {
 func TestTitleOverGatewayRetriesOnceOnChatterThenSucceeds(t *testing.T) {
 	t.Parallel()
 	gw := &titleScriptedGW{replies: []string{"I'll create a log parser for you", "Parse Logs Utility"}}
-	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	name := TitleOverGateway(gw, discard())(context.Background(), "write a Go CLI that parses logs")
 	if name != "Parse Logs Utility" {
 		t.Fatalf("name = %q, want Parse Logs Utility", name)
 	}
@@ -1742,7 +1745,7 @@ func TestTitleOverGatewayRetriesOnceOnChatterThenSucceeds(t *testing.T) {
 func TestTitleOverGatewayEmptyWhenBothAttemptsInvalid(t *testing.T) {
 	t.Parallel()
 	gw := &titleScriptedGW{replies: []string{"I'll create a log parser", "Sure, here's a title for that"}}
-	name := TitleOverGateway(gw)(context.Background(), "write a Go CLI that parses logs")
+	name := TitleOverGateway(gw, discard())(context.Background(), "write a Go CLI that parses logs")
 	if name != "" {
 		t.Fatalf("name = %q, want empty after both attempts invalid", name)
 	}
@@ -1750,6 +1753,54 @@ func TestTitleOverGatewayEmptyWhenBothAttemptsInvalid(t *testing.T) {
 	defer gw.mu.Unlock()
 	if len(gw.requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(gw.requests))
+	}
+}
+
+// TestTitleOverGatewayTakesFirstLine confirms a multi-line reply (a
+// model adding commentary after the title despite the prompt) is
+// still accepted by taking only its first line, rather than rejected
+// by validTitle's newline guard.
+func TestTitleOverGatewayTakesFirstLine(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("Fix Login Bug\n\nLet me know if you need anything")}
+	name := TitleOverGateway(gw, discard())(context.Background(), "fix the login bug")
+	if name != "Fix Login Bug" {
+		t.Fatalf("name = %q, want Fix Login Bug", name)
+	}
+}
+
+// TestTitleOverGatewayLogsStreamErrorEvent confirms a stream that ends
+// in EventError with no usable chunk text logs the error's code and
+// message rather than failing silently.
+func TestTitleOverGatewayLogsStreamErrorEvent(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventError, Err: &stream.StreamError{Code: "timeout", Message: "upstream timed out"}},
+	}}
+	name := TitleOverGateway(gw, log)(context.Background(), "a goal")
+	if name != "" {
+		t.Fatalf("name = %q, want empty on stream error event", name)
+	}
+	if !strings.Contains(buf.String(), "title: stream error event") || !strings.Contains(buf.String(), "upstream timed out") {
+		t.Fatalf("log missing stream error event details, got: %s", buf.String())
+	}
+}
+
+// TestTitleOverGatewayLogsInvalidTwice confirms exhausting both
+// attempts on invalid titles logs the rejection.
+func TestTitleOverGatewayLogsInvalidTwice(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	gw := &titleScriptedGW{replies: []string{"I'll create a log parser", "Sure, here's a title for that"}}
+	name := TitleOverGateway(gw, log)(context.Background(), "write a Go CLI that parses logs")
+	if name != "" {
+		t.Fatalf("name = %q, want empty after both attempts invalid", name)
+	}
+	if !strings.Contains(buf.String(), "title: rejected by validTitle") {
+		t.Fatalf("log missing rejection, got: %s", buf.String())
 	}
 }
 

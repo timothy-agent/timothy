@@ -163,6 +163,20 @@ func (f *fakeStore) SetExploreNotes(ctx context.Context, id, notes string) error
 	return nil
 }
 
+// SetNameIfEmpty mirrors the real Store's empty-name guard — a second
+// call for a mission that already has a name is a no-op, not an
+// overwrite.
+func (f *fakeStore) SetNameIfEmpty(ctx context.Context, id, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	if m.Name == "" {
+		m.Name = name
+		f.missions[id] = m
+	}
+	return nil
+}
+
 func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

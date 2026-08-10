@@ -82,6 +82,32 @@ func (d *Driver) extractMissionMemory(ctx context.Context, id string, terminal P
 	go d.memory(context.Background(), m.SessionID, 0, digest, "") //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
 }
 
+// backfillMissionName regenerates a missing display name when a mission
+// reaches a terminal phase — the create-time naming call is best-effort
+// and a failure there would otherwise be permanent. Best-effort itself:
+// never blocks or fails the transition. SetNameIfEmpty's guard makes a
+// late create-time call racing this one harmless.
+func (d *Driver) backfillMissionName(ctx context.Context, id string) {
+	if d.nameMission == nil {
+		return
+	}
+	m, err := d.store.Get(ctx, id)
+	if err != nil || m.Name != "" {
+		return
+	}
+	goal := m.Goal
+	go func() { //nolint:gosec // G118: deliberate — the mission is already terminal, naming must outlive whatever request/ctx observed that transition
+		name := d.nameMission(context.Background(), goal)
+		if name == "" {
+			d.log.Warn("mission: name backfill returned empty", "mission_id", id)
+			return
+		}
+		if err := d.store.SetNameIfEmpty(context.Background(), id, name); err != nil {
+			d.log.Warn("mission: name backfill save failed", "mission_id", id, "error", err)
+		}
+	}()
+}
+
 // OutcomeDigest assembles the curated extraction input: goal, title,
 // kind, explore notes, per-unit outcomes (title/status/verify evidence
 // summary only, never shell output), the review verdict (or

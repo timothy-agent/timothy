@@ -474,7 +474,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, secrets, agent, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log, gwc)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, token, app.Log, gwc)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -626,6 +626,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetGitCommitStyle(flags.GitCommitStyle)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
+	driver.SetNameMission(chat.TitleOverGateway(gwc, log))
 	if conns != nil && secrets != nil {
 		// A repo_url mission's clone token: resolve connector_id straight
 		// to its credential_ref's secret value, same as resolveSecret does
