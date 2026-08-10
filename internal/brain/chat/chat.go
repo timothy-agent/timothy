@@ -53,30 +53,7 @@ const (
 	// that just re-seeds the grant on its next turn, same degrade as a
 	// mission outliving its grant.
 	approvalGrantTTL = 12 * time.Hour
-	// maxDocumentMarkdownBytes caps a converted PDF's persisted markdown
-	// (128KB ≈ ~32k tokens): the markdown lands unbounded in the current
-	// turn's message, and LLMContext never trims it — the compactor only
-	// summarizes OLDER turns, so a huge PDF would blow the model's
-	// context on the very turn that attached it.
-	maxDocumentMarkdownBytes = 128 << 10
 )
-
-// truncatedDocumentMarker is appended when a converted document's
-// markdown is cut at maxDocumentMarkdownBytes, so the model (and the
-// user re-reading the transcript) knows the document wasn't fully
-// captured rather than silently ending mid-sentence.
-const truncatedDocumentMarker = "\n\n[document truncated: markdown exceeded 128KB]"
-
-// truncateDocumentMarkdown caps md at maxDocumentMarkdownBytes, cutting
-// at a valid rune boundary (strings.ToValidUTF8 drops any partial rune
-// left dangling by the byte-level slice) and appending
-// truncatedDocumentMarker. A no-op when md is already within budget.
-func truncateDocumentMarkdown(md string) string {
-	if len(md) <= maxDocumentMarkdownBytes {
-		return md
-	}
-	return strings.ToValidUTF8(md[:maxDocumentMarkdownBytes], "") + truncatedDocumentMarker
-}
 
 // ErrBadRequest marks caller mistakes (empty message) so the API can
 // answer 400 instead of blaming the gateway.
@@ -783,7 +760,7 @@ func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]sess
 			if err != nil {
 				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", id, err)
 			}
-			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: truncateDocumentMarkdown(md)})
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(md)})
 		default:
 			return nil, nil, fmt.Errorf("chat: %w: attachment %q: unsupported mime %q", ErrBadRequest, id, att.Mime)
 		}

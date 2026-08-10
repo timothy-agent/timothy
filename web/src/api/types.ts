@@ -628,6 +628,9 @@ export interface Mission {
   // parent's outcome digest, snapshotted at follow-up create time.
   parent_mission_id?: string
   parent_context?: string
+  // attachments are PDF documents attached at create time — markdown is
+  // never sent over the wire (see api/missions.go's sanitizeMission).
+  attachments?: { id: string; mime: string; name?: string }[]
   created_at: string
   updated_at: string
 }

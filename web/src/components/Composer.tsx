@@ -40,8 +40,10 @@ export interface PendingAttachment {
 }
 
 const allowedMimes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf']
-const maxAttachmentBytes = 10 * 1024 * 1024
-const maxAttachments = 8
+// Exported: MissionAttachments.tsx reuses the same caps for its own
+// PDF-only upload flow.
+export const maxAttachmentBytes = 10 * 1024 * 1024
+export const maxAttachments = 8
 
 // Composer is the one message box: the chat page's docked input and
 // the home page's hero input are the same component so behavior

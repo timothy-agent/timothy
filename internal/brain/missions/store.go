@@ -50,7 +50,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
-	branch_pattern, commit_style, parent_mission_id, parent_context, created_at, updated_at`
+	branch_pattern, commit_style, parent_mission_id, parent_context, attachments, created_at, updated_at`
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
 // column: the mission's latest mission.failed event's payload.reason
@@ -63,7 +63,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		agentID, scheduleID, sessionID, parentMission *string
 		phase, status                                 string
 		pendingPermission                             *string
-		spec, progress                                []byte
+		spec, progress, attachmentsRaw                []byte
 		failureReason                                 *string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
@@ -73,7 +73,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext,
+		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
 		&m.CreatedAt, &m.UpdatedAt,
 		&failureReason); err != nil {
 		return Mission{}, err
@@ -116,6 +116,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
 	}
+	_ = json.Unmarshal(attachmentsRaw, &m.Attachments)
 	return m, nil
 }
 
@@ -137,7 +138,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		agentID, scheduleID, sessionID, parentMission *string
 		phase, status                                 string
 		pendingPermission                             *string
-		spec, progress                                []byte
+		spec, progress, attachmentsRaw                []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -146,7 +147,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext,
+		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
 		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
@@ -188,6 +189,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
 	}
+	_ = json.Unmarshal(attachmentsRaw, &m.Attachments)
 	return m, nil
 }
 
@@ -201,15 +203,25 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("missions create spec: %w", err)
 	}
+	// attachments is NOT NULL; a nil slice marshals to "null", which
+	// would violate that, so a never-attached mission gets "[]" instead.
+	attachments := m.Attachments
+	if attachments == nil {
+		attachments = []MissionAttachment{}
+	}
+	attachmentsJSON, err := json.Marshal(attachments)
+	if err != nil {
+		return "", fmt.Errorf("missions create attachments: %w", err)
+	}
 	var id string
 	budgetCurrency := m.BudgetCurrency
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, '')::uuid, $15, $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')::uuid, $24) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, '')::uuid, $15, $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')::uuid, $24, $25) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, attachmentsJSON,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

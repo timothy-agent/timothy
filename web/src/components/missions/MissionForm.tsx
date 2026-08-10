@@ -32,6 +32,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../ui/textarea'
 import { errText } from '../settings/util'
 import { envIcon } from '../icons/EnvIcons'
+import { type PendingAttachment } from '../Composer'
+import { MissionAttachments } from './MissionAttachments'
 
 type RepoSource = 'none' | 'github'
 
@@ -201,6 +203,10 @@ export function MissionForm({
   const routes = useRoutes()
   const enabledRoutes = routes?.filter((r) => r.enabled) ?? []
   const [goal, setGoal] = useState('')
+  // attachments, like goal, is never seeded from initial — a follow-up
+  // carries the parent's outcome digest as prompt context, not its
+  // documents; each new mission attaches its own.
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [kind, setKind] = useState<Kind>(initial?.kind ?? 'general')
   // kindLocked freezes kind against further auto-classify calls once
   // the user has explicitly chosen it (chip click, or the repeat-mode
@@ -451,7 +457,10 @@ export function MissionForm({
   const canSubmit =
     mode === 'edit'
       ? scheduleName.trim() !== '' && goal.trim() !== '' && validCronShape(cron)
-      : goal.trim() !== '' && (!repeat || validCronShape(cron)) && githubSourceReady
+      : goal.trim() !== '' &&
+        (!repeat || validCronShape(cron)) &&
+        githubSourceReady &&
+        !attachments.some((a) => a.uploading)
 
   const submitMission = async () => {
     let repoURL: string | undefined
@@ -483,6 +492,8 @@ export function MissionForm({
       connector_id: repoURL ? connectorID : undefined,
       on_complete: repoURL && onComplete ? onComplete : undefined,
       parent_mission_id: parentMissionId,
+      attachments:
+        attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
     })
     toast.success('Mission created')
     onDone({ kind: 'mission', id })
@@ -603,6 +614,9 @@ export function MissionForm({
             Coding missions aren't supported on a recurring schedule yet: each fire has no
             repository to work in.
           </p>
+        )}
+        {mode === 'create' && !repeat && (
+          <MissionAttachments attachments={attachments} onChange={setAttachments} />
         )}
       </section>
 

@@ -507,6 +507,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
 	}
+	user += renderAttachments(m.Attachments)
 
 	extra := []*tools.Tool{ExploreNotesTool()}
 	if shell := r.missionShell(m); shell != nil {
@@ -716,6 +717,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
 	}
+	user += renderAttachments(m.Attachments)
 	req := loop.Request{
 		SessionID: m.SessionID,
 		Route:     oversightRoute(m),
