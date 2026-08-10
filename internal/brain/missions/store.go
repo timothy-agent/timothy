@@ -50,7 +50,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
-	branch_pattern, commit_style, created_at, updated_at`
+	branch_pattern, commit_style, parent_mission_id, parent_context, created_at, updated_at`
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
 // column: the mission's latest mission.failed event's payload.reason
@@ -59,12 +59,12 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 // web UI's mission list/detail views read.
 func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	var (
-		m                              Mission
-		agentID, scheduleID, sessionID *string
-		phase, status                  string
-		pendingPermission              *string
-		spec, progress                 []byte
-		failureReason                  *string
+		m                                             Mission
+		agentID, scheduleID, sessionID, parentMission *string
+		phase, status                                 string
+		pendingPermission                             *string
+		spec, progress                                []byte
+		failureReason                                 *string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -73,7 +73,8 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &m.CreatedAt, &m.UpdatedAt,
+		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext,
+		&m.CreatedAt, &m.UpdatedAt,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
@@ -85,6 +86,9 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	}
 	if sessionID != nil {
 		m.SessionID = *sessionID
+	}
+	if parentMission != nil {
+		m.ParentMissionID = *parentMission
 	}
 	if pendingPermission != nil {
 		m.PendingPermission = *pendingPermission
@@ -129,11 +133,11 @@ const failureReasonJoin = `
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
-		m                              Mission
-		agentID, scheduleID, sessionID *string
-		phase, status                  string
-		pendingPermission              *string
-		spec, progress                 []byte
+		m                                             Mission
+		agentID, scheduleID, sessionID, parentMission *string
+		phase, status                                 string
+		pendingPermission                             *string
+		spec, progress                                []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -142,7 +146,8 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext,
+		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
 	if agentID != nil {
@@ -153,6 +158,9 @@ func scanMission(row pgx.Row) (Mission, error) {
 	}
 	if sessionID != nil {
 		m.SessionID = *sessionID
+	}
+	if parentMission != nil {
+		m.ParentMissionID = *parentMission
 	}
 	if pendingPermission != nil {
 		m.PendingPermission = *pendingPermission
@@ -199,9 +207,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		budgetCurrency = "USD"
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, '')::uuid, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, '')::uuid, $15, $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')::uuid, $24) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

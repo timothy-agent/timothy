@@ -38,6 +38,10 @@ type WorkPacket struct {
 	// python3 exists, and can report "done" on a step whose own
 	// verify_cmd will fail for want of a runtime that was never there.
 	ExecEnvironmentNote string
+	// ParentContext is the parent mission's outcome digest, set only
+	// for a follow-up mission (missions.Mission.ParentContext) — gives
+	// the worker the prior mission's result without reopening it.
+	ParentContext string
 }
 
 // Render turns the packet into the system/user message a worker
@@ -94,6 +98,12 @@ func (p WorkPacket) Render() (system, user string) {
 	if p.GitLog != "" {
 		b.WriteString("Recent commits in this worktree:\n")
 		b.WriteString(NeutralizeSlot(p.GitLog))
+		b.WriteString("\n")
+	}
+
+	if p.ParentContext != "" {
+		b.WriteString("Previous mission outcome:\n")
+		b.WriteString(NeutralizeSlot(p.ParentContext))
 		b.WriteString("\n")
 	}
 

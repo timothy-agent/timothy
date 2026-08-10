@@ -448,6 +448,24 @@ func TestPlanSessionUsesPlanRoute(t *testing.T) {
 	}
 }
 
+// TestPlanSessionIncludesParentContext confirms a follow-up mission's
+// prior outcome digest reaches the planner's user prompt.
+func TestPlanSessionIncludesParentContext(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", ParentContext: "prior mission fixed the signup bug"}
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	msgs := agent.requests[0].Messages
+	content := msgs[len(msgs)-1].Content
+	if !strings.Contains(content, "Previous mission outcome:") || !strings.Contains(content, "prior mission fixed the signup bug") {
+		t.Fatalf("planner message missing parent context:\n%s", content)
+	}
+}
+
 func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[]}`)},
@@ -1050,6 +1068,24 @@ func TestExploreSessionUsesPlanRoute(t *testing.T) {
 	}
 	if got := agent.requests[0].Route; got != "strong" {
 		t.Fatalf("explorer request route = %q, want plan_route", got)
+	}
+}
+
+// TestExploreSessionIncludesParentContext confirms a follow-up
+// mission's prior outcome digest reaches the explorer's user prompt.
+func TestExploreSessionIncludesParentContext(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "test", ParentContext: "prior mission fixed the signup bug"}
+	if _, err := r.ExploreSession(context.Background(), m); err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	msgs := agent.requests[0].Messages
+	content := msgs[len(msgs)-1].Content
+	if !strings.Contains(content, "Previous mission outcome:") || !strings.Contains(content, "prior mission fixed the signup bug") {
+		t.Fatalf("explorer message missing parent context:\n%s", content)
 	}
 }
 

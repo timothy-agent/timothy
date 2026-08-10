@@ -184,6 +184,58 @@ func TestMissionDelete(t *testing.T) {
 	}
 }
 
+// TestMissionParentLineageRoundTrips covers the follow-up columns:
+// parent_mission_id/parent_context round-trip through Create/Get, and
+// deleting the (terminal) parent SETs NULL rather than blocking or
+// cascading — the child mission stays valid with an empty
+// ParentMissionID afterward.
+func TestMissionParentLineageRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	parentID, err := s.Create(ctx, Mission{Goal: marker + "parent", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, parentID, Transition{
+		Next: StepState{Phase: PhaseDone, Status: StatusDone},
+	}); err != nil {
+		t.Fatalf("ApplyTransition parent to terminal: %v", err)
+	}
+
+	childID, err := s.Create(ctx, Mission{
+		Goal: marker + "child", Kind: "general",
+		ParentMissionID: parentID, ParentContext: "mission goal: parent\nterminal state: done\n",
+	})
+	if err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+	child, err := s.Get(ctx, childID)
+	if err != nil {
+		t.Fatalf("Get child: %v", err)
+	}
+	if child.ParentMissionID != parentID {
+		t.Fatalf("ParentMissionID = %q, want %q", child.ParentMissionID, parentID)
+	}
+	if child.ParentContext != "mission goal: parent\nterminal state: done\n" {
+		t.Fatalf("ParentContext = %q, want it to round-trip unchanged", child.ParentContext)
+	}
+
+	if _, err := s.Delete(ctx, parentID); err != nil {
+		t.Fatalf("Delete parent: %v", err)
+	}
+	child, err = s.Get(ctx, childID)
+	if err != nil {
+		t.Fatalf("Get child after parent delete: %v", err)
+	}
+	if child.ParentMissionID != "" {
+		t.Fatalf("ParentMissionID after parent delete = %q, want empty (ON DELETE SET NULL)", child.ParentMissionID)
+	}
+	if child.ParentContext == "" {
+		t.Fatal("ParentContext after parent delete = empty, want the snapshot to survive (it's independent of the FK)")
+	}
+}
+
 func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

@@ -420,6 +420,94 @@ func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateFollowUp covers the follow-up gate end to end: a
+// parent that isn't terminal yet 409s, and a terminal parent's create
+// succeeds with parent_mission_id/parent_context set to the parent's
+// outcome digest — mirrors TestMissionsCreateCarriesPlanRoute's
+// round-trip shape for the new fields.
+func TestMissionsCreateFollowUp(t *testing.T) {
+	store := testMissionStore(t)
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	post := func(body string) (int, []byte) {
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.Bytes()
+	}
+
+	// A non-terminal parent 409s.
+	parentID, err := store.Create(context.Background(), missions.Mission{
+		Goal: "itest-api-mission follow-up parent (live)", Kind: "general",
+	})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	if code, body := post(`{"goal":"itest-api-mission follow-up child","kind":"general","parent_mission_id":"` + parentID + `"}`); code != http.StatusConflict {
+		t.Fatalf("follow-up of a non-terminal parent: code=%d body=%s, want 409", code, body)
+	}
+
+	// Advance the parent to terminal, then the follow-up succeeds and
+	// carries the parent's outcome digest.
+	if err := store.ApplyTransition(context.Background(), parentID, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseDone, Status: missions.StatusDone},
+	}); err != nil {
+		t.Fatalf("apply transition to terminal: %v", err)
+	}
+	code, body := post(`{"goal":"itest-api-mission follow-up child","kind":"general","parent_mission_id":"` + parentID + `"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("follow-up of a terminal parent: code=%d body=%s, want 201", code, body)
+	}
+	var created missions.Mission
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ParentMissionID != parentID {
+		t.Fatalf("create response parent_mission_id = %q, want %q", created.ParentMissionID, parentID)
+	}
+	if !strings.Contains(created.ParentContext, "itest-api-mission follow-up parent (live)") {
+		t.Fatalf("create response parent_context = %q, want it to contain the parent's goal", created.ParentContext)
+	}
+	if !strings.Contains(created.ParentContext, "terminal state: done") {
+		t.Fatalf("create response parent_context = %q, want it to name the parent's terminal state", created.ParentContext)
+	}
+
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ParentMissionID != parentID || got.ParentContext != created.ParentContext {
+		t.Fatalf("stored parent lineage = (%q, %q), want it to match the create response", got.ParentMissionID, got.ParentContext)
+	}
+}
+
+// TestMissionsCreateFollowUpUnknownParent covers the 400 path with a
+// LIVE store (TestMissionsCreateValidatesParentMission in
+// missions_test.go covers the same shape against a degraded pool,
+// which can't distinguish "unknown id" from "store unreachable").
+func TestMissionsCreateFollowUpUnknownParent(t *testing.T) {
+	store := testMissionStore(t)
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	body := `{"goal":"itest-api-mission follow-up unknown parent","kind":"general","parent_mission_id":"00000000-0000-0000-0000-000000000000"}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "parent mission not found") {
+		t.Fatalf("unknown parent_mission_id: code=%d body=%s, want 400 with a parent-not-found message", w.Code, w.Body.String())
+	}
+}
+
 // TestMissionsCreateGeneratesNameAsync confirms a successful naming
 // call lands on the row via SetNameIfEmpty without create having to
 // wait for it — the create response itself carries no name yet (the

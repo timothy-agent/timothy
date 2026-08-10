@@ -937,6 +937,11 @@ export interface CreateMissionInput {
   // placeholder/style reference.
   branch_pattern?: string
   commit_style?: string
+  // parent_mission_id, when set, makes this a follow-up mission: the
+  // named mission must already be terminal (done/failed). Its branch,
+  // when reachable, becomes this mission's worktree base, and its
+  // outcome digest is carried into this mission's prompts.
+  parent_mission_id?: string
 }
 
 // ExecutorOption is one registered harness's usability on a given

@@ -3,6 +3,7 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import {
   classifyMission,
+  type CreateMissionInput,
   createConnectorRepo,
   createMission,
   createSchedule,
@@ -48,6 +49,23 @@ const onCompleteChoices: { value: string; label: string }[] = [
   { value: 'push', label: 'Push branch when done' },
   { value: 'push_pr', label: 'Push and open a PR when done' },
 ]
+
+// repoFromCloneURL rebuilds a minimal GitHubRepo from a parent
+// mission's stored clone URL (mirrors MissionDetail.tsx's
+// githubFullName) — a follow-up seeds the repo picker with the
+// parent's repo, but the mission row only ever stored the clone URL,
+// not repos.list's other fields (private/default_branch/etc), which
+// this form's fields never read for an already-selected repo.
+function repoFromCloneURL(cloneURL: string): GitHubRepo {
+  return {
+    full_name: cloneURL.replace(/^https?:\/\/[^/]+\//, '').replace(/\.git$/, ''),
+    private: false,
+    default_branch: '',
+    html_url: cloneURL.replace(/\.git$/, ''),
+    clone_url: cloneURL,
+    pushed_at: '',
+  }
+}
 
 const kindCopy: Record<Kind, string> = {
   coding: 'Coding · branches from repo',
@@ -160,11 +178,22 @@ function formatExpiresAt(v: string): string {
 export function MissionForm({
   mode,
   schedule,
+  initial,
+  parentMissionId,
   onDone,
   onCancel,
 }: {
   mode: 'create' | 'edit'
   schedule?: Schedule
+  // initial seeds the form's create-mode state from a parent mission
+  // (a follow-up) — everything except goal, which is left empty for
+  // the user to type. Read only once, in the useState initializers
+  // below, so the caller must render this component only once initial
+  // is settled (e.g. after an async parent fetch resolves).
+  initial?: Partial<CreateMissionInput>
+  // parentMissionId, when set, is included on the create payload —
+  // makes this a follow-up mission (see CreateMissionInput).
+  parentMissionId?: string
   onDone: (result: { kind: 'mission' | 'schedule'; id: string }) => void
   onCancel: () => void
 }) {
@@ -172,40 +201,43 @@ export function MissionForm({
   const routes = useRoutes()
   const enabledRoutes = routes?.filter((r) => r.enabled) ?? []
   const [goal, setGoal] = useState('')
-  const [kind, setKind] = useState<Kind>('general')
+  const [kind, setKind] = useState<Kind>(initial?.kind ?? 'general')
   // kindLocked freezes kind against further auto-classify calls once
   // the user has explicitly chosen it (chip click, or the repeat-mode
   // general override below) — cleared when the goal is emptied, which
-  // resets to auto-detect for whatever's typed next.
-  const [kindLocked, setKindLocked] = useState(false)
+  // resets to auto-detect for whatever's typed next. A follow-up's
+  // seeded kind counts as an explicit choice too.
+  const [kindLocked, setKindLocked] = useState(!!initial?.kind)
   const [classifying, setClassifying] = useState(false)
-  const [agentID, setAgentID] = useState('')
+  const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [route, setRoute] = useState('')
-  const [reviewRoute, setReviewRoute] = useState('')
-  const [planRoute, setPlanRoute] = useState('')
-  const [escalationRoute, setEscalationRoute] = useState('')
+  const [route, setRoute] = useState(initial?.route ?? '')
+  const [reviewRoute, setReviewRoute] = useState(initial?.review_route ?? '')
+  const [planRoute, setPlanRoute] = useState(initial?.plan_route ?? '')
+  const [escalationRoute, setEscalationRoute] = useState(initial?.escalation_route ?? '')
   const [budget, setBudget] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('USD')
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
-  const [harness, setHarness] = useState('')
-  const [environment, setEnvironment] = useState('')
-  const [branchPattern, setBranchPattern] = useState('')
-  const [commitStyle, setCommitStyle] = useState('')
+  const [harness, setHarness] = useState(initial?.harness ?? '')
+  const [environment, setEnvironment] = useState(initial?.environment ?? '')
+  const [branchPattern, setBranchPattern] = useState(initial?.branch_pattern ?? '')
+  const [commitStyle, setCommitStyle] = useState(initial?.commit_style ?? '')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
   const [busy, setBusy] = useState(false)
 
   // Repository source: 'none' self-initializes an empty repo (the
   // existing coding-mission default); 'github' clones an existing repo
   // (or a brand-new one) through a github-kind connector.
-  const [repoSource, setRepoSource] = useState<RepoSource>('none')
+  const [repoSource, setRepoSource] = useState<RepoSource>(initial?.repo_url ? 'github' : 'none')
   const [githubConnectors, setGithubConnectors] = useState<AdminConnector[] | null>(null)
-  const [connectorID, setConnectorID] = useState('')
+  const [connectorID, setConnectorID] = useState(initial?.connector_id ?? '')
   const [repos, setRepos] = useState<GitHubRepo[] | null>(null)
   const [reposLoading, setReposLoading] = useState(false)
   const [reposError, setReposError] = useState<string | null>(null)
   const [repoQuery, setRepoQuery] = useState('')
-  const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null)
+  const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(
+    initial?.repo_url ? repoFromCloneURL(initial.repo_url) : null,
+  )
   const [connIdentity, setConnIdentity] = useState<GitHubIdentity | null>(null)
   const [repoPickerOpen, setRepoPickerOpen] = useState(false)
   const [newRepo, setNewRepo] = useState(false)
@@ -215,7 +247,7 @@ export function MissionForm({
   // Consent-at-create for the mission's auto-completion action —
   // resets whenever the GitHub source is unpicked, since on_complete is
   // only ever valid alongside repo_url/connector_id.
-  const [onComplete, setOnComplete] = useState<OnComplete>('')
+  const [onComplete, setOnComplete] = useState<OnComplete>(initial?.on_complete ?? '')
   useEffect(() => {
     if (repoSource !== 'github') setOnComplete('')
   }, [repoSource])
@@ -450,6 +482,7 @@ export function MissionForm({
       repo_url: repoURL,
       connector_id: repoURL ? connectorID : undefined,
       on_complete: repoURL && onComplete ? onComplete : undefined,
+      parent_mission_id: parentMissionId,
     })
     toast.success('Mission created')
     onDone({ kind: 'mission', id })

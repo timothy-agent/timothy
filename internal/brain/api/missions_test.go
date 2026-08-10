@@ -318,6 +318,33 @@ func TestMissionsCreateValidatesGitStrategy(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateValidatesParentMission covers the follow-up gate:
+// an unresolvable parent_mission_id 400s ("parent mission not found")
+// before Driver.Create is ever reached — against a degraded pool
+// Store.Get always wraps its failure as ErrNotFound (see store.go),
+// the same "can't tell degraded-store from truly-unknown-id" shape
+// TestMissionsCreateValidatesRepoURL's connector_id case already
+// relies on. The not-terminal (409) and happy-path digest cases need a
+// live parent mission and are covered by missions_integration_test.go.
+func TestMissionsCreateValidatesParentMission(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"general","parent_mission_id":"00000000-0000-0000-0000-000000000000"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	body, _ := io.ReadAll(w.Result().Body)
+	if w.Code != 400 || !strings.Contains(string(body), "parent mission not found") {
+		t.Fatalf("unresolvable parent_mission_id: code=%d body=%q, want 400 with a parent-not-found message", w.Code, string(body))
+	}
+}
+
 // TestClassifyKind exercises classifyKind's parsing and its bias to
 // "coding" for anything short of an unambiguous "general" reply —
 // nil classify, a classify error, and a garbage reply must all land on

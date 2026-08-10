@@ -189,7 +189,7 @@ func TestProvisionCodingMissionSelfInitsRepo(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, branch, baseCommit, err := w.Provision(ctx, "mission-self", "Fix the login bug", "coding", "", "", nil, "")
+	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-self", "Fix the login bug", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestProvisionSelfInitRollbackAndCommitUnit(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	_, worktree, _, _, err := w.Provision(ctx, "mission-self-2", "Add a feature", "coding", "", "", nil, "")
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-self-2", "Add a feature", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestProvisionClonesRepo(t *testing.T) {
 	gitRun(t, seed, "remote", "add", "origin", bare)
 	gitRun(t, seed, "push", "-q", "origin", "main")
 
-	workspace, worktree, branch, baseCommit, err := w.Provision(ctx, "mission-clone", "Fix the login bug", "coding", bare, "dummy-token", nil, "")
+	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-clone", "Fix the login bug", "coding", bare, "dummy-token", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -329,6 +329,114 @@ func TestProvisionClonesRepo(t *testing.T) {
 	}
 }
 
+// TestProvisionClonesRepoWithBaseRef proves a follow-up mission's
+// requested base (baseRef, its parent's own branch) is fetched and
+// used as the new branch's base instead of the repo's default branch
+// — asserting the new branch's parent commit is the base ref's commit,
+// not the default branch's.
+func TestProvisionClonesRepoWithBaseRef(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	bare := t.TempDir()
+	gitRun(t, bare, "init", "-q", "--bare", "-b", "main")
+	seed := t.TempDir()
+	gitRun(t, seed, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, seed, "add", "README.md")
+	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
+	gitRun(t, seed, "remote", "add", "origin", bare)
+	gitRun(t, seed, "push", "-q", "origin", "main")
+
+	// A parent mission's branch, pushed to the same bare repo, one
+	// commit ahead of main.
+	gitRun(t, seed, "checkout", "-q", "-b", "feat/parent-work")
+	if err := os.WriteFile(filepath.Join(seed, "extra.txt"), []byte("extra"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, seed, "add", "extra.txt")
+	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "parent work")
+	gitRun(t, seed, "push", "-q", "origin", "feat/parent-work")
+	parentCommit := strings.TrimSpace(gitRun(t, seed, "rev-parse", "feat/parent-work"))
+	mainCommit := strings.TrimSpace(gitRun(t, seed, "rev-parse", "main"))
+	if parentCommit == mainCommit {
+		t.Fatal("test setup: parent branch commit must differ from main")
+	}
+
+	_, worktree, branch, baseCommit, baseUsed, err := w.Provision(ctx, "mission-followup", "Continue the work", "coding", bare, "dummy-token", nil, "", "feat/parent-work")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if baseUsed != "feat/parent-work" {
+		t.Fatalf("baseUsed = %q, want %q", baseUsed, "feat/parent-work")
+	}
+	if baseCommit != parentCommit {
+		t.Fatalf("baseCommit = %q, want the parent branch's commit %q", baseCommit, parentCommit)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "extra.txt")); err != nil {
+		t.Fatalf("file only on the parent branch is missing from the new worktree: %v", err)
+	}
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = worktree
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != branch {
+		t.Fatalf("current branch = %q, want %q", got, branch)
+	}
+}
+
+// TestProvisionClonesRepoWithUnreachableBaseRefFallsBack proves a
+// baseRef that doesn't exist in the source repo degrades to the
+// existing default-branch behavior instead of failing provisioning —
+// baseUsed comes back empty (matching Provision's pre-follow-up
+// return shape) and the new branch bases on the default branch's
+// commit.
+func TestProvisionClonesRepoWithUnreachableBaseRefFallsBack(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	bare := t.TempDir()
+	gitRun(t, bare, "init", "-q", "--bare", "-b", "main")
+	seed := t.TempDir()
+	gitRun(t, seed, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, seed, "add", "README.md")
+	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
+	gitRun(t, seed, "remote", "add", "origin", bare)
+	gitRun(t, seed, "push", "-q", "origin", "main")
+	mainCommit := strings.TrimSpace(gitRun(t, seed, "rev-parse", "main"))
+
+	_, worktree, branch, baseCommit, baseUsed, err := w.Provision(ctx, "mission-followup-missing", "Continue the work", "coding", bare, "dummy-token", nil, "", "does-not-exist")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if baseUsed != "" {
+		t.Fatalf("baseUsed = %q, want empty (fell back to the default branch)", baseUsed)
+	}
+	if baseCommit != mainCommit {
+		t.Fatalf("baseCommit = %q, want the default branch's commit %q", baseCommit, mainCommit)
+	}
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = worktree
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != branch {
+		t.Fatalf("current branch = %q, want %q", got, branch)
+	}
+}
+
 // TestProvisionClonesRepoWithConnIdentity proves a connection's
 // resolved identity (connIdentity) lands as the clone's LOCAL git
 // config and that a subsequent CommitUnit authors its commit as that
@@ -353,7 +461,7 @@ func TestProvisionClonesRepoWithConnIdentity(t *testing.T) {
 	gitRun(t, seed, "push", "-q", "origin", "main")
 
 	identity := &GitIdentity{Name: "conn-bot", Email: "conn-bot@example.com"}
-	_, worktree, _, _, err := w.Provision(ctx, "mission-conn-identity", "Fix the login bug", "coding", bare, "dummy-token", identity, "")
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-conn-identity", "Fix the login bug", "coding", bare, "dummy-token", identity, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -416,7 +524,7 @@ func TestProvisionClonesRepoWithSigningKey(t *testing.T) {
 
 	privatePEM, publicLine := testSigningKeypair(t)
 	identity := &GitIdentity{Name: "conn-bot", Email: "conn-bot@example.com", SigningKey: privatePEM}
-	workspace, worktree, _, _, err := w.Provision(ctx, "mission-signing", "Fix the login bug", "coding", bare, "dummy-token", identity, "")
+	workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-signing", "Fix the login bug", "coding", bare, "dummy-token", identity, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -482,7 +590,7 @@ func TestCloneRepoScrubsTokenFromError(t *testing.T) {
 	workspaceDir := t.TempDir()
 	dir := filepath.Join(workspaceDir, "wt")
 	const token = "super-secret-clone-token"
-	err := w.cloneRepo(context.Background(), workspaceDir, dir, "mission/x", "/does/not/exist", token, nil)
+	_, err := w.cloneRepo(context.Background(), workspaceDir, dir, "mission/x", "/does/not/exist", token, nil, "")
 	if err == nil {
 		t.Fatal("cloneRepo against a nonexistent remote should fail")
 	}
@@ -499,7 +607,7 @@ func TestTeardownRemovesSelfInitRepo(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, _, _, err := w.Provision(ctx, "mission-self-3", "Teardown test", "coding", "", "", nil, "")
+	workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-self-3", "Teardown test", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}

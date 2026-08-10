@@ -2,6 +2,7 @@ import {
   ArrowLeft01Icon,
   CloudUploadIcon,
   Delete02Icon,
+  GitBranchIcon,
   GitPullRequestCreateIcon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -523,6 +524,17 @@ export function MissionDetail() {
                 Recurring · {describeCron(schedule.cron)} · next run {formatDate(schedule.next_run)}
               </p>
             )}
+            {mission.parent_mission_id && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Follow-up of{' '}
+                <Link
+                  to={`/missions/${mission.parent_mission_id}`}
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  {mission.parent_mission_id.slice(0, 8)}
+                </Link>
+              </p>
+            )}
             {pauseDetail && (
               <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>
             )}
@@ -590,6 +602,21 @@ export function MissionDetail() {
                 <Button variant="destructive" disabled={busy} onClick={() => void cancel()}>
                   Cancel
                 </Button>
+              )}
+              {terminalPhases.has(mission.phase) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label="Follow up"
+                      onClick={() => navigate(`/missions/new?parent=${mission.id}`)}
+                    >
+                      <HugeiconsIcon icon={GitBranchIcon} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Start a follow-up mission</TooltipContent>
+                </Tooltip>
               )}
               {terminalPhases.has(mission.phase) && (
                 <Tooltip>

@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS missions (
     plan_route            text NOT NULL DEFAULT '',
     pending_permission    text,
     schedule_id           uuid,
+    -- ParentMissionID names the terminal mission this one follows up
+    -- on (api/missions.go's create); parents are terminal, exactly the
+    -- rows Delete can remove, so SET NULL keeps a follow-up mission
+    -- valid rather than blocking its parent's deletion.
+    parent_mission_id     uuid REFERENCES missions(id) ON DELETE SET NULL,
+    -- ParentContext is an immutable outcome-digest snapshot of the
+    -- parent mission taken at follow-up create time (missions.OutcomeDigest)
+    -- — rendered into the follow-up's explore/plan/work prompts.
+    parent_context        text NOT NULL DEFAULT '',
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
     -- Opt-in escalation ladder: when set, worker turns switch to this

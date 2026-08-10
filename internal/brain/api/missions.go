@@ -290,6 +290,12 @@ type createMissionRequest struct {
 	// only known placeholders/styles, never model-decided.
 	BranchPattern string `json:"branch_pattern"`
 	CommitStyle   string `json:"commit_style"`
+	// ParentMissionID, when set, makes this a follow-up mission: the
+	// named mission must already be terminal (done/failed). Its
+	// outcome digest (missions.OutcomeDigest) is snapshotted onto this
+	// mission's ParentContext at create time, and its branch, when
+	// reachable, becomes this mission's worktree base.
+	ParentMissionID string `json:"parent_mission_id"`
 }
 
 // create validates the request, resolves route/review_route/budget
@@ -394,6 +400,29 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	var parentMissionID, parentContext string
+	if req.ParentMissionID != "" {
+		parent, err := h.store.Get(r.Context(), req.ParentMissionID)
+		if err != nil {
+			// Store.Get wraps any row-level failure (bad uuid, missing
+			// row) as ErrNotFound — same "can't tell degraded-store
+			// from truly-unknown-id" shape as the connector_id lookup
+			// above, so every miss lands on the same 400.
+			jsonError(w, http.StatusBadRequest, "bad_request", "parent mission not found")
+			return
+		}
+		if !parent.Phase.Terminal() {
+			jsonError(w, http.StatusConflict, "parent_not_terminal", "parent mission is not finished")
+			return
+		}
+		events, err := h.store.Events(r.Context(), req.ParentMissionID)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		parentMissionID = parent.ID
+		parentContext = missions.OutcomeDigest(parent, events, parent.Phase, parent.FailureReason)
+	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
 	// mission created without an explicit agent still needs a real
@@ -459,6 +488,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
+		ParentMissionID: parentMissionID, ParentContext: parentContext,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {

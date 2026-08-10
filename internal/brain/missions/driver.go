@@ -451,7 +451,8 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 		if branchPattern == "" && d.gitBranchPattern != nil {
 			branchPattern = d.gitBranchPattern(ctx)
 		}
-		workspace, worktree, branch, baseCommit, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity, branchPattern)
+		baseRef := d.followUpBaseRef(ctx, m)
+		workspace, worktree, branch, baseCommit, baseUsed, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity, branchPattern, baseRef)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
@@ -459,6 +460,15 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 			return m, err
 		}
 		m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
+		if m.ParentMissionID != "" && m.Kind == "coding" {
+			ref := baseUsed
+			if ref == "" {
+				ref = "the repo's default branch (parent branch unreachable)"
+			}
+			if err := d.store.AppendProgress(ctx, m.ID, fmt.Sprintf("Follow-up of mission %s: worktree based on %s", m.ParentMissionID, ref)); err != nil {
+				d.log.Warn("driver: record follow-up base note failed", "mission_id", m.ID, "error", err)
+			}
+		}
 		if m.AutoApproveSafe && d.perms != nil && m.SessionID != "" {
 			// Register the mission's own directory as the session's
 			// sandbox: destructive-classified commands provably confined
@@ -475,6 +485,28 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 		}
 	}
 	return m, nil
+}
+
+// followUpBaseRef resolves a follow-up mission's worktree base: the
+// parent's own branch, but only when the parent actually has one
+// (kind=coding) and shares this mission's RepoURL — a follow-up to a
+// general mission, or one cloning a different repo, has no
+// meaningful base to hand Provision. Any failure (parent gone, no
+// branch) degrades to "" (Provision's own default-branch behavior),
+// never fails provisioning.
+func (d *Driver) followUpBaseRef(ctx context.Context, m Mission) string {
+	if m.ParentMissionID == "" {
+		return ""
+	}
+	parent, err := d.store.Get(ctx, m.ParentMissionID)
+	if err != nil {
+		d.log.Debug("driver: follow-up base ref: parent lookup failed", "mission_id", m.ID, "parent_id", m.ParentMissionID, "error", err)
+		return ""
+	}
+	if parent.Branch == "" || parent.RepoURL != m.RepoURL {
+		return ""
+	}
+	return parent.Branch
 }
 
 // grantSessionDefaults pre-authorizes a freshly created hidden session:
@@ -1312,7 +1344,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	return WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(),
+		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext,
 	}, nil
 }
 

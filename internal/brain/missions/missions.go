@@ -137,6 +137,13 @@ type Mission struct {
 	// regardless of any grant, so this cannot weaken that guarantee.
 	AutoApproveSafe bool   `json:"auto_approve_safe"`
 	ScheduleID      string `json:"schedule_id,omitempty"`
+	// ParentMissionID names the terminal mission this one follows up on
+	// (api/missions.go's create) — empty for an ordinary mission.
+	ParentMissionID string `json:"parent_mission_id,omitempty"`
+	// ParentContext is the parent mission's outcome digest
+	// (OutcomeDigest), snapshotted at follow-up create time — rendered
+	// into this mission's explore/plan/work prompts.
+	ParentContext string `json:"parent_context,omitempty"`
 	// SessionID is a hidden, non-chat-facing session row this mission's
 	// worker/reviewer/planner turns run under — loop.Agent's tool-call
 	// bookkeeping (session_events, audit) hard-requires a real session

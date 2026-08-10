@@ -147,6 +147,49 @@ describe('MissionForm — create mode, one-off mission', () => {
   })
 })
 
+describe('MissionForm — follow-up', () => {
+  it('submits parent_mission_id when given, and seeds kind from initial without locking goal', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm-followup' } as Mission)
+    renderForm(
+      <MissionForm
+        mode="create"
+        initial={{ kind: 'coding' }}
+        parentMissionId="parent-1"
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Continue the work' } })
+    expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          goal: 'Continue the work',
+          kind: 'coding',
+          parent_mission_id: 'parent-1',
+        }),
+      ),
+    )
+  })
+
+  it('omits parent_mission_id from the create payload for an ordinary mission', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ parent_mission_id: undefined }),
+      ),
+    )
+  })
+})
+
 describe('MissionForm — kind chip', () => {
   beforeEach(() => {
     vi.useFakeTimers()

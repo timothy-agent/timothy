@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestBuildDigest(t *testing.T) {
+func TestOutcomeDigest(t *testing.T) {
 	tests := []struct {
 		name          string
 		mission       Mission
@@ -73,7 +73,7 @@ func TestBuildDigest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			digest := buildDigest(tt.mission, tt.events, tt.terminal, tt.failureReason)
+			digest := OutcomeDigest(tt.mission, tt.events, tt.terminal, tt.failureReason)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(digest, want) {
 					t.Errorf("digest missing %q\ngot:\n%s", want, digest)

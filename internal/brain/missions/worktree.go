@@ -66,15 +66,22 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 // override > settings > DefaultBranchPattern, resolved by the caller);
 // empty falls back to DefaultBranchPattern here so every existing call
 // site (tests, any caller not yet passing one) keeps the original
-// "<type>/<slug>" shape.
-func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern string) (workspace, worktree, branch, baseCommit string, err error) {
+// "<type>/<slug>" shape. baseRef, when non-empty, is a follow-up
+// mission's requested worktree base (its parent's branch): a
+// self-init'd mission ignores it (there is no prior history to base
+// on), a cloned mission tries it first and falls back to the repo's
+// default branch on any error (see cloneRepo) — baseUsed reports which
+// ref the new branch actually landed on ("" for a self-init'd mission,
+// or the clone's default branch on fallback), so the caller can record
+// an accurate note.
+func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern, baseRef string) (workspace, worktree, branch, baseCommit, baseUsed string, err error) {
 	workspace = filepath.Join(w.root, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
-		return "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
+		return "", "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
 	}
 
 	if kind != "coding" {
-		return workspace, "", "", "", nil
+		return workspace, "", "", "", "", nil
 	}
 
 	if branchPattern == "" {
@@ -88,15 +95,17 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoUR
 	worktree = filepath.Join(workspace, "wt")
 
 	if repoURL != "" {
-		if err := w.cloneRepo(ctx, workspace, worktree, branch, repoURL, token, connIdentity); err != nil {
-			return "", "", "", "", err
+		used, err := w.cloneRepo(ctx, workspace, worktree, branch, repoURL, token, connIdentity, baseRef)
+		if err != nil {
+			return "", "", "", "", "", err
 		}
+		baseUsed = used
 	} else if err := w.initSelfRepo(ctx, worktree, branch, missionID); err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
 
 	baseCommit = w.captureBaseCommit(ctx, worktree)
-	return workspace, worktree, branch, baseCommit, nil
+	return workspace, worktree, branch, baseCommit, baseUsed, nil
 }
 
 // GitIdentity is a resolved commit author (name, email), plus the
@@ -130,12 +139,18 @@ const signingKeyFileName = "signing_key"
 // argv/disk), then creates and checks out the mission's own branch on
 // top of the cloned default branch — mission commits land on
 // "<type>/<slug>" (see CommitType), the same branch shape a self-init'd mission uses,
-// never directly on the repo's default branch. connIdentity, when
-// non-nil, is written as the clone's LOCAL (not global) git config
-// right after — CommitUnit/initSelfRepo read this back so every commit
-// in this worktree is authored as the connection, no token involved.
-// connIdentity.SigningKey non-empty additionally writes the private key
-// to workspaceDir/signing_key (0600) and points the clone's LOCAL git
+// never directly on the repo's default branch. baseRef, when
+// non-empty, is tried first as the new branch's base (a follow-up
+// mission's parent branch); any failure to check it out (unknown ref,
+// since --single-branch only fetched the default branch) falls back to
+// the already-cloned default branch — baseUsed reports "" for the
+// default-branch fallback (matching the pre-follow-up return shape) or
+// the ref actually used. connIdentity, when non-nil, is written as the
+// clone's LOCAL (not global) git config right after — CommitUnit/
+// initSelfRepo read this back so every commit in this worktree is
+// authored as the connection, no token involved. connIdentity.SigningKey
+// non-empty additionally writes the private key to
+// workspaceDir/signing_key (0600) and points the clone's LOCAL git
 // config at it (gpg.format=ssh, user.signingkey, commit.gpgsign=true),
 // so CommitUnit's ordinary `git commit` signs every commit — no
 // separate signing code path.
@@ -148,7 +163,7 @@ const signingKeyFileName = "signing_key"
 // sharing the same workspace volume. Accepted for the single-operator
 // posture, same class as D-054's executor auth-state volume; revisited
 // together with agentguard provisioning (U5b).
-func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, repoURL, token string, connIdentity *GitIdentity) error {
+func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, repoURL, token string, connIdentity *GitIdentity, baseRef string) (baseUsed string, err error) {
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
 	helper := `!f() { echo "username=x-access-token"; echo "password=$GIT_CLONE_TOKEN"; }; f`
@@ -160,10 +175,27 @@ func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, re
 	out, err := cmd.CombinedOutput()
 	scrubbed := strings.ReplaceAll(string(out), token, "***")
 	if err != nil {
-		return fmt.Errorf("worktree: clone: %w: %s", err, scrubbed)
+		return "", fmt.Errorf("worktree: clone: %w: %s", err, scrubbed)
 	}
-	if out, err := runGit(cctx, dir, "checkout", "-q", "-b", branch); err != nil {
-		return fmt.Errorf("worktree: clone: create mission branch: %w: %s", err, out)
+	if baseRef != "" {
+		fetchCmd := exec.CommandContext(cctx, "git", //nolint:gosec // repoURL/dir/token same as the clone above; baseRef is a mission's own recorded branch name, not free user input
+			"-c", "credential.helper=",
+			"-c", "credential.helper="+helper,
+			"fetch", "-q", "origin", baseRef)
+		fetchCmd.Dir = dir
+		fetchCmd.Env = append(os.Environ(), "GIT_CLONE_TOKEN="+token, "GIT_TERMINAL_PROMPT=0")
+		if fout, err := fetchCmd.CombinedOutput(); err != nil {
+			w.log.Warn("worktree: clone: base ref fetch failed; falling back to default branch", "dir", dir, "base_ref", baseRef, "error", err, "output", strings.ReplaceAll(string(fout), token, "***"))
+		} else if out, err := runGit(cctx, dir, "checkout", "-q", "-b", branch, "FETCH_HEAD"); err != nil {
+			w.log.Warn("worktree: clone: base ref checkout failed; falling back to default branch", "dir", dir, "base_ref", baseRef, "error", err, "output", out)
+		} else {
+			baseUsed = baseRef
+		}
+	}
+	if baseUsed == "" {
+		if out, err := runGit(cctx, dir, "checkout", "-q", "-b", branch); err != nil {
+			return "", fmt.Errorf("worktree: clone: create mission branch: %w: %s", err, out)
+		}
 	}
 	if connIdentity != nil {
 		if err := setLocalIdentity(cctx, dir, connIdentity.Name, connIdentity.Email); err != nil {
@@ -181,7 +213,7 @@ func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, re
 			}
 		}
 	}
-	return nil
+	return baseUsed, nil
 }
 
 // setLocalSigning writes connIdentity's SSH signing private key to

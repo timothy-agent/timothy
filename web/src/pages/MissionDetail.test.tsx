@@ -780,6 +780,37 @@ describe('MissionDetail', () => {
     expect(screen.queryByRole('button', { name: 'Delete mission' })).toBeNull()
   })
 
+  it('hides Follow up for a non-terminal mission', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByRole('button', { name: 'Follow up' })).toBeNull()
+  })
+
+  it('shows Follow up for a done mission and navigates to a prefilled create form', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
+    render(
+      <MemoryRouter initialEntries={['/missions/m1']}>
+        <Routes>
+          <Route path="/missions/:id" element={<MissionDetail />} />
+          <Route path="/missions/new" element={<div>New mission page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Fix the login bug')
+    fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+    await screen.findByText('New mission page')
+  })
+
+  it('links to the parent mission when parent_mission_id is set', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, parent_mission_id: 'parent-123' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.getByRole('link', { name: /parent-1/ })).toHaveAttribute(
+      'href',
+      '/missions/parent-123',
+    )
+  })
+
   it('shows delete for a done mission and deletes on confirm', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
