@@ -42,6 +42,10 @@ type WorkPacket struct {
 	// for a follow-up mission (missions.Mission.ParentContext) — gives
 	// the worker the prior mission's result without reopening it.
 	ParentContext string
+	// Attachments are the mission's create-time PDF documents — reach
+	// every worker turn via Render, including a delegated executor's
+	// turn (executor packets also go through Render).
+	Attachments []MissionAttachment
 }
 
 // Render turns the packet into the system/user message a worker
@@ -107,5 +111,28 @@ func (p WorkPacket) Render() (system, user string) {
 		b.WriteString("\n")
 	}
 
+	b.WriteString(renderAttachments(p.Attachments))
+
 	return system, b.String()
+}
+
+// renderAttachments formats each attachment with markdown into a
+// "Attached document <name>:" section, neutralized like every other
+// model-reachable field — shared by WorkPacket.Render and the
+// explore/plan runner sessions (runner.go) so the three near-identical
+// loops stay in sync. An attachment with no markdown (a conversion
+// that somehow never ran) renders nothing.
+func renderAttachments(atts []MissionAttachment) string {
+	var b strings.Builder
+	for _, a := range atts {
+		if a.Markdown == "" {
+			continue
+		}
+		name := a.Name
+		if name == "" {
+			name = a.ID
+		}
+		fmt.Fprintf(&b, "\nAttached document %s:\n%s\n", NeutralizeSlot(name), NeutralizeSlot(a.Markdown))
+	}
+	return b.String()
 }

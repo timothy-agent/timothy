@@ -17,6 +17,7 @@ vi.mock('../../api/client', () => ({
   getSettings: vi.fn(),
   getMissionExecutorOptions: vi.fn(),
   testConnector: vi.fn().mockResolvedValue({ ok: true }),
+  uploadAttachment: vi.fn(),
 }))
 
 import {
@@ -31,6 +32,7 @@ import {
   listConnectors,
   listRoutes,
   patchSchedule,
+  uploadAttachment,
 } from '../../api/client'
 
 // renderForm wraps MissionForm in a MemoryRouter — the repository
@@ -144,6 +146,48 @@ describe('MissionForm — create mode, one-off mission', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={onCancel} />)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onCancel).toHaveBeenCalled()
+  })
+
+  it('attaching a PDF renders a chip and submits it on the payload', async () => {
+    vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att1', mime: 'application/pdf', size_bytes: 100 })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize the attached spec' } })
+    const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await screen.findByText('spec.pdf')
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [{ id: 'att1', name: 'spec.pdf' }] }),
+      ),
+    )
+  })
+
+  it('disables submit while an attachment is uploading', async () => {
+    let resolveUpload: (v: { id: string; mime: string; size_bytes: number }) => void = () => {}
+    vi.mocked(uploadAttachment).mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpload = resolve
+      }),
+    )
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize the attached spec' } })
+    const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await screen.findByText('spec.pdf')
+    const createButton = screen.getByRole('button', { name: 'Create mission' }) as HTMLButtonElement
+    expect(createButton.disabled).toBe(true)
+
+    resolveUpload({ id: 'att1', mime: 'application/pdf', size_bytes: 100 })
+    await waitFor(() => expect(createButton.disabled).toBe(false))
   })
 })
 

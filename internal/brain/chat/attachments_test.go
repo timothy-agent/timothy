@@ -413,8 +413,13 @@ func TestChatPDFAttachmentWithoutMarkitdownIsBadRequest(t *testing.T) {
 	}
 }
 
+// docMarkdownCap mirrors markitdown.TruncateMarkdown's own cap — kept
+// local to this test rather than exported from that package, since
+// nothing outside a test needs the literal number.
+const docMarkdownCap = 128 << 10
+
 // TestChatPDFAttachmentTruncatesOversizedMarkdown confirms a converted
-// document past maxDocumentMarkdownBytes is cut at the cap and marked,
+// document past markitdown.TruncateMarkdown's cap is cut and marked,
 // never persisted unbounded — a huge PDF must not blow the current
 // turn's context (LLMContext can't trim it, and the compactor only
 // shrinks older turns).
@@ -426,7 +431,7 @@ func TestChatPDFAttachmentTruncatesOversizedMarkdown(t *testing.T) {
 	fa := newFakeAttachments()
 	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
 	svc.SetAttachments(fa)
-	huge := strings.Repeat("a", maxDocumentMarkdownBytes+1024)
+	huge := strings.Repeat("a", docMarkdownCap+1024)
 	md := fakeMarkitdown(t, huge)
 	svc.SetMarkitdown(md.URL)
 
@@ -446,11 +451,12 @@ func TestChatPDFAttachmentTruncatesOversizedMarkdown(t *testing.T) {
 		t.Fatalf("documents = %+v, want one", um.Documents)
 	}
 	got := um.Documents[0].Markdown
-	if !strings.HasSuffix(got, truncatedDocumentMarker) {
+	const truncatedMarker = "\n\n[document truncated: markdown exceeded 128KB]"
+	if !strings.HasSuffix(got, truncatedMarker) {
 		t.Fatalf("markdown does not end with truncation marker: %q", got[max(0, len(got)-60):])
 	}
-	if len(got) > maxDocumentMarkdownBytes+len(truncatedDocumentMarker) {
-		t.Fatalf("markdown len = %d, want <= %d", len(got), maxDocumentMarkdownBytes+len(truncatedDocumentMarker))
+	if len(got) > docMarkdownCap+len(truncatedMarker) {
+		t.Fatalf("markdown len = %d, want <= %d", len(got), docMarkdownCap+len(truncatedMarker))
 	}
 }
 

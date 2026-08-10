@@ -4,6 +4,7 @@ import {
   Delete02Icon,
   GitBranchIcon,
   GitPullRequestCreateIcon,
+  Pdf02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -534,6 +535,23 @@ export function MissionDetail() {
                   {mission.parent_mission_id.slice(0, 8)}
                 </Link>
               </p>
+            )}
+            {mission.attachments && mission.attachments.length > 0 && (
+              // Plain chips, not download links: the download path would
+              // need the bearer-token blob flow client.ts's
+              // fetchAttachmentBlob/fetchBlobDownload use elsewhere, which
+              // felt like more plumbing than this summary line warrants.
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {mission.attachments.map((a) => (
+                  <span
+                    key={a.id}
+                    className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 px-2 py-0.5 text-xs text-muted-foreground"
+                  >
+                    <HugeiconsIcon icon={Pdf02Icon} className="size-3" />
+                    {a.name ?? a.id.slice(0, 8)}
+                  </span>
+                ))}
+              </div>
             )}
             {pauseDetail && (
               <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>

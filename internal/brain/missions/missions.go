@@ -144,6 +144,11 @@ type Mission struct {
 	// (OutcomeDigest), snapshotted at follow-up create time — rendered
 	// into this mission's explore/plan/work prompts.
 	ParentContext string `json:"parent_context,omitempty"`
+	// Attachments are PDF documents attached at create time, each
+	// markitdown-converted ONCE (same rationale as chat's
+	// validateAttachments) and snapshotted onto the row — rendered into
+	// this mission's explore/plan/work prompts every turn.
+	Attachments []MissionAttachment `json:"attachments,omitempty"`
 	// SessionID is a hidden, non-chat-facing session row this mission's
 	// worker/reviewer/planner turns run under — loop.Agent's tool-call
 	// bookkeeping (session_events, audit) hard-requires a real session
@@ -151,6 +156,19 @@ type Mission struct {
 	SessionID string    `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MissionAttachment is one PDF document attached at mission create
+// time. ID names an attachments-store row. Markdown is that PDF's
+// markitdown conversion, snapshotted ONCE at create time — the same
+// rationale as chat's validateAttachments: re-converting on every turn
+// would re-call the markitdown sidecar every turn, and any output
+// drift would rewrite an earlier rendered prompt.
+type MissionAttachment struct {
+	ID       string `json:"id"`
+	Mime     string `json:"mime"`
+	Name     string `json:"name,omitempty"`
+	Markdown string `json:"markdown,omitempty"`
 }
 
 // WorkRoot is where mission workers/verify/review actually operate:

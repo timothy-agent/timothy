@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- parent mission taken at follow-up create time (missions.OutcomeDigest)
     -- — rendered into the follow-up's explore/plan/work prompts.
     parent_context        text NOT NULL DEFAULT '',
+    -- Attachments is a jsonb array of {id, mime, name, markdown}: id
+    -- names an attachments-store row, markdown is the PDF's markitdown
+    -- conversion snapshotted ONCE at create time — re-conversion drift
+    -- would rewrite earlier prompts (api/missions.go's create).
+    attachments           jsonb NOT NULL DEFAULT '[]',
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
     -- Opt-in escalation ladder: when set, worker turns switch to this

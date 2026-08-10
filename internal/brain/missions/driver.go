@@ -1344,7 +1344,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	return WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext,
+		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext, Attachments: m.Attachments,
 	}, nil
 }
 

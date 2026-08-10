@@ -52,3 +52,23 @@ func TestConvert(t *testing.T) {
 		}
 	})
 }
+
+func TestTruncateMarkdown(t *testing.T) {
+	t.Run("under cap is unchanged", func(t *testing.T) {
+		md := "# short document"
+		if got := TruncateMarkdown(md); got != md {
+			t.Fatalf("TruncateMarkdown = %q, want unchanged", got)
+		}
+	})
+
+	t.Run("over cap is cut and marked", func(t *testing.T) {
+		md := strings.Repeat("a", maxMarkdownBytes+100)
+		got := TruncateMarkdown(md)
+		if len(got) <= maxMarkdownBytes || !strings.HasSuffix(got, truncatedMarker) {
+			t.Fatalf("TruncateMarkdown did not cut and mark an over-cap document (len=%d)", len(got))
+		}
+		if !strings.HasPrefix(got, strings.Repeat("a", maxMarkdownBytes)) {
+			t.Fatal("TruncateMarkdown did not preserve the first maxMarkdownBytes")
+		}
+	})
+}

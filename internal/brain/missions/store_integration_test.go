@@ -236,6 +236,48 @@ func TestMissionParentLineageRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionAttachmentsRoundTrip covers the attachments column: a
+// mission created with attachments round-trips them (including
+// markdown) through Create/Get, and a mission created with a nil
+// Attachments slice still succeeds against the NOT NULL column.
+func TestMissionAttachmentsRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "with attachments", Kind: "general",
+		Attachments: []MissionAttachment{
+			{ID: "att1", Mime: "application/pdf", Name: "spec.pdf", Markdown: "# Spec\ndo the thing"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(m.Attachments) != 1 {
+		t.Fatalf("Attachments = %+v, want one", m.Attachments)
+	}
+	want := MissionAttachment{ID: "att1", Mime: "application/pdf", Name: "spec.pdf", Markdown: "# Spec\ndo the thing"}
+	if m.Attachments[0] != want {
+		t.Fatalf("Attachments[0] = %+v, want %+v", m.Attachments[0], want)
+	}
+
+	nilID, err := s.Create(ctx, Mission{Goal: marker + "no attachments", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create with nil Attachments: %v", err)
+	}
+	nilM, err := s.Get(ctx, nilID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(nilM.Attachments) != 0 {
+		t.Fatalf("Attachments = %+v, want empty", nilM.Attachments)
+	}
+}
+
 func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

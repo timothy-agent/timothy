@@ -14,13 +14,28 @@ import (
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
+
+// maxMissionAttachments caps how many PDFs a single mission create
+// request may attach — bounds worst-case prompt size across every
+// explore/plan/work turn (each attachment's markdown is rendered every
+// turn, unlike chat where it's per-message).
+const maxMissionAttachments = 8
+
+// missionAttachmentStore is the slice of *attachments.Store missions
+// need — mirrors chat.AttachmentStore exactly (chat.go's AttachmentStore).
+type missionAttachmentStore interface {
+	Get(ctx context.Context, id string) (attachments.Attachment, error)
+	Open(ctx context.Context, id string) (io.ReadCloser, attachments.Attachment, error)
+}
 
 // registerMissions mounts the mission surface: served locally,
 // missions are brain's domain like agents and connectors. nil store
@@ -43,11 +58,17 @@ import (
 // provider/model per mission id from the cost ledger (D-05x's
 // ledger.Aggregator.TopModelByMission) for the list response's
 // top_model decoration — nil (no ledger wiring) omits the field.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager) {
+// attachmentStore/markitdownURL back create-time PDF attachment
+// conversion (see resolveAttachments) — a nil store or empty URL
+// disables attachments. attachmentStore takes the narrow interface
+// (not *attachments.Store) so the caller's own nil-box guard (a nil
+// *attachments.Store boxed here would be a non-nil interface value)
+// happens once, at the call site — same shape as chat.Service.SetAttachments.
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -118,6 +139,13 @@ type missionAPI struct {
 	// mission-specific store.
 	dir Directory
 	log *slog.Logger
+	// attachments resolves create-time PDF refs; nil disables mission
+	// attachments entirely (same as chat's own attachments field).
+	attachments missionAttachmentStore
+	// markitdownURL is the sidecar's base URL for PDF conversion; ""
+	// rejects any attachment with a 400 naming the missing sidecar.
+	markitdownURL  string
+	markitdownHTTP *http.Client
 }
 
 // routeExists reports whether name resolves to a real route via
@@ -178,7 +206,27 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "missions_failed", err.Error())
 		return
 	}
+	for i := range rows {
+		rows[i] = sanitizeMission(rows[i])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"missions": h.decorateTopModels(r.Context(), rows)})
+}
+
+// sanitizeMission clears each attachment's Markdown before a mission
+// row goes out over the API: the json tags exist for jsonb persistence,
+// but a response carrying up to maxMissionAttachments*128KB of markdown
+// on every list/get call would be wasteful and the client never reads it.
+func sanitizeMission(m missions.Mission) missions.Mission {
+	if len(m.Attachments) == 0 {
+		return m
+	}
+	atts := make([]missions.MissionAttachment, len(m.Attachments))
+	for i, a := range m.Attachments {
+		a.Markdown = ""
+		atts[i] = a
+	}
+	m.Attachments = atts
+	return m
 }
 
 // missionResponse is missions.Mission plus fields the store itself
@@ -296,6 +344,19 @@ type createMissionRequest struct {
 	// mission's ParentContext at create time, and its branch, when
 	// reachable, becomes this mission's worktree base.
 	ParentMissionID string `json:"parent_mission_id"`
+	// Attachments name already-uploaded PDF documents (POST
+	// /v1/attachments) to attach at create time — PDF-only, converted
+	// to markdown once here (see resolveAttachments); images/audio are
+	// unsupported for missions.
+	Attachments []missionAttachmentInput `json:"attachments"`
+}
+
+// missionAttachmentInput names one already-uploaded attachment to
+// resolve at create time; Name is display-only (the store itself
+// doesn't carry a filename).
+type missionAttachmentInput struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // create validates the request, resolves route/review_route/budget
@@ -423,6 +484,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		parentMissionID = parent.ID
 		parentContext = missions.OutcomeDigest(parent, events, parent.Phase, parent.FailureReason)
 	}
+	missionAtts, ok := h.resolveAttachments(w, r.Context(), req.Attachments)
+	if !ok {
+		return
+	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
 	// mission created without an explicit agent still needs a real
@@ -489,6 +554,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext,
+		Attachments: missionAtts,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
@@ -513,7 +579,64 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 		return
 	}
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, sanitizeMission(created))
+}
+
+// resolveAttachments validates and converts a create request's PDF
+// refs into MissionAttachments — writes any error response itself and
+// returns ok=false, mirroring chat.validateAttachments' shape but as a
+// method so it can write directly (create()'s other validation blocks
+// use jsonError+return rather than a returned error). Empty input
+// returns nil, true without touching the store, same as chat's own
+// zero-ids fast path.
+func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Context, in []missionAttachmentInput) ([]missions.MissionAttachment, bool) {
+	if len(in) == 0 {
+		return nil, true
+	}
+	if h.attachments == nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "attachments are not enabled")
+		return nil, false
+	}
+	if len(in) > maxMissionAttachments {
+		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("too many attachments (max %d)", maxMissionAttachments))
+		return nil, false
+	}
+	if h.markitdownURL == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "pdf attachments require the markitdown sidecar (MARKITDOWN_URL)")
+		return nil, false
+	}
+	out := make([]missions.MissionAttachment, 0, len(in))
+	for _, input := range in {
+		att, err := h.attachments.Get(ctx, input.ID)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("attachment %q not found", input.ID))
+			return nil, false
+		}
+		if att.Mime != "application/pdf" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "only document attachments are supported for missions")
+			return nil, false
+		}
+		r, _, err := h.attachments.Open(ctx, att.ID)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return nil, false
+		}
+		raw, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return nil, false
+		}
+		md, err := markitdown.Convert(ctx, h.markitdownHTTP, h.markitdownURL, att.ID+".pdf", att.Mime, raw)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return nil, false
+		}
+		out = append(out, missions.MissionAttachment{
+			ID: att.ID, Mime: att.Mime, Name: input.Name, Markdown: markitdown.TruncateMarkdown(md),
+		})
+	}
+	return out, true
 }
 
 // generateName fires the mission's one-shot naming call in the
@@ -641,7 +764,7 @@ func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {
 		failMission(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, h.decorateTopModels(r.Context(), []missions.Mission{m})[0])
+	writeJSON(w, http.StatusOK, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(m)})[0])
 }
 
 // delete permanently removes a terminal mission: its row (Store.Delete

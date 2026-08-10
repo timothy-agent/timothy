@@ -942,6 +942,9 @@ export interface CreateMissionInput {
   // when reachable, becomes this mission's worktree base, and its
   // outcome digest is carried into this mission's prompts.
   parent_mission_id?: string
+  // attachments name already-uploaded PDFs (POST /v1/attachments) to
+  // convert to markdown once at create time — PDF only, up to 8.
+  attachments?: { id: string; name: string }[]
 }
 
 // ExecutorOption is one registered harness's usability on a given
