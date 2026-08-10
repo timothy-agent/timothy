@@ -273,6 +273,7 @@ services:
       context: ../web
       args:
         GIT_SHA: ${GIT_SHA:-}
+        APP_VERSION: ${APP_VERSION:-}
       # HugeIcons Pro registry auth for npm ci, passed as a BuildKit
       # secret (name-only ref; the value lives in deploy/.env, never in
       # the repo or an image layer).

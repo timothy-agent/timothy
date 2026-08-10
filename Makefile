@@ -2,6 +2,13 @@ GO_IMAGE   := golang:1.26.5
 LINT_IMAGE := golangci/golangci-lint:v2.12.2
 COMPOSE    := docker compose -f deploy/docker-compose.yml
 
+# Local web builds get the same version/sha the release pipeline
+# injects, so the sidebar never falls back to package.json's stale
+# version and an "unknown" sha. -dev marks an image as locally built;
+# ?= lets an explicit environment override win (the release path).
+export GIT_SHA     ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+export APP_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null)-dev
+
 # Go toolchain runs containerized: no host Go install required, same
 # version everywhere. Named volumes cache modules and builds.
 GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
