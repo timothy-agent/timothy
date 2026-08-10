@@ -75,6 +75,7 @@ type driverStore interface {
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	SetExploreNotes(ctx context.Context, id, notes string) error
+	SetNameIfEmpty(ctx context.Context, id, name string) error
 	AppendProgress(ctx context.Context, id, note string) error
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
 }
@@ -183,6 +184,12 @@ type Driver struct {
 	// nil-safe: unset skips extraction entirely, same as chat's own
 	// MemoryExtract field.
 	memory MemoryExtract
+
+	// nameMission wires the display-name generator used to backfill
+	// missions that reached a terminal phase without a name (see
+	// SetNameMission / backfillMissionName) — nil-safe: unset leaves
+	// unnamed missions unnamed, same as before this existed.
+	nameMission func(context.Context, string) string
 
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
@@ -321,6 +328,14 @@ func (d *Driver) SetPushFailedNotifier(notify func(ctx context.Context, missionI
 // nothing into memory.
 func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
 	d.memory = fn
+}
+
+// SetNameMission installs the display-name generator used to backfill
+// missions that reached a terminal phase without a name (the create-time
+// fire-and-forget call failed). A setter for the same reason
+// SetMemoryExtract is. Optional — nil leaves unnamed missions unnamed.
+func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
+	d.nameMission = fn
 }
 
 // fireOnComplete runs a mission's recorded on_complete choice
@@ -640,6 +655,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		delete(d.gatekeepers, id)
 		d.removeSandbox(id)
 		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
+		d.backfillMissionName(ctx, id)
 	}
 	if t.Next.Phase == PhaseDone {
 		// m is the pre-transition snapshot (re-fetched above, before this
@@ -723,6 +739,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		delete(d.gatekeepers, id)
 		d.removeSandbox(id)
 		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
+		d.backfillMissionName(ctx, id)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {

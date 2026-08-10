@@ -500,6 +500,7 @@ func (h *missionAPI) generateName(id, goal string) {
 	go func() {
 		name := h.nameMission(context.Background(), goal)
 		if name == "" {
+			h.log.Warn("mission: name generation returned empty", "mission_id", id)
 			return
 		}
 		if err := h.store.SetNameIfEmpty(context.Background(), id, name); err != nil {
