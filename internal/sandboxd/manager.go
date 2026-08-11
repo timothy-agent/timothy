@@ -421,6 +421,12 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// brain/gateway/sshd when the host itself is under memory
 		// pressure.
 		OomScoreAdj: sandboxOomScoreAdj,
+		// Capabilities only matter to root, and the container runs uid
+		// 65534, but CapDrop closes NET_RAW on the bridge and
+		// no-new-privileges blocks any setuid escalation path; missions
+		// need neither (pip/npm/git run unprivileged).
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges"},
 		// Default bridge: internet access (a coding mission may need
 		// `pip install`/`npm install`), but NOT the compose-internal
 		// "timothy" network — no route to postgres/gateway/memoryd.

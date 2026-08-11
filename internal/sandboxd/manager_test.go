@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -631,6 +632,12 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	}
 	if gotHostConfig.OomScoreAdj != sandboxOomScoreAdj {
 		t.Errorf("OomScoreAdj = %d, want %d", gotHostConfig.OomScoreAdj, sandboxOomScoreAdj)
+	}
+	if !slices.Equal(gotHostConfig.CapDrop, []string{"ALL"}) {
+		t.Errorf("CapDrop = %v, want [ALL]", gotHostConfig.CapDrop)
+	}
+	if !slices.Contains(gotHostConfig.SecurityOpt, "no-new-privileges") {
+		t.Errorf("SecurityOpt = %v, want to contain no-new-privileges", gotHostConfig.SecurityOpt)
 	}
 }
 
