@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from '../ui/select'
 import { Field, Toggle } from './shared'
+import { SkillsPicker } from './SkillsPicker'
 import { ToolsPicker } from './ToolsPicker'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 
@@ -17,14 +18,6 @@ export function slugify(v: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-}
-
-// splitList parses a comma-separated allowlist; empty = everything.
-function splitList(v: string): string[] {
-  return v
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
 }
 
 export interface AgentFormValue {
@@ -42,7 +35,7 @@ export function useAgentForm(agent?: AdminAgent) {
   const [description, setDescription] = useState(agent?.description ?? '')
   const [overlay, setOverlay] = useState(agent?.prompt_overlay ?? '')
   const [route, setRoute] = useState(agent?.route ?? '')
-  const [skillsText, setSkillsText] = useState(agent?.skills.join(', ') ?? '')
+  const [skills, setSkills] = useState<string[]>(agent?.skills ?? [])
   const [tools, setTools] = useState<string[]>(agent?.tools ?? [])
   const [memory, setMemory] = useState(agent?.memory ?? true)
 
@@ -55,7 +48,7 @@ export function useAgentForm(agent?: AdminAgent) {
     setDescription(agent.description)
     setOverlay(agent.prompt_overlay)
     setRoute(agent.route)
-    setSkillsText(agent.skills.join(', '))
+    setSkills(agent.skills)
     setTools(agent.tools)
     setMemory(agent.memory)
   }, [agent])
@@ -65,7 +58,7 @@ export function useAgentForm(agent?: AdminAgent) {
     description: description.trim(),
     overlay,
     route,
-    skills: splitList(skillsText),
+    skills,
     tools,
     memory,
   }
@@ -73,7 +66,7 @@ export function useAgentForm(agent?: AdminAgent) {
   return {
     value,
     canSubmit: agent ? true : slugify(name) !== '',
-    fields: { name, setName, description, setDescription, overlay, setOverlay, route, setRoute, skillsText, setSkillsText, tools, setTools, memory, setMemory },
+    fields: { name, setName, description, setDescription, overlay, setOverlay, route, setRoute, skills, setSkills, tools, setTools, memory, setMemory },
   }
 }
 
@@ -147,6 +140,9 @@ export function AgentForm({
           </div>
         </Field>
       </div>
+      <Field label="Skills allowlist" hint="pick from the loaded skill packs; empty = all">
+        <SkillsPicker value={fields.skills} onChange={fields.setSkills} />
+      </Field>
       <Field label="Tools allowlist" hint="pick from the live tool surface; empty = all">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>

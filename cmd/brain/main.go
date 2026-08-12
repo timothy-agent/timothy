@@ -473,7 +473,7 @@ func main() {
 	ledgerAgg := ledger.NewAggregator(app.DB)
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
-		agentReg, conns, goog, secrets, agent, missionStore, missionDriver, missionNotifier,
+		agentReg, conns, goog, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {

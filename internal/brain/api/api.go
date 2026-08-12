@@ -25,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
+	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -91,7 +92,7 @@ var memoryRoutePatterns = []string{
 // proxy to the gateway's internal control plane, conns the local
 // connector control plane (nil leaves any of them unmounted).
 // whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, toolset Toolset, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
@@ -112,6 +113,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, secrets)
 	a.registerTools(srv.Handle, toolset)
+	a.registerSkills(srv.Handle, packs)
 	var codingExecutorDefault func(context.Context) string
 	if flags != nil {
 		codingExecutorDefault = flags.CodingExecutor

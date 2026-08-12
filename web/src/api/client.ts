@@ -3,6 +3,7 @@ import type {
   AdminConnector,
   AdminProvider,
   AdminRoute,
+  AdminSkill,
   AdminTool,
   AvailableModel,
   BudgetLimit,
@@ -736,6 +737,13 @@ export async function listAgents(): Promise<AdminAgent[]> {
 export async function listTools(): Promise<AdminTool[]> {
   const { tools } = await request<{ tools: AdminTool[] }>('/v1/admin/tools')
   return tools ?? []
+}
+
+// listSkills lists the loaded skill packs, feeding the agent editor's
+// skills allowlist picker.
+export async function listSkills(): Promise<AdminSkill[]> {
+  const { skills } = await request<{ skills: AdminSkill[] }>('/v1/admin/skills')
+  return skills ?? []
 }
 
 export async function createAgent(a: Partial<AdminAgent>): Promise<string> {

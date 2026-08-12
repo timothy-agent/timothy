@@ -10,9 +10,10 @@ vi.mock('../../api/client', () => ({
   patchAgent: vi.fn(),
   deleteAgent: vi.fn(),
   listTools: vi.fn(),
+  listSkills: vi.fn(),
 }))
 
-import { listAgents, listRoutes, listTools } from '../../api/client'
+import { listAgents, listRoutes, listTools, listSkills } from '../../api/client'
 
 afterEach(cleanup)
 
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.mocked(listAgents).mockResolvedValue([coder])
   vi.mocked(listRoutes).mockResolvedValue([codingRoute])
   vi.mocked(listTools).mockResolvedValue([])
+  vi.mocked(listSkills).mockResolvedValue([])
 })
 
 function renderEdit(id = 'a1') {
@@ -62,10 +64,10 @@ describe('AgentEdit', () => {
     expect(screen.getByRole('combobox', { name: 'agent route' })).toHaveTextContent('coding')
   })
 
-  it('does not show a skills allowlist field', async () => {
+  it('shows a skills allowlist field', async () => {
     renderEdit()
 
     await screen.findByDisplayValue(coder.description)
-    expect(screen.queryByText('Skills allowlist')).not.toBeInTheDocument()
+    expect(screen.getByText('Skills allowlist')).toBeInTheDocument()
   })
 })

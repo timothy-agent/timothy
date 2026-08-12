@@ -524,6 +524,14 @@ export interface AdminTool {
   description: string
 }
 
+// AdminSkill is one loaded skill pack — feeds the agent editor's
+// skills allowlist picker so a name is chosen from what actually
+// exists, never typed blind.
+export interface AdminSkill {
+  name: string
+  description: string
+}
+
 // PlanUnit is one item of a mission's plan. passes is flipped only by
 // the harness (RunVerify), never claimed by the model.
 export interface PlanUnit {
