@@ -30,17 +30,14 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
     ON agents ((true)) WHERE is_default;
 
--- Seed only the agents the code depends on: 'general' because exactly
--- one default agent must exist, 'researcher' because the /research
--- page locks sessions to that name. Skills/tools are minimal-by-
--- default: empty means none (opt-in only), so every allowlist below
--- names exactly the surface that agent needs — a shorter list is
--- fewer tool schemas on every turn's system prompt, cheaper in tokens
--- and less for the model to choose wrong among. general routes
--- 'research' rather than '' so the default agent also consults
--- tools/sources instead of answering from memory alone. Guarded both
--- ways for is_default: if any default agent already exists, this seed
--- must not attempt to set is_default=true.
+-- Seed exactly one agent: 'general', because exactly one default
+-- agent must exist. Every other agent is created by the operator in
+-- the UI. Route is '' (the server default route) — routing is the
+-- operator's routing table, not a seed opinion. Skills/tools are
+-- opt-in only (empty means none): the seed allowlists every shipped
+-- skill pack — an allowlist entry costs one index line per turn, the
+-- body loads only on demand — and a minimal tool surface, since every
+-- listed tool schema rides every turn's prompt.
 --
 -- Tool names are the compiled-in builtins' exact registered names
 -- (internal/brain/tools/builtin/*.go) plus connector tools by their
@@ -49,33 +46,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 -- internal/brain/tools/permissions.go) matches these against the
 -- runtime-namespaced tool name a connector actually registers, so
 -- this works regardless of which connector serves gmail/calendar.
--- gmail_send is deliberately left off every seed: sending mail is a
--- deliberate per-agent opt-in, not a default.
+-- gmail_send is deliberately left off: sending mail is a deliberate
+-- per-agent opt-in, not a default. Guarded both ways for is_default:
+-- if any default agent already exists, this seed must not attempt to
+-- set is_default=true.
 INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
-SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'research',
-    '["email-research"]',
+SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', '',
+    '["research-brief", "deep-research", "coding", "email-research"]',
     '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "missions", "mission_push", "gmail_search", "gmail_read", "calendar_list_events"]',
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');
-
-INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
-VALUES
-  ('researcher',
-   'Consults tools and sources before answering, never from memory alone.',
-   'You are in research mode: consult tools and cite what you find before answering. Never answer purely from memory when a tool could verify.',
-   'research',
-   '["research-brief", "deep-research"]',
-   '["web_search", "web_fetch", "current_time", "convert_time", "missions", "mission_push"]',
-   false)
-ON CONFLICT (name) DO NOTHING;
-
--- Seeds the 'coder' agent: coding missions pick this from the agent
--- dropdown at creation time (missions.go's create handler resolves an
--- agent's route the same way chat sessions do) to get the
--- GLM-then-Nova-reasoning chain instead of the general default.
-INSERT INTO agents (name, description, prompt_overlay, route, review_route, skills, tools)
-VALUES
-  ('coder', 'Coding missions and tasks: GLM primary, Nova reasoning fallback.', '', 'coding', 'coding',
-   '["coding"]',
-   '["missions", "mission_push", "web_search", "web_fetch", "current_time", "convert_time"]')
-ON CONFLICT (name) DO NOTHING;

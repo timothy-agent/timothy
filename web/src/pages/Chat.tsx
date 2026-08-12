@@ -67,9 +67,11 @@ export function Chat({
   // Locked pages fix their own agent and never touch the shared
   // localStorage preference — a research page reading (or clobbering)
   // whatever agent general chat last used would be a leak either
-  // direction. Empty string = the server-side default agent.
+  // direction. Empty string = the server-side default agent, the only
+  // seeded one; its skills allowlist covers every shipped pack, so a
+  // locked page's skill hint always passes the allowlist gate.
   const [agent, setAgent] = useState(
-    () => (lockedSkillHint ? 'researcher' : (localStorage.getItem(agentKey) ?? '')),
+    () => (lockedSkillHint ? '' : (localStorage.getItem(agentKey) ?? '')),
   )
   // Same locked-page carve-out as agent: a dedicated page fixes its
   // own route (or leaves it Auto) and never touches the shared
