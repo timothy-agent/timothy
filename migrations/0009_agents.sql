@@ -32,8 +32,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 
 -- Seed exactly one agent: 'general', because exactly one default
 -- agent must exist. Every other agent is created by the operator in
--- the UI. Route is '' (the server default route) — routing is the
--- operator's routing table, not a seed opinion. Skills/tools are
+-- the UI. Route is 'default' (seeded in 0002_gateway.sql, guaranteed
+-- to exist by migration order). Skills/tools are
 -- opt-in only (empty means none): the seed allowlists every shipped
 -- skill pack — an allowlist entry costs one index line per turn, the
 -- body loads only on demand — and a minimal tool surface, since every
@@ -51,7 +51,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 -- if any default agent already exists, this seed must not attempt to
 -- set is_default=true.
 INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
-SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', '',
+SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'default',
     '["research-brief", "deep-research", "coding", "email-research"]',
     '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "missions", "mission_push", "gmail_search", "gmail_read", "calendar_list_events"]',
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
