@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown sandboxd dev canary canary-coding canary-executor sandbox-image
+	brain gateway memoryd web markitdown sandboxd dev canary canary-coding canary-research canary-executor sandbox-image
 
 build:
 	$(GO_RUN) go build ./...
@@ -105,6 +105,15 @@ canary:
 # without it.
 canary-coding:
 	./scripts/canary-coding.sh
+
+# Same gate for research work: the goal requires current web
+# information and a cited markdown report, so it exercises
+# web_search/web_fetch and the citations check that the trivial
+# lookup goals in canary-mission.sh never touch. Needs the stack up.
+# Optional LLM judge: set CANARY_JUDGE_ROUTE to a route different from
+# whatever wrote the report; unset means deterministic checks only.
+canary-research:
+	./scripts/canary-research.sh
 
 # Regression gate for the delegated-executor (D-052) path: pins a
 # canary-executor route to a single claude-cli chain entry, no
