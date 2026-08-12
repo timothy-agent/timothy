@@ -203,6 +203,10 @@ export function MissionForm({
   const routes = useRoutes()
   const enabledRoutes = routes?.filter((r) => r.enabled) ?? []
   const [goal, setGoal] = useState('')
+  const goalWordCount = useMemo(
+    () => (goal.trim() === '' ? 0 : goal.trim().split(/\s+/).length),
+    [goal],
+  )
   // attachments, like goal, is never seeded from initial — a follow-up
   // carries the parent's outcome digest as prompt context, not its
   // documents; each new mission attaches its own.
@@ -601,6 +605,9 @@ export function MissionForm({
           autoFocus
           className="min-h-60 resize-y text-base"
         />
+        <p className="text-right text-xs text-muted-foreground">
+          {goalWordCount} {goalWordCount === 1 ? 'word' : 'words'}
+        </p>
 
         {goal.trim() !== '' && (
           <button type="button" onClick={toggleKind} disabled={repeat && kind === 'general'}>
