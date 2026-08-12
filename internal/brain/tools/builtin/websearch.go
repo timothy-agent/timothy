@@ -14,13 +14,22 @@ import (
 )
 
 const (
-	webSearchTimeout   = 15 * time.Second
-	webSearchMaxBody   = 2 << 20 // bytes read off the wire
-	webSearchMaxResult = 10
+	webSearchTimeout       = 15 * time.Second
+	webSearchMaxBody       = 2 << 20 // bytes read off the wire
+	webSearchDefaultResult = 10
+	webSearchMaxResult     = 20
+)
+
+var (
+	webSearchTimeRanges = map[string]bool{"day": true, "week": true, "month": true, "year": true}
+	webSearchCategories = map[string]bool{"general": true, "news": true, "science": true, "it": true}
 )
 
 type webSearchArgs struct {
-	Query string `json:"query"`
+	Query     string `json:"query"`
+	TimeRange string `json:"time_range"`
+	Category  string `json:"category"`
+	Count     *int   `json:"count"`
 }
 
 // searxResult is the subset of SearXNG's JSON response this tool uses.
@@ -58,6 +67,15 @@ retry the search hoping for a different kind of result.
 
 Arguments:
 - query (string, required): the search query.
+- time_range (string, optional): "day", "week", "month", or "year" —
+  restricts results to that recency. Example: {"query": "AI news",
+  "time_range": "week"}.
+- category (string, optional): "general" (default), "news",
+  "science", or "it" — narrows results to that domain. Example:
+  {"query": "quantum computing breakthrough", "category": "science"}.
+- count (integer, optional): how many results to return, 1-20,
+  default 10. Example: {"query": "golang 1.26 release notes",
+  "count": 5}.
 
 Example: {"query": "Amazon Bedrock Nova Lite pricing"} → a numbered
 list of results with title, URL, and snippet.`,
@@ -67,6 +85,22 @@ list of results with title, URL, and snippet.`,
 				"query": {
 					"type": "string",
 					"description": "The search query"
+				},
+				"time_range": {
+					"type": "string",
+					"enum": ["day", "week", "month", "year"],
+					"description": "Restrict results to this recency window."
+				},
+				"category": {
+					"type": "string",
+					"enum": ["general", "news", "science", "it"],
+					"description": "Narrow results to this domain; defaults to general."
+				},
+				"count": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 20,
+					"description": "Number of results to return; defaults to 10."
 				}
 			},
 			"required": ["query"],
@@ -80,13 +114,32 @@ list of results with title, URL, and snippet.`,
 			if strings.TrimSpace(args.Query) == "" {
 				return "", fmt.Errorf("query must not be empty")
 			}
-			return runSearch(ctx, client, endpoint, args.Query)
+			if args.TimeRange != "" && !webSearchTimeRanges[args.TimeRange] {
+				return "", fmt.Errorf("time_range must be one of day, week, month, year, got %q", args.TimeRange)
+			}
+			if args.Category != "" && !webSearchCategories[args.Category] {
+				return "", fmt.Errorf("category must be one of general, news, science, it, got %q", args.Category)
+			}
+			count := webSearchDefaultResult
+			if args.Count != nil {
+				count = *args.Count
+				if count < 1 || count > webSearchMaxResult {
+					return "", fmt.Errorf("count must be between 1 and %d, got %d", webSearchMaxResult, count)
+				}
+			}
+			return runSearch(ctx, client, endpoint, args.Query, args.TimeRange, args.Category, count)
 		},
 	}
 }
 
-func runSearch(ctx context.Context, client *http.Client, endpoint, query string) (string, error) {
+func runSearch(ctx context.Context, client *http.Client, endpoint, query, timeRange, category string, count int) (string, error) {
 	q := url.Values{"q": {query}, "format": {"json"}}
+	if timeRange != "" {
+		q.Set("time_range", timeRange)
+	}
+	if category != "" {
+		q.Set("categories", category)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+q.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
@@ -118,8 +171,8 @@ func runSearch(ctx context.Context, client *http.Client, endpoint, query string)
 
 	var b strings.Builder
 	n := len(parsed.Results)
-	if n > webSearchMaxResult {
-		n = webSearchMaxResult
+	if n > count {
+		n = count
 	}
 	for i := 0; i < n; i++ {
 		r := parsed.Results[i]
