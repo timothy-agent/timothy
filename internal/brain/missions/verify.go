@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -122,6 +125,100 @@ func CheckArtifacts(workRoot string, artifacts []string) []string {
 			problems = append(problems, fmt.Sprintf("%s: is a directory, expected a file", rel))
 		case info.Size() == 0:
 			problems = append(problems, fmt.Sprintf("%s: exists but is empty", rel))
+		}
+	}
+	return problems
+}
+
+// citedURLPattern matches both markdown links ([text](http...)) and
+// bare http(s) URLs. Markdown link targets are captured first so a
+// bare-URL scan doesn't also pick up the same URL again from inside
+// the parens (D-059).
+var citedURLPattern = regexp.MustCompile(`\[[^\]]*\]\((https?://[^\s)]+)\)|(https?://[^\s)\]]+)`)
+
+// ExtractCitedURLs pulls every http(s) URL cited in text — markdown
+// link targets and bare URLs alike — in first-seen order, deduplicated.
+func ExtractCitedURLs(text string) []string {
+	matches := citedURLPattern.FindAllStringSubmatch(text, -1)
+	seen := make(map[string]bool, len(matches))
+	var urls []string
+	for _, m := range matches {
+		u := m[1]
+		if u == "" {
+			u = m[2]
+		}
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		urls = append(urls, u)
+	}
+	return urls
+}
+
+// NormalizeURL canonicalizes a URL for citation comparison: lowercase
+// scheme+host, fragment stripped, one trailing slash collapsed. Query
+// strings are left exactly as given — a query difference means a
+// different resource, not the same one differently written. An
+// unparseable URL normalizes to its trimmed original so it still
+// compares (and fails) predictably rather than vanishing silently.
+func NormalizeURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Fragment = ""
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	return u.String()
+}
+
+// CheckCitations verifies every http(s) URL cited in a unit's declared
+// artifacts was actually seen by the worker this turn — via web_fetch's
+// url arg or a web_search result URL — never merely claimed. Scoped to
+// "general" missions only (D-059): coding missions cite source, not
+// the web. seenURLs empty and the artifact cites nothing passes
+// trivially; seenURLs empty with citations present fails everything,
+// since no web tool call at all cannot have produced any of them.
+func CheckCitations(workRoot string, artifacts, seenURLs []string) []string {
+	allowed := make(map[string]bool, len(seenURLs))
+	for _, u := range seenURLs {
+		allowed[NormalizeURL(u)] = true
+	}
+
+	var problems []string
+	for _, a := range artifacts {
+		rel := strings.TrimSpace(a)
+		if rel == "" {
+			continue
+		}
+		cleaned := filepath.Clean(rel)
+		if filepath.IsAbs(rel) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			continue // reported by CheckArtifacts; not this check's job
+		}
+		abs := filepath.Join(workRoot, cleaned)
+		if err := tools.WithinRoot(workRoot, abs); err != nil {
+			continue
+		}
+		content, err := os.ReadFile(abs) // #nosec G304 -- cleaned and WithinRoot-vetted above
+		if err != nil {
+			continue // missing/unreadable artifact is CheckArtifacts' problem
+		}
+
+		var unknown []string
+		seenUnknown := map[string]bool{}
+		for _, cited := range ExtractCitedURLs(string(content)) {
+			norm := NormalizeURL(cited)
+			if allowed[norm] || seenUnknown[norm] {
+				continue
+			}
+			seenUnknown[norm] = true
+			unknown = append(unknown, cited)
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			problems = append(problems, fmt.Sprintf("%s: cited URL(s) never seen via web_fetch/web_search this turn: %s — fetch a source with web_fetch before citing it", rel, strings.Join(unknown, ", ")))
 		}
 	}
 	return problems

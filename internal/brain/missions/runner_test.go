@@ -1240,7 +1240,7 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 		textEvent("partial work"),
 	}}}
 	r := newTestRunner(agent)
-	text, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+	text, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
 	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
 		t.Fatalf("err = %v, want no-terminal error", err)
 	}
@@ -1258,7 +1258,7 @@ func TestRunTurnIncompleteIsError(t *testing.T) {
 		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
 	}}}
 	r := newTestRunner(agent)
-	if _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+	if _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
 		t.Fatalf("err = %v, want incomplete-stream error", err)
 	}
 }
@@ -1271,7 +1271,7 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		{Type: stream.EventError},
 	}}}
 	r := newTestRunner(agent)
-	if _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+	if _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
@@ -1326,5 +1326,98 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 	}
 	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
 		t.Fatal("PlanSession's request must set BuiltinsOnly")
+	}
+}
+
+// okToolResultEvent is toolResultEvent's ok-status counterpart with a
+// name and digest — web_search's rendered results ride the digest,
+// never a separate raw-result field (D-059).
+func okToolResultEvent(id, name, digest string) stream.StreamEvent {
+	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
+		ID: id, Name: name, Status: "ok", Digest: digest,
+	}}
+}
+
+func TestWebFetchArgURL(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"valid url arg", `{"url":"https://example.com/docs"}`, []string{"https://example.com/docs"}},
+		{"empty url", `{"url":""}`, nil},
+		{"malformed json", `not json`, nil},
+		{"missing url field", `{}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := webFetchArgURL(json.RawMessage(tc.input))
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("webFetchArgURL(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWebSearchResultURLs(t *testing.T) {
+	cases := []struct {
+		name   string
+		digest string
+		want   []string
+	}{
+		{
+			name:   "single result",
+			digest: "1. Example Docs\nhttps://example.com/docs\nsnippet text",
+			want:   []string{"https://example.com/docs"},
+		},
+		{
+			name:   "multiple results blank-line separated",
+			digest: "1. First\nhttps://a.example/x\nsnippet one\n\n2. Second\nhttps://b.example/y\nsnippet two",
+			want:   []string{"https://a.example/x", "https://b.example/y"},
+		},
+		{
+			name:   "no results found sentinel yields nothing",
+			digest: "no results found",
+			want:   nil,
+		},
+		{
+			name:   "truncated tail with no url line yields nothing extra",
+			digest: "1. Only",
+			want:   nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := webSearchResultURLs(tc.digest)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("webSearchResultURLs(%q) = %v, want %v", tc.digest, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch is the
+// end-to-end wiring check (D-059): a worker turn that calls web_fetch
+// and web_search must surface both URLs on the returned verdict, so
+// the driver's citations check has real harness evidence to compare
+// against — never the model's own claim.
+func TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{
+			toolEndEvent("web_fetch", `{"url":"https://example.com/fetched"}`),
+			okToolResultEvent("call-1", "web_fetch", "fetched content"),
+			toolEndEvent("web_search", `{"query":"golang release notes"}`),
+			okToolResultEvent("call-2", "web_search", "1. Release notes\nhttps://example.com/searched\nsnippet"),
+			toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"researched"}`),
+		},
+	}}
+	r := newTestRunner(agent)
+	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	want := []string{"https://example.com/fetched", "https://example.com/searched"}
+	if !slices.Equal(v.SeenURLs, want) {
+		t.Fatalf("RunWorker verdict SeenURLs = %v, want %v", v.SeenURLs, want)
 	}
 }

@@ -1043,7 +1043,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
 			d.log.Warn("driver: record evidence failed", "mission_id", m.ID, "error", err)
 		}
-		if in, ok := d.trySkipReview(ctx, m); ok {
+		if in, ok := d.trySkipReview(ctx, m, verdict.SeenURLs); ok {
 			return in, nil
 		}
 		return StepInput{Input: InputPhaseComplete}, nil
@@ -1079,7 +1079,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 // Coding missions always review: a diff can be wrong in ways
 // existence checks can't see. Units with no declared artifacts always
 // review too — there is no harness evidence to stand on.
-func (d *Driver) trySkipReview(ctx context.Context, m Mission) (StepInput, bool) {
+func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string) (StepInput, bool) {
 	if m.Kind == "coding" {
 		return StepInput{}, false
 	}
@@ -1087,7 +1087,7 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission) (StepInput, bool)
 	if unit == nil || len(unit.Artifacts) == 0 {
 		return StepInput{}, false
 	}
-	if err := d.verifyCurrentUnit(ctx, m); err != nil {
+	if err := d.verifyCurrentUnit(ctx, m, seenURLs); err != nil {
 		var vf *verifyFailure
 		if errors.As(err, &vf) {
 			note := fmt.Sprintf("Verification failed for unit %d before review: %s", vf.unit+1, vf.excerpt)
@@ -1229,7 +1229,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 
 	if verdict.Approved {
 		var vf *verifyFailure
-		if err := d.verifyCurrentUnit(ctx, m); err != nil {
+		if err := d.verifyCurrentUnit(ctx, m, nil); err != nil {
 			if errors.As(err, &vf) {
 				// The reviewer approved, but the harness's own verify_cmd
 				// disagrees — real evidence the approval didn't hold up
@@ -1292,10 +1292,18 @@ func (e *verifyFailure) Error() string {
 // verifyCurrentUnit runs the harness's own checks for the plan's
 // current (first unverified) unit and marks it passed — only this
 // harness-run evidence may flip a unit's Passes flag, never model
-// output. Declared artifacts are checked first (exists, non-empty):
-// a tautological verify_cmd cannot pass a unit whose artifact was
-// never written.
-func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
+// output. Declared artifacts are checked first (exists, non-empty),
+// then (general missions only, D-059) that every URL cited in those
+// artifacts was actually seen by the worker via web_fetch/web_search
+// this turn — a tautological verify_cmd cannot pass a unit whose
+// artifact was never written, or whose citations were invented.
+// seenURLs is only ever populated by the caller right after the
+// worker turn that produced it (runExecute); it is empty on the later
+// runReview call, which is fine — for a general mission trySkipReview
+// already ran this exact check with the real evidence, and runReview
+// only reaches this path for coding missions (out of scope) or the
+// rare infra-failure fallback.
+func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission, seenURLs []string) error {
 	for i, u := range m.Spec.Units {
 		if u.Passes {
 			continue
@@ -1318,6 +1326,17 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission) error {
 				d.log.Warn("driver: record verify failed", "mission_id", m.ID, "error", err)
 			}
 			return &verifyFailure{unit: i, excerpt: excerpt}
+		}
+		if m.Kind == "general" {
+			if problems := CheckCitations(workRoot, u.Artifacts, seenURLs); len(problems) > 0 {
+				excerpt := "citation check failed:\n" + strings.Join(problems, "\n")
+				if err := d.store.AppendEvent(ctx, m.ID, "mission.unit_verified", map[string]any{
+					"unit": i, "passed": false, "check": "citations", "problems": problems,
+				}); err != nil {
+					d.log.Warn("driver: record verify failed", "mission_id", m.ID, "error", err)
+				}
+				return &verifyFailure{unit: i, excerpt: excerpt}
+			}
 		}
 		if u.VerifyCmd == "" {
 			return d.markUnitPassed(ctx, m, i)

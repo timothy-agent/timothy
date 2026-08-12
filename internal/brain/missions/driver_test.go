@@ -1449,6 +1449,68 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 	}
 }
 
+// TestDriverCitationCheckBlocksInvokedCitation: a general mission's
+// worker writes an artifact citing a URL it never actually fetched or
+// searched — the harness's own CheckCitations must catch this and
+// send the unit back to execute, same failure path CheckArtifacts
+// uses, never letting the invented citation stand.
+func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://example.com/invented)"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Spec: Spec{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it", SeenURLs: []string{"https://example.com/other"}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseExecute || m.Spec.Units[0].Passes {
+		t.Fatalf("mission = phase %s passes %v, want back in execute with the unit NOT passed", m.Phase, m.Spec.Units[0].Passes)
+	}
+	if len(m.Progress) == 0 || !strings.Contains(m.Progress[len(m.Progress)-1].Note, "citation check failed") {
+		t.Fatalf("progress = %+v, want a note explaining the citation failure", m.Progress)
+	}
+}
+
+// TestDriverCitationCheckSkippedForCodingMission: coding missions cite
+// source, not the web (D-059) — an invented URL in a coding mission's
+// artifact must not block it, since the citations check never runs
+// for Kind == "coding". The scriptedRunner has a review verdict
+// scripted since coding missions always review.
+func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://example.com/invented)"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseExecute, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Spec: Spec{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	d := testDriver(store, runner)
+
+	driveN(t, d, "m1", 2)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone || m.Status != StatusDone {
+		t.Fatalf("mission = %+v, want done/done — citation check must not run for a coding mission", m)
+	}
+}
+
 // TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing reproduces
 // the fix: a unit that already passed can silently break while a LATER
 // unit's work is happening. Unit 0's artifact ("a.md") passed

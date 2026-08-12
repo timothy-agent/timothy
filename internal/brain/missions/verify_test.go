@@ -142,3 +142,126 @@ func TestTailBufferBoundsMemoryKeepsEnd(t *testing.T) {
 		t.Fatalf("tailBuffer content = %q, want %q (the last 5 bytes)", got, want)
 	}
 }
+
+func TestExtractCitedURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"markdown link", "see [the docs](https://example.com/docs) for more", []string{"https://example.com/docs"}},
+		{"bare url", "fetched from https://example.com/api/v1 directly", []string{"https://example.com/api/v1"}},
+		{"mixed markdown and bare", "[a](https://a.example/x) and also https://b.example/y", []string{"https://a.example/x", "https://b.example/y"}},
+		{"no urls", "just plain text, no citations here", nil},
+		{"duplicate collapses to one", "https://example.com/x and again https://example.com/x", []string{"https://example.com/x"}},
+		{"http scheme included", "http://example.com/plain", []string{"http://example.com/plain"}},
+		{"non-http scheme ignored", "see ftp://example.com/file", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExtractCitedURLs(tc.text)
+			if !equalStrings(got, tc.want) {
+				t.Fatalf("ExtractCitedURLs(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"trailing slash stripped", "https://example.com/docs/", "https://example.com/docs"},
+		{"fragment stripped", "https://example.com/docs#section-2", "https://example.com/docs"},
+		{"scheme and host lowercased", "HTTPS://Example.COM/Docs", "https://example.com/Docs"},
+		{"query preserved exactly", "https://example.com/search?q=Foo", "https://example.com/search?q=Foo"},
+		{"no trailing slash unchanged", "https://example.com/docs", "https://example.com/docs"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NormalizeURL(tc.in); got != tc.want {
+				t.Fatalf("NormalizeURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckCitations(t *testing.T) {
+	writeArtifact := func(t *testing.T, root, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name      string
+		content   string
+		seenURLs  []string
+		wantProbs int
+	}{
+		{
+			name:      "cited url was fetched",
+			content:   "source: [docs](https://example.com/docs)",
+			seenURLs:  []string{"https://example.com/docs"},
+			wantProbs: 0,
+		},
+		{
+			name:      "invented citation fails",
+			content:   "source: [docs](https://example.com/invented)",
+			seenURLs:  []string{"https://example.com/other"},
+			wantProbs: 1,
+		},
+		{
+			name:      "bare url matched against search result",
+			content:   "see https://example.com/api for details",
+			seenURLs:  []string{"https://example.com/api"},
+			wantProbs: 0,
+		},
+		{
+			name:      "trailing slash and fragment normalize equal",
+			content:   "[ref](https://example.com/docs/#intro)",
+			seenURLs:  []string{"https://example.com/docs"},
+			wantProbs: 0,
+		},
+		{
+			name:      "no links in artifact passes trivially",
+			content:   "no citations here, just prose",
+			seenURLs:  nil,
+			wantProbs: 0,
+		},
+		{
+			name:      "no web calls at all but links present fails",
+			content:   "[ref](https://example.com/docs)",
+			seenURLs:  nil,
+			wantProbs: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeArtifact(t, root, "report.md", tc.content)
+			problems := CheckCitations(root, []string{"report.md"}, tc.seenURLs)
+			if len(problems) != tc.wantProbs {
+				t.Fatalf("CheckCitations = %v, want %d problem(s)", problems, tc.wantProbs)
+			}
+		})
+	}
+}
+
+// equalStrings compares two string slices where nil and empty are
+// treated the same (ExtractCitedURLs returns nil, not an empty slice,
+// when nothing matches).
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -29,10 +29,11 @@ description: Decomposes a complex research question into independent sub-questio
   aggregator repeating it.
 - Label inference explicitly: "Inference: ..." for anything reasoned from
   sources rather than stated by one. Never blur the line between the two.
-- Never cite a URL you did not fetch or see in a search result this turn.
-  The harness checks cited URLs against ones actually retrieved and fails
-  the unit on a mismatch, so an invented or remembered URL is not a
-  shortcut, it is a failed unit.
+- Cite only URLs you fetched with web_fetch this unit. A search snippet
+  is a lead, not a source: fetch the page before citing it. The harness
+  checks cited URLs against ones actually retrieved and fails the unit on
+  a mismatch, so an invented or remembered URL is not a shortcut, it is a
+  failed unit.
 - Stop searching a sub-question once it has an answer backed by adequate
   sources. If a query line goes nowhere, note the dead end in one line and
   try a different angle, don't repeat the same query hoping for a
@@ -54,7 +55,7 @@ description: Decomposes a complex research question into independent sub-questio
 | Excuse | Rebuttal |
 |---|---|
 | "These sub-questions all touch the same topic, I'll merge them" | Same topic doesn't mean same unit; independence is about whether one needs the other's answer. |
-| "I already found this in a search result snippet, no need to list it" | A snippet you read is a source you saw; put it in the Sources section or don't cite it. |
+| "The snippet already told me, no need to fetch the page" | A snippet is a lead, not a source; fetch the page, confirm the claim, then cite it. |
 | "The synthesis can just re-search to fill a gap" | Synthesis reads findings files only; a gap found at synthesis time means a findings unit was incomplete, not a license to search again. |
 | "One source is fine, this fact is obviously true" | Obviousness is not verification; decision-driving claims still need two independent sources. |
 | "Close enough to the URL I remember" | The harness matches cited URLs against fetched ones exactly; a remembered or reconstructed URL fails the unit. |
@@ -63,8 +64,8 @@ description: Decomposes a complex research question into independent sub-questio
 
 - A sub-question depends on another sub-question's answer but got its own
   parallel unit anyway.
-- A findings file cites a URL that never appears in that unit's search or
-  fetch results.
+- A findings file cites a URL that was never fetched with web_fetch in
+  that unit.
 - The synthesis unit is making a web_search or fetch call.
 - report.md contains a claim with no traceable source in any findings
   file's Sources section.
