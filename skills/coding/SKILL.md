@@ -1,5 +1,5 @@
 ---
-name: coding-task
+name: coding
 description: Disciplined software changes: plan first, test first, verify end-to-end. Use when writing, modifying, debugging, or reviewing code, or when a task produces anything a compiler, interpreter, or test suite will judge.
 ---
 

@@ -155,10 +155,10 @@ func TestRuntimeValueSettings(t *testing.T) {
 		t.Fatalf("TokenBudget = %d, want 120000 (cache must invalidate on write)", got)
 	}
 
-	if err := s.SetValue(ctx, ValueSkillsAllowlist, "coding-task, research"); err != nil {
+	if err := s.SetValue(ctx, ValueSkillsAllowlist, "coding, research"); err != nil {
 		t.Fatalf("SetValue allowlist: %v", err)
 	}
-	if !s.SkillAllowed(ctx, "coding-task") || !s.SkillAllowed(ctx, "research") {
+	if !s.SkillAllowed(ctx, "coding") || !s.SkillAllowed(ctx, "research") {
 		t.Fatal("listed packs must be allowed")
 	}
 	if s.SkillAllowed(ctx, "other") {

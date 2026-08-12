@@ -64,7 +64,7 @@ export function SkillsPicker({
               .filter(Boolean),
           )
         }
-        placeholder="research-brief, coding-task"
+        placeholder="research-brief, coding"
         className="mt-1.5 flex h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
       />
     )

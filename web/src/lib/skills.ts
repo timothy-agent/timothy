@@ -2,5 +2,5 @@
 // both use) to the display text the chip shows.
 export const skillLabels: Record<string, string> = {
   'research-brief': 'Research brief',
-  'coding-task': 'Coding task',
+  'coding': 'Coding',
 }

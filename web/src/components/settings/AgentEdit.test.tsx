@@ -23,7 +23,7 @@ const coder: AdminAgent = {
   description: 'Coding missions and tasks: GLM primary, Nova reasoning fallback.',
   prompt_overlay: 'You are a careful senior engineer.',
   route: 'coding',
-  skills: ['coding-task'],
+  skills: ['coding'],
   tools: ['shell', 'write_file'],
   memory: true,
   is_default: false,

@@ -107,15 +107,15 @@ func TestIndexIsOneLinePerSkill(t *testing.T) {
 func TestLoadSkillTool(t *testing.T) {
 	t.Parallel()
 	tool := LoadSkillTool([]Skill{
-		{Name: "coding-task", Description: "d", Body: "- plan first\n- test first"},
+		{Name: "coding", Description: "d", Body: "- plan first\n- test first"},
 	}, nil)
 
-	args, _ := json.Marshal(map[string]string{"name": "coding-task"})
+	args, _ := json.Marshal(map[string]string{"name": "coding"})
 	got, err := tool.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(got, "plan first") || !strings.Contains(got, "# Skill: coding-task") {
+	if !strings.Contains(got, "plan first") || !strings.Contains(got, "# Skill: coding") {
 		t.Fatalf("body = %q", got)
 	}
 

@@ -14,7 +14,7 @@ func TestSkillsEndpointListsLoadedPacks(t *testing.T) {
 	m := mux(a)
 	a.registerSkills(m.Handle, []skills.Skill{
 		{Name: "research", Description: "Use when researching a topic"},
-		{Name: "coding-task", Description: "Use when writing code"},
+		{Name: "coding", Description: "Use when writing code"},
 	})
 
 	req := httptest.NewRequest("GET", "/v1/admin/skills", nil)
@@ -26,7 +26,7 @@ func TestSkillsEndpointListsLoadedPacks(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := decodeSkillsBody(t, w.Body.Bytes())
-	if len(body.Skills) != 2 || body.Skills[0].Name != "research" || body.Skills[1].Name != "coding-task" {
+	if len(body.Skills) != 2 || body.Skills[0].Name != "research" || body.Skills[1].Name != "coding" {
 		t.Fatalf("skills = %+v", body.Skills)
 	}
 	if body.Skills[0].Description != "Use when researching a topic" {

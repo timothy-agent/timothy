@@ -76,6 +76,6 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO agents (name, description, prompt_overlay, route, review_route, skills, tools)
 VALUES
   ('coder', 'Coding missions and tasks: GLM primary, Nova reasoning fallback.', '', 'coding', 'coding',
-   '["coding-task"]',
+   '["coding"]',
    '["missions", "mission_push", "web_search", "web_fetch", "current_time", "convert_time"]')
 ON CONFLICT (name) DO NOTHING;
