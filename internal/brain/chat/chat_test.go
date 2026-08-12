@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -768,9 +769,12 @@ func TestChatValidatesMessage(t *testing.T) {
 func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("planned")}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true, Skills: []string{"travel-planning"}}, true
+	}
 	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), []skills.Skill{
 		{Name: "travel-planning", Description: "Use when planning a trip", Body: "Ask about dates, budget, destination."},
-	}, nil, nil, discard())
+	}, nil, resolver, discard())
 
 	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "Tokyo, 5 days", SkillHint: "travel-planning"})
 	if err != nil {
@@ -799,7 +803,10 @@ func TestChatSkillAllowlistGatesIndexAndHint(t *testing.T) {
 		{Name: "blocked-skill", Description: "Use when blocked", Body: "rules-b"},
 	}
 	allow := func(_ context.Context, name string) bool { return name == "allowed-skill" }
-	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, nil, discard())
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true, Skills: []string{"allowed-skill", "blocked-skill"}}, true
+	}
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, resolver, discard())
 
 	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "blocked-skill"}); err == nil {
 		t.Fatal("skill_hint for a disallowed pack accepted")
@@ -822,6 +829,136 @@ func TestChatSkillHintRefusesUnknownSkill(t *testing.T) {
 	_, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "no-such-skill"})
 	if err == nil {
 		t.Fatal("unknown skill_hint accepted")
+	}
+}
+
+// An agent with an empty skills allowlist gets no packs at all — the
+// flipped semantics (empty = none, opt-in only), unlike tools' own
+// empty = none via resolveToolAllow's exemptions below.
+func TestChatEmptySkillsAllowlistDeniesEveryPack(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	packs := []skills.Skill{
+		{Name: "some-skill", Description: "d", Body: "rules"},
+	}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true}, true // Skills left empty
+	}
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, resolver, discard())
+
+	// skill_hint naming a pack the (empty) allowlist doesn't list must
+	// be refused, same as an unknown skill — a denied hint is never
+	// force-loaded around the allowlist.
+	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "some-skill"}); err == nil {
+		t.Fatal("skill_hint accepted for an agent with an empty skills allowlist")
+	}
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	sys := chatRequest(t, gw).System
+	if strings.Contains(sys, "some-skill") {
+		t.Fatalf("empty skills allowlist still surfaced a pack in the index:\n%s", sys)
+	}
+}
+
+// A non-empty skills allowlist admits only the packs it names — the
+// unflipped half of the same rule.
+func TestChatNonEmptySkillsAllowlistAdmitsOnlyListedPacks(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	packs := []skills.Skill{
+		{Name: "listed-skill", Description: "d", Body: "rules-a"},
+		{Name: "unlisted-skill", Description: "d", Body: "rules-b"},
+	}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true, Skills: []string{"listed-skill"}}, true
+	}
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, resolver, discard())
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	sys := chatRequest(t, gw).System
+	if !strings.Contains(sys, "listed-skill") || strings.Contains(sys, "unlisted-skill") {
+		t.Fatalf("skills allowlist did not admit only the listed pack:\n%s", sys)
+	}
+}
+
+// Tools keep the same "empty = none, opt-in only" flip as skills, but
+// resolveToolAllow carves out retrieve_output unconditionally (D-019:
+// how the model reads back its own offloaded results) and load_skill
+// only when the agent's skills allowlist is non-empty (nothing to
+// load otherwise).
+func TestResolveToolAllowEmptyGrantsOnlyRetrieveOutput(t *testing.T) {
+	t.Parallel()
+	got := resolveToolAllow(agents.Agent{})
+	want := []string{retrieveOutputTool}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("resolveToolAllow(empty) = %v, want %v", got, want)
+	}
+}
+
+func TestResolveToolAllowEmptyToolsWithSkillsAlsoGrantsLoadSkill(t *testing.T) {
+	t.Parallel()
+	got := resolveToolAllow(agents.Agent{Skills: []string{"some-skill"}})
+	want := map[string]bool{retrieveOutputTool: true, loadSkillTool: true}
+	if len(got) != len(want) {
+		t.Fatalf("resolveToolAllow = %v, want exactly %v", got, want)
+	}
+	for _, n := range got {
+		if !want[n] {
+			t.Fatalf("resolveToolAllow = %v, unexpected entry %q", got, n)
+		}
+	}
+}
+
+func TestResolveToolAllowNonEmptyToolsGainsInfraExemptions(t *testing.T) {
+	t.Parallel()
+	profile := agents.Agent{Tools: []string{"web_search", "current_time"}, Skills: []string{"some-skill"}}
+	got := resolveToolAllow(profile)
+	want := []string{"web_search", "current_time", "retrieve_output", "load_skill"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("resolveToolAllow(non-empty) = %v, want %v", got, want)
+	}
+	if len(profile.Tools) != 2 {
+		t.Fatalf("profile.Tools mutated: %v", profile.Tools)
+	}
+}
+
+func TestResolveToolAllowNeverDuplicatesExemptions(t *testing.T) {
+	t.Parallel()
+	profile := agents.Agent{Tools: []string{"retrieve_output", "load_skill"}, Skills: []string{"some-skill"}}
+	got := resolveToolAllow(profile)
+	want := []string{"retrieve_output", "load_skill"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("resolveToolAllow(already listed) = %v, want %v", got, want)
+	}
+}
+
+// End-to-end: an agent with no tools configured still offers
+// retrieve_output to the loop (the exemption survives the actual
+// Chat call, not just the helper).
+func TestChatEmptyToolsAllowlistStillOffersRetrieveOutput(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true}, true // Tools left empty
+	}
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	allow := chatRequest(t, gw).ToolAllow
+	if len(allow) != 1 || allow[0] != retrieveOutputTool {
+		t.Fatalf("ToolAllow = %v, want only retrieve_output", allow)
 	}
 }
 
@@ -1335,8 +1472,8 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	if sent.Route != "research" || sent.Agent != "researcher" {
 		t.Fatalf("route/agent = %s/%s, want research/researcher", sent.Route, sent.Agent)
 	}
-	if len(sent.ToolAllow) != 1 || sent.ToolAllow[0] != "web_search" {
-		t.Fatalf("tool allowlist = %v", sent.ToolAllow)
+	if !slices.Equal(sent.ToolAllow, []string{"web_search", "retrieve_output"}) {
+		t.Fatalf("tool allowlist = %v, want authored list plus retrieve_output", sent.ToolAllow)
 	}
 	if !strings.Contains(sent.System, "Consult sources before answering.") {
 		t.Fatalf("overlay missing from system prompt:\n%s", sent.System)

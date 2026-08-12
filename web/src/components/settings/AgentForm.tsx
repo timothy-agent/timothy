@@ -140,10 +140,10 @@ export function AgentForm({
           </div>
         </Field>
       </div>
-      <Field label="Skills allowlist" hint="pick from the loaded skill packs; empty = all">
+      <Field label="Skills allowlist" hint="pick from the loaded skill packs; empty = none">
         <SkillsPicker value={fields.skills} onChange={fields.setSkills} />
       </Field>
-      <Field label="Tools allowlist" hint="pick from the live tool surface; empty = all">
+      <Field label="Tools allowlist" hint="pick from the live tool surface; empty = none">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>
     </div>

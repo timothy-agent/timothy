@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -130,7 +131,7 @@ type Service struct {
 	compactor      Compactor
 	memory         MemoryExtract   // nil: long-term memory off
 	recall         MemoryRetrieve  // nil: no memory injection
-	agents         AgentResolver   // nil: zero-value agent (everything allowed)
+	agents         AgentResolver   // nil: zero-value agent (no skills/tools but retrieve_output, default route, memory on)
 	candidates     AgentCandidates // nil: auto-dispatch falls back to default
 	classify       agents.Classify // nil: auto-dispatch falls back to default
 	budget         func(context.Context) int
@@ -513,14 +514,15 @@ func TitleOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, in
 }
 
 // allowedPacks filters the loaded packs through the global runtime
-// allowlist AND the serving agent's own skill list (empty = all).
+// allowlist AND the serving agent's own skill list (empty = none: an
+// agent must opt into skills explicitly).
 func (s *Service) allowedPacks(ctx context.Context, profile agents.Agent) []skills.Skill {
 	out := make([]skills.Skill, 0, len(s.packs))
 	for _, p := range s.packs {
 		if s.skillAllow != nil && !s.skillAllow(ctx, p.Name) {
 			continue
 		}
-		if !profileAllows(profile.Skills, p.Name) {
+		if !profileAllowsSkill(profile.Skills, p.Name) {
 			continue
 		}
 		out = append(out, p)
@@ -528,17 +530,53 @@ func (s *Service) allowedPacks(ctx context.Context, profile agents.Agent) []skil
 	return out
 }
 
-// profileAllows checks one agent allowlist: empty admits everything.
-func profileAllows(allow []string, name string) bool {
-	if len(allow) == 0 {
-		return true
-	}
+// profileAllowsSkill checks one agent's skills allowlist: empty denies
+// every pack (an agent must opt into skills explicitly).
+func profileAllowsSkill(allow []string, name string) bool {
 	for _, n := range allow {
 		if n == name {
 			return true
 		}
 	}
 	return false
+}
+
+// retrieveOutputTool and loadSkillTool are the builtin tools' exact
+// registered names (internal/brain/tools/builtin/retrieve.go,
+// internal/brain/skills/tool.go) — not imported as constants to avoid
+// pulling chat into the builtin package's dependency graph for two
+// literal strings, same convention as the sensitive-tool suffixes in
+// cmd/brain/main.go.
+const (
+	retrieveOutputTool = "retrieve_output"
+	loadSkillTool      = "load_skill"
+)
+
+// resolveToolAllow builds the tool allowlist actually sent to the
+// loop from the serving agent's config: empty means no tools (an
+// agent must opt into tools explicitly), the same flip as skills.
+// Two exemptions, independent of the agent's own list:
+//   - retrieve_output always stays available — it is how the model
+//     reads back its own offloaded tool results (D-019); filtering it
+//     out would silently strand any result too big to inline.
+//   - load_skill follows the SKILLS allowlist, not the tools one: it
+//     is present only when the agent has at least one skill to load
+//     (an agent with none has nothing load_skill could load, and
+//     omitting it saves its schema's tokens on every skill-less turn).
+//
+// Both exemptions are enforced whether or not the agent authored a
+// tool list — an agent that picks tools in the UI should not silently
+// lose offload retrieval or skill loading by not knowing the infra
+// names. profile.Tools itself is never mutated.
+func resolveToolAllow(profile agents.Agent) []string {
+	allow := profile.Tools
+	if !slices.Contains(allow, retrieveOutputTool) {
+		allow = append(slices.Clone(allow), retrieveOutputTool)
+	}
+	if len(profile.Skills) > 0 && !slices.Contains(allow, loadSkillTool) {
+		allow = append(slices.Clone(allow), loadSkillTool)
+	}
+	return allow
 }
 
 // Request is one chat turn.
@@ -589,7 +627,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if req.SkillHint != "" {
 		body, ok := s.skillBodies[req.SkillHint]
 		if !ok || (s.skillAllow != nil && !s.skillAllow(ctx, req.SkillHint)) ||
-			!profileAllows(profile.Skills, req.SkillHint) {
+			!profileAllowsSkill(profile.Skills, req.SkillHint) {
 			return "", nil, fmt.Errorf("chat: %w: unknown skill %q", ErrBadRequest, req.SkillHint)
 		}
 		skillBody = body
@@ -935,7 +973,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
 		Route:     route,
 		Agent:     profile.Name,
-		ToolAllow: profile.Tools,
+		ToolAllow: resolveToolAllow(profile),
 		Purpose:   "chat",
 		ModelHint: modelHint,
 		System:    system,

@@ -81,7 +81,7 @@ export function SkillsPicker({
             className="h-10 w-full justify-between font-normal"
           >
             <span className="truncate text-left">
-              {value.length === 0 ? 'All skills' : `${value.length} selected`}
+              {value.length === 0 ? 'No skills' : `${value.length} selected`}
             </span>
             <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
           </Button>

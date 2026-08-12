@@ -20,8 +20,11 @@ import (
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
-// Agent is the API shape of one agents row. Empty Skills/Tools mean
-// "everything allowed"; empty Route means the default route.
+// Agent is the API shape of one agents row. Empty Skills or Tools
+// means none of that surface is allowed (both opt-in only, resolved
+// by internal/brain/chat's resolveToolAllow/allowedPacks — retrieve_
+// output and, when Skills is non-empty, load_skill stay available
+// regardless); empty Route means the default route.
 //
 // ReviewRoute and BudgetUSD are meaningless to a chat-only agent and
 // stay at their zero values for one; a mission-capable agent
@@ -183,9 +186,9 @@ func (s *Store) ResolveByID(ctx context.Context, id string) (Agent, bool) {
 }
 
 // load returns the enabled agents and the default's name from a short
-// cache. A database outage degrades to the zero-value agent (all
-// tools, all skills, default route, memory on) — chat must keep
-// working when config storage hiccups.
+// cache. A database outage degrades to the zero-value agent (no
+// tools/skills beyond chat's always-on exemptions, default route,
+// memory on) — chat must keep working when config storage hiccups.
 func (s *Store) load(ctx context.Context) (map[string]Agent, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

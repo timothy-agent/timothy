@@ -244,7 +244,12 @@ type Request struct {
 	SessionID string
 	Route     string
 	Agent     string   // serving agent, for ledger attribution
-	ToolAllow []string // agent's tool allowlist; empty = all
+	// ToolAllow filters the offered tool surface; empty means every
+	// base tool. Missions leave this nil for anything but the planner
+	// call (see runner.go). Chat's agent-authored allowlist (empty =
+	// no tools to the user) is resolved to a non-empty list before it
+	// ever reaches here — see chat.resolveToolAllow.
+	ToolAllow []string
 	ModelHint string
 	System    string
 	Messages  []provider.Message
