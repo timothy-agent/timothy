@@ -16,6 +16,8 @@ import type {
   GitHubIdentity,
   GitHubRepo,
   GroupTotal,
+  KbCollection,
+  KbDocument,
   LatencyRow,
   MemoryItem,
   Mission,
@@ -767,6 +769,69 @@ export async function setDefaultAgent(id: string): Promise<void> {
 
 export async function deleteAgent(id: string): Promise<void> {
   await request<void>(`/v1/admin/agents/${id}`, { method: 'DELETE' })
+}
+
+// --- knowledge (RAG collections agents search with kb_search) ---
+
+export async function listKbCollections(): Promise<KbCollection[]> {
+  const { collections } = await request<{ collections: KbCollection[] }>('/v1/admin/kb/collections')
+  return collections ?? []
+}
+
+export async function getKbCollection(id: string): Promise<KbCollection> {
+  return request<KbCollection>(`/v1/admin/kb/collections/${id}`)
+}
+
+export async function createKbCollection(c: { name: string; description: string }): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/admin/kb/collections', {
+    method: 'POST',
+    body: JSON.stringify(c),
+  })
+  return id
+}
+
+export async function deleteKbCollection(id: string): Promise<void> {
+  await request<void>(`/v1/admin/kb/collections/${id}`, { method: 'DELETE' })
+}
+
+export async function listKbDocuments(collectionId: string): Promise<KbDocument[]> {
+  const { documents } = await request<{ documents: KbDocument[] }>(
+    `/v1/admin/kb/collections/${collectionId}/documents`,
+  )
+  return documents ?? []
+}
+
+// uploadKbDocument posts one file to a collection (multipart field
+// "file") — same bypass of request()'s JSON content type as
+// uploadAttachment, since the body is the file, not JSON.
+export async function uploadKbDocument(collectionId: string, file: File): Promise<KbDocument> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`/v1/admin/kb/collections/${collectionId}/documents`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { message?: string }
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    throw new ChatError(res.status, message || `upload failed (${res.status})`)
+  }
+  return (await res.json()) as KbDocument
+}
+
+export async function deleteKbDocument(id: string): Promise<void> {
+  await request<void>(`/v1/admin/kb/documents/${id}`, { method: 'DELETE' })
+}
+
+export async function reingestKbDocument(id: string): Promise<void> {
+  await request<void>(`/v1/admin/kb/documents/${id}/reingest`, { method: 'POST' })
 }
 
 // --- connectors (integrations) ---

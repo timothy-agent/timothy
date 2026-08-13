@@ -507,6 +507,10 @@ export interface AdminAgent {
   memory: boolean
   is_default: boolean
   enabled: boolean
+  // Knowledge collections this agent can search with kb_search.
+  // Optional: the backend doesn't send it yet, so callers default to
+  // [] when absent.
+  knowledge?: string[]
   // Mission-only fields (internal/brain/missions) — meaningless to a
   // chat-only agent, absent or at zero values for one. Optional here
   // since most call sites (chat agent picker etc.) never populate
@@ -530,6 +534,35 @@ export interface AdminTool {
 export interface AdminSkill {
   name: string
   description: string
+}
+
+// KbCollection is one document collection agents can search with
+// kb_search — a named group of ingested documents.
+export interface KbCollection {
+  id: string
+  name: string
+  description: string
+  doc_count: number
+  chunk_count: number
+  created_at: string
+  updated_at: string
+}
+
+// KbDocument is one ingested file within a collection. status tracks
+// the ingestion pipeline: pending (queued) -> ingesting (chunking +
+// embedding) -> ready | failed.
+export interface KbDocument {
+  id: string
+  collection_id: string
+  title: string
+  source_type: 'file' | 'notion' | 'wiki' | 'url'
+  source_ref: string
+  status: 'pending' | 'ingesting' | 'ready' | 'failed'
+  error: string
+  chunk_count: number
+  bytes: number
+  ingested_at: string | null
+  created_at: string
 }
 
 // PlanUnit is one item of a mission's plan. passes is flipped only by

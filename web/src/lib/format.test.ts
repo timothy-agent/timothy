@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compact, formatDuration, missionDisplayName, money } from './format'
+import { compact, formatDuration, humanBytes, missionDisplayName, money, relativeTime } from './format'
 
 describe('compact', () => {
   it('leaves small numbers as-is', () => {
@@ -79,5 +79,40 @@ describe('money', () => {
 
   it('falls back to "CODE amount" for a currency code Intl rejects, without throwing', () => {
     expect(money(1.5, 'NOTACODE')).toBe('NOTACODE 1.50')
+  })
+})
+
+describe('humanBytes', () => {
+  it('renders sub-1024 byte counts as bytes', () => {
+    expect(humanBytes(512)).toBe('512 B')
+  })
+
+  it('renders kilobytes with one decimal', () => {
+    expect(humanBytes(2048)).toBe('2.0 KB')
+  })
+
+  it('renders megabytes and gigabytes', () => {
+    expect(humanBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+    expect(humanBytes(2 * 1024 * 1024 * 1024)).toBe('2.0 GB')
+  })
+})
+
+describe('relativeTime', () => {
+  it('renders under a minute as "just now"', () => {
+    expect(relativeTime(new Date(Date.now() - 10_000).toISOString())).toBe('just now')
+  })
+
+  it('renders minutes and hours ago', () => {
+    expect(relativeTime(new Date(Date.now() - 5 * 60_000).toISOString())).toBe('5m ago')
+    expect(relativeTime(new Date(Date.now() - 3 * 3_600_000).toISOString())).toBe('3h ago')
+  })
+
+  it('renders days ago within a week', () => {
+    expect(relativeTime(new Date(Date.now() - 2 * 86_400_000).toISOString())).toBe('2d ago')
+  })
+
+  it('falls back to a locale date past a week', () => {
+    const old = new Date(Date.now() - 10 * 86_400_000)
+    expect(relativeTime(old.toISOString())).toBe(old.toLocaleDateString())
   })
 })

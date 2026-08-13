@@ -29,6 +29,36 @@ export function missionDisplayName(mission: { name?: string; goal: string }, n =
   return goal.length > n ? `${goal.slice(0, n)}…` : goal
 }
 
+// humanBytes renders a byte count in the largest unit that keeps it
+// readable (KB/MB/GB), one decimal past the first unit.
+export function humanBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let v = bytes / 1024
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(1)} ${units[i]}`
+}
+
+// relativeTime renders an ISO timestamp as "just now" / "5m ago" /
+// "3h ago" / "2d ago", falling back to a locale date past a week —
+// document/collection rows update often enough that an absolute
+// timestamp is less scannable than a relative one.
+export function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 60_000) return 'just now'
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(iso).toLocaleDateString()
+}
+
 // money renders an amount in its billing currency's own symbol rather
 // than assuming "$"/USD — the ledger itself never converts (D-013):
 // this always renders the amount exactly as recorded. Precision keeps

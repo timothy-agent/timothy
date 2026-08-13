@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, AdminRoute } from '../../api/types'
@@ -11,9 +11,10 @@ vi.mock('../../api/client', () => ({
   deleteAgent: vi.fn(),
   listTools: vi.fn(),
   listSkills: vi.fn(),
+  listKbCollections: vi.fn(),
 }))
 
-import { listAgents, listRoutes, listTools, listSkills } from '../../api/client'
+import { listAgents, listRoutes, listTools, listSkills, listKbCollections, patchAgent } from '../../api/client'
 
 afterEach(cleanup)
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue([codingRoute])
   vi.mocked(listTools).mockResolvedValue([])
   vi.mocked(listSkills).mockResolvedValue([])
+  vi.mocked(listKbCollections).mockResolvedValue([])
 })
 
 function renderEdit(id = 'a1') {
@@ -69,5 +71,27 @@ describe('AgentEdit', () => {
 
     await screen.findByDisplayValue(coder.description)
     expect(screen.getByText('Skills allowlist')).toBeInTheDocument()
+  })
+
+  it('shows a knowledge allowlist field', async () => {
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    expect(screen.getByText('Knowledge allowlist')).toBeInTheDocument()
+  })
+
+  it('includes knowledge in the save payload, defaulting to empty when the agent omits it', async () => {
+    vi.mocked(patchAgent).mockResolvedValue()
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchAgent).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({ knowledge: [] }),
+      ),
+    )
   })
 })

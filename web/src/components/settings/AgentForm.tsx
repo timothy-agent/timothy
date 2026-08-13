@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from '../ui/select'
 import { Field, Toggle } from './shared'
+import { KnowledgePicker } from './KnowledgePicker'
 import { SkillsPicker } from './SkillsPicker'
 import { ToolsPicker } from './ToolsPicker'
 import type { AdminAgent, AdminRoute } from '../../api/types'
@@ -27,6 +28,7 @@ export interface AgentFormValue {
   route: string
   skills: string[]
   tools: string[]
+  knowledge: string[]
   memory: boolean
 }
 
@@ -37,6 +39,7 @@ export function useAgentForm(agent?: AdminAgent) {
   const [route, setRoute] = useState(agent?.route ?? '')
   const [skills, setSkills] = useState<string[]>(agent?.skills ?? [])
   const [tools, setTools] = useState<string[]>(agent?.tools ?? [])
+  const [knowledge, setKnowledge] = useState<string[]>(agent?.knowledge ?? [])
   const [memory, setMemory] = useState(agent?.memory ?? true)
 
   // Edit loads its agent asynchronously, after this hook has already
@@ -50,6 +53,7 @@ export function useAgentForm(agent?: AdminAgent) {
     setRoute(agent.route)
     setSkills(agent.skills)
     setTools(agent.tools)
+    setKnowledge(agent.knowledge ?? [])
     setMemory(agent.memory)
   }, [agent])
 
@@ -60,13 +64,31 @@ export function useAgentForm(agent?: AdminAgent) {
     route,
     skills,
     tools,
+    knowledge,
     memory,
   }
 
   return {
     value,
     canSubmit: agent ? true : slugify(name) !== '',
-    fields: { name, setName, description, setDescription, overlay, setOverlay, route, setRoute, skills, setSkills, tools, setTools, memory, setMemory },
+    fields: {
+      name,
+      setName,
+      description,
+      setDescription,
+      overlay,
+      setOverlay,
+      route,
+      setRoute,
+      skills,
+      setSkills,
+      tools,
+      setTools,
+      knowledge,
+      setKnowledge,
+      memory,
+      setMemory,
+    },
   }
 }
 
@@ -145,6 +167,9 @@ export function AgentForm({
       </Field>
       <Field label="Tools allowlist" hint="pick from the live tool surface; empty = none">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
+      </Field>
+      <Field label="Knowledge allowlist" hint="collections this agent can search with kb_search; empty = none">
+        <KnowledgePicker value={fields.knowledge} onChange={fields.setKnowledge} />
       </Field>
     </div>
   )

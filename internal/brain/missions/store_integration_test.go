@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -309,6 +310,43 @@ func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 	}
 	if m2.PromptOverlay != "" {
 		t.Fatalf("PromptOverlay = %q, want empty when not set", m2.PromptOverlay)
+	}
+}
+
+// TestMissionKnowledgeRoundTrips covers Knowledge: a snapshot of the
+// creating agent's kb_collections at create time, same shape as
+// PromptOverlay above.
+func TestMissionKnowledgeRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "knowledge", Kind: "general", Route: "default",
+		Knowledge: []string{"docs", "runbooks"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !slices.Equal(m.Knowledge, []string{"docs", "runbooks"}) {
+		t.Fatalf("Knowledge = %v, want it to round-trip unchanged", m.Knowledge)
+	}
+
+	// Absent means "kb_search never offered" — must stay empty, not some
+	// driver default.
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-knowledge", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(m2.Knowledge) != 0 {
+		t.Fatalf("Knowledge = %v, want empty when not set", m2.Knowledge)
 	}
 }
 

@@ -47,6 +47,11 @@ type Agent struct {
 	ReviewRoute       string   `json:"review_route"`
 	BudgetUSD         *float64 `json:"budget_usd,omitempty"`
 	ApprovalAllowlist []string `json:"approval_allowlist"`
+	// Knowledge names the kb_collections this agent may search with
+	// kb_search (D-060) — empty means none (opt-in only, same as
+	// Skills/Tools). Collection scoping is enforced in Go at the tool
+	// call, never left to a prompt.
+	Knowledge []string `json:"knowledge"`
 }
 
 // namePattern mirrors connectors: a lowercase slug that survives in
@@ -86,21 +91,22 @@ func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
 }
 
-const agentColumns = `id, name, description, prompt_overlay, route, skills, tools, memory, is_default, enabled, review_route, budget_usd, approval_allowlist`
+const agentColumns = `id, name, description, prompt_overlay, route, skills, tools, memory, is_default, enabled, review_route, budget_usd, approval_allowlist, knowledge`
 
 func scanAgent(row pgx.Row) (Agent, error) {
 	var (
-		a                   Agent
-		skills, tools, appr []byte
+		a                              Agent
+		skills, tools, appr, knowledge []byte
 	)
 	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.PromptOverlay, &a.Route,
 		&skills, &tools, &a.Memory, &a.IsDefault, &a.Enabled,
-		&a.ReviewRoute, &a.BudgetUSD, &appr); err != nil {
+		&a.ReviewRoute, &a.BudgetUSD, &appr, &knowledge); err != nil {
 		return Agent{}, err
 	}
 	_ = json.Unmarshal(skills, &a.Skills)
 	_ = json.Unmarshal(tools, &a.Tools)
 	_ = json.Unmarshal(appr, &a.ApprovalAllowlist)
+	_ = json.Unmarshal(knowledge, &a.Knowledge)
 	if a.Skills == nil {
 		a.Skills = []string{}
 	}
@@ -109,6 +115,9 @@ func scanAgent(row pgx.Row) (Agent, error) {
 	}
 	if a.ApprovalAllowlist == nil {
 		a.ApprovalAllowlist = []string{}
+	}
+	if a.Knowledge == nil {
+		a.Knowledge = []string{}
 	}
 	return a, nil
 }
@@ -242,14 +251,14 @@ func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("agents create: %w", err)
 	}
-	skills, tools, appr := jsonArr(a.Skills), jsonArr(a.Tools), jsonArr(a.ApprovalAllowlist)
+	skills, tools, appr, knowledge := jsonArr(a.Skills), jsonArr(a.Tools), jsonArr(a.ApprovalAllowlist), jsonArr(a.Knowledge)
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO agents
 			(name, description, prompt_overlay, route, skills, tools, memory, enabled,
-			 review_route, budget_usd, approval_allowlist)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+			 review_route, budget_usd, approval_allowlist, knowledge)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
 		a.Name, a.Description, a.PromptOverlay, a.Route, skills, tools, a.Memory, a.Enabled,
-		a.ReviewRoute, a.BudgetUSD, appr).Scan(&id)
+		a.ReviewRoute, a.BudgetUSD, appr, knowledge).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("agents create: %w", err)
 	}
@@ -271,6 +280,7 @@ type Patch struct {
 	ReviewRoute       *string   `json:"review_route"`
 	BudgetUSD         *float64  `json:"budget_usd"`
 	ApprovalAllowlist *[]string `json:"approval_allowlist"`
+	Knowledge         *[]string `json:"knowledge"`
 }
 
 func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
@@ -323,13 +333,16 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	if p.ApprovalAllowlist != nil {
 		after.ApprovalAllowlist = *p.ApprovalAllowlist
 	}
+	if p.Knowledge != nil {
+		after.Knowledge = *p.Knowledge
+	}
 	if _, err := tx.Exec(ctx, `UPDATE agents SET description = $2, prompt_overlay = $3,
 			route = $4, skills = $5, tools = $6, memory = $7, enabled = $8,
-			review_route = $9, budget_usd = $10, approval_allowlist = $11, updated_at = now()
+			review_route = $9, budget_usd = $10, approval_allowlist = $11, knowledge = $12, updated_at = now()
 		WHERE id = $1`,
 		id, after.Description, after.PromptOverlay, after.Route,
 		jsonArr(after.Skills), jsonArr(after.Tools), after.Memory, after.Enabled,
-		after.ReviewRoute, after.BudgetUSD, jsonArr(after.ApprovalAllowlist)); err != nil {
+		after.ReviewRoute, after.BudgetUSD, jsonArr(after.ApprovalAllowlist), jsonArr(after.Knowledge)); err != nil {
 		return fmt.Errorf("agents patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

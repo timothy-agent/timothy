@@ -96,6 +96,10 @@ type AgentDefaults struct {
 	// explicit budget_currency, or "USD" if that's also empty).
 	BudgetAmount      *float64
 	ApprovalAllowlist []string
+	// Knowledge is the agent's kb_collections allowlist, snapshotted
+	// onto the mission the same way PromptOverlay is (see
+	// missions.Mission.Knowledge).
+	Knowledge []string
 }
 
 // AgentResolver resolves an agent id to its defaults at FIRE time, not
@@ -376,17 +380,24 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // lazily the first time Advance/Drive touches it (see driver.go's
 // ensureProvisioned).
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
+	t, promptOverlay, knowledge := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
 	spec, _ := json.Marshal(Spec{})
 	budgetCurrency := t.BudgetCurrency
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_safe, spec, schedule_id, harness, environment)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+	if knowledge == nil {
+		knowledge = []string{}
+	}
+	knowledgeJSON, err := json.Marshal(knowledge)
+	if err != nil {
+		return fmt.Errorf("marshal knowledge: %w", err)
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO missions
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		t.Goal, sc.Name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment)
+		promptOverlay, knowledgeJSON, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment)
 	return err
 }
 
@@ -402,8 +413,9 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 // (DefaultCodingRoute), and a coding template that omits harness gets
 // the settings default (D-051) — mirrors api/missions.go create()'s
 // own precedence so a scheduler-fired mission inherits it too.
-func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string) {
+func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string, []string) {
 	promptOverlay := ""
+	var knowledge []string
 	if resolve != nil {
 		if defaults, ok := resolve(ctx, t.AgentID); ok {
 			if t.Route == "" {
@@ -416,6 +428,7 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 				t.BudgetAmount = defaults.BudgetAmount
 			}
 			promptOverlay = defaults.PromptOverlay
+			knowledge = defaults.Knowledge
 		}
 	}
 	defaultRoute := ""
@@ -448,5 +461,5 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 	if t.Kind == "coding" && t.Environment == "" {
 		t.Environment, _ = DetectEnvironment("", t.Goal)
 	}
-	return t, promptOverlay
+	return t, promptOverlay, knowledge
 }

@@ -3,6 +3,7 @@ import { AgentsTab } from '../components/settings/AgentsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { CredentialsTab } from '../components/settings/CredentialsTab'
 import { FeaturesTab } from '../components/settings/FeaturesTab'
+import { KnowledgeTab } from '../components/settings/KnowledgeTab'
 import { ProvidersTab } from '../components/settings/ProvidersTab'
 import { RoutesTab } from '../components/settings/RoutesTab'
 import { SecretsTab } from '../components/settings/SecretsTab'
@@ -36,6 +37,12 @@ export const settingsAreas = [
     label: 'Routing',
     description: 'Task routes decide which provider chain handles a given job.',
     render: RoutesTab,
+  },
+  {
+    key: 'knowledge',
+    label: 'Knowledge',
+    description: 'Curate document collections agents can search for grounded answers.',
+    render: KnowledgeTab,
   },
   {
     key: 'secrets',

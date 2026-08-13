@@ -8,8 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
@@ -151,7 +153,20 @@ type nativeRunner struct {
 	// sandbox executes worker/reviewer shell commands in a per-mission
 	// Docker container instead of brain's own process.
 	sandbox sandboxExec
+	// kbSearch backs the per-turn kb_search ExtraTool (see kbSearchTool)
+	// — nil means kb_search is never offered on any mission turn,
+	// regardless of a mission's own Knowledge snapshot (same "the
+	// dependency's absence turns the feature off entirely" contract as
+	// chat.go's SetKBSearch).
+	kbSearch KBSearchFunc
 }
+
+// KBSearchFunc runs one kb_search call scoped to collectionNames — main
+// curries memclient.Client.KBSearch in, same shape as chat.go's
+// KBSearch type. collectionNames travels on every call (the mission's
+// own Knowledge snapshot), never bound once, since the same func serves
+// every mission.
+type KBSearchFunc func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
 // NewNativeRunner wraps a production *loop.Agent as a Runner. The
 // agent instance is expected to be brain's existing chat agent — a
@@ -163,11 +178,58 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 }
 
 // NewNativeRunnerWithFloor is NewNativeRunner plus a model floor deny
-// list (see nativeRunner.modelFloorDeny) and a sandbox exec backend
-// (a *sandbox.Manager.Exec closure) — worker and reviewer shell calls
-// route through it instead of brain's own process.
-func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, log *slog.Logger) Runner {
-	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, log: log}
+// list (see nativeRunner.modelFloorDeny), a sandbox exec backend (a
+// *sandbox.Manager.Exec closure) — worker and reviewer shell calls
+// route through it instead of brain's own process — and a kb_search
+// backend (nil disables kb_search on every mission turn, matching
+// SetKBSearch's nil-safe contract).
+func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, kbSearch KBSearchFunc, log *slog.Logger) Runner {
+	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, log: log}
+}
+
+// kbSearchTool builds this turn's kb_search ExtraTool bound to m's own
+// Knowledge snapshot, or nil when kb_search must not be offered: no
+// backend wired, or the mission's creating agent named no collections
+// (empty Knowledge = no kb_search, same opt-in-only contract as
+// chat.go's kbSearchTool, which this mirrors exactly). A non-nil sink
+// records every returned document at execution time — the harness's
+// citation evidence must come from here, not from the rendered tool
+// result: digests cap at digestCeiling and offload past 8KiB, so a
+// full kb_search result never survives into the digest text.
+func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
+	if r.kbSearch == nil || len(m.Knowledge) == 0 {
+		return nil
+	}
+	collections := slices.Clone(m.Knowledge)
+	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
+		hits, err := r.kbSearch(ctx, query, collections, mode, k)
+		if err == nil && sink != nil {
+			sink.record(hits)
+		}
+		return hits, err
+	})
+}
+
+// kbRefSink accumulates the kb:// refs of documents kb_search actually
+// returned across a worker run's turns. Guarded because the loop may
+// execute tool calls concurrently within a turn.
+type kbRefSink struct {
+	mu   sync.Mutex
+	refs []string
+}
+
+func (s *kbRefSink) record(hits []builtin.KBSearchHit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range hits {
+		s.refs = append(s.refs, "kb://"+h.DocumentID)
+	}
+}
+
+func (s *kbRefSink) all() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.refs)
 }
 
 // missionTools builds the turn-scoped file tools rooted in the
@@ -461,7 +523,11 @@ func reviewRoute(m Mission) string {
 // retry, never a silent accept.
 func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
 	system, user := packet.Render()
+	kbSeen := &kbRefSink{}
 	extra := append([]*tools.Tool{MissionStatusTool()}, r.missionTools(m)...)
+	if t := r.kbSearchTool(m, kbSeen); t != nil {
+		extra = append(extra, t)
+	}
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        workerRoute(m),
@@ -482,7 +548,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		return WorkerVerdict{}, text, err
 	}
 	if v, ok := r.tryParseVerdict(args); ok {
-		v.SeenURLs = seenURLs
+		v.SeenURLs = append(seenURLs, kbSeen.all()...)
 		return v, text, nil
 	}
 
@@ -498,7 +564,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		return WorkerVerdict{}, text + "\n" + recoverText, err
 	}
 	if v, ok := r.tryParseVerdict(recoverArgs); ok {
-		v.SeenURLs = seenURLs
+		v.SeenURLs = append(seenURLs, kbSeen.all()...)
 		return v, text + "\n" + recoverText, nil
 	}
 
@@ -515,7 +581,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if raw, ok := extractTextSentinel(combined, missionStatusToolName); ok {
 		if v, ok := r.tryParseVerdict(raw); ok {
 			r.log.Warn("mission worker expressed mission_status as text, not a tool call", "mission_id", m.ID)
-			v.SeenURLs = seenURLs
+			v.SeenURLs = append(seenURLs, kbSeen.all()...)
 			return v, combined, nil
 		}
 	}
@@ -566,6 +632,9 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	extra := []*tools.Tool{ExploreNotesTool()}
 	if shell := r.missionShell(m); shell != nil {
 		extra = append(extra, shell)
+	}
+	if t := r.kbSearchTool(m, nil); t != nil {
+		extra = append(extra, t)
 	}
 	req := loop.Request{
 		SessionID:    m.SessionID,
@@ -772,6 +841,10 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
 	}
 	user += renderAttachments(m.Attachments)
+	extra := []*tools.Tool{PlanTool()}
+	if t := r.kbSearchTool(m, nil); t != nil {
+		extra = append(extra, t)
+	}
 	req := loop.Request{
 		SessionID: m.SessionID,
 		Route:     oversightRoute(m),
@@ -780,12 +853,13 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		System:    system,
 		Messages:  []provider.Message{{Role: "user", Content: user}},
 		// The planner plans; it must not act. No base tool matches this
-		// allowlist (submit_plan arrives via ExtraTools, which bypass
-		// it), so the turn's only tool is submit_plan — a planner that
-		// reaches for shell parked a live canary on the permission gate
-		// for ten minutes trying to do the worker's job in plan phase.
+		// allowlist (submit_plan/kb_search arrive via ExtraTools, which
+		// bypass it, and kb_search is read-only — never "acting"), so
+		// the turn's only BASE tool is none — a planner that reaches for
+		// shell parked a live canary on the permission gate for ten
+		// minutes trying to do the worker's job in plan phase.
 		ToolAllow:    []string{planToolName},
-		ExtraTools:   []*tools.Tool{PlanTool()},
+		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
 	}

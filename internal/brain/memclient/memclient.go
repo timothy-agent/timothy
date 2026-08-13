@@ -131,6 +131,84 @@ func (c *Client) Retrieve(ctx context.Context, sessionID, query string) ([]Memor
 	return out.Memories, nil
 }
 
+// IngestDocument runs memoryd's synchronous chunk/embed/store pipeline
+// for one already-converted document and returns the chunk count.
+// Re-ingest is safe to call again: memoryd deletes the document's
+// existing chunks before writing the new set.
+func (c *Client) IngestDocument(ctx context.Context, documentID, title, markdown string) (int, error) {
+	body, err := json.Marshal(map[string]string{"document_id": documentID, "title": title, "markdown": markdown})
+	if err != nil {
+		return 0, fmt.Errorf("memclient: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/ingest-document", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("memclient: request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("memclient: memoryd unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return 0, fmt.Errorf("memclient: memoryd http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		ChunkCount int `json:"chunk_count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("memclient: decode: %w", err)
+	}
+	return out.ChunkCount, nil
+}
+
+// KBChunkHit is one hybrid-retrieval result from the knowledge base.
+type KBChunkHit struct {
+	ChunkID       string  `json:"chunk_id"`
+	DocumentID    string  `json:"document_id"`
+	DocumentTitle string  `json:"document_title"`
+	Collection    string  `json:"collection"`
+	Breadcrumb    string  `json:"breadcrumb"`
+	Content       string  `json:"content"`
+	Score         float64 `json:"score"`
+	SourceRef     string  `json:"source_ref"`
+}
+
+// KBSearch asks memoryd for the top-k chunks matching query, scoped to
+// collectionNames (required, non-empty — this is the ONLY place a
+// caller can widen or narrow that scope; the tool that calls this must
+// bind names at construction, never take them from model input).
+func (c *Client) KBSearch(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]KBChunkHit, error) {
+	body, err := json.Marshal(map[string]any{
+		"query": query, "collection_names": collectionNames, "mode": mode, "k": k,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("memclient: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/kb-search", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("memclient: request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("memclient: memoryd unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("memclient: memoryd http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		Results []KBChunkHit `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("memclient: decode: %w", err)
+	}
+	return out.Results, nil
+}
+
 // RenderBlock fences retrieved memories as tagged DATA for the system
 // prompt tail. The preamble and the closing-tag escape are the
 // memory-poisoning defense (D-011): whatever a memory's content says,

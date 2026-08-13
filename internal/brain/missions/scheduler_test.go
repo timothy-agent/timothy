@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 )
@@ -102,6 +103,7 @@ func TestResolveTemplateDefaults(t *testing.T) {
 		wantBudget    *float64
 		wantOverlay   string
 		wantHarness   string
+		wantKnowledge []string
 	}{
 		{
 			name:       "nil resolver falls back to the default role's route",
@@ -156,6 +158,26 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			wantReview:  "careful",
 			wantBudget:  &budget,
 			wantOverlay: "overlay text",
+		},
+		{
+			name:     "resolved agent's knowledge collections are returned",
+			template: MissionTemplate{Goal: "g", AgentID: "briefing"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{Route: "fast", ReviewRoute: "careful", Knowledge: []string{"docs", "runbooks"}}, true
+			},
+			wantRoute:     "fast",
+			wantReview:    "careful",
+			wantKnowledge: []string{"docs", "runbooks"},
+		},
+		{
+			name:     "unresolved agent id yields no knowledge",
+			template: MissionTemplate{Goal: "g", AgentID: "missing"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{}, false
+			},
+			wantRoute:     "default",
+			wantReview:    "default",
+			wantKnowledge: nil,
 		},
 		{
 			name:     "template's own non-empty fields are never overwritten",
@@ -227,7 +249,7 @@ func TestResolveTemplateDefaults(t *testing.T) {
 					return false
 				}
 			}
-			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, routeExists, tc.codingExec)
+			got, overlay, knowledge := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, routeExists, tc.codingExec)
 			if got.Route != tc.wantRoute {
 				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
 			}
@@ -247,6 +269,9 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			}
 			if got.Harness != tc.wantHarness {
 				t.Errorf("Harness = %q, want %q", got.Harness, tc.wantHarness)
+			}
+			if !slices.Equal(knowledge, tc.wantKnowledge) {
+				t.Errorf("knowledge = %v, want %v", knowledge, tc.wantKnowledge)
 			}
 		})
 	}

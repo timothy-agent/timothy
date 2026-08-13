@@ -15,6 +15,8 @@ description: Decomposes a complex research question into independent sub-questio
 - Scout each sub-question with 1-2 web_search calls before locking the plan:
   confirm it is actually answerable and roughly how much material exists.
   This is reconnaissance, not the research itself.
+- If a kb_search tool is available, search the knowledge base before the
+  web and cite kb sources by their kb:// ref.
 - One plan unit per sub-question. Each unit declares exactly one artifact,
   `findings-<slug>.md`, created with write_file. Each findings file has:
   the answer to that sub-question, key facts with an inline citation and

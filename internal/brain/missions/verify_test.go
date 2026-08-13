@@ -156,6 +156,10 @@ func TestExtractCitedURLs(t *testing.T) {
 		{"duplicate collapses to one", "https://example.com/x and again https://example.com/x", []string{"https://example.com/x"}},
 		{"http scheme included", "http://example.com/plain", []string{"http://example.com/plain"}},
 		{"non-http scheme ignored", "see ftp://example.com/file", nil},
+		{"bare kb ref", "Source: kb://doc-123", []string{"kb://doc-123"}},
+		{"markdown kb link", "see [the doc](kb://doc-123) for more", []string{"kb://doc-123"}},
+		{"mixed kb ref and url", "kb://doc-123 and also https://example.com/x", []string{"kb://doc-123", "https://example.com/x"}},
+		{"bare kb ref sheds trailing punctuation", "cites kb://a1b2c3d4-0000-0000-0000-000000000001; and kb://a1b2c3d4-0000-0000-0000-000000000002.", []string{"kb://a1b2c3d4-0000-0000-0000-000000000001", "kb://a1b2c3d4-0000-0000-0000-000000000002"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,6 +241,24 @@ func TestCheckCitations(t *testing.T) {
 			content:   "[ref](https://example.com/docs)",
 			seenURLs:  nil,
 			wantProbs: 1,
+		},
+		{
+			name:      "cited kb ref was searched",
+			content:   "Source: kb://doc-123",
+			seenURLs:  []string{"kb://doc-123"},
+			wantProbs: 0,
+		},
+		{
+			name:      "invented kb ref fails",
+			content:   "Source: kb://doc-invented",
+			seenURLs:  []string{"kb://doc-other"},
+			wantProbs: 1,
+		},
+		{
+			name:      "kb ref and url both seen passes",
+			content:   "Source: kb://doc-123\nsee also [docs](https://example.com/docs)",
+			seenURLs:  []string{"kb://doc-123", "https://example.com/docs"},
+			wantProbs: 0,
 		},
 	}
 	for _, tc := range cases {

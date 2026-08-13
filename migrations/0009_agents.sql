@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS agents (
     review_route       text NOT NULL DEFAULT '',
     budget_usd         numeric(12,2),
     approval_allowlist jsonb NOT NULL DEFAULT '[]',
+    -- Knowledge collections (kb_collections.name) this agent may search
+    -- with kb_search (D-060) — empty means none, same opt-in semantics
+    -- as skills/tools: an agent must name a collection explicitly.
+    knowledge      jsonb NOT NULL DEFAULT '[]',
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );

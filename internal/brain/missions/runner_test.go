@@ -14,6 +14,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -1420,4 +1421,133 @@ func TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch(t *testing.T) {
 	if !slices.Equal(v.SeenURLs, want) {
 		t.Fatalf("RunWorker verdict SeenURLs = %v, want %v", v.SeenURLs, want)
 	}
+}
+
+// TestKBSearchToolRecordsRefsInSink covers the execution-time harvest
+// (the digest is capped/offloaded past digestCeiling, so citation
+// evidence must be recorded when the tool RUNS, never parsed from the
+// rendered result): executing the worker's kb_search tool must land
+// every returned document's kb:// ref in the sink, and a nil sink
+// (explore/plan turns) must stay safe.
+func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
+	r := &nativeRunner{log: slog.Default(), kbSearch: func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		return []builtin.KBSearchHit{
+			{DocumentID: "aaaaaaaa-0000-0000-0000-000000000001", DocumentTitle: "Runbook", Content: "content"},
+			{DocumentID: "bbbbbbbb-0000-0000-0000-000000000002", DocumentTitle: "Guide", Content: "more"},
+		}, nil
+	}}
+	m := Mission{ID: "m1", Knowledge: []string{"docs"}}
+
+	sink := &kbRefSink{}
+	tool := r.kbSearchTool(m, sink)
+	if tool == nil {
+		t.Fatal("kbSearchTool = nil with backend and knowledge present")
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"deploy runbook"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := []string{"kb://aaaaaaaa-0000-0000-0000-000000000001", "kb://bbbbbbbb-0000-0000-0000-000000000002"}
+	if got := sink.all(); !slices.Equal(got, want) {
+		t.Fatalf("sink refs = %v, want %v", got, want)
+	}
+
+	if _, err := r.kbSearchTool(m, nil).Execute(context.Background(), json.RawMessage(`{"query":"deploy runbook"}`)); err != nil {
+		t.Fatalf("Execute with nil sink: %v", err)
+	}
+}
+
+// TestRunWorkerSurfacesKBSinkRefsOnVerdict is the end-to-end wiring
+// check: refs recorded by the sink during the worker turn must reach
+// the verdict's SeenURLs alongside the digest-harvested web URLs.
+func TestRunWorkerSurfacesKBSinkRefsOnVerdict(t *testing.T) {
+	agent := &kbExecutingAgent{scriptedAgent: scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"researched"}`)},
+	}}}
+	r := newTestRunner(agent)
+	r.kbSearch = func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		return []builtin.KBSearchHit{{DocumentID: "aaaaaaaa-0000-0000-0000-000000000001", DocumentTitle: "Runbook", Content: "content"}}, nil
+	}
+	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	want := []string{"kb://aaaaaaaa-0000-0000-0000-000000000001"}
+	if !slices.Equal(v.SeenURLs, want) {
+		t.Fatalf("RunWorker verdict SeenURLs = %v, want %v", v.SeenURLs, want)
+	}
+}
+
+// kbExecutingAgent stands in for the loop actually running the offered
+// kb_search tool mid-turn: Start executes it for real (so the tool's
+// closure records into the worker's sink) before replaying the
+// scripted events.
+type kbExecutingAgent struct {
+	scriptedAgent
+}
+
+func (a *kbExecutingAgent) Start(ctx context.Context, req loop.Request) (<-chan stream.StreamEvent, error) {
+	for _, tool := range req.ExtraTools {
+		if tool.Name == "kb_search" {
+			if _, err := tool.Execute(ctx, json.RawMessage(`{"query":"q"}`)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return a.scriptedAgent.Start(ctx, req)
+}
+
+// TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge covers
+// kbSearchTool's opt-in-only contract: no backend wired, or a mission
+// with an empty Knowledge snapshot, must never put kb_search on the
+// turn's offered tool surface (chat.go's kbSearchTool mirrors this
+// exactly on the chat side).
+func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
+	hasKBSearch := func(req loop.Request) bool {
+		for _, tool := range req.ExtraTools {
+			if tool.Name == "kb_search" {
+				return true
+			}
+		}
+		return false
+	}
+	doneBatch := [][]stream.StreamEvent{{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)}}
+
+	t.Run("no backend wired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: doneBatch}
+		r := newTestRunner(agent)
+		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker: %v", err)
+		}
+		if hasKBSearch(agent.requests[0]) {
+			t.Fatal("kb_search offered with no backend wired")
+		}
+	})
+
+	t.Run("empty mission knowledge", func(t *testing.T) {
+		agent := &scriptedAgent{batches: doneBatch}
+		r := newTestRunner(agent)
+		r.kbSearch = func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+			return nil, nil
+		}
+		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker: %v", err)
+		}
+		if hasKBSearch(agent.requests[0]) {
+			t.Fatal("kb_search offered with empty mission Knowledge")
+		}
+	})
+
+	t.Run("backend wired and knowledge set", func(t *testing.T) {
+		agent := &scriptedAgent{batches: doneBatch}
+		r := newTestRunner(agent)
+		r.kbSearch = func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+			return nil, nil
+		}
+		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker: %v", err)
+		}
+		if !hasKBSearch(agent.requests[0]) {
+			t.Fatal("kb_search not offered despite backend wired and non-empty Knowledge")
+		}
+	})
 }

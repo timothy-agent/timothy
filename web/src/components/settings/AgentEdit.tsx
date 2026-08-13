@@ -51,6 +51,7 @@ export function AgentEdit() {
         route: value.route,
         skills: value.skills,
         tools: value.tools,
+        knowledge: value.knowledge,
         memory: value.memory,
       })
       toast.success('Agent saved')

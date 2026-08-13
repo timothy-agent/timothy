@@ -8,6 +8,7 @@ description: Source-grounded research with verification and citations. Use when 
 ## Rules
 
 - Retrieve before you write: every load-bearing claim needs a source you actually fetched this turn, not trained recall.
+- If a kb_search tool is available, search the knowledge base before the web and cite kb sources by their kb:// ref.
 - Two independent sources for any claim that drives a decision; one source for background color.
 - Record where each fact came from; a source mentioned only in the trailing list without ever being referenced in the body is not a citation, it is decoration.
 - Distinguish plainly between what a source states and what you infer from it; label inference as inference.

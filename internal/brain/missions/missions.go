@@ -28,7 +28,11 @@ type Mission struct {
 	// at create time — see 0010_missions.sql for why this isn't a live
 	// agent lookup.
 	PromptOverlay string `json:"prompt_overlay,omitempty"`
-	Phase         Phase  `json:"phase"`
+	// Knowledge is a snapshot of the creating agent's kb_collections
+	// allowlist at create time, same reasoning as PromptOverlay above.
+	// Empty means kb_search is never offered on this mission's turns.
+	Knowledge []string `json:"knowledge,omitempty"`
+	Phase     Phase    `json:"phase"`
 	Status        Status `json:"status"`
 	// FailureReason is derived (no column) from this mission's latest
 	// mission.failed event's payload.reason — "cancelled" or

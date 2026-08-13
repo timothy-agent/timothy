@@ -46,7 +46,7 @@ func (s *Store) SetHub(hub *Hub) {
 const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_reason, pause_message,
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
-	plan_route, escalation_route, prompt_overlay,
+	plan_route, escalation_route, prompt_overlay, knowledge,
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
@@ -63,13 +63,13 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		agentID, scheduleID, sessionID, parentMission *string
 		phase, status                                 string
 		pendingPermission                             *string
-		spec, progress, attachmentsRaw                []byte
+		spec, progress, attachmentsRaw, knowledgeRaw  []byte
 		failureReason                                 *string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
-		&m.PlanRoute, &m.EscalationRoute, &m.PromptOverlay,
+		&m.PlanRoute, &m.EscalationRoute, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
@@ -78,6 +78,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
+	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -138,12 +139,12 @@ func scanMission(row pgx.Row) (Mission, error) {
 		agentID, scheduleID, sessionID, parentMission *string
 		phase, status                                 string
 		pendingPermission                             *string
-		spec, progress, attachmentsRaw                []byte
+		spec, progress, attachmentsRaw, knowledgeRaw  []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
-		&m.PlanRoute, &m.EscalationRoute, &m.PromptOverlay,
+		&m.PlanRoute, &m.EscalationRoute, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
@@ -151,6 +152,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
+	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -213,15 +215,25 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("missions create attachments: %w", err)
 	}
+	// knowledge is NOT NULL; a nil slice marshals to "null", so a
+	// mission with no knowledge collections gets "[]" instead.
+	knowledge := m.Knowledge
+	if knowledge == nil {
+		knowledge = []string{}
+	}
+	knowledgeJSON, err := json.Marshal(knowledge)
+	if err != nil {
+		return "", fmt.Errorf("missions create knowledge: %w", err)
+	}
 	var id string
 	budgetCurrency := m.BudgetCurrency
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, '')::uuid, $15, $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')::uuid, $24, $25) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, attachmentsJSON,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15, '')::uuid, $16, $17, $18, $19, $20, $21, $22, $23, NULLIF($24, '')::uuid, $25, $26) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 8), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, attachmentsJSON,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

@@ -29,6 +29,7 @@ export function AgentAdd() {
         route: value.route,
         skills: value.skills,
         tools: value.tools,
+        knowledge: value.knowledge,
         memory: value.memory,
         enabled: true,
       })

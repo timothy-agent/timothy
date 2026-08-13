@@ -82,8 +82,8 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// protocol parked every mission's first turn for nothing.
 			"mission_status": true,
 			"review_verdict": true,
-			"submit_plan":   true,
-			"explore_notes": true,
+			"submit_plan":    true,
+			"explore_notes":  true,
 			// write_file is root-confined by construction (relative
 			// paths only, .. rejected, root fixed at registration) —
 			// there is nothing for a prompt to guard that the tool
@@ -94,6 +94,10 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// web_search. mission_push is deliberately NOT here: it must
 			// always ask (see MissionPush's doc comment).
 			"missions": true,
+			// kb_search is a pure read scoped to collections bound in Go
+			// at construction (D-060), never model input — same reasoning
+			// as web_search/missions.
+			"kb_search": true,
 		},
 	}
 }

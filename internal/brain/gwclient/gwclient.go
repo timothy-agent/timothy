@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -28,17 +29,22 @@ type StreamRequest struct {
 	// Agent attributes the call in the cost ledger. ToolAllow is
 	// loop-internal (never serialized): the serving agent's tool
 	// allowlist, empty = all tools.
-	Agent     string             `json:"agent,omitempty"`
-	ToolAllow []string           `json:"-"`
-	Purpose   string             `json:"purpose,omitempty"` // ledger tag: why this call happened
-	ModelHint string             `json:"model_hint,omitempty"`
-	System    string             `json:"system,omitempty"`
-	Messages  []provider.Message `json:"messages"`
-	Tools     []provider.ToolDef `json:"tools,omitempty"`
-	MaxTokens int                `json:"max_tokens,omitempty"`
-	Effort    string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
-	SessionID string             `json:"session_id,omitempty"`
-	MissionID string             `json:"mission_id,omitempty"` // ledger tag: the mission this turn serves
+	Agent     string   `json:"agent,omitempty"`
+	ToolAllow []string `json:"-"`
+	// ExtraTools are turn-only tool defs layered on top of the shared
+	// base set (loop.Request.ExtraTools) — chat's per-agent kb_search
+	// binding is the only caller today. Loop-internal, never
+	// serialized, same as ToolAllow.
+	ExtraTools []*tools.Tool      `json:"-"`
+	Purpose    string             `json:"purpose,omitempty"` // ledger tag: why this call happened
+	ModelHint  string             `json:"model_hint,omitempty"`
+	System     string             `json:"system,omitempty"`
+	Messages   []provider.Message `json:"messages"`
+	Tools      []provider.ToolDef `json:"tools,omitempty"`
+	MaxTokens  int                `json:"max_tokens,omitempty"`
+	Effort     string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
+	SessionID  string             `json:"session_id,omitempty"`
+	MissionID  string             `json:"mission_id,omitempty"` // ledger tag: the mission this turn serves
 }
 
 // windowsTTL matches the gateway's own config poll cadence: a fresher

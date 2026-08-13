@@ -25,6 +25,8 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
@@ -144,6 +146,7 @@ type Service struct {
 	attachments    AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
 	markitdownURL  string                             // "": pdf attachments disabled (MARKITDOWN_URL unset)
 	markitdownHTTP *http.Client                       // shared client for the markitdown sidecar call
+	kbSearch       KBSearch                           // nil: kb_search never offered, regardless of agent config
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -234,6 +237,36 @@ func (s *Service) SetMarkitdown(url string) {
 	if s.markitdownHTTP == nil {
 		s.markitdownHTTP = &http.Client{}
 	}
+}
+
+// KBSearch runs one knowledge-base search scoped to collectionNames —
+// main curries memclient.Client.KBSearch in; collectionNames travels
+// on every call, never bound once, since the same func serves every
+// agent and each turn's collections are the SERVING agent's own
+// Knowledge list (D-060: enforced here in Go, never a prompt).
+type KBSearch func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
+
+// SetKBSearch wires the kb_search tool's backing search call. Optional
+// — nil means kb_search is never offered on any turn, regardless of an
+// agent's Knowledge list (same "the dependency's absence turns the
+// feature off entirely" contract as SetMemoryRetrieve/SetAttachments).
+func (s *Service) SetKBSearch(fn KBSearch) { s.kbSearch = fn }
+
+// kbSearchTool builds this turn's kb_search ExtraTool bound to
+// profile's Knowledge collections, or nil when kb_search must not be
+// offered: no backing search call wired, or the agent named no
+// collections (empty Knowledge = no kb_search, same opt-in-only
+// contract as Skills/Tools — this is the "exclude from the turn"
+// choice, matching load_skill's precedent of leaving a tool off the
+// offered surface entirely rather than having it answer with an error).
+func (s *Service) kbSearchTool(profile agents.Agent) *tools.Tool {
+	if s.kbSearch == nil || len(profile.Knowledge) == 0 {
+		return nil
+	}
+	collections := slices.Clone(profile.Knowledge)
+	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
+		return s.kbSearch(ctx, query, collections, mode, k)
+	})
 }
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
@@ -970,15 +1003,20 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 		}
 	}
 
+	var extraTools []*tools.Tool
+	if t := s.kbSearchTool(profile); t != nil {
+		extraTools = []*tools.Tool{t}
+	}
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
-		Route:     route,
-		Agent:     profile.Name,
-		ToolAllow: resolveToolAllow(profile),
-		Purpose:   "chat",
-		ModelHint: modelHint,
-		System:    system,
-		Messages:  msgs,
-		SessionID: sessionID,
+		Route:      route,
+		Agent:      profile.Name,
+		ToolAllow:  resolveToolAllow(profile),
+		ExtraTools: extraTools,
+		Purpose:    "chat",
+		ModelHint:  modelHint,
+		System:     system,
+		Messages:   msgs,
+		SessionID:  sessionID,
 	})
 	if err != nil {
 		s.turnDone(sessionID)

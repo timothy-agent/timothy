@@ -25,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -278,7 +279,7 @@ func main() {
 		}
 		return name
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, app.Log)
 	}
@@ -467,6 +468,27 @@ func main() {
 		svc.SetMarkitdown(markitdownURL)
 	}
 
+	// kb_search: nil-safe wiring, same shape as memory retrieve/extract
+	// above — mc satisfies IngestDocument/KBSearch unconditionally, so
+	// this always wires (memoryd unreachable surfaces as a per-call
+	// error, not a nil-gate, since MEMORYD_URL always resolves to a
+	// default).
+	kbStore := kb.New(app.DB)
+	svc.SetKBSearch(func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		hits, err := mc.KBSearch(ctx, query, collectionNames, mode, k)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]builtin.KBSearchHit, len(hits))
+		for i, h := range hits {
+			out[i] = builtin.KBSearchHit{
+				DocumentID: h.DocumentID, DocumentTitle: h.DocumentTitle, Breadcrumb: h.Breadcrumb,
+				Content: h.Content, SourceRef: h.SourceRef,
+			}
+		}
+		return out, nil
+	})
+
 	usageDecorator := api.NewUsageDecorator(flags, fxStore)
 	// ledgerAgg backs the mission list's top_model decoration (D-05x):
 	// same *pgpool.Pool the rest of brain shares, no separate wiring.
@@ -474,7 +496,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -563,6 +585,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 		return missions.AgentDefaults{
 			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
 			BudgetAmount: a.BudgetUSD, ApprovalAllowlist: a.ApprovalAllowlist,
+			Knowledge: a.Knowledge,
 		}, true
 	}
 }
@@ -576,7 +599,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -603,7 +626,25 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// sandboxMgr routes model-authored command execution (the
 	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.
-	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, log)
+	// kb_search: nil-safe (mc is never nil, MEMORYD_URL always resolves
+	// to a default), same shape as chat's own SetKBSearch wiring — the
+	// mission's OWN Knowledge snapshot (never a live agent lookup)
+	// scopes collections per turn (missions.nativeRunner.kbSearchTool).
+	kbSearch := func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		hits, err := mc.KBSearch(ctx, query, collectionNames, mode, k)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]builtin.KBSearchHit, len(hits))
+		for i, h := range hits {
+			out[i] = builtin.KBSearchHit{
+				DocumentID: h.DocumentID, DocumentTitle: h.DocumentTitle, Breadcrumb: h.Breadcrumb,
+				Content: h.Content, SourceRef: h.SourceRef,
+			}
+		}
+		return out, nil
+	}
+	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, log)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch — resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,
@@ -951,13 +992,14 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 		return r.gw.Stream(ctx, req)
 	}
 	return r.agent.Start(ctx, loop.Request{
-		SessionID: req.SessionID,
-		Route:     req.Route,
-		Agent:     req.Agent,
-		ToolAllow: req.ToolAllow,
-		ModelHint: req.ModelHint,
-		System:    req.System,
-		Messages:  req.Messages,
+		SessionID:  req.SessionID,
+		Route:      req.Route,
+		Agent:      req.Agent,
+		ToolAllow:  req.ToolAllow,
+		ExtraTools: req.ExtraTools,
+		ModelHint:  req.ModelHint,
+		System:     req.System,
+		Messages:   req.Messages,
 	})
 }
 

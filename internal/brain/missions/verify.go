@@ -131,13 +131,15 @@ func CheckArtifacts(workRoot string, artifacts []string) []string {
 }
 
 // citedURLPattern matches both markdown links ([text](http...)) and
-// bare http(s) URLs. Markdown link targets are captured first so a
-// bare-URL scan doesn't also pick up the same URL again from inside
-// the parens (D-059).
-var citedURLPattern = regexp.MustCompile(`\[[^\]]*\]\((https?://[^\s)]+)\)|(https?://[^\s)\]]+)`)
+// bare http(s) URLs, plus kb://<document_id> refs (kbsearch.go's
+// formatKBHits "Source:" line) in either form. Markdown link targets
+// are captured first so a bare-ref scan doesn't also pick up the same
+// URL/ref again from inside the parens (D-059).
+var citedURLPattern = regexp.MustCompile(`\[[^\]]*\]\(((?:https?|kb)://[^\s)]+)\)|((?:https?|kb)://[^\s)\]]+)`)
 
-// ExtractCitedURLs pulls every http(s) URL cited in text — markdown
-// link targets and bare URLs alike — in first-seen order, deduplicated.
+// ExtractCitedURLs pulls every http(s) URL and kb:// reference cited in
+// text — markdown link targets and bare refs alike — in first-seen
+// order, deduplicated.
 func ExtractCitedURLs(text string) []string {
 	matches := citedURLPattern.FindAllStringSubmatch(text, -1)
 	seen := make(map[string]bool, len(matches))
@@ -147,7 +149,18 @@ func ExtractCitedURLs(text string) []string {
 		if u == "" {
 			u = m[2]
 		}
-		if u == "" || seen[u] {
+		if u == "" {
+			continue
+		}
+		// A bare kb:// ref is a bounded UUID, so anything past it —
+		// "kb://<id>;" at a clause boundary — is prose punctuation the
+		// bare-ref branch swallowed, never part of the ref.
+		if rest, ok := strings.CutPrefix(u, "kb://"); ok {
+			u = "kb://" + strings.TrimRightFunc(rest, func(r rune) bool {
+				return r != '-' && (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F')
+			})
+		}
+		if seen[u] {
 			continue
 		}
 		seen[u] = true
@@ -174,13 +187,15 @@ func NormalizeURL(raw string) string {
 	return u.String()
 }
 
-// CheckCitations verifies every http(s) URL cited in a unit's declared
-// artifacts was actually seen by the worker this turn — via web_fetch's
-// url arg or a web_search result URL — never merely claimed. Scoped to
+// CheckCitations verifies every http(s) URL and kb:// reference cited
+// in a unit's declared artifacts was actually seen by the worker this
+// turn — via web_fetch's url arg, a web_search result URL, or a
+// kb_search result's kb:// ref — never merely claimed. Scoped to
 // "general" missions only (D-059): coding missions cite source, not
-// the web. seenURLs empty and the artifact cites nothing passes
-// trivially; seenURLs empty with citations present fails everything,
-// since no web tool call at all cannot have produced any of them.
+// the web/knowledge base. seenURLs empty and the artifact cites
+// nothing passes trivially; seenURLs empty with citations present
+// fails everything, since no tool call at all cannot have produced any
+// of them.
 func CheckCitations(workRoot string, artifacts, seenURLs []string) []string {
 	allowed := make(map[string]bool, len(seenURLs))
 	for _, u := range seenURLs {
@@ -218,8 +233,52 @@ func CheckCitations(workRoot string, artifacts, seenURLs []string) []string {
 		}
 		if len(unknown) > 0 {
 			sort.Strings(unknown)
-			problems = append(problems, fmt.Sprintf("%s: cited URL(s) never seen via web_fetch/web_search this turn: %s — fetch a source with web_fetch before citing it", rel, strings.Join(unknown, ", ")))
+			problems = append(problems, fmt.Sprintf("%s: %s — %s", rel, unknownCitationSummary(unknown), unknownCitationFix(unknown)))
 		}
 	}
 	return problems
+}
+
+// unknownCitationSummary labels an unknown-citation list "URL(s)",
+// "kb reference(s)", or a mix — the failure message only names kb
+// refs when at least one is actually present, so a citations-web-only
+// unit's message never mentions a tool it had no reason to use.
+func unknownCitationSummary(unknown []string) string {
+	hasKB, hasURL := false, false
+	for _, u := range unknown {
+		if strings.HasPrefix(u, "kb://") {
+			hasKB = true
+		} else {
+			hasURL = true
+		}
+	}
+	switch {
+	case hasKB && hasURL:
+		return "cited URL(s)/kb reference(s) never seen this turn: " + strings.Join(unknown, ", ")
+	case hasKB:
+		return "cited kb reference(s) never seen via kb_search this turn: " + strings.Join(unknown, ", ")
+	default:
+		return "cited URL(s) never seen via web_fetch/web_search this turn: " + strings.Join(unknown, ", ")
+	}
+}
+
+// unknownCitationFix names the fix matching unknownCitationSummary's
+// scope.
+func unknownCitationFix(unknown []string) string {
+	hasKB, hasURL := false, false
+	for _, u := range unknown {
+		if strings.HasPrefix(u, "kb://") {
+			hasKB = true
+		} else {
+			hasURL = true
+		}
+	}
+	switch {
+	case hasKB && hasURL:
+		return "fetch a source with web_fetch, or search for it with kb_search, before citing it"
+	case hasKB:
+		return "search for it with kb_search before citing it"
+	default:
+		return "fetch a source with web_fetch before citing it"
+	}
 }

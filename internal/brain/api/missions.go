@@ -495,6 +495,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	// name: req.AgentID is the mission row's agent_id FK value (the
 	// picker sends a.id), unlike chat's session.agent which is a name.
 	var promptOverlay string
+	var knowledge []string
 	if h.agentReg != nil {
 		if a, ok := h.agentReg.ResolveByID(r.Context(), req.AgentID); ok {
 			if req.Route == "" {
@@ -507,6 +508,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 				req.BudgetAmount = a.BudgetUSD
 			}
 			promptOverlay = a.PromptOverlay
+			knowledge = a.Knowledge
 		}
 	}
 	// An agent's route (and this handler's own fallback) can still be
@@ -550,7 +552,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
-		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
+		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext,
