@@ -116,15 +116,15 @@ func (g *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<
 	return ch, nil
 }
 
-func (g *fakeGateway) Embed(_ context.Context, texts []string, _ string) ([][]float32, error) {
+func (g *fakeGateway) Embed(_ context.Context, texts []string, _ string) ([][]float32, string, error) {
 	if g.embeds != nil {
-		return g.embeds, nil
+		return g.embeds, "fake-embed", nil
 	}
 	out := make([][]float32, len(texts))
 	for i := range texts {
 		out[i] = []float32{1, 0, 0}
 	}
-	return out, nil
+	return out, "fake-embed", nil
 }
 
 // fakeStore records pipeline actions.
@@ -329,8 +329,8 @@ func TestExtractSurfacesLLMError(t *testing.T) {
 // embedlessGateway fails Embed but streams facts fine.
 type embedlessGateway struct{ fakeGateway }
 
-func (g *embedlessGateway) Embed(context.Context, []string, string) ([][]float32, error) {
-	return nil, fmt.Errorf("no route for task category embedding")
+func (g *embedlessGateway) Embed(context.Context, []string, string) ([][]float32, string, error) {
+	return nil, "", fmt.Errorf("no route for task category embedding")
 }
 
 func TestExtractDegradesWithoutEmbeddings(t *testing.T) {

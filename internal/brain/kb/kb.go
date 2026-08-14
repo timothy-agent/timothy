@@ -213,6 +213,26 @@ func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceT
 	return id, nil
 }
 
+// SweepStale fails every document parked at pending/ingesting. Ingest
+// runs on a fire-and-forget goroutine (api's startIngest), so a brain
+// restart mid-ingest strands the row in a non-terminal status forever
+// — the UI polls a spinner that never resolves. Called once at boot,
+// before any new ingest can start; the stored markdown survives, so
+// reingest recovers the document.
+func (s *Store) SweepStale(ctx context.Context) (int64, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("kb sweep stale: %w", err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE kb_documents
+		SET status = 'failed', error = 'ingestion interrupted by a restart — re-ingest to retry', updated_at = now()
+		WHERE status IN ('pending', 'ingesting')`)
+	if err != nil {
+		return 0, fmt.Errorf("kb sweep stale: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // SetIngesting flips a document to the ingesting phase right before
 // the memoryd call — the background goroutine's own status update,
 // distinct from memoryd's own ready/failed report (store.KBStore.

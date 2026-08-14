@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -474,6 +475,14 @@ func main() {
 	// error, not a nil-gate, since MEMORYD_URL always resolves to a
 	// default).
 	kbStore := kb.New(app.DB)
+	// Ingest goroutines die with the process; fail anything a previous
+	// run left mid-ingest so the UI offers reingest instead of an
+	// eternal spinner.
+	if n, err := kbStore.SweepStale(ctx); err != nil {
+		app.Log.Warn("kb stale-ingest sweep failed", "error", err)
+	} else if n > 0 {
+		app.Log.Info("kb stale-ingest sweep", "documents_failed", n)
+	}
 	svc.SetKBSearch(func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, collectionNames, mode, k)
 		if err != nil {
@@ -488,6 +497,7 @@ func main() {
 		}
 		return out, nil
 	})
+	svc.SetKBRead(kbReadFromStore(kbStore))
 
 	usageDecorator := api.NewUsageDecorator(flags, fxStore)
 	// ledgerAgg backs the mission list's top_model decoration (D-05x):
@@ -509,6 +519,25 @@ func main() {
 // so it's built once here rather than each caller decoding the master
 // key independently. A nil return (with an error to log) means an
 // unusable master key or init failure; callers nil-gate on it.
+// kbReadFromStore builds the kb_read backing lookup: the full stored
+// markdown straight from brain's own kb store — no memoryd round trip.
+// A document outside the caller's allowed collections reads as not
+// found (never "forbidden": the distinction would leak that the id
+// exists).
+func kbReadFromStore(kbStore *kb.Store) func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error) {
+	return func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error) {
+		doc, err := kbStore.GetDocument(ctx, documentID)
+		if err != nil {
+			return builtin.KBDocument{}, fmt.Errorf("document %s not found", documentID)
+		}
+		col, err := kbStore.GetCollection(ctx, doc.CollectionID)
+		if err != nil || !slices.Contains(collectionNames, col.Name) {
+			return builtin.KBDocument{}, fmt.Errorf("document %s not found", documentID)
+		}
+		return builtin.KBDocument{Title: doc.Title, SourceRef: doc.SourceRef, Markdown: doc.Markdown}, nil
+	}
+}
+
 func buildSecretStore(db *pgpool.Pool, log *slog.Logger) (*secretstore.Store, error) {
 	masterKey, err := secretstore.DecodeMasterKey(os.Getenv(secretstore.MasterKeyEnv))
 	if err != nil {
@@ -644,7 +673,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		}
 		return out, nil
 	}
-	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, log)
+	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, kbReadFromStore(kb.New(db)), log)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch — resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,

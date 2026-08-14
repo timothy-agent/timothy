@@ -57,20 +57,28 @@ func (a *API) handleIngest(w http.ResponseWriter, r *http.Request) {
 	for i, p := range pieces {
 		texts[i] = p.Breadcrumb + "\n\n" + p.Content
 	}
-	const embedPurpose = "kb-ingest"
-	vecs, err := a.embed.Embed(r.Context(), texts, embedPurpose)
-	if err != nil {
-		a.log.Warn("kb ingest embedding failed", "document_id", req.DocumentID, "error", err)
-		a.reportKBFailed(r.Context(), req.DocumentID, fmt.Sprintf("embedding failed: %v", err))
-		jsonError(w, http.StatusBadGateway, "embedding_failed", err.Error())
-		return
+	// Embed in bounded batches: a large document's chunk set in one
+	// request can exceed a provider's per-call input limit.
+	var vecs [][]float32
+	var model string
+	for start := 0; start < len(texts); start += kbEmbedBatchSize {
+		end := min(start+kbEmbedBatchSize, len(texts))
+		batch, batchModel, err := a.embed.Embed(r.Context(), texts[start:end], "kb-ingest")
+		if err != nil {
+			a.log.Warn("kb ingest embedding failed", "document_id", req.DocumentID, "error", err)
+			a.reportKBFailed(r.Context(), req.DocumentID, fmt.Sprintf("embedding failed: %v", err))
+			jsonError(w, http.StatusBadGateway, "embedding_failed", err.Error())
+			return
+		}
+		vecs = append(vecs, batch...)
+		model = batchModel
 	}
 
 	chunks := make([]store.KBChunk, len(pieces))
 	for i, p := range pieces {
 		chunks[i] = store.KBChunk{
 			Seq: p.Seq, Breadcrumb: p.Breadcrumb, Content: p.Content,
-			Embedding: store.Vector(vecs[i]), EmbeddingModel: embedPurpose,
+			Embedding: store.Vector(vecs[i]), EmbeddingModel: model,
 		}
 	}
 	if err := a.kb.ReplaceChunks(r.Context(), req.DocumentID, chunks); err != nil {
@@ -119,6 +127,10 @@ type kbSearchHitJSON struct {
 const (
 	kbSearchDefaultK = 8
 	kbSearchMaxK     = 10
+
+	// kbEmbedBatchSize bounds how many chunk texts ride one gateway
+	// embed call during ingestion.
+	kbEmbedBatchSize = 16
 )
 
 // handleKBSearch runs hybrid/semantic/keyword retrieval scoped to the
@@ -159,7 +171,7 @@ func (a *API) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 
 	var embedding store.Vector
 	if mode != store.KBSearchKeyword {
-		vecs, err := a.embed.Embed(r.Context(), []string{req.Query}, "kb-search")
+		vecs, _, err := a.embed.Embed(r.Context(), []string{req.Query}, "kb-search")
 		if err != nil {
 			a.log.Warn("kb search embedding failed; degrading to keyword-only", "error", err)
 			if mode == store.KBSearchSemantic {

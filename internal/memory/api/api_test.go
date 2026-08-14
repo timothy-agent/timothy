@@ -116,15 +116,15 @@ func (f *fakeSearcher) MarkRetrieved(_ context.Context, ids []string) { f.marked
 
 type fakeEmbedder struct{ err error }
 
-func (f *fakeEmbedder) Embed(_ context.Context, texts []string, _ string) ([][]float32, error) {
+func (f *fakeEmbedder) Embed(_ context.Context, texts []string, _ string) ([][]float32, string, error) {
 	if f.err != nil {
-		return nil, f.err
+		return nil, "", f.err
 	}
 	out := make([][]float32, len(texts))
 	for i := range texts {
 		out[i] = []float32{1, 0}
 	}
-	return out, nil
+	return out, "fake-embed", nil
 }
 
 func postRetrieve(t *testing.T, a *API, body string) *httptest.ResponseRecorder {

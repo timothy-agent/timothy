@@ -24,7 +24,7 @@ import (
 // Gateway is the slice of the gateway client extraction needs.
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
-	Embed(ctx context.Context, texts []string, purpose string) ([][]float32, error)
+	Embed(ctx context.Context, texts []string, purpose string) ([][]float32, string, error)
 }
 
 // Storer is the slice of the memory store extraction needs.
@@ -113,7 +113,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 	// store without vectors (text and entity legs still retrieve
 	// them) and near-dup detection skips. Mirrors retrieval's
 	// partial-recall-beats-none stance.
-	vecs, err := e.gw.Embed(ctx, texts, "memory-extract")
+	vecs, _, err := e.gw.Embed(ctx, texts, "memory-extract")
 	if err != nil {
 		e.log.Warn("embedding failed; storing facts without vectors", "error", err, "session_id", req.SessionID)
 		vecs = make([][]float32, len(facts))

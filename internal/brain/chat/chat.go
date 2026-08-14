@@ -147,6 +147,7 @@ type Service struct {
 	markitdownURL  string                             // "": pdf attachments disabled (MARKITDOWN_URL unset)
 	markitdownHTTP *http.Client                       // shared client for the markitdown sidecar call
 	kbSearch       KBSearch                           // nil: kb_search never offered, regardless of agent config
+	kbRead         KBRead                             // nil: kb_read never offered, regardless of agent config
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -266,6 +267,28 @@ func (s *Service) kbSearchTool(profile agents.Agent) *tools.Tool {
 	collections := slices.Clone(profile.Knowledge)
 	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
 		return s.kbSearch(ctx, query, collections, mode, k)
+	})
+}
+
+// KBRead loads one knowledge-base document scoped to collectionNames —
+// same contract as KBSearch: collectionNames travels on every call and
+// is the serving agent's own Knowledge list.
+type KBRead func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error)
+
+// SetKBRead wires the kb_read tool's backing lookup. Optional — same
+// nil contract as SetKBSearch.
+func (s *Service) SetKBRead(fn KBRead) { s.kbRead = fn }
+
+// kbReadTool builds this turn's kb_read ExtraTool, gated exactly like
+// kbSearchTool: no backend or empty Knowledge means the tool is not
+// offered.
+func (s *Service) kbReadTool(profile agents.Agent) *tools.Tool {
+	if s.kbRead == nil || len(profile.Knowledge) == 0 {
+		return nil
+	}
+	collections := slices.Clone(profile.Knowledge)
+	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
+		return s.kbRead(ctx, documentID, collections)
 	})
 }
 
@@ -1005,7 +1028,10 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 
 	var extraTools []*tools.Tool
 	if t := s.kbSearchTool(profile); t != nil {
-		extraTools = []*tools.Tool{t}
+		extraTools = append(extraTools, t)
+	}
+	if t := s.kbReadTool(profile); t != nil {
+		extraTools = append(extraTools, t)
 	}
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
 		Route:      route,

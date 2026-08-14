@@ -228,7 +228,7 @@ func (c *Consolidator) mergeGroup(ctx context.Context, ids []string) (reject str
 		return reason, nil
 	}
 
-	vecs, err := c.gw.Embed(ctx, []string{merged}, "memory-consolidate")
+	vecs, _, err := c.gw.Embed(ctx, []string{merged}, "memory-consolidate")
 	if err != nil {
 		return "", fmt.Errorf("embed merged fact: %w", err)
 	}

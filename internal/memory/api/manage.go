@@ -97,7 +97,7 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	// Best-effort embedding: a user memory without a vector still
 	// serves the text and entity legs.
-	if vecs, err := a.embed.Embed(r.Context(), []string{req.Content}, "memory-remember"); err != nil {
+	if vecs, _, err := a.embed.Embed(r.Context(), []string{req.Content}, "memory-remember"); err != nil {
 		a.log.Warn("remember embedding failed; stored without vector", "error", err)
 	} else {
 		m.Embedding = store.Vector(vecs[0])
@@ -164,7 +164,7 @@ func (a *API) confirmEdited(ctx context.Context, id, content string) error {
 		Confidence: 1, EntityRefs: orig.EntityRefs,
 		SourceSession: orig.SourceSession, SourceSeq: orig.SourceSeq,
 	}
-	if vecs, err := a.embed.Embed(ctx, []string{content}, "memory-remember"); err != nil {
+	if vecs, _, err := a.embed.Embed(ctx, []string{content}, "memory-remember"); err != nil {
 		a.log.Warn("edit embedding failed; stored without vector", "error", err)
 	} else {
 		m.Embedding = store.Vector(vecs[0])

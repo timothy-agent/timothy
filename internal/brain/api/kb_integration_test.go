@@ -341,6 +341,44 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 	}
 }
 
+func TestKBSweepStaleFailsStuckDocuments(t *testing.T) {
+	store := testKBStore(t)
+	ctx := context.Background()
+
+	collID, err := store.CreateCollection(ctx, "itest-sweep", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	pendingID, err := store.CreateDocument(ctx, collID, "Stuck pending", "file", "a.md", "content", 7)
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+	ingestingID, err := store.CreateDocument(ctx, collID, "Stuck ingesting", "file", "b.md", "content", 7)
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+	if err := store.SetIngesting(ctx, ingestingID); err != nil {
+		t.Fatalf("SetIngesting: %v", err)
+	}
+
+	n, err := store.SweepStale(ctx)
+	if err != nil {
+		t.Fatalf("SweepStale: %v", err)
+	}
+	if n < 2 {
+		t.Fatalf("swept %d documents, want at least the 2 stuck ones", n)
+	}
+	for _, id := range []string{pendingID, ingestingID} {
+		doc, err := store.GetDocument(ctx, id)
+		if err != nil {
+			t.Fatalf("GetDocument: %v", err)
+		}
+		if doc.Status != "failed" || !strings.Contains(doc.Error, "interrupted") {
+			t.Fatalf("doc %s: status=%q error=%q, want failed/interrupted", id, doc.Status, doc.Error)
+		}
+	}
+}
+
 func TestKBDocumentFromURLRejectsBadURL(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}

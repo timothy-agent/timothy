@@ -98,6 +98,9 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// at construction (D-060), never model input — same reasoning
 			// as web_search/missions.
 			"kb_search": true,
+			// kb_read is the same pure read, one document at a time,
+			// with the collection allowlist bound the same way.
+			"kb_read": true,
 		},
 	}
 }

@@ -159,6 +159,10 @@ type nativeRunner struct {
 	// dependency's absence turns the feature off entirely" contract as
 	// chat.go's SetKBSearch).
 	kbSearch KBSearchFunc
+
+	// kbRead backs the per-turn kb_read ExtraTool — same nil contract
+	// as kbSearch.
+	kbRead KBReadFunc
 }
 
 // KBSearchFunc runs one kb_search call scoped to collectionNames — main
@@ -167,6 +171,10 @@ type nativeRunner struct {
 // own Knowledge snapshot), never bound once, since the same func serves
 // every mission.
 type KBSearchFunc func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
+
+// KBReadFunc loads one kb document scoped to collectionNames — same
+// travel-on-every-call contract as KBSearchFunc.
+type KBReadFunc func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error)
 
 // NewNativeRunner wraps a production *loop.Agent as a Runner. The
 // agent instance is expected to be brain's existing chat agent — a
@@ -183,8 +191,8 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 // route through it instead of brain's own process — and a kb_search
 // backend (nil disables kb_search on every mission turn, matching
 // SetKBSearch's nil-safe contract).
-func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, kbSearch KBSearchFunc, log *slog.Logger) Runner {
-	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, log: log}
+func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, kbSearch KBSearchFunc, kbRead KBReadFunc, log *slog.Logger) Runner {
+	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, kbRead: kbRead, log: log}
 }
 
 // kbSearchTool builds this turn's kb_search ExtraTool bound to m's own
@@ -207,6 +215,19 @@ func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
 			sink.record(hits)
 		}
 		return hits, err
+	})
+}
+
+// kbReadTool builds this turn's kb_read ExtraTool, gated exactly like
+// kbSearchTool: no backend, or an empty Knowledge snapshot, means the
+// tool is not offered.
+func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
+	if r.kbRead == nil || len(m.Knowledge) == 0 {
+		return nil
+	}
+	collections := slices.Clone(m.Knowledge)
+	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
+		return r.kbRead(ctx, documentID, collections)
 	})
 }
 
@@ -528,6 +549,9 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if t := r.kbSearchTool(m, kbSeen); t != nil {
 		extra = append(extra, t)
 	}
+	if t := r.kbReadTool(m); t != nil {
+		extra = append(extra, t)
+	}
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        workerRoute(m),
@@ -634,6 +658,9 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		extra = append(extra, shell)
 	}
 	if t := r.kbSearchTool(m, nil); t != nil {
+		extra = append(extra, t)
+	}
+	if t := r.kbReadTool(m); t != nil {
 		extra = append(extra, t)
 	}
 	req := loop.Request{
@@ -843,6 +870,9 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	user += renderAttachments(m.Attachments)
 	extra := []*tools.Tool{PlanTool()}
 	if t := r.kbSearchTool(m, nil); t != nil {
+		extra = append(extra, t)
+	}
+	if t := r.kbReadTool(m); t != nil {
 		extra = append(extra, t)
 	}
 	req := loop.Request{

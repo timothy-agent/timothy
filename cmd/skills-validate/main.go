@@ -73,7 +73,7 @@ func embeddingCollisions(gatewayURL string, packs []skills.Skill) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	vecs, err := gwclient.New(gatewayURL).Embed(ctx, texts, "skills-validate")
+	vecs, _, err := gwclient.New(gatewayURL).Embed(ctx, texts, "skills-validate")
 	if err != nil {
 		return fmt.Errorf("embedding check: %w", err)
 	}

@@ -121,6 +121,15 @@ const (
 const legLimitLit = "30"
 const rrfKLit = "60"
 
+// minSimilarityLit is the vector leg's relevance floor (cosine
+// similarity): below it a chunk is noise, not a match. Nearest-neighbor
+// search always returns SOMETHING — without a floor an off-topic query
+// still fills k slots with whatever is least-far away, and the model
+// may cite it. Returning nothing beats confidently-irrelevant (same
+// principle as memories retrieval). The keyword leg needs no floor: a
+// tsquery either matches lexemes or returns nothing.
+const minSimilarityLit = "0.25"
+
 // KBSearch runs hybrid (vector + full-text, RRF-fused), semantic-only,
 // or keyword-only retrieval over kb_chunks, scoped to collectionNames
 // (required, non-empty — collection scoping is enforced here in SQL,
@@ -174,40 +183,59 @@ const (
 	// enforced (D-060: Go code, never a prompt).
 	kbProjection = `SELECT c.id, d.id, d.title, col.name, c.breadcrumb, c.content, d.source_ref`
 
+	// kbQueryCTEq1/q2 normalize the query's lexemes and OR them
+	// together — same rationale as memories retrieval's textSQL: a
+	// multi-topic question must match each chunk that answers PART of
+	// it, which websearch/plainto AND-semantics would return nothing
+	// for. Lexemes are quoted (with '' doubling) so none can break the
+	// tsquery syntax. Two variants because the query text is $1 in
+	// keyword mode and $2 in hybrid.
+	kbQueryCTEq1 = `SELECT to_tsquery('english',
+			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
+		FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme`
+	kbQueryCTEq2 = `SELECT to_tsquery('english',
+			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
+		FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS lexeme`
+
 	semanticSQL = kbProjection + `, 1 - (c.embedding <=> $1::vector) AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id
 		WHERE col.name = ANY($2) AND c.embedding IS NOT NULL
+		  AND 1 - (c.embedding <=> $1::vector) >= ` + minSimilarityLit + `
 		ORDER BY c.embedding <=> $1::vector
 		LIMIT $3`
 
-	keywordSQL = kbProjection + `, ts_rank(c.tsv, websearch_to_tsquery('english', $1)) AS score
+	keywordSQL = `WITH q AS (` + kbQueryCTEq1 + `)
+		` + kbProjection + `, ts_rank(c.tsv, q.query) AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
-		JOIN kb_collections col ON col.id = d.collection_id
-		WHERE col.name = ANY($2) AND c.tsv @@ websearch_to_tsquery('english', $1)
+		JOIN kb_collections col ON col.id = d.collection_id, q
+		WHERE col.name = ANY($2) AND c.tsv @@ q.query
 		ORDER BY score DESC
 		LIMIT $3`
 
 	// hybridSQL fuses a vector top-30 and an FTS top-30 leg via
 	// Reciprocal Rank Fusion (k=60), same fusion constant as the
-	// memories retrieval package. $1 embedding, $2 query, $3 collection
-	// names, $4 result count.
-	hybridSQL = `WITH vec AS (
+	// memories retrieval package. Each leg carries its own relevance
+	// gate (similarity floor / lexeme match), so an off-topic query
+	// yields an empty result instead of the k least-far chunks.
+	// $1 embedding, $2 query, $3 collection names, $4 result count.
+	hybridSQL = `WITH q AS (` + kbQueryCTEq2 + `), vec AS (
 			SELECT c.id, row_number() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
 			FROM kb_chunks c
 			JOIN kb_documents d ON d.id = c.document_id
 			JOIN kb_collections col ON col.id = d.collection_id
 			WHERE col.name = ANY($3) AND c.embedding IS NOT NULL
+			  AND 1 - (c.embedding <=> $1::vector) >= ` + minSimilarityLit + `
 			ORDER BY c.embedding <=> $1::vector
 			LIMIT ` + legLimitLit + `
 		), fts AS (
-			SELECT c.id, row_number() OVER (ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', $2)) DESC) AS rank
+			SELECT c.id, row_number() OVER (ORDER BY ts_rank(c.tsv, q.query) DESC) AS rank
 			FROM kb_chunks c
 			JOIN kb_documents d ON d.id = c.document_id
-			JOIN kb_collections col ON col.id = d.collection_id
-			WHERE col.name = ANY($3) AND c.tsv @@ websearch_to_tsquery('english', $2)
+			JOIN kb_collections col ON col.id = d.collection_id, q
+			WHERE col.name = ANY($3) AND c.tsv @@ q.query
 			ORDER BY rank
 			LIMIT ` + legLimitLit + `
 		), fused AS (

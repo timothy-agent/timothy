@@ -31,7 +31,7 @@ type Searcher interface {
 
 // Embedder embeds the query text; *gwclient.Client satisfies it.
 type Embedder interface {
-	Embed(ctx context.Context, texts []string, purpose string) ([][]float32, error)
+	Embed(ctx context.Context, texts []string, purpose string) ([][]float32, string, error)
 }
 
 // API serves memoryd's routes.
@@ -123,7 +123,7 @@ func (a *API) handleRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var embedding store.Vector
-	if vecs, err := a.embed.Embed(r.Context(), []string{req.Query}, "memory-retrieve"); err != nil {
+	if vecs, _, err := a.embed.Embed(r.Context(), []string{req.Query}, "memory-retrieve"); err != nil {
 		a.log.Warn("query embedding failed; vector leg skipped", "error", err)
 	} else {
 		embedding = vecs[0]

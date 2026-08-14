@@ -15,9 +15,10 @@ import (
 )
 
 type fakeKB struct {
-	replacedDocID string
-	replacedCount int
-	replaceErr    error
+	replacedDocID  string
+	replacedCount  int
+	replacedChunks []store.KBChunk
+	replaceErr     error
 
 	searchHits []store.KBSearchHit
 	searchErr  error
@@ -31,6 +32,7 @@ type fakeKB struct {
 func (f *fakeKB) ReplaceChunks(_ context.Context, documentID string, chunks []store.KBChunk) error {
 	f.replacedDocID = documentID
 	f.replacedCount = len(chunks)
+	f.replacedChunks = chunks
 	return f.replaceErr
 }
 
@@ -84,6 +86,60 @@ func TestIngestChunksEmbedsAndStores(t *testing.T) {
 	}
 	if docs.ingestedID != "doc-1" || docs.ingestedCount != kb.replacedCount {
 		t.Fatalf("status not reported ingested: %+v", docs)
+	}
+}
+
+// batchSizeEmbedder records how many texts each Embed call carried.
+type batchSizeEmbedder struct {
+	fakeEmbedder
+	batches []int
+}
+
+func (b *batchSizeEmbedder) Embed(ctx context.Context, texts []string, purpose string) ([][]float32, string, error) {
+	b.batches = append(b.batches, len(texts))
+	return b.fakeEmbedder.Embed(ctx, texts, purpose)
+}
+
+func TestIngestBatchesEmbeddingsAndRecordsModel(t *testing.T) {
+	t.Parallel()
+	// Enough sections to force multiple embed batches.
+	var md strings.Builder
+	for i := range kbEmbedBatchSize + 5 {
+		md.WriteString("## Section ")
+		md.WriteString(strings.Repeat("x", i+1))
+		md.WriteString("\ncontent for this section\n\n")
+	}
+	body, err := json.Marshal(map[string]string{"document_id": "doc-b", "title": "Doc", "markdown": md.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kb := &fakeKB{}
+	embed := &batchSizeEmbedder{}
+	a := kbAPIFor(kb, &fakeDocStatus{}, embed)
+	rec := postJSON(t, a.handleIngest, "/v1/ingest-document", string(body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	if len(embed.batches) < 2 {
+		t.Fatalf("embed batches = %v, want the chunk set split across calls", embed.batches)
+	}
+	for _, n := range embed.batches {
+		if n > kbEmbedBatchSize {
+			t.Fatalf("batch of %d exceeds the %d cap", n, kbEmbedBatchSize)
+		}
+	}
+	total := 0
+	for _, n := range embed.batches {
+		total += n
+	}
+	if total != kb.replacedCount {
+		t.Fatalf("embedded %d texts for %d stored chunks", total, kb.replacedCount)
+	}
+	for _, c := range kb.replacedChunks {
+		if c.EmbeddingModel != "fake-embed" {
+			t.Fatalf("embedding_model = %q, want the model the embedder reported", c.EmbeddingModel)
+		}
 	}
 }
 

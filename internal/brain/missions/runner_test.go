@@ -1456,6 +1456,32 @@ func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
 	}
 }
 
+// kbReadTool follows kbSearchTool's opt-in-only contract exactly: no
+// backend, or an empty Knowledge snapshot, keeps the tool off the
+// offered surface; with both present it serves the bound collections.
+func TestKBReadToolGating(t *testing.T) {
+	read := func(ctx context.Context, documentID string, collections []string) (builtin.KBDocument, error) {
+		if !slices.Equal(collections, []string{"docs"}) {
+			t.Fatalf("collections = %v, want the mission snapshot", collections)
+		}
+		return builtin.KBDocument{Title: "Runbook", Markdown: "content"}, nil
+	}
+	if tool := (&nativeRunner{log: slog.Default()}).kbReadTool(Mission{Knowledge: []string{"docs"}}); tool != nil {
+		t.Fatal("kbReadTool offered without a backend")
+	}
+	if tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{}); tool != nil {
+		t.Fatal("kbReadTool offered with empty knowledge")
+	}
+	tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{Knowledge: []string{"docs"}})
+	if tool == nil {
+		t.Fatal("kbReadTool = nil with backend and knowledge present")
+	}
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"ref":"kb://doc-1"}`))
+	if err != nil || !strings.Contains(out, "Runbook") {
+		t.Fatalf("Execute = %q, %v", out, err)
+	}
+}
+
 // TestRunWorkerSurfacesKBSinkRefsOnVerdict is the end-to-end wiring
 // check: refs recorded by the sink during the worker turn must reach
 // the verdict's SeenURLs alongside the digest-harvested web URLs.
