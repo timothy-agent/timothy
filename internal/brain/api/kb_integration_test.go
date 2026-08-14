@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -361,12 +363,35 @@ func TestKBSweepStaleFailsStuckDocuments(t *testing.T) {
 		t.Fatalf("SetIngesting: %v", err)
 	}
 
+	// Fresh rows sit inside the sweep's grace window (a boot sweep must
+	// not eat an upload that just started); nothing is swept yet.
 	n, err := store.SweepStale(ctx)
 	if err != nil {
 		t.Fatalf("SweepStale: %v", err)
 	}
-	if n < 2 {
-		t.Fatalf("swept %d documents, want at least the 2 stuck ones", n)
+	if n != 0 {
+		t.Fatalf("swept %d fresh documents, want 0 (grace window)", n)
+	}
+
+	// Backdate both past the grace window, as a restart-stranded row
+	// would be.
+	conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx,
+		`UPDATE kb_documents SET updated_at = now() - interval '5 minutes' WHERE id = ANY($1)`,
+		[]string{pendingID, ingestingID}); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	n, err = store.SweepStale(ctx)
+	if err != nil {
+		t.Fatalf("SweepStale: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("swept %d documents, want the 2 stuck ones", n)
 	}
 	for _, id := range []string{pendingID, ingestingID} {
 		doc, err := store.GetDocument(ctx, id)

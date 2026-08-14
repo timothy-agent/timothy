@@ -213,12 +213,14 @@ func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceT
 	return id, nil
 }
 
-// SweepStale fails every document parked at pending/ingesting. Ingest
-// runs on a fire-and-forget goroutine (api's startIngest), so a brain
+// SweepStale fails documents parked at pending/ingesting. Ingest runs
+// on a fire-and-forget goroutine (api's startIngest), so a brain
 // restart mid-ingest strands the row in a non-terminal status forever
-// — the UI polls a spinner that never resolves. Called once at boot,
-// before any new ingest can start; the stored markdown survives, so
-// reingest recovers the document.
+// — the UI polls a spinner that never resolves. Called once at boot on
+// its own goroutine, which races the freshly started API server: the
+// 30-second grace window keeps a legitimately in-flight upload from
+// being swept. The stored markdown survives, so reingest recovers the
+// document.
 func (s *Store) SweepStale(ctx context.Context) (int64, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -226,7 +228,8 @@ func (s *Store) SweepStale(ctx context.Context) (int64, error) {
 	}
 	tag, err := db.Exec(ctx, `UPDATE kb_documents
 		SET status = 'failed', error = 'ingestion interrupted by a restart — re-ingest to retry', updated_at = now()
-		WHERE status IN ('pending', 'ingesting')`)
+		WHERE status IN ('pending', 'ingesting')
+		  AND updated_at < now() - interval '30 seconds'`)
 	if err != nil {
 		return 0, fmt.Errorf("kb sweep stale: %w", err)
 	}

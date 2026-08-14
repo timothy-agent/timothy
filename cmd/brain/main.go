@@ -477,12 +477,22 @@ func main() {
 	kbStore := kb.New(app.DB)
 	// Ingest goroutines die with the process; fail anything a previous
 	// run left mid-ingest so the UI offers reingest instead of an
-	// eternal spinner.
-	if n, err := kbStore.SweepStale(ctx); err != nil {
-		app.Log.Warn("kb stale-ingest sweep failed", "error", err)
-	} else if n > 0 {
-		app.Log.Info("kb stale-ingest sweep", "documents_failed", n)
-	}
+	// eternal spinner. On its own goroutine behind WaitHealthy: at this
+	// point in boot the pool is still connecting (the connector load
+	// and mission recovery sweep hit the same window and retry).
+	go func() {
+		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := app.DB.WaitHealthy(wctx); err != nil {
+			app.Log.Warn("kb stale-ingest sweep skipped: database not ready", "error", err)
+			return
+		}
+		if n, err := kbStore.SweepStale(wctx); err != nil {
+			app.Log.Warn("kb stale-ingest sweep failed", "error", err)
+		} else if n > 0 {
+			app.Log.Info("kb stale-ingest sweep", "documents_failed", n)
+		}
+	}()
 	svc.SetKBSearch(func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, collectionNames, mode, k)
 		if err != nil {
