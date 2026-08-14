@@ -4,7 +4,7 @@
 # toolchain to the base mission sandbox — missions writing Go need
 # `go build`/`go test` for their verify_cmd.
 ARG SANDBOX_BASE=timothy-sandbox-base:latest
-FROM golang:1.26.5 AS go-dist
+FROM golang:1.26.6 AS go-dist
 
 FROM ${SANDBOX_BASE}
 

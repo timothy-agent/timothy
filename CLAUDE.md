@@ -23,7 +23,7 @@ PostgreSQL database + React web UI, run via Docker Compose
 
 ## Commands
 
-The Go toolchain runs containerized (`golang:1.26.5`); no host Go.
+The Go toolchain runs containerized (`golang:1.26.6`); no host Go.
 
 ```sh
 make build test vet lint     # canonical pre-commit verify
@@ -41,7 +41,7 @@ Single Go test:
 ```sh
 docker run --rm -v "$PWD":/src -w /src \
   -v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
-  -e GOFLAGS=-buildvcs=false golang:1.26.5 \
+  -e GOFLAGS=-buildvcs=false golang:1.26.6 \
   go test -race -run TestName ./internal/brain/missions/
 ```
 

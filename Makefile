@@ -1,4 +1,4 @@
-GO_IMAGE   := golang:1.26.5
+GO_IMAGE   := golang:1.26.6
 LINT_IMAGE := golangci/golangci-lint:v2.12.2
 COMPOSE    := docker compose -f deploy/docker-compose.yml
 

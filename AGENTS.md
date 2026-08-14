@@ -21,7 +21,7 @@ PostgreSQL database + React web UI, run via Docker Compose
 
 ## Commands
 
-The Go toolchain runs containerized (`golang:1.26.5`); no host Go.
+The Go toolchain runs containerized (`golang:1.26.6`); no host Go.
 
 ```sh
 make build test vet lint     # canonical pre-commit verify — run before every commit
