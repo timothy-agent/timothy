@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
+  addKbDocumentFromUrl,
   deleteKbCollection,
   deleteKbDocument,
   getKbCollection,
@@ -74,6 +75,8 @@ export function KnowledgeCollectionDetail() {
   const [confirmDeleteCollection, setConfirmDeleteCollection] = useState(false)
   const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<KbDocument | null>(null)
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
+  const [url, setUrl] = useState('')
+  const [addingUrl, setAddingUrl] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(() => {
@@ -119,6 +122,20 @@ export function KnowledgeCollectionDetail() {
           return next
         })
       }
+    }
+  }
+
+  const addUrl = async () => {
+    if (!id || !url.trim() || addingUrl) return
+    setAddingUrl(true)
+    try {
+      const doc = await addKbDocumentFromUrl(id, url.trim())
+      setDocuments((prev) => [doc, ...prev])
+      setUrl('')
+    } catch (err) {
+      toast.error('Could not add URL', { description: errText(err) })
+    } finally {
+      setAddingUrl(false)
     }
   }
 
@@ -218,6 +235,29 @@ export function KnowledgeCollectionDetail() {
           </p>
         )}
       </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void addUrl()
+        }}
+        className="flex items-center gap-2"
+      >
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://example.com/article — add a page or PDF by URL"
+          className="h-9 w-full rounded-md border border-border bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
+        />
+        <Button type="submit" variant="outline" disabled={!url.trim() || addingUrl}>
+          {addingUrl ? (
+            <HugeiconsIcon icon={Loading03Icon} className="animate-spin" />
+          ) : (
+            'Add URL'
+          )}
+        </Button>
+      </form>
 
       {documents.length === 0 ? (
         <p className="text-sm text-muted-foreground">No documents yet.</p>

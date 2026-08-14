@@ -830,6 +830,15 @@ export async function deleteKbDocument(id: string): Promise<void> {
   await request<void>(`/v1/admin/kb/documents/${id}`, { method: 'DELETE' })
 }
 
+// addKbDocumentFromUrl asks brain to fetch a public URL, convert it to
+// markdown, and ingest it into the collection.
+export async function addKbDocumentFromUrl(collectionId: string, url: string): Promise<KbDocument> {
+  return request<KbDocument>(`/v1/admin/kb/collections/${collectionId}/documents/url`, {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  })
+}
+
 export async function reingestKbDocument(id: string): Promise<void> {
   await request<void>(`/v1/admin/kb/documents/${id}/reingest`, { method: 'POST' })
 }

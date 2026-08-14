@@ -193,10 +193,11 @@ func (s *Store) GetDocument(ctx context.Context, id string) (Document, error) {
 }
 
 // CreateDocument inserts a pending document row: markdown is the
-// markitdown conversion done once at upload time (or the raw file for
-// .md/.txt, which skip conversion); sourceRef names the uploaded
-// filename.
-func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceRef, markdown string, bytes int64) (string, error) {
+// markitdown conversion done once at upload/fetch time (or the raw
+// content for markdown/plain text, which skip conversion); sourceType
+// is 'file' or 'url'; sourceRef names the uploaded filename or the
+// fetched URL.
+func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceType, sourceRef, markdown string, bytes int64) (string, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("kb documents create: %w", err)
@@ -204,8 +205,8 @@ func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceR
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO kb_documents
 		(collection_id, title, source_type, source_ref, markdown, status, bytes)
-		VALUES ($1, $2, 'file', $3, $4, 'pending', $5) RETURNING id`,
-		collectionID, title, sourceRef, markdown, bytes).Scan(&id)
+		VALUES ($1, $2, $3, $4, $5, 'pending', $6) RETURNING id`,
+		collectionID, title, sourceType, sourceRef, markdown, bytes).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("kb documents create: %w", err)
 	}

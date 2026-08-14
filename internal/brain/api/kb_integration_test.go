@@ -270,6 +270,127 @@ func TestKBDocumentUploadRejectsUnsupportedType(t *testing.T) {
 	}
 }
 
+func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte("# Fetched\nbody from the web"))
+	}))
+	defer page.Close()
+
+	// httptest listens on loopback, which the production netguard
+	// transport refuses — swap in an unguarded one for this test.
+	saved := kbFetchTransport
+	kbFetchTransport = http.DefaultTransport
+	defer func() { kbFetchTransport = saved }()
+
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "")
+
+	collID, err := store.CreateCollection(context.Background(), "itest-url", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents/url",
+		strings.NewReader(`{"url":"`+page.URL+`/guides/rag-primer.md","title":""}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d body %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "body from the web") {
+		t.Fatal("response must not include markdown")
+	}
+
+	var doc struct {
+		ID        string `json:"id"`
+		Title     string `json:"title"`
+		SourceRef string `json:"source_ref"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Title != "rag-primer" {
+		t.Fatalf("title = %q, want derived rag-primer", doc.Title)
+	}
+	if doc.SourceRef != page.URL+"/guides/rag-primer.md" {
+		t.Fatalf("source_ref = %q, want the fetched URL", doc.SourceRef)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if ingester.callCount() > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	final, err := store.GetDocument(context.Background(), doc.ID)
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	if final.Markdown != "# Fetched\nbody from the web" {
+		t.Fatalf("stored markdown = %q", final.Markdown)
+	}
+	if got := ingester.callCount(); got != 1 {
+		t.Fatalf("ingester calls = %d, want 1", got)
+	}
+}
+
+func TestKBDocumentFromURLRejectsBadURL(t *testing.T) {
+	store := testKBStore(t)
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "")
+
+	collID, err := store.CreateCollection(context.Background(), "itest-url-bad", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	for _, raw := range []string{`{"url":"ftp://example.com/x"}`, `{"url":"not a url"}`, `{"url":""}`} {
+		req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents/url", strings.NewReader(raw))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", raw, w.Code)
+		}
+	}
+}
+
+func TestKBDocumentFromURLBlocksLocalAddresses(t *testing.T) {
+	store := testKBStore(t)
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	// Real guarded transport: the loopback httptest server must be
+	// refused at dial time.
+	a.registerKB(m.Handle, store, &fakeIngester{}, "")
+
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("secret internal page"))
+	}))
+	defer page.Close()
+
+	collID, err := store.CreateCollection(context.Background(), "itest-url-ssrf", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents/url",
+		strings.NewReader(`{"url":"`+page.URL+`"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "blocked address") {
+		t.Fatalf("status = %d body %s, want 502 blocked address", w.Code, w.Body)
+	}
+}
+
 func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	store := testKBStore(t)
 	ingester := &fakeIngester{err: errors.New("memoryd unreachable")}
@@ -281,7 +402,7 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "doc.md", "content", 7)
+	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "file", "doc.md", "content", 7)
 	if err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
