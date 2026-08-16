@@ -327,7 +327,10 @@ func newRunID() (string, error) {
 // worker turn is asked to honor — DONE/RETRY/BLOCKED plus a note,
 // mirroring mission_status's own outcome/analysis contract so the
 // result ladder (below) can map either onto the same WorkerVerdict.
-var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["DONE","RETRY","BLOCKED"]},"note":{"type":"string"}},"required":["status","note"]}`)
+// additionalProperties:false is load-bearing: OpenAI's strict
+// structured-output validation (codex --output-schema) rejects any
+// schema without it.
+var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["DONE","RETRY","BLOCKED"]},"note":{"type":"string"}},"required":["status","note"],"additionalProperties":false}`)
 
 // delegatedSystemAppend is appended to the packet's own system prompt
 // (WorkPacket.Render's SystemAppend) — it tells the harness to end with

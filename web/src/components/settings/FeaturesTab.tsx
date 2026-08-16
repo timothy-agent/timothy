@@ -167,7 +167,7 @@ const CODING_EXECUTOR_NATIVE = '__native__'
 // DefaultCodingExecutorCard picks the delegated coding-CLI harness new
 // coding missions default to when the mission itself doesn't specify
 // one — mirrors DefaultCurrencyCard's shape, options are static since
-// the known harnesses (claude-cli, pi) besides native.
+// the known harnesses (claude-cli, pi, codex-cli) besides native.
 function DefaultCodingExecutorCard({
   values,
   onError,
@@ -207,6 +207,7 @@ function DefaultCodingExecutorCard({
               <SelectItem value={CODING_EXECUTOR_NATIVE}>Native</SelectItem>
               <SelectItem value="claude-cli">Claude Code</SelectItem>
               <SelectItem value="pi">pi</SelectItem>
+              <SelectItem value="codex-cli">Codex CLI</SelectItem>
             </SelectContent>
           </Select>
         </div>

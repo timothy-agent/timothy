@@ -65,6 +65,11 @@ var execEnvAllowlist = map[string]bool{
 	// long run's transcript doesn't balloon toward the sandbox's 2 GiB
 	// cap — set unconditionally by the adapter, not a credential.
 	"NODE_OPTIONS": true,
+	// codex adapter env (executor/codex.go): CODEX_API_KEY is the
+	// credential config.toml's env_key points at; CODEX_HOME pins
+	// codex's state/config dir inside the run dir.
+	"CODEX_API_KEY": true,
+	"CODEX_HOME":    true,
 	// pi adapter env (executor/pi.go): PI_API_KEY is the credential;
 	// the rest pin pi's agent-state dir and disable network/telemetry
 	// calls the sandbox has no route to make anyway.

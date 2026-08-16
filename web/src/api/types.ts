@@ -657,7 +657,7 @@ export interface Mission {
   environment?: string
   // harness is the delegated CLI executor this coding mission's worker
   // turns run under (D-051): "" or absent is native in-process
-  // dispatch, "claude-cli"/"pi" name a registered executor.
+  // dispatch, "claude-cli"/"pi"/"codex-cli" name a registered executor.
   harness?: string
   // branch_pattern/commit_style are this mission's own override of the
   // settings-configured git strategy defaults; "" or absent means the

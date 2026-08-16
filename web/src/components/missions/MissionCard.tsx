@@ -3,6 +3,7 @@ import type { Mission } from '../../api/types'
 import { missionDisplayName } from '../../lib/format'
 import { BrandMark } from '../BrandMark'
 import { ClaudeCodeIcon } from '../icons/ClaudeCodeIcon'
+import { OpenAIIcon } from '../icons/OpenAIIcon'
 import { PiIcon } from '../icons/PiIcon'
 
 const statusColor: Record<Mission['status'], string> = {
@@ -20,6 +21,7 @@ const statusColor: Record<Mission['status'], string> = {
 const harnessDisplayNames: Record<string, string> = {
   'claude-cli': 'Claude Code',
   pi: 'pi',
+  'codex-cli': 'Codex CLI',
 }
 
 function harnessLabel(harness?: string): string {
@@ -29,6 +31,7 @@ function harnessLabel(harness?: string): string {
 
 function HarnessIcon({ harness }: { harness?: string }) {
   if (harness === 'pi') return <PiIcon />
+  if (harness === 'codex-cli') return <OpenAIIcon />
   if (harness === 'claude-cli') return <ClaudeCodeIcon />
   return <BrandMark className="size-3.5 shrink-0 rounded-[3px]" />
 }

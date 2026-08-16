@@ -959,7 +959,7 @@ func TestResolveRouteUnknownHarnessParam(t *testing.T) {
 	// An unknown harness name in the query param itself is a hard
 	// "route not found" — the caller (gateway API layer) turns this
 	// into a 400, distinct from an existing route with an unusable entry.
-	if _, ok := snap.ResolveRoute("coding", "codex-cli"); ok {
+	if _, ok := snap.ResolveRoute("coding", "nonexistent-cli"); ok {
 		t.Fatalf("ResolveRoute: want ok=false for unknown harness param")
 	}
 }

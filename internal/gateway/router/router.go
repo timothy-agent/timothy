@@ -85,19 +85,22 @@ type ChainEntry struct {
 // CLIs live in brain (internal/brain/missions/executor); the gateway
 // only validates names and wire-format compatibility, never runs a
 // subprocess itself.
-var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true}
+var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true}
 
 // harnessDrivers names the set of driver names each known harness
 // accepts directly from its provider row — checked by both admin
 // validation and the resolve endpoint's executor gate so the two can
 // never disagree. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat natively (its whole point is dual-wire
-// support). Independent of this set, the anthropic_base_url override
-// (D-051) always satisfies either harness, since it exposes an
-// anthropic-format endpoint regardless of the row's own driver.
+// support); codex-cli speaks openaicompat only (its own responses wire).
+// Independent of this set, the anthropic_base_url override (D-051)
+// always satisfies claude-cli/pi, since it exposes an anthropic-format
+// endpoint regardless of the row's own driver — codex-cli has no such
+// override, since it never speaks anthropic.
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
+	"codex-cli":  {"openaicompat": true},
 }
 
 // RouteRow mirrors one routes table row. Strategy picks the chain
@@ -615,12 +618,15 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 			}
 		} else {
 			// The anthropic_base_url override only applies to a kind='api'
-			// row pointed at a third-party anthropic-compatible endpoint —
-			// a kind='cli' row (subscription/oauth-auth) talks to the
-			// vendor's own default endpoint and must keep BaseURL empty, or
+			// row pointed at a third-party anthropic-compatible endpoint,
+			// for a harness that actually accepts the anthropic wire
+			// (codex-cli never does — it speaks openai only) — a kind='cli'
+			// row (subscription/oauth-auth) talks to the vendor's own
+			// default endpoint and must keep BaseURL empty, or
 			// BuildInvocation's AuthSubscription/AuthOAuthToken checks
 			// reject the spawn outright (they require no BaseURL at all).
-			overrideApplied := row.Kind != "cli" && row.Driver != "anthropic" && row.AnthropicBaseURL != ""
+			overrideApplied := row.Kind != "cli" && row.Driver != "anthropic" &&
+				row.AnthropicBaseURL != "" && harnessDrivers[harness]["anthropic"]
 			if overrideApplied {
 				re.BaseURL = row.AnthropicBaseURL
 			}
@@ -664,7 +670,8 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 			return false, fmt.Sprintf("cli provider row serves the %s harness", row.Driver)
 		}
 	} else {
-		wireOK := harnessDrivers[harness][row.Driver] || row.AnthropicBaseURL != ""
+		wireOK := harnessDrivers[harness][row.Driver] ||
+			(row.AnthropicBaseURL != "" && harnessDrivers[harness]["anthropic"])
 		if !wireOK {
 			return false, fmt.Sprintf("wire-incompatible: %s requires one of %s, or options.anthropic_base_url", harness, sortedKeys(harnessDrivers[harness]))
 		}

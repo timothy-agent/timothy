@@ -43,6 +43,7 @@ import {
 } from '../components/ui/dialog'
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
+import { OpenAIIcon } from '../components/icons/OpenAIIcon'
 import { PiIcon } from '../components/icons/PiIcon'
 import { envIcon } from '../components/icons/EnvIcons'
 import { Badge } from '../components/ui/badge'
@@ -159,6 +160,7 @@ function latestExecutorSpawn(
 const harnessDisplayNames: Record<string, string> = {
   'claude-cli': 'Claude Code',
   pi: 'pi',
+  'codex-cli': 'Codex CLI',
 }
 
 function harnessDisplayName(harness: string): string {
@@ -169,6 +171,7 @@ function harnessDisplayName(harness: string): string {
 // the Claude Code mark for ids without one of their own.
 function HarnessIcon({ harness }: { harness: string }) {
   if (harness === 'pi') return <PiIcon />
+  if (harness === 'codex-cli') return <OpenAIIcon />
   return <ClaudeCodeIcon />
 }
 

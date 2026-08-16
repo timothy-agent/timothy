@@ -121,7 +121,11 @@ func TestValidateHarnessWireFormat(t *testing.T) {
 		{name: "anthropic_base_url satisfies pi too", harness: "pi", driver: "made-up",
 			opts: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
 		{name: "neither satisfies pi", harness: "pi", driver: "made-up", wantErr: "requires driver"},
-		{name: "unknown harness has no rule", harness: "codex-cli", driver: "openaicompat"},
+		{name: "openaicompat driver satisfies codex-cli", harness: "codex-cli", driver: "openaicompat"},
+		{name: "anthropic driver rejected for codex-cli", harness: "codex-cli", driver: "anthropic", wantErr: "requires driver"},
+		{name: "anthropic_base_url does not satisfy codex-cli", harness: "codex-cli", driver: "made-up",
+			opts: map[string]string{"anthropic_base_url": "http://localhost:9999"}, wantErr: "requires driver"},
+		{name: "unknown harness has no rule", harness: "nonexistent-cli", driver: "openaicompat"},
 		{name: "empty harness has no rule", harness: "", driver: "openaicompat"},
 	}
 	for _, tt := range tests {

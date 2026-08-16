@@ -37,10 +37,10 @@ type pgxQuerier interface {
 var drivers = map[string]bool{"anthropic": true, "openaicompat": true, "bedrock": true}
 
 // cliDrivers whitelists driver names valid on a kind='cli' provider
-// row — one per known harness (router.KnownHarnesses), plus
-// "codex-cli" pre-registered for the harness arriving later. These
-// never go through provider.Build; only their name and wire-format
-// compatibility are validated here (D-051).
+// row. These never go through provider.Build; only their name and
+// wire-format compatibility are validated here (D-051). codex-cli is
+// api_key only (no subscription/oauth mode), so in practice it's
+// always a kind='api' row — this entry costs nothing to keep either way.
 var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true}
 
 // credentialRefPattern accepts names and paths (env var names, Vault
@@ -359,10 +359,12 @@ func validateProvider(p Provider) error {
 // the set of driver names each known harness accepts directly from a
 // kind='api' provider row, independent of the anthropic_base_url
 // override. claude-cli speaks anthropic only; pi speaks either
-// anthropic or openaicompat (its whole point is dual-wire support).
+// anthropic or openaicompat (its whole point is dual-wire support);
+// codex-cli speaks openaicompat only (its own responses wire).
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
+	"codex-cli":  {"openaicompat": true},
 }
 
 // validateHarnessWireFormat checks that a kind='api' provider row can
@@ -370,16 +372,18 @@ var harnessDrivers = map[string]map[string]bool{
 // pi's dual-wire support), mirroring router.executorUsable's wire
 // check exactly so admin can never write a provider the resolve
 // endpoint would then mark wire-incompatible: the row's driver must be
-// in harnessDrivers[harness], or options.anthropic_base_url must point
-// at an Anthropic-compatible endpoint. Never called for kind='cli'
-// rows — those are inherently wire-compatible (D-051, see
-// validateProvider's "cli" case).
+// in harnessDrivers[harness], or — only for a harness that accepts the
+// anthropic wire at all (codex-cli never does) — options.
+// anthropic_base_url must point at an Anthropic-compatible endpoint.
+// Never called for kind='cli' rows — those are inherently
+// wire-compatible (D-051, see validateProvider's "cli" case).
 func validateHarnessWireFormat(harness, driver string, opts map[string]string) error {
 	accepted, known := harnessDrivers[harness]
 	if !known {
 		return nil
 	}
-	if !accepted[driver] && opts["anthropic_base_url"] == "" {
+	overrideOK := accepted["anthropic"] && opts["anthropic_base_url"] != ""
+	if !accepted[driver] && !overrideOK {
 		return fmt.Errorf("harness %q requires driver in %v or options.anthropic_base_url", harness, sortedDrivers(accepted))
 	}
 	return nil

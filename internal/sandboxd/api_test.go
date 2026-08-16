@@ -117,6 +117,15 @@ func TestValidExecEnv(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "codex adapter env allowlisted",
+			env: map[string]string{ //nolint:gosec // G101: fixture values, not real credentials.
+				"CODEX_API_KEY": "sk-test",
+				"CODEX_HOME":    "/workspace/missions/x/runs/y/codex-home",
+				"NO_COLOR":      "1",
+			},
+			wantOK: true,
+		},
+		{
 			name:    "unknown name rejected",
 			env:     map[string]string{"AWS_SECRET_ACCESS_KEY": "x"},
 			wantOK:  false,

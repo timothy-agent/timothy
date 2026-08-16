@@ -863,7 +863,7 @@ func TestResolveRouteUnknownHarnessParamRejected(t *testing.T) {
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding", "codex-cli"))
+	a.handleResolveRoute(w, resolveReq("coding", "nonexistent-cli"))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400 for unknown harness param", w.Code)
 	}

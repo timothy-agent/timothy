@@ -39,6 +39,11 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @anthropic-ai/claude-code@2.1.22
 # together. node 24 here already satisfies pi's engines >=22.19.
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.1
 
+# Headless OpenAI Codex CLI, same rationale as claude/pi above. Pin
+# matches internal/brain/missions/executor/testdata/codex-0.147.0 -
+# bump both together.
+RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @openai/codex@0.147.0
+
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in
 # nobody has HOME=/nonexistent, which breaks pip/npm; give it a real,
