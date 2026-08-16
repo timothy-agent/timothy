@@ -29,6 +29,7 @@ type Collection struct {
 	Description string    `json:"description"`
 	DocCount    int       `json:"doc_count"`
 	ChunkCount  int       `json:"chunk_count"`
+	FailedCount int       `json:"failed_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -67,11 +68,12 @@ func New(db *pgpool.Pool) *Store {
 
 const collectionColumns = `c.id, c.name, c.description, c.created_at, c.updated_at,
 	(SELECT count(*) FROM kb_documents d WHERE d.collection_id = c.id),
-	(SELECT coalesce(sum(d.chunk_count), 0) FROM kb_documents d WHERE d.collection_id = c.id)`
+	(SELECT coalesce(sum(d.chunk_count), 0) FROM kb_documents d WHERE d.collection_id = c.id),
+	(SELECT count(*) FROM kb_documents d WHERE d.collection_id = c.id AND d.status = 'failed')`
 
 func scanCollection(row pgx.Row) (Collection, error) {
 	var c Collection
-	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.CreatedAt, &c.UpdatedAt, &c.DocCount, &c.ChunkCount)
+	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.CreatedAt, &c.UpdatedAt, &c.DocCount, &c.ChunkCount, &c.FailedCount)
 	return c, err
 }
 

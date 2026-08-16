@@ -134,6 +134,23 @@ func TestKBCollectionsCRUD(t *testing.T) {
 		t.Fatalf("list status = %d body %s", w.Code, w.Body)
 	}
 
+	// A failed document counts toward failed_count but not the base
+	// doc/chunk story — GetCollection picks it up via collectionColumns.
+	docID, err := store.CreateDocument(context.Background(), created.ID, "Doc", "file", "doc.md", "content", 7)
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+	if err := store.SetFailed(context.Background(), docID, "boom"); err != nil {
+		t.Fatalf("SetFailed: %v", err)
+	}
+	got, err := store.GetCollection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCollection: %v", err)
+	}
+	if got.FailedCount != 1 {
+		t.Fatalf("FailedCount = %d, want 1", got.FailedCount)
+	}
+
 	del := httptest.NewRequest("DELETE", "/v1/admin/kb/collections/"+created.ID, nil)
 	del.Header.Set("Authorization", "Bearer tok")
 	w = httptest.NewRecorder()

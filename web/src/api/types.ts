@@ -549,6 +549,9 @@ export interface KbCollection {
   description: string
   doc_count: number
   chunk_count: number
+  // failed_count is how many documents in this collection are in the
+  // 'failed' ingestion state.
+  failed_count: number
   created_at: string
   updated_at: string
 }

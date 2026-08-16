@@ -46,8 +46,8 @@ func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.
 	h := &kbAPI{
 		store: store, ingest: ingest, markitdownURL: markitdownURL,
 		markitdownHTTP: &http.Client{},
-		fetchHTTP: &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
-		log: a.log,
+		fetchHTTP:      &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
+		log:            a.log,
 	}
 	handle("GET /v1/admin/kb/collections", a.auth(http.HandlerFunc(h.listCollections)))
 	handle("POST /v1/admin/kb/collections", a.auth(http.HandlerFunc(h.createCollection)))
@@ -350,6 +350,8 @@ func (h *kbAPI) convertFetched(ctx context.Context, u *url.URL, body []byte, con
 		name := "page.html"
 		if strings.Contains(contentType, "application/pdf") {
 			name = "page.pdf"
+		} else {
+			body = stripHTMLChrome(body)
 		}
 		md, err := markitdown.Convert(ctx, h.markitdownHTTP, h.markitdownURL, name, contentType, body)
 		if err != nil {

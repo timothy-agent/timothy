@@ -32,7 +32,6 @@ func staticBudget(n int) func(context.Context) int {
 	return func(context.Context) int { return n }
 }
 
-
 // memDir is an in-memory Directory + chat.SessionLog.
 type memDir struct {
 	mu         sync.Mutex

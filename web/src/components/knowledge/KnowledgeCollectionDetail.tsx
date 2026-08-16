@@ -67,6 +67,25 @@ function StatusBadge({ doc }: { doc: KbDocument }) {
 // document in the collection reaches a terminal state.
 const pollMs = 3000
 
+// parseUrls splits pasted/typed text on whitespace into unique, valid
+// http(s) URLs, preserving first-seen order.
+function parseUrls(text: string): string[] {
+  const seen = new Set<string>()
+  const urls: string[] = []
+  for (const token of text.split(/\s+/)) {
+    if (!token || seen.has(token)) continue
+    try {
+      const parsed = new URL(token)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+    } catch {
+      continue
+    }
+    seen.add(token)
+    urls.push(token)
+  }
+  return urls
+}
+
 export function KnowledgeCollectionDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -76,7 +95,7 @@ export function KnowledgeCollectionDetail() {
   const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<KbDocument | null>(null)
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
   const [url, setUrl] = useState('')
-  const [addingUrl, setAddingUrl] = useState(false)
+  const [urlProgress, setUrlProgress] = useState<{ done: number; total: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(() => {
@@ -126,16 +145,24 @@ export function KnowledgeCollectionDetail() {
   }
 
   const addUrl = async () => {
-    if (!id || !url.trim() || addingUrl) return
-    setAddingUrl(true)
-    try {
-      const doc = await addKbDocumentFromUrl(id, url.trim())
-      setDocuments((prev) => [doc, ...prev])
-      setUrl('')
-    } catch (err) {
-      toast.error('Could not add URL', { description: errText(err) })
-    } finally {
-      setAddingUrl(false)
+    if (!id || urlProgress) return
+    const urls = parseUrls(url)
+    if (urls.length === 0) return
+    setUrlProgress({ done: 0, total: urls.length })
+    const failed: string[] = []
+    for (const [i, u] of urls.entries()) {
+      try {
+        await addKbDocumentFromUrl(id, u)
+      } catch {
+        failed.push(u)
+      }
+      setUrlProgress({ done: i + 1, total: urls.length })
+    }
+    setUrlProgress(null)
+    setUrl('')
+    refresh()
+    if (failed.length > 0) {
+      toast.error(`${failed.length} of ${urls.length} failed: ${failed[0]}${failed.length > 1 ? '…' : ''}`)
     }
   }
 
@@ -241,18 +268,31 @@ export function KnowledgeCollectionDetail() {
           e.preventDefault()
           void addUrl()
         }}
-        className="flex items-center gap-2"
+        className="flex items-end gap-2"
       >
-        <input
-          type="url"
+        <textarea
+          rows={1}
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com/article — add a page or PDF by URL"
-          className="h-9 w-full rounded-md border border-border bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
+          onChange={(e) => {
+            setUrl(e.target.value)
+            e.target.style.height = 'auto'
+            e.target.style.height = `${e.target.scrollHeight}px`
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              void addUrl()
+            }
+          }}
+          placeholder="https://example.com/article — add a page or PDF by URL (paste several to bulk-add)"
+          className="max-h-40 min-h-9 w-full resize-none rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
         />
-        <Button type="submit" variant="outline" disabled={!url.trim() || addingUrl}>
-          {addingUrl ? (
-            <HugeiconsIcon icon={Loading03Icon} className="animate-spin" />
+        <Button type="submit" variant="outline" disabled={parseUrls(url).length === 0 || !!urlProgress}>
+          {urlProgress ? (
+            <>
+              <HugeiconsIcon icon={Loading03Icon} className="animate-spin" />
+              adding {urlProgress.done}/{urlProgress.total}…
+            </>
           ) : (
             'Add URL'
           )}

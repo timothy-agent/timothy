@@ -73,6 +73,12 @@ export function KnowledgeCollectionsList() {
               <p className="mt-auto text-xs text-muted-foreground">
                 {c.doc_count} doc{c.doc_count === 1 ? '' : 's'} · {c.chunk_count} chunk
                 {c.chunk_count === 1 ? '' : 's'} · updated {relativeTime(c.updated_at)}
+                {c.failed_count > 0 && (
+                  <span className="text-red-600 dark:text-red-400">
+                    {' '}
+                    · {c.failed_count} failed
+                  </span>
+                )}
               </p>
             </button>
           ))}

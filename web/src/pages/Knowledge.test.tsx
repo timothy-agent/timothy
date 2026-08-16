@@ -1,8 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
+import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { KbCollection, KbDocument } from '../api/types'
 import { Knowledge } from './Knowledge'
+
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}))
 
 vi.mock('../api/client', () => ({
   listKbCollections: vi.fn(),
@@ -13,9 +18,11 @@ vi.mock('../api/client', () => ({
   uploadKbDocument: vi.fn(),
   deleteKbDocument: vi.fn(),
   reingestKbDocument: vi.fn(),
+  addKbDocumentFromUrl: vi.fn(),
 }))
 
 import {
+  addKbDocumentFromUrl,
   createKbCollection,
   deleteKbDocument,
   getKbCollection,
@@ -31,6 +38,7 @@ const productDocs: KbCollection = {
   description: 'Product documentation for support agents.',
   doc_count: 2,
   chunk_count: 40,
+  failed_count: 0,
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-10T00:00:00Z',
 }
@@ -86,6 +94,19 @@ describe('Knowledge page', () => {
     expect(await screen.findByText('Collections · 1')).toBeTruthy()
     expect(screen.getByText('product-docs')).toBeTruthy()
     expect(screen.getByText(/2 docs · 40 chunks/)).toBeTruthy()
+  })
+
+  it('shows a failed-docs badge on the card when failed_count > 0', async () => {
+    vi.mocked(listKbCollections).mockResolvedValue([{ ...productDocs, failed_count: 3 }])
+    renderPage()
+    expect(await screen.findByText(/2 docs · 40 chunks/)).toBeTruthy()
+    expect(screen.getByText(/3 failed/)).toBeTruthy()
+  })
+
+  it('shows no failed-docs badge when failed_count is 0', async () => {
+    renderPage()
+    expect(await screen.findByText(/2 docs · 40 chunks/)).toBeTruthy()
+    expect(screen.queryByText(/failed/)).toBeNull()
   })
 
   it('shows an empty state with an explainer and create button', async () => {
@@ -147,6 +168,66 @@ describe('Knowledge page', () => {
 
       await waitFor(() => expect(uploadKbDocument).toHaveBeenCalledWith('c1', file))
       expect(await screen.findByText('new.md')).toBeTruthy()
+    })
+
+    it('adds a single URL via the input, unchanged from prior behavior', async () => {
+      const added: KbDocument = { ...readyDoc, id: 'd4', title: 'article', status: 'pending' }
+      vi.mocked(addKbDocumentFromUrl).mockResolvedValue(added)
+
+      renderPage('/knowledge/c1')
+      await screen.findByText('onboarding.pdf')
+
+      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      fireEvent.change(input, { target: { value: 'https://example.com/a' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+
+      await waitFor(() =>
+        expect(addKbDocumentFromUrl).toHaveBeenCalledWith('c1', 'https://example.com/a'),
+      )
+      expect(addKbDocumentFromUrl).toHaveBeenCalledTimes(1)
+    })
+
+    it('submits multiple pasted URLs sequentially, in order, with progress text', async () => {
+      vi.mocked(addKbDocumentFromUrl).mockResolvedValue(readyDoc)
+
+      renderPage('/knowledge/c1')
+      await screen.findByText('onboarding.pdf')
+
+      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      fireEvent.change(input, {
+        target: { value: 'https://example.com/a\nhttps://example.com/b https://example.com/c' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+
+      await waitFor(() => expect(addKbDocumentFromUrl).toHaveBeenCalledTimes(3))
+      expect(addKbDocumentFromUrl).toHaveBeenNthCalledWith(1, 'c1', 'https://example.com/a')
+      expect(addKbDocumentFromUrl).toHaveBeenNthCalledWith(2, 'c1', 'https://example.com/b')
+      expect(addKbDocumentFromUrl).toHaveBeenNthCalledWith(3, 'c1', 'https://example.com/c')
+    })
+
+    it('keeps submitting remaining URLs after one fails, and toasts a summary', async () => {
+      vi.mocked(addKbDocumentFromUrl).mockImplementation((_id, url) =>
+        url === 'https://example.com/bad'
+          ? Promise.reject(new Error('fetch failed'))
+          : Promise.resolve(readyDoc),
+      )
+
+      renderPage('/knowledge/c1')
+      await screen.findByText('onboarding.pdf')
+
+      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      fireEvent.change(input, {
+        target: {
+          value: 'https://example.com/a https://example.com/bad https://example.com/c',
+        },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+
+      await waitFor(() => expect(addKbDocumentFromUrl).toHaveBeenCalledTimes(3))
+      expect(addKbDocumentFromUrl).toHaveBeenNthCalledWith(3, 'c1', 'https://example.com/c')
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('1 of 3 failed: https://example.com/bad'),
+      )
     })
 
     it('re-ingests a failed document', async () => {

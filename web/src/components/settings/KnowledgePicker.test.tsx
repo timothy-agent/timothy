@@ -16,6 +16,7 @@ const collections: KbCollection[] = [
     description: 'Product documentation.',
     doc_count: 1,
     chunk_count: 5,
+    failed_count: 0,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
   },
