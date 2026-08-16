@@ -1,6 +1,7 @@
 # Timothy
 
 [![CI](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml/badge.svg)](https://github.com/timothy-agent/timothy/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/timothy-agent/timothy/graph/badge.svg?token=TTV3A14CFX)](https://codecov.io/gh/timothy-agent/timothy)
 [![Release](https://img.shields.io/github/v/release/timothy-agent/timothy?include_prereleases&sort=semver&label=release)](https://github.com/timothy-agent/timothy/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
