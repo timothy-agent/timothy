@@ -7,11 +7,13 @@ import {
   chatStream,
   getTranscript,
   retryStream,
+  setSessionKnowledge,
   stopTurn,
   streamLive,
 } from '../api/client'
 import type { ChatEvent } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
+import { useAgents } from '../components/AgentPicker'
 import { Composer, type PendingAttachment } from '../components/Composer'
 import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from '../components/Message'
 import { PermissionModal } from '../components/PermissionModal'
@@ -55,6 +57,7 @@ export function Chat({
   const navigate = useNavigate()
   const location = useLocation()
   const { refresh } = useSessions()
+  const agents = useAgents()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -84,6 +87,17 @@ export function Chat({
   // can accidentally mangle. Rides every turn until removed. Locked
   // pages skip this state entirely and always send lockedSkillHint.
   const [skillHint, setSkillHint] = useState<string | undefined>(lockedSkillHint)
+  // Collection names pinned via #mention chips. Seeded from the
+  // session's `knowledge` on load; local-only until the first send on
+  // a brand-new chat (no session id yet).
+  const [knowledge, setKnowledge] = useState<string[]>([])
+  // The serving agent's own bound collections — always searched, never
+  // pinned by the user. Re-derived from the live agent selection (not
+  // snapshotted) so switching agents mid-session updates the chips.
+  // Same fallback as AgentRoutePicker: an empty/unmatched agent name
+  // resolves to the default agent, the one that actually serves it.
+  const servingAgent = agents.find((a) => a.name === agent) ?? agents.find((a) => a.is_default)
+  const agentKnowledge = servingAgent?.knowledge ?? []
   const [loadError, setLoadError] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
   // Id of the assistant item whose Activity panel is open, if any. The
@@ -137,6 +151,7 @@ export function Chat({
     setLoadError(null)
     if (!routeSession) {
       setItems([])
+      setKnowledge([])
       adoptedRef.current = null
       return
     }
@@ -148,6 +163,7 @@ export function Chat({
         setItems(fromTranscript(items))
         if (session.agent) setAgent(session.agent)
         setRoute(session.last_route ?? '')
+        setKnowledge(session.knowledge ?? [])
         // A turn was already streaming when this tab opened the session
         // (opened mid-turn, or a reload during one): attach to it live
         // instead of leaving the transcript's replay looking stale.
@@ -192,6 +208,22 @@ export function Chat({
     const el = listRef.current
     if (!el) return
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
+
+  // updateKnowledge handles both the mention popup's add (local only,
+  // rides the next send) and a chip's remove button. A removal on an
+  // existing session also persists immediately via PUT — the chip
+  // otherwise reappears next time the session is opened.
+  const updateKnowledge = (next: string[]) => {
+    const removed = next.length < knowledge.length
+    setKnowledge(next)
+    const sessionId = sessionRef.current
+    if (removed && sessionId) {
+      setSessionKnowledge(sessionId, next).catch(() => {
+        toast.error('Could not update knowledge')
+        setKnowledge(knowledge) // roll back the optimistic removal
+      })
+    }
   }
 
   const pickAgent = (a: string) => {
@@ -311,6 +343,7 @@ export function Chat({
     hint = skillHint,
     routeName = route,
     sentAttachments: PendingAttachment[] = [],
+    sentKnowledge = knowledge,
   ) => {
     const message = text.trim()
     // Uploads still in flight aren't sendable ids yet — only completed
@@ -361,6 +394,7 @@ export function Chat({
           route: routeName || undefined,
           skill_hint: hint,
           attachments: ready.length > 0 ? ready.map((a) => a.id) : undefined,
+          knowledge: sentKnowledge.length > 0 ? sentKnowledge : undefined,
         },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
@@ -411,7 +445,7 @@ export function Chat({
     }
   }
 
-  const send = () => void sendMessage(draft, agent, skillHint, route, attachments)
+  const send = () => void sendMessage(draft, agent, skillHint, route, attachments, knowledge)
 
   // stop asks the server to cancel the in-flight turn (chat.Service now
   // runs it detached from this request, so abortRef.current?.abort()
@@ -505,7 +539,8 @@ export function Chat({
         !intent.agent &&
         !intent.route &&
         !intent.skillHint &&
-        !intent.attachments)
+        !intent.attachments &&
+        !intent.knowledge)
     )
       return
     intentConsumedRef.current = true
@@ -515,8 +550,19 @@ export function Chat({
     if (intent.agent) pickAgent(intent.agent)
     if (intent.route) pickRoute(intent.route)
     if (intent.skillHint) setSkillHint(intent.skillHint)
+    if (intent.knowledge) setKnowledge(intent.knowledge)
     if (intent.send || intent.attachments)
-      void sendMessage(intent.send ?? '', who, intent.skillHint, whichRoute, intent.attachments)
+      // sendMessage takes knowledge explicitly here for the same reason
+      // as hint/whichRoute above: the setKnowledge call just above hasn't
+      // landed in this render, so `knowledge` state is still stale.
+      void sendMessage(
+        intent.send ?? '',
+        who,
+        intent.skillHint,
+        whichRoute,
+        intent.attachments,
+        intent.knowledge ?? knowledge,
+      )
     else if (intent.draft) setDraft(intent.draft)
     // Mount-time only by design: the intent rides the navigation that
     // created this page instance; the ref guards strict-mode replays.
@@ -638,6 +684,9 @@ export function Chat({
           placeholder={placeholder}
           attachments={attachments}
           onAttachments={setAttachments}
+          knowledge={knowledge}
+          onKnowledge={updateKnowledge}
+          agentKnowledge={agentKnowledge}
         />
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
           Enter to send · Shift+Enter for a new line

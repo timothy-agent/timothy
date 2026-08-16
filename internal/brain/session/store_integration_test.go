@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -448,6 +450,58 @@ func TestPendingPermissions(t *testing.T) {
 	// Empty scope: no query, no rows, ever.
 	if got, err := s.PendingPermissions(ctx, nil); err != nil || got != nil {
 		t.Fatalf("PendingPermissions(nil) = %v, %v; want nil, nil", got, err)
+	}
+}
+
+// TestKnowledgeRoundTrip pins AddKnowledge's union semantics and
+// SetKnowledge's outright replace, including clearing back to empty.
+func TestKnowledgeRoundTrip(t *testing.T) {
+	s, id := integrationStore(t)
+	ctx := t.Context()
+
+	got, err := s.Knowledge(ctx, id)
+	if err != nil {
+		t.Fatalf("Knowledge (initial): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("initial Knowledge = %v, want empty", got)
+	}
+
+	if err := s.AddKnowledge(ctx, id, []string{"a", "b"}); err != nil {
+		t.Fatalf("AddKnowledge a,b: %v", err)
+	}
+	if err := s.AddKnowledge(ctx, id, []string{"b", "c"}); err != nil {
+		t.Fatalf("AddKnowledge b,c: %v", err)
+	}
+	got, err = s.Knowledge(ctx, id)
+	if err != nil {
+		t.Fatalf("Knowledge (after adds): %v", err)
+	}
+	sort.Strings(got)
+	if !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("Knowledge after adds = %v, want [a b c]", got)
+	}
+
+	if err := s.SetKnowledge(ctx, id, []string{"x"}); err != nil {
+		t.Fatalf("SetKnowledge: %v", err)
+	}
+	got, err = s.Knowledge(ctx, id)
+	if err != nil {
+		t.Fatalf("Knowledge (after set): %v", err)
+	}
+	if !slices.Equal(got, []string{"x"}) {
+		t.Fatalf("Knowledge after SetKnowledge = %v, want [x]", got)
+	}
+
+	if err := s.SetKnowledge(ctx, id, nil); err != nil {
+		t.Fatalf("SetKnowledge nil: %v", err)
+	}
+	got, err = s.Knowledge(ctx, id)
+	if err != nil {
+		t.Fatalf("Knowledge (after clear): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("Knowledge after clear = %v, want empty", got)
 	}
 }
 

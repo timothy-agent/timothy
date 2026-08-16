@@ -46,7 +46,8 @@ Arguments:
   kb_search result's "Source:" line (the bare document id also works).
 
 Returns the document's title, source reference, and full markdown
-content.`,
+content. When citing it to the user, use the document title — never
+the kb:// reference.`,
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {

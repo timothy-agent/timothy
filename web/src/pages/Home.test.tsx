@@ -9,10 +9,11 @@ vi.mock('../api/client', () => ({
   listMemories: vi.fn(),
   listRoutes: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
+  listKbCollections: vi.fn().mockResolvedValue([]),
 }))
 
 import type { AdminRoute } from '../api/types'
-import { listAgents, listMemories, listRoutes } from '../api/client'
+import { listAgents, listKbCollections, listMemories, listRoutes } from '../api/client'
 
 let landed: { pathname: string; state: ChatIntent | null } | null = null
 
@@ -138,5 +139,23 @@ describe('Home', () => {
     renderHome()
     fireEvent.click(screen.getByRole('button', { name: 'Analytics' }))
     expect(screen.getByText('analytics page')).toBeTruthy()
+  })
+
+  it('carries picked #mention chips into the chat intent on send', async () => {
+    vi.mocked(listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    renderHome()
+    const input = screen.getByLabelText('Message') as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#obs' } })
+    await screen.findByText('#observability')
+    fireEvent.keyDown(input, { key: 'Enter' }) // selects the mention, adds the chip
+
+    fireEvent.change(input, { target: { value: 'hello there' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(landed?.state?.knowledge).toEqual(['observability'])
+    expect(landed?.state?.send).toBe('hello there')
   })
 })

@@ -31,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog'
-import { errText } from './util'
+import { errText } from '../settings/util'
 
 const acceptExt = '.pdf,.md,.txt,.docx,.html'
 
@@ -102,7 +102,7 @@ export function KnowledgeCollectionDetail() {
     return () => clearInterval(t)
   }, [hasPending, id])
 
-  if (collection === null) return <Navigate to="/settings/knowledge" replace />
+  if (collection === null) return <Navigate to="/knowledge" replace />
   if (collection === undefined) return null
 
   async function uploadFiles(files: File[]) {
@@ -144,7 +144,7 @@ export function KnowledgeCollectionDetail() {
     try {
       await deleteKbCollection(id)
       toast.success('Collection removed')
-      navigate('/settings/knowledge')
+      navigate('/knowledge')
     } catch (err) {
       toast.error('Could not remove collection', { description: errText(err) })
       setConfirmDeleteCollection(false)
@@ -178,7 +178,7 @@ export function KnowledgeCollectionDetail() {
   return (
     <div className="mt-6 w-full space-y-6">
       <Link
-        to="/settings/knowledge"
+        to="/knowledge"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
       >
         <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />

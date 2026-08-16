@@ -334,6 +334,14 @@ export async function deleteSession(id: string): Promise<void> {
   await request<void>(`/v1/sessions/${id}`, { method: 'DELETE' })
 }
 
+// setSessionKnowledge replaces a session's pinned kb collection list.
+export async function setSessionKnowledge(id: string, collections: string[]): Promise<void> {
+  await request<void>(`/v1/sessions/${id}/knowledge`, {
+    method: 'PUT',
+    body: JSON.stringify({ collections }),
+  })
+}
+
 // transcribe posts a recorded audio clip (from the mic button) to
 // brain's local speech-to-text proxy and returns the transcript.
 // Raw bytes, not JSON — the body IS the audio, so this bypasses

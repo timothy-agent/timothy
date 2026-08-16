@@ -44,6 +44,7 @@ type Directory interface {
 	Update(ctx context.Context, id string, title *string, archived *bool) error
 	Delete(ctx context.Context, id string) error
 	PendingPermissions(ctx context.Context, sessionIDs []string) ([]session.PendingPermission, error)
+	SetKnowledge(ctx context.Context, id string, names []string) error
 }
 
 // PermissionResolver answers parked permission prompts; the loop's
@@ -73,6 +74,11 @@ type API struct {
 	// conversion off, it never blocks or errors the read/stream.
 	flags *settings.Store
 	rates *fxrates.Store
+
+	// kbCollections lists the knowledge base's collections for
+	// validating a knowledge PUT/chat request's names — nil when KB is
+	// disabled (no kb.Store wired), rejecting any non-empty Knowledge.
+	kbCollections func(ctx context.Context) ([]kb.Collection, error)
 }
 
 // memoryRoutePatterns is the EXHAUSTIVE list of memoryd routes brain
@@ -95,6 +101,9 @@ var memoryRoutePatterns = []string{
 // whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
 func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates}
+	if kbStore != nil {
+		a.kbCollections = kbStore.ListCollections
+	}
 	if memories != nil {
 		for _, pattern := range memoryRoutePatterns {
 			srv.Handle(pattern, a.auth(memories))
@@ -137,6 +146,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	a.registerLive(srv.Handle)
 	srv.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
+	srv.Handle("PUT /v1/sessions/{id}/knowledge", a.auth(http.HandlerFunc(a.handleSetKnowledge)))
 	srv.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	srv.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
 	srv.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
@@ -374,6 +384,63 @@ func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// validateKnowledge rejects any name that isn't a real kb collection.
+// Nil/empty names is always fine; a.kbCollections == nil (KB disabled)
+// rejects any non-empty list outright.
+func (a *API) validateKnowledge(ctx context.Context, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	if a.kbCollections == nil {
+		return errors.New("knowledge base is not configured")
+	}
+	collections, err := a.kbCollections(ctx)
+	if err != nil {
+		return err
+	}
+	known := make(map[string]bool, len(collections))
+	for _, c := range collections {
+		known[c.Name] = true
+	}
+	for _, name := range names {
+		if !known[name] {
+			return fmt.Errorf("unknown knowledge collection %q", name)
+		}
+	}
+	return nil
+}
+
+// handleSetKnowledge replaces a session's pinned kb_collection names
+// outright (the composer's # mention state), validated against the
+// knowledge base's real collections.
+func (a *API) handleSetKnowledge(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !validSessionID(id) {
+		jsonError(w, http.StatusNotFound, "not_found", "no such session")
+		return
+	}
+	var req struct {
+		Collections []string `json:"collections"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := a.validateKnowledge(r.Context(), req.Collections); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := a.dir.SetKnowledge(r.Context(), id, req.Collections); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			jsonError(w, http.StatusNotFound, "not_found", "no such session")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "set_knowledge_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleDelete permanently removes a session and all its
 // session-scoped records. Irreversible; the web UI gates it behind an
 // explicit confirmation.
@@ -411,6 +478,10 @@ func (a *API) handleMessages(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not_found", "no such session")
 		return
 	}
+	if err := a.validateKnowledge(r.Context(), req.Knowledge); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	if _, err := a.dir.Get(r.Context(), req.SessionID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
@@ -430,6 +501,10 @@ func (a *API) handleMessages(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleChatShim(w http.ResponseWriter, r *http.Request) {
 	var req chat.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := a.validateKnowledge(r.Context(), req.Knowledge); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}

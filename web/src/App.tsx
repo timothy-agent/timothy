@@ -6,6 +6,7 @@ import {
   GithubIcon,
   Home01Icon,
   Key01Icon,
+  LibraryIcon,
   Moon02Icon,
   RocketIcon,
   Search01Icon,
@@ -62,7 +63,8 @@ import { Chat } from './pages/Chat'
 import { Analytics } from './pages/Analytics'
 import { EditSchedule } from './pages/EditSchedule'
 import { Home } from './pages/Home'
-import { Memory } from './pages/Memory'
+import { Knowledge } from './pages/Knowledge'
+import { KnowledgeRedirect, Memory } from './pages/Memory'
 import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
@@ -73,6 +75,7 @@ const nav = [
   { label: 'Home', href: '/', icon: Home01Icon },
   { label: 'Chat', href: '/chat', icon: BubbleChatIcon },
   { label: 'Missions', href: '/missions', icon: RocketIcon },
+  { label: 'Knowledge', href: '/knowledge', icon: LibraryIcon },
   { label: 'Memory', href: '/memory', icon: Brain02Icon },
   { label: 'Analytics', href: '/analytics', icon: Analytics01Icon },
   { label: 'Settings', href: '/settings', icon: Settings02Icon },
@@ -85,6 +88,7 @@ function isActive(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/'
   if (href === '/chat') return pathname === '/chat' || pathname.startsWith('/chat/')
   if (href === '/missions') return pathname === '/missions' || pathname.startsWith('/missions/')
+  if (href === '/knowledge') return pathname === '/knowledge' || pathname.startsWith('/knowledge/')
   if (href === '/settings') return pathname.startsWith('/settings')
   return pathname === href
 }
@@ -455,7 +459,9 @@ function App() {
                 <Route path="/missions/new" element={<NewMission />} />
                 <Route path="/missions/schedules/:id/edit" element={<EditSchedule />} />
                 <Route path="/missions/:id" element={<MissionDetail />} />
-                <Route path="/memory" element={<Memory />} />
+                <Route path="/knowledge/*" element={<Knowledge />} />
+                <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />
+                <Route path="/memory/*" element={<Memory />} />
                 <Route path="/settings/*" element={<Settings />} />
                 {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}
                 <Route path="/settings" element={<Navigate to="/settings/providers" replace />} />

@@ -36,6 +36,15 @@ function renderAt(initialEntry: string) {
   )
 }
 
+describe('Sidebar nav', () => {
+  it('lists Knowledge directly above Memory', async () => {
+    renderAt('/')
+    const links = await screen.findAllByRole('link')
+    const labels = links.map((l) => l.textContent).filter((t) => t === 'Knowledge' || t === 'Memory')
+    expect(labels).toEqual(['Knowledge', 'Memory'])
+  })
+})
+
 describe('Settings sidebar submenu', () => {
   it('starts expanded and highlights the active area on a settings route', async () => {
     renderAt('/settings/secrets')

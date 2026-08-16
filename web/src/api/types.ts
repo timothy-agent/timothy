@@ -102,6 +102,9 @@ export interface ChatRequest {
   model_hint?: string
   skill_hint?: string
   attachments?: string[]
+  // knowledge is the set of kb collection names pinned for this turn;
+  // the server unions them into the session's knowledge list.
+  knowledge?: string[]
 }
 
 // --- session management (mirrors brain's /v1/sessions surface) ---
@@ -112,6 +115,8 @@ export interface SessionMeta {
   archived: boolean
   agent?: string
   last_route?: string
+  // knowledge is the session's pinned kb collection names.
+  knowledge?: string[]
   created_at: string
   updated_at: string
 }

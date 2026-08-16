@@ -4,11 +4,11 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { createKbCollection } from '../../api/client'
-import { slugify } from './AgentForm'
-import { Field } from './shared'
+import { slugify } from '../settings/AgentForm'
+import { Field } from '../settings/shared'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
-import { errText } from './util'
+import { errText } from '../settings/util'
 
 export function KnowledgeCollectionAdd() {
   const navigate = useNavigate()
@@ -21,7 +21,7 @@ export function KnowledgeCollectionAdd() {
     try {
       const id = await createKbCollection({ name: slugify(name), description: description.trim() })
       toast.success('Collection created', { description: `${slugify(name)} is ready for documents.` })
-      navigate(`/settings/knowledge/${id}`)
+      navigate(`/knowledge/${id}`)
     } catch (err) {
       toast.error('Could not create collection', { description: errText(err) })
     } finally {
@@ -32,7 +32,7 @@ export function KnowledgeCollectionAdd() {
   return (
     <div className="mt-6 w-full space-y-6">
       <Link
-        to="/settings/knowledge"
+        to="/knowledge"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
       >
         <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
@@ -67,7 +67,7 @@ export function KnowledgeCollectionAdd() {
         </div>
 
         <div className="flex gap-3 pt-6">
-          <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/knowledge')}>
+          <Button variant="outline" disabled={busy} onClick={() => navigate('/knowledge')}>
             Cancel
           </Button>
           <Button disabled={slugify(name) === '' || busy} onClick={() => void submit()}>

@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer, type PendingAttachment } from './Composer'
 
@@ -8,6 +9,7 @@ vi.mock('../api/client', () => ({
   transcribe: vi.fn(),
   uploadAttachment: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: true }, values: {} }),
+  listKbCollections: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('sonner', () => ({
@@ -368,5 +370,183 @@ describe('Composer attachments', () => {
     fireEvent.paste(screen.getByRole('textbox', { name: 'Message' }), { clipboardData })
 
     await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(file))
+  })
+})
+
+// StatefulComposer owns draft/knowledge state itself (Composer is a
+// controlled component) so a test can drive real typing/selection and
+// see the popup and chips update, closer to how the page actually
+// wires it than passing static props would allow.
+function StatefulComposer({
+  onSend,
+  onKnowledgeSpy,
+}: {
+  onSend: () => void
+  onKnowledgeSpy?: (next: string[]) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const [knowledge, setKnowledge] = useState<string[]>([])
+  return (
+    <Composer
+      {...baseProps()}
+      draft={draft}
+      onDraft={setDraft}
+      onSend={onSend}
+      knowledge={knowledge}
+      onKnowledge={(next) => {
+        setKnowledge(next)
+        onKnowledgeSpy?.(next)
+      }}
+    />
+  )
+}
+
+describe('Composer knowledge mentions', () => {
+  it('does not show a popup when onKnowledge is omitted', async () => {
+    render(<Composer {...baseProps()} draft="#obs" />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    fireEvent.change(input, { target: { value: '#obs' } })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText('#observability')).toBeNull()
+  })
+
+  it('shows a filtered popup, selects on Enter, strips the token, and stops intercepting Enter', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    const onSend = vi.fn()
+    render(<StatefulComposer onSend={onSend} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#obs' } })
+
+    await screen.findByText('#observability')
+    expect(screen.queryByText('#billing')).toBeNull()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(input.value).toBe('')
+    await screen.findByText('#observability') // now rendered as a chip, not a popup row
+    expect(screen.queryByRole('button', { name: /^#observability$/ })).toBeNull()
+
+    // Popup is closed and the token is gone: Enter now sends normally.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledOnce()
+  })
+
+  it('closes the popup on Escape and lets Enter send', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    const onSend = vi.fn()
+    render(<StatefulComposer onSend={onSend} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#obs' } })
+    await screen.findByText('#observability')
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.queryByRole('button', { name: /^#observability$/ })).toBeNull()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledOnce()
+  })
+
+  it('removes a chip via its remove button without touching the others', () => {
+    const onKnowledge = vi.fn()
+    render(
+      <Composer
+        {...baseProps()}
+        draft=""
+        knowledge={['observability', 'billing']}
+        onKnowledge={onKnowledge}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Remove observability knowledge' }))
+    expect(onKnowledge).toHaveBeenCalledWith(['billing'])
+  })
+
+  it('retries the collections fetch on the next # after a transient failure', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections)
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockResolvedValueOnce([
+        { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+      ])
+    const onSend = vi.fn()
+    render(<StatefulComposer onSend={onSend} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#obs' } })
+    await waitFor(() => expect(client.listKbCollections).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText('#observability')).toBeNull()
+
+    fireEvent.change(input, { target: { value: '#ob' } })
+    fireEvent.change(input, { target: { value: '#obs' } })
+    await waitFor(() => expect(client.listKbCollections).toHaveBeenCalledTimes(2))
+    await screen.findByText('#observability')
+  })
+})
+
+describe('Composer agent-bound knowledge chips', () => {
+  it('renders agent-bound collections as muted, non-removable chips', () => {
+    render(
+      <Composer
+        {...baseProps()}
+        draft=""
+        knowledge={[]}
+        onKnowledge={vi.fn()}
+        agentKnowledge={['runbooks']}
+      />,
+    )
+    expect(screen.getByText('#runbooks')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Remove runbooks knowledge' })).toBeNull()
+  })
+
+  it('excludes agent-bound names from the mention popup', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+      { id: '2', name: 'runbooks', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    function StatefulWithAgentKnowledge() {
+      const [draft, setDraft] = useState('')
+      const [knowledge, setKnowledge] = useState<string[]>([])
+      return (
+        <Composer
+          {...baseProps()}
+          draft={draft}
+          onDraft={setDraft}
+          knowledge={knowledge}
+          onKnowledge={setKnowledge}
+          agentKnowledge={['runbooks']}
+        />
+      )
+    }
+    render(<StatefulWithAgentKnowledge />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+
+    fireEvent.change(input, { target: { value: '#r' } })
+    await waitFor(() => expect(client.listKbCollections).toHaveBeenCalled())
+    // 'runbooks' matches the query but is agent-bound, so it's excluded.
+    expect(screen.queryByText('#runbooks', { selector: 'button' })).toBeNull()
+  })
+
+  it('hides the duplicate muted chip when a name is both agent-bound and session-pinned', () => {
+    render(
+      <Composer
+        {...baseProps()}
+        draft=""
+        knowledge={['runbooks']}
+        onKnowledge={vi.fn()}
+        agentKnowledge={['runbooks']}
+      />,
+    )
+    // Only the removable violet chip renders, not a second muted one.
+    expect(screen.getByRole('button', { name: 'Remove runbooks knowledge' })).toBeTruthy()
+    expect(screen.getAllByText('#runbooks')).toHaveLength(1)
   })
 })

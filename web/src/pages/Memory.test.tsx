@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MemoryItem } from '../api/types'
-import { Memory } from './Memory'
+import { Memory, KnowledgeRedirect } from './Memory'
 
 vi.mock('../api/client', () => ({
   listMemories: vi.fn(),
@@ -14,12 +14,7 @@ vi.mock('../api/client', () => ({
   entityMemories: vi.fn(),
 }))
 
-import {
-  entityGraph,
-  listMemories,
-  resolveMemory,
-  searchMemories,
-} from '../api/client'
+import { entityGraph, listMemories, resolveMemory, searchMemories } from '../api/client'
 
 const pendingMemory: MemoryItem = {
   id: 'm1',
@@ -32,10 +27,12 @@ const pendingMemory: MemoryItem = {
   created_at: '2026-07-11T10:00:00Z',
 }
 
-function renderPage() {
+function renderPage(initialEntry = '/memory') {
   return render(
-    <MemoryRouter>
-      <Memory />
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/memory/*" element={<Memory />} />
+      </Routes>
     </MemoryRouter>,
   )
 }
@@ -103,6 +100,33 @@ describe('Memory queue', () => {
     vi.mocked(listMemories).mockResolvedValue([])
     renderPage()
     expect(await screen.findByText(/Queue is empty/)).toBeInTheDocument()
+  })
+})
+
+describe('Memory tabs', () => {
+  it('defaults to the queue tab, with queue listed first', async () => {
+    renderPage()
+    await screen.findByTestId('queue-card')
+    const tabButtons = screen.getAllByRole('button', { name: /^(Queue|Browser|Graph)$/ })
+    expect(tabButtons.map((b) => b.textContent)).toEqual(['Queue', 'Browser', 'Graph'])
+  })
+})
+
+describe('KnowledgeRedirect', () => {
+  function renderRedirect(entry: string) {
+    return render(
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />
+          <Route path="/knowledge/*" element={<div data-testid="knowledge-page" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('forwards a knowledge deep link to the new top-level route', async () => {
+    renderRedirect('/memory/knowledge/c1')
+    expect(await screen.findByTestId('knowledge-page')).toBeInTheDocument()
   })
 })
 

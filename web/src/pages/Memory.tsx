@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, Navigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   addMemory,
@@ -310,8 +310,16 @@ const tabs = [
   { id: 'graph', label: 'Graph' },
 ] as const
 
+// KnowledgeRedirect keeps old /memory/knowledge(/...) links working
+// after the area moved to its own top-level page.
+export function KnowledgeRedirect() {
+  const { '*': rest } = useParams()
+  return <Navigate to={`/knowledge${rest ? `/${rest}` : ''}`} replace />
+}
+
 export function Memory() {
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('queue')
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-full space-y-6 p-6">

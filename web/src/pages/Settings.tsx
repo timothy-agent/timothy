@@ -1,9 +1,8 @@
-import { Navigate, Route, Routes } from 'react-router'
+import { Navigate, Route, Routes, useParams } from 'react-router'
 import { AgentsTab } from '../components/settings/AgentsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { CredentialsTab } from '../components/settings/CredentialsTab'
 import { FeaturesTab } from '../components/settings/FeaturesTab'
-import { KnowledgeTab } from '../components/settings/KnowledgeTab'
 import { ProvidersTab } from '../components/settings/ProvidersTab'
 import { RoutesTab } from '../components/settings/RoutesTab'
 import { SecretsTab } from '../components/settings/SecretsTab'
@@ -37,12 +36,6 @@ export const settingsAreas = [
     label: 'Routing',
     description: 'Task routes decide which provider chain handles a given job.',
     render: RoutesTab,
-  },
-  {
-    key: 'knowledge',
-    label: 'Knowledge',
-    description: 'Curate document collections agents can search for grounded answers.',
-    render: KnowledgeTab,
   },
   {
     key: 'secrets',
@@ -80,10 +73,18 @@ function SettingsPage({ area }: { area: (typeof settingsAreas)[number] }) {
   )
 }
 
+// KnowledgeRedirect keeps old /settings/knowledge(/...) links working
+// after the area moved to its own top-level page.
+function KnowledgeRedirect() {
+  const { '*': rest } = useParams()
+  return <Navigate to={`/knowledge${rest ? `/${rest}` : ''}`} replace />
+}
+
 export function Settings() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="providers" replace />} />
+      <Route path="knowledge/*" element={<KnowledgeRedirect />} />
       {settingsAreas.map((area) => (
         <Route key={area.key} path={`${area.key}/*`} element={<SettingsPage area={area} />} />
       ))}

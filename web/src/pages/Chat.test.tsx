@@ -25,6 +25,8 @@ vi.mock('../api/client', () => ({
   listRoutes: vi.fn(),
   listAgents: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
+  listKbCollections: vi.fn().mockResolvedValue([]),
+  setSessionKnowledge: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
@@ -38,6 +40,7 @@ import {
   getTranscript,
   listAgents,
   listRoutes,
+  setSessionKnowledge,
   stopTurn,
   streamLive,
 } from '../api/client'
@@ -451,5 +454,168 @@ describe('stop turn', () => {
 
     expect(stopTurn).not.toHaveBeenCalled()
     released()
+  })
+})
+
+describe('session knowledge', () => {
+  it('seeds chips from the session and includes them in the send request', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: {
+        id: 's1',
+        title: '',
+        archived: false,
+        knowledge: ['observability'],
+        created_at: '',
+        updated_at: '',
+      },
+      items: [],
+      turn_active: false,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('#observability')
+
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(chatStream).toHaveBeenCalledWith(
+        expect.objectContaining({ knowledge: ['observability'] }),
+        expect.anything(),
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('removing a chip calls setSessionKnowledge with the remaining names', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: {
+        id: 's1',
+        title: '',
+        archived: false,
+        knowledge: ['observability', 'billing'],
+        created_at: '',
+        updated_at: '',
+      },
+      items: [],
+      turn_active: false,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('#observability')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove observability knowledge' }))
+
+    await waitFor(() =>
+      expect(setSessionKnowledge).toHaveBeenCalledWith('s1', ['billing']),
+    )
+    expect(screen.queryByText('#observability')).toBeNull()
+  })
+
+  it('carries knowledge from a home-screen intent into the first send', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[{ pathname: '/chat', state: { send: 'hello', knowledge: ['observability'] } }]}
+      >
+        <Routes>
+          <Route path="/chat" element={<Chat onNeedToken={vi.fn()} />} />
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() =>
+      expect(chatStream).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'hello', knowledge: ['observability'] }),
+        expect.anything(),
+        expect.anything(),
+      ),
+    )
+    await screen.findByText('#observability')
+  })
+
+  it('shows the serving agent\'s bound collections as muted chips, updating on agent switch', async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      {
+        id: 'a1',
+        name: 'general',
+        description: '',
+        prompt_overlay: '',
+        route: '',
+        skills: [],
+        tools: [],
+        memory: true,
+        is_default: true,
+        enabled: true,
+        knowledge: ['runbooks'],
+      },
+      {
+        id: 'a2',
+        name: 'research',
+        description: '',
+        prompt_overlay: '',
+        route: '',
+        skills: [],
+        tools: [],
+        memory: true,
+        is_default: false,
+        enabled: true,
+        knowledge: ['papers'],
+      },
+    ])
+
+    renderChat()
+    await screen.findByText('#runbooks')
+    expect(screen.queryByRole('button', { name: 'Remove runbooks knowledge' })).toBeNull()
+    expect(screen.queryByText('#papers')).toBeNull()
+
+    openMenu('Agent and route')
+    fireEvent.click(await screen.findByText('research'))
+
+    await screen.findByText('#papers')
+    expect(screen.queryByText('#runbooks')).toBeNull()
+  })
+
+  it('toasts and restores the chip when setSessionKnowledge fails', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: {
+        id: 's1',
+        title: '',
+        archived: false,
+        knowledge: ['observability'],
+        created_at: '',
+        updated_at: '',
+      },
+      items: [],
+      turn_active: false,
+    })
+    vi.mocked(setSessionKnowledge).mockRejectedValueOnce(new Error('boom'))
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('#observability')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove observability knowledge' }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not update knowledge'))
+    await screen.findByText('#observability')
   })
 })

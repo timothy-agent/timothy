@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
+	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -30,15 +32,16 @@ func staticBudget(n int) func(context.Context) int {
 
 // fakeLog is an in-memory SessionLog.
 type fakeLog struct {
-	mu       sync.Mutex
-	events   map[string][]session.Event
-	titles   map[string]string
-	category map[string]string
-	createdN int
+	mu        sync.Mutex
+	events    map[string][]session.Event
+	titles    map[string]string
+	category  map[string]string
+	knowledge map[string][]string
+	createdN  int
 }
 
 func newFakeLog() *fakeLog {
-	return &fakeLog{events: map[string][]session.Event{}, titles: map[string]string{}, category: map[string]string{}}
+	return &fakeLog{events: map[string][]session.Event{}, titles: map[string]string{}, category: map[string]string{}, knowledge: map[string][]string{}}
 }
 
 func (f *fakeLog) Create(_ context.Context, title string) (string, error) {
@@ -84,6 +87,23 @@ func (f *fakeLog) SetLastRoute(_ context.Context, id, route, agent string) error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.category[id] = route
+	return nil
+}
+
+func (f *fakeLog) Knowledge(_ context.Context, id string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.knowledge[id]...), nil
+}
+
+func (f *fakeLog) AddKnowledge(_ context.Context, id string, names []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, name := range names {
+		if !slices.Contains(f.knowledge[id], name) {
+			f.knowledge[id] = append(f.knowledge[id], name)
+		}
+	}
 	return nil
 }
 
@@ -790,6 +810,150 @@ func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 	gw.mu.Unlock()
 	if !strings.Contains(sys, "travel-planning") || !strings.Contains(sys, "Ask about dates, budget, destination.") {
 		t.Fatalf("system prompt missing the hinted skill body:\n%s", sys)
+	}
+}
+
+// extraToolNames returns the ExtraTools names on req, for asserting
+// which turn-only tools (kb_search, kb_read) were offered.
+func extraToolNames(req gwclient.StreamRequest) []string {
+	var names []string
+	for _, t := range req.ExtraTools {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// TestKBToolsOfferedFromSessionKnowledgeAlone pins the union contract:
+// an agent with an empty Knowledge list still gets kb_search/kb_read
+// offered when the session itself has pinned collections.
+func TestKBToolsOfferedFromSessionKnowledgeAlone(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	log.knowledge["s1"] = []string{"docs"}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true}, true // empty Knowledge
+	}
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
+		return nil, nil
+	})
+	s.SetKBRead(func(context.Context, string, []string) (builtin.KBDocument, error) {
+		return builtin.KBDocument{}, nil
+	})
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	names := extraToolNames(chatRequest(t, gw))
+	if !slices.Contains(names, "kb_search") || !slices.Contains(names, "kb_read") {
+		t.Fatalf("extra tools = %v, want kb_search and kb_read from session knowledge alone", names)
+	}
+}
+
+// TestPinnedKnowledgePromptBlock pins the system-prompt signal: a
+// session with pinned collections and a wired kb backend gets a
+// "Pinned knowledge" block naming them.
+func TestPinnedKnowledgePromptBlock(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	log.knowledge["s1"] = []string{"docs"}
+	s := newService(gw, log)
+	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
+		return nil, nil
+	})
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sys := chatRequest(t, gw).System
+	if !strings.Contains(sys, "Pinned knowledge") || !strings.Contains(sys, "docs") {
+		t.Fatalf("system prompt missing pinned knowledge block:\n%s", sys)
+	}
+}
+
+// TestPinnedKnowledgeNoPromptWithoutBackend pins the guard: a pinned
+// collection with no kb backend wired must not promise a tool that
+// doesn't exist.
+func TestPinnedKnowledgeNoPromptWithoutBackend(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	log.knowledge["s1"] = []string{"docs"}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sys := chatRequest(t, gw).System
+	if strings.Contains(sys, "Pinned knowledge") {
+		t.Fatalf("system prompt has pinned knowledge block with no kb backend:\n%s", sys)
+	}
+}
+
+// TestKBToolsUnionDedupesAgentAndSessionCollections pins the union
+// itself: the agent's own Knowledge and the session's pinned list
+// combine without duplicates, and both feed the bound search call.
+func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	log.knowledge["s1"] = []string{"a", "b"}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true, Knowledge: []string{"a"}}, true
+	}
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+
+	var gotCollections []string
+	s.SetKBSearch(func(_ context.Context, _ string, collections []string, _ string, _ int) ([]builtin.KBSearchHit, error) {
+		gotCollections = collections
+		return nil, nil
+	})
+
+	collections := s.kbSearchTool([]string{"a", "b"})
+	if collections == nil {
+		t.Fatal("kbSearchTool returned nil for a non-empty union")
+	}
+	if _, err := collections.Execute(t.Context(), []byte(`{"query":"x"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sort.Strings(gotCollections)
+	if !slices.Equal(gotCollections, []string{"a", "b"}) {
+		t.Fatalf("bound collections = %v, want [a b]", gotCollections)
+	}
+}
+
+// TestChatPersistsMentionedKnowledge pins Chat()'s persistence side:
+// req.Knowledge (composer # mentions) gets unioned into the session's
+// stored knowledge before the turn runs.
+func TestChatPersistsMentionedKnowledge(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Knowledge: []string{"runbooks"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	got, err := log.Knowledge(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Knowledge: %v", err)
+	}
+	if !slices.Equal(got, []string{"runbooks"}) {
+		t.Fatalf("session knowledge = %v, want [runbooks]", got)
 	}
 }
 

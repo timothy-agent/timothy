@@ -10,10 +10,11 @@ import {
   Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import type { ClipboardEvent, DragEvent } from 'react'
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { getSettings, transcribe, uploadAttachment } from '../api/client'
+import { getSettings, listKbCollections, transcribe, uploadAttachment } from '../api/client'
+import type { KbCollection } from '../api/types'
 import { skillLabels } from '../lib/skills'
 import {
   getTranscribeLanguage,
@@ -66,6 +67,9 @@ export function Composer({
   placeholder = 'Message Timothy…',
   attachments = [],
   onAttachments,
+  knowledge,
+  onKnowledge,
+  agentKnowledge,
 }: {
   draft: string
   onDraft: (v: string) => void
@@ -88,6 +92,15 @@ export function Composer({
   placeholder?: string
   attachments?: PendingAttachment[]
   onAttachments?: (next: PendingAttachment[]) => void
+  // knowledge/onKnowledge enable `#collection` mentions: pinned kb
+  // collection names shown as chips. Omitting them disables mentions
+  // for that composer instance.
+  knowledge?: string[]
+  onKnowledge?: (next: string[]) => void
+  // Collections the serving agent always searches (agents' `knowledge`
+  // field) — shown as muted, non-removable chips and excluded from the
+  // mention popup since pinning them is redundant.
+  agentKnowledge?: string[]
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -116,6 +129,121 @@ export function Composer({
       .then((s) => setTranscribeEnabled(s.settings.transcribe_enabled ?? false))
       .catch(() => setTranscribeEnabled(false))
   }, [])
+
+  // #collection mention state. Collections are fetched lazily (once)
+  // the first time the user types `#`, then cached for the rest of
+  // this component's lifetime.
+  const collectionsRef = useRef<KbCollection[] | null>(null)
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null)
+  const [mentionOptions, setMentionOptions] = useState<KbCollection[]>([])
+  const [mentionIndex, setMentionIndex] = useState(0)
+  // The knowledge array the mention popup filters against — read
+  // through a ref so the async collections fetch and keydown handler
+  // (closures that can outlive a render) see the latest chip list.
+  const knowledgeRef = useRef(knowledge ?? [])
+  knowledgeRef.current = knowledge ?? []
+  // Same stale-closure guard for the agent-bound list: excluded from
+  // the popup (pinning them is redundant), read through a ref for the
+  // same reason as knowledgeRef above.
+  const agentKnowledgeRef = useRef(agentKnowledge ?? [])
+  agentKnowledgeRef.current = agentKnowledge ?? []
+  // Whether a collections fetch is currently in flight, separate from
+  // collectionsRef's data so a failure can reset the data ref to null
+  // (retry on the next `#`) without also racing a second fetch.
+  const collectionsFetchingRef = useRef(false)
+
+  const mentionRe = /(^|\s)#([a-zA-Z0-9_-]*)$/
+
+  function filterOptions(cols: KbCollection[], query: string): KbCollection[] {
+    return cols.filter(
+      (c) =>
+        c.name.toLowerCase().includes(query) &&
+        !knowledgeRef.current.includes(c.name) &&
+        !agentKnowledgeRef.current.includes(c.name),
+    )
+  }
+
+  // updateMention re-derives the popup from the text before the caret
+  // on every draft/selection change. Only active when onKnowledge is
+  // given — mentions are opt-in per composer instance.
+  function updateMention(text: string, caret: number) {
+    if (!onKnowledge) return
+    const before = text.slice(0, caret)
+    const match = mentionRe.exec(before)
+    if (!match) {
+      setMentionQuery(null)
+      return
+    }
+    const query = match[2].toLowerCase()
+    setMentionQuery(query)
+    setMentionIndex(0)
+    if (collectionsRef.current === null) {
+      if (collectionsFetchingRef.current) return
+      collectionsFetchingRef.current = true
+      listKbCollections()
+        .then((cols) => {
+          collectionsRef.current = cols
+          setMentionOptions(filterOptions(cols, query))
+        })
+        .catch(() => {
+          // Reset to null (not []) so the next `#` keystroke retries
+          // instead of leaving the popup dead until a page reload.
+          collectionsRef.current = null
+          setMentionOptions([])
+        })
+        .finally(() => {
+          collectionsFetchingRef.current = false
+        })
+      return
+    }
+    setMentionOptions(filterOptions(collectionsRef.current, query))
+  }
+
+  // selectMention strips the `#prefix` token from the draft and adds
+  // the collection name as a chip.
+  function selectMention(name: string) {
+    const el = inputRef.current
+    if (!el || !onKnowledge) return
+    const caret = el.selectionStart ?? draft.length
+    const before = draft.slice(0, caret)
+    const match = mentionRe.exec(before)
+    if (!match) return
+    const start = caret - match[2].length - 1
+    const next = draft.slice(0, start) + draft.slice(caret)
+    onDraft(next)
+    setMentionQuery(null)
+    if (!(knowledge ?? []).includes(name)) onKnowledge([...(knowledge ?? []), name])
+    requestAnimationFrame(() => el.setSelectionRange(start, start))
+  }
+
+  function removeKnowledge(name: string) {
+    onKnowledge?.((knowledge ?? []).filter((n) => n !== name))
+  }
+
+  function handleMentionKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): boolean {
+    if (mentionQuery === null || mentionOptions.length === 0) return false
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setMentionIndex((i) => (i + 1) % mentionOptions.length)
+      return true
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length)
+      return true
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      selectMention(mentionOptions[mentionIndex].name)
+      return true
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setMentionQuery(null)
+      return true
+    }
+    return false
+  }
 
   // Auto-grow up to a cap, then scroll inside. Runs on every draft
   // change so programmatic clears (post-send) shrink it back.
@@ -251,12 +379,65 @@ export function Composer({
     if (files.length > 0) void uploadFiles(files)
   }
 
+  // Muted chips: agent-bound collections not already pinned by the
+  // user. A name in both wins as the removable violet chip only — no
+  // duplicate muted chip alongside it.
+  const agentOnlyKnowledge = (agentKnowledge ?? []).filter((name) => !(knowledge ?? []).includes(name))
+
   return (
     <div
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
-      className="rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40"
+      className="relative rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40"
     >
+      {onKnowledge && mentionQuery !== null && mentionOptions.length > 0 && (
+        <div className="absolute bottom-full left-2 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-zinc-950/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-zinc-800">
+          {mentionOptions.map((c, i) => (
+            <button
+              key={c.id}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()} // keep textarea focus
+              onClick={() => selectMention(c.name)}
+              className={
+                i === mentionIndex
+                  ? 'block w-full truncate px-3 py-1.5 text-left text-sm bg-zinc-100 text-zinc-900 dark:bg-zinc-700 dark:text-white'
+                  : 'block w-full truncate px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-700/50'
+              }
+            >
+              #{c.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {((knowledge && knowledge.length > 0) || agentOnlyKnowledge.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1 px-3 pt-2.5">
+          {agentOnlyKnowledge.map((name) => (
+            <span
+              key={`agent-${name}`}
+              title="Always searched by this agent"
+              className="inline-flex items-center gap-1 rounded-full bg-zinc-100 py-1 px-2.5 text-xs font-medium text-zinc-500 dark:bg-zinc-700/60 dark:text-zinc-400"
+            >
+              #{name}
+            </span>
+          ))}
+          {knowledge?.map((name) => (
+            <span
+              key={name}
+              className="inline-flex items-center gap-1 rounded-full bg-violet-50 py-1 pr-1.5 pl-2.5 text-xs font-medium text-violet-700 dark:bg-violet-500/10 dark:text-violet-300"
+            >
+              #{name}
+              <button
+                type="button"
+                onClick={() => removeKnowledge(name)}
+                aria-label={`Remove ${name} knowledge`}
+                className="flex size-4 items-center justify-center rounded-full text-violet-700/70 hover:bg-violet-100 hover:text-violet-900 dark:text-violet-300/70 dark:hover:bg-violet-500/20 dark:hover:text-violet-100"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 px-3 pt-2.5">
           {attachments.map((a) => (
@@ -315,9 +496,17 @@ export function Composer({
         autoFocus={autoFocus}
         placeholder={placeholder}
         className="max-h-50 w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-base/6 text-zinc-900 outline-none placeholder:text-zinc-400 sm:text-sm/6 dark:text-white dark:placeholder:text-zinc-500"
-        onChange={(e) => onDraft(e.target.value)}
+        onChange={(e) => {
+          onDraft(e.target.value)
+          updateMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+        }}
+        onSelect={(e) => {
+          const el = e.currentTarget
+          updateMention(el.value, el.selectionStart ?? el.value.length)
+        }}
         onPaste={onAttachments ? handlePaste : undefined}
         onKeyDown={(e) => {
+          if (handleMentionKeyDown(e)) return
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             onSend()

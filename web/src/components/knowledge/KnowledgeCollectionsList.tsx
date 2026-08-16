@@ -7,7 +7,7 @@ import { listKbCollections } from '../../api/client'
 import type { KbCollection } from '../../api/types'
 import { relativeTime } from '../../lib/format'
 import { Button } from '../ui/button'
-import { errText } from './util'
+import { errText } from '../settings/util'
 
 export function KnowledgeCollectionsList() {
   const [collections, setCollections] = useState<KbCollection[]>([])
@@ -32,7 +32,7 @@ export function KnowledgeCollectionsList() {
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Collections · {collections.length}
         </h2>
-        <Button onClick={() => navigate('/settings/knowledge/new')}>
+        <Button onClick={() => navigate('/knowledge/new')}>
           <HugeiconsIcon icon={Add01Icon} />
           New collection
         </Button>
@@ -47,7 +47,7 @@ export function KnowledgeCollectionsList() {
             No collections yet. Create one and upload documents so agents can search them for
             grounded answers.
           </p>
-          <Button onClick={() => navigate('/settings/knowledge/new')}>
+          <Button onClick={() => navigate('/knowledge/new')}>
             <HugeiconsIcon icon={Add01Icon} />
             New collection
           </Button>
@@ -58,7 +58,7 @@ export function KnowledgeCollectionsList() {
             <button
               key={c.id}
               type="button"
-              onClick={() => navigate(`/settings/knowledge/${c.id}`)}
+              onClick={() => navigate(`/knowledge/${c.id}`)}
               className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 text-left shadow-sm transition hover:shadow-md"
             >
               <div className="flex items-center gap-3">

@@ -9,7 +9,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_route text NOT NULL DEFAULT '',
     -- Sessions record which agent serves them; message events carry
     -- the per-turn agent so mid-session switches attribute correctly.
-    agent      text NOT NULL DEFAULT ''
+    agent      text NOT NULL DEFAULT '',
+    -- Session-scoped knowledge: kb_collection names the user pinned to
+    -- this session (composer # mentions); unioned with the serving
+    -- agent's own knowledge list per turn.
+    knowledge  jsonb NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS session_events (

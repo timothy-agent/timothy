@@ -316,6 +316,13 @@ func (h *kbAPI) fetchURL(ctx context.Context, u *url.URL) ([]byte, string, error
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Bot-block statuses: LinkedIn's 999, plus the usual challenge
+		// responses — a raw status code reads like our bug when it's the
+		// site refusing automated clients.
+		switch resp.StatusCode {
+		case 999, http.StatusForbidden, http.StatusTooManyRequests:
+			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access — save the page as a PDF and upload it instead", resp.StatusCode, u.Host)
+		}
 		return nil, "", fmt.Errorf("http %d fetching %s", resp.StatusCode, u.Host)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKBUploadBytes+1))

@@ -79,6 +79,8 @@ type SessionLog interface {
 	Append(ctx context.Context, sessionID, kind string, payload any) (int64, error)
 	SetTitleIfEmpty(ctx context.Context, id, title string) error
 	SetLastRoute(ctx context.Context, id, route, agent string) error
+	Knowledge(ctx context.Context, id string) ([]string, error)
+	AddKnowledge(ctx context.Context, id string, names []string) error
 }
 
 // Distill extracts turn residue; loop.DistillTurn curried with the
@@ -254,17 +256,18 @@ type KBSearch func(ctx context.Context, query string, collectionNames []string, 
 func (s *Service) SetKBSearch(fn KBSearch) { s.kbSearch = fn }
 
 // kbSearchTool builds this turn's kb_search ExtraTool bound to
-// profile's Knowledge collections, or nil when kb_search must not be
-// offered: no backing search call wired, or the agent named no
-// collections (empty Knowledge = no kb_search, same opt-in-only
-// contract as Skills/Tools — this is the "exclude from the turn"
-// choice, matching load_skill's precedent of leaving a tool off the
-// offered surface entirely rather than having it answer with an error).
-func (s *Service) kbSearchTool(profile agents.Agent) *tools.Tool {
-	if s.kbSearch == nil || len(profile.Knowledge) == 0 {
+// collections (the serving agent's Knowledge unioned with the
+// session's own pinned list), or nil when kb_search must not be
+// offered: no backing search call wired, or collections is empty
+// (opt-in-only, same contract as Skills/Tools — this is the "exclude
+// from the turn" choice, matching load_skill's precedent of leaving a
+// tool off the offered surface entirely rather than having it answer
+// with an error).
+func (s *Service) kbSearchTool(collections []string) *tools.Tool {
+	if s.kbSearch == nil || len(collections) == 0 {
 		return nil
 	}
-	collections := slices.Clone(profile.Knowledge)
+	collections = slices.Clone(collections)
 	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
 		return s.kbSearch(ctx, query, collections, mode, k)
 	})
@@ -280,13 +283,13 @@ type KBRead func(ctx context.Context, documentID string, collectionNames []strin
 func (s *Service) SetKBRead(fn KBRead) { s.kbRead = fn }
 
 // kbReadTool builds this turn's kb_read ExtraTool, gated exactly like
-// kbSearchTool: no backend or empty Knowledge means the tool is not
+// kbSearchTool: no backend or empty collections means the tool is not
 // offered.
-func (s *Service) kbReadTool(profile agents.Agent) *tools.Tool {
-	if s.kbRead == nil || len(profile.Knowledge) == 0 {
+func (s *Service) kbReadTool(collections []string) *tools.Tool {
+	if s.kbRead == nil || len(collections) == 0 {
 		return nil
 	}
-	collections := slices.Clone(profile.Knowledge)
+	collections = slices.Clone(collections)
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return s.kbRead(ctx, documentID, collections)
 	})
@@ -653,6 +656,10 @@ type Request struct {
 	// the user attached to this message — refs only, resolved into
 	// base64 at request-build time (D-045).
 	Attachments []string `json:"attachments,omitempty"`
+	// Knowledge names kb collections the user pinned to this turn's
+	// session (composer # mentions) — unioned into the session's
+	// stored knowledge list before the turn runs.
+	Knowledge []string `json:"knowledge,omitempty"`
 }
 
 // Chat streams one turn. The user message is durably appended before
@@ -718,6 +725,11 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 			return "", nil, err
 		}
 		sessionID = id
+	}
+	if len(req.Knowledge) > 0 {
+		if err := s.log.AddKnowledge(ctx, sessionID, req.Knowledge); err != nil {
+			return sessionID, nil, err
+		}
 	}
 
 	events, err := s.log.Events(ctx, sessionID)
@@ -1026,11 +1038,38 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 		}
 	}
 
+	// Collections offered this turn: the serving agent's own Knowledge
+	// list unioned with the session's pinned list (composer # mentions).
+	// The session lookup is best-effort — a failure must not kill the
+	// turn, it just falls back to the agent's list alone. Fetched here
+	// (not just before extraTools) so the same result also backs the
+	// pinned-knowledge system prompt block below.
+	collections := slices.Clone(profile.Knowledge)
+	sk, skErr := s.log.Knowledge(turnCtx, sessionID)
+	if skErr != nil {
+		s.logger.Warn("session knowledge lookup", "session_id", sessionID, "error", skErr)
+	} else {
+		for _, name := range sk {
+			if !slices.Contains(collections, name) {
+				collections = append(collections, name)
+			}
+		}
+	}
+
+	// A pinned collection is an explicit user signal to search it, not
+	// just a passive tool grant — but only when kb_search will actually
+	// be offered (skErr nil, s.kbSearch wired, union non-empty): a
+	// pinned name with no backend must never promise a tool that isn't
+	// there.
+	if skErr == nil && len(sk) > 0 && s.kbSearch != nil && len(collections) > 0 {
+		system += "\n\n# Pinned knowledge\n\nThe user pinned these knowledge collections to this session: " + strings.Join(sk, ", ") + ". This is an explicit signal: when a question could plausibly be answered by their content, call kb_search first and ground the answer in what it returns, rather than answering from general knowledge alone."
+	}
+
 	var extraTools []*tools.Tool
-	if t := s.kbSearchTool(profile); t != nil {
+	if t := s.kbSearchTool(collections); t != nil {
 		extraTools = append(extraTools, t)
 	}
-	if t := s.kbReadTool(profile); t != nil {
+	if t := s.kbReadTool(collections); t != nil {
 		extraTools = append(extraTools, t)
 	}
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{

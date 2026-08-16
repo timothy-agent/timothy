@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
@@ -139,6 +141,37 @@ func (d *memDir) Append(_ context.Context, id, kind string, payload any) (int64,
 
 func (d *memDir) SetTitleIfEmpty(context.Context, string, string) error      { return nil }
 func (d *memDir) SetLastRoute(context.Context, string, string, string) error { return nil }
+
+func (d *memDir) Knowledge(_ context.Context, id string) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.metas[id].Knowledge...), nil
+}
+
+func (d *memDir) AddKnowledge(_ context.Context, id string, names []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m := d.metas[id]
+	for _, name := range names {
+		if !slices.Contains(m.Knowledge, name) {
+			m.Knowledge = append(m.Knowledge, name)
+		}
+	}
+	d.metas[id] = m
+	return nil
+}
+
+func (d *memDir) SetKnowledge(_ context.Context, id string, names []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m, ok := d.metas[id]
+	if !ok {
+		return fmt.Errorf("session: knowledge %s: not found", id)
+	}
+	m.Knowledge = append([]string(nil), names...)
+	d.metas[id] = m
+	return nil
+}
 
 // PendingPermissions mirrors session.Store's own unresolved-vs-resolved
 // logic over the in-memory event log, scoped to sessionIDs — same
@@ -271,6 +304,7 @@ func mux(a *API) *http.ServeMux {
 	m.Handle("GET /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleTranscript)))
 	a.registerLive(m.Handle)
 	m.Handle("PATCH /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleUpdate)))
+	m.Handle("PUT /v1/sessions/{id}/knowledge", a.auth(http.HandlerFunc(a.handleSetKnowledge)))
 	m.Handle("DELETE /v1/sessions/{id}", a.auth(http.HandlerFunc(a.handleDelete)))
 	m.Handle("POST /v1/sessions/{id}/messages", a.auth(http.HandlerFunc(a.handleMessages)))
 	m.Handle("POST /v1/sessions/{id}/messages/retry", a.auth(http.HandlerFunc(a.handleRetry)))
@@ -563,6 +597,76 @@ func TestSessionDelete(t *testing.T) {
 	}
 	if _, err := dir.Get(t.Context(), held); err != nil {
 		t.Fatal("mission-referenced session must survive")
+	}
+}
+
+// TestSetKnowledgeRejectsUnknownCollection pins validateKnowledge's
+// gate: a name the KB doesn't have is a 400, not a silent accept.
+func TestSetKnowledgeRejectsUnknownCollection(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "s")
+	a.kbCollections = func(context.Context) ([]kb.Collection, error) {
+		return []kb.Collection{{Name: "docs"}}, nil
+	}
+
+	w := doMux(a, http.MethodPut, "/v1/sessions/"+id+"/knowledge", `{"collections":["no-such-collection"]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT knowledge with unknown collection: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSetKnowledgeAcceptsValidCollections pins the success path: a
+// known collection name is accepted, persisted, and answered 204.
+func TestSetKnowledgeAcceptsValidCollections(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "s")
+	a.kbCollections = func(context.Context) ([]kb.Collection, error) {
+		return []kb.Collection{{Name: "docs"}}, nil
+	}
+
+	w := doMux(a, http.MethodPut, "/v1/sessions/"+id+"/knowledge", `{"collections":["docs"]}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("PUT knowledge: %d %s", w.Code, w.Body.String())
+	}
+	got, err := dir.Knowledge(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Knowledge: %v", err)
+	}
+	if !slices.Equal(got, []string{"docs"}) {
+		t.Fatalf("session knowledge = %v, want [docs]", got)
+	}
+}
+
+// TestSetKnowledgeRequiresKBConfigured: kbCollections nil (no kb.Store
+// wired) refuses any non-empty knowledge list rather than silently
+// accepting names it can never validate.
+func TestSetKnowledgeRequiresKBConfigured(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "s")
+
+	w := doMux(a, http.MethodPut, "/v1/sessions/"+id+"/knowledge", `{"collections":["docs"]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT knowledge with KB disabled: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleMessagesRejectsUnknownKnowledge: a chat request naming an
+// unknown kb collection in Knowledge is a 400 before the turn runs.
+func TestHandleMessagesRejectsUnknownKnowledge(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", okEvents())
+	id, _ := dir.Create(t.Context(), "s")
+	a.kbCollections = func(context.Context) ([]kb.Collection, error) {
+		return []kb.Collection{{Name: "docs"}}, nil
+	}
+
+	w := doMux(a, http.MethodPost, "/v1/sessions/"+id+"/messages",
+		`{"message":"hi","knowledge":["no-such-collection"]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("handleMessages with unknown knowledge: %d %s", w.Code, w.Body.String())
 	}
 }
 

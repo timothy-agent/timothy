@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { KbCollection, KbDocument } from '../../api/types'
-import { KnowledgeTab } from './KnowledgeTab'
+import type { KbCollection, KbDocument } from '../api/types'
+import { Knowledge } from './Knowledge'
 
-vi.mock('../../api/client', () => ({
+vi.mock('../api/client', () => ({
   listKbCollections: vi.fn(),
   getKbCollection: vi.fn(),
   createKbCollection: vi.fn(),
@@ -23,7 +23,7 @@ import {
   listKbDocuments,
   reingestKbDocument,
   uploadKbDocument,
-} from '../../api/client'
+} from '../api/client'
 
 const productDocs: KbCollection = {
   id: 'c1',
@@ -63,11 +63,11 @@ const failedDoc: KbDocument = {
   created_at: '2026-08-10T00:00:00Z',
 }
 
-function renderTab(entry = '/settings/knowledge') {
+function renderPage(entry = '/knowledge') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <Routes>
-        <Route path="/settings/knowledge/*" element={<KnowledgeTab />} />
+        <Route path="/knowledge/*" element={<Knowledge />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -79,9 +79,10 @@ beforeEach(() => {
   vi.mocked(listKbCollections).mockResolvedValue([productDocs])
 })
 
-describe('KnowledgeTab list', () => {
-  it('renders collections with doc and chunk counts', async () => {
-    renderTab()
+describe('Knowledge page', () => {
+  it('renders the page header and collections with doc and chunk counts', async () => {
+    renderPage()
+    expect(screen.getByRole('heading', { name: 'Knowledge' })).toBeTruthy()
     expect(await screen.findByText('Collections · 1')).toBeTruthy()
     expect(screen.getByText('product-docs')).toBeTruthy()
     expect(screen.getByText(/2 docs · 40 chunks/)).toBeTruthy()
@@ -89,19 +90,17 @@ describe('KnowledgeTab list', () => {
 
   it('shows an empty state with an explainer and create button', async () => {
     vi.mocked(listKbCollections).mockResolvedValue([])
-    renderTab()
+    renderPage()
     expect(await screen.findByText(/No collections yet/)).toBeTruthy()
     expect(screen.getAllByRole('button', { name: 'New collection' }).length).toBeGreaterThan(0)
   })
-})
 
-describe('KnowledgeTab create', () => {
   it('creates a collection and navigates to its detail page', async () => {
     vi.mocked(createKbCollection).mockResolvedValue('c2')
     vi.mocked(getKbCollection).mockResolvedValue({ ...productDocs, id: 'c2', name: 'runbooks' })
     vi.mocked(listKbDocuments).mockResolvedValue([])
 
-    renderTab()
+    renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'New collection' }))
 
     fireEvent.change(await screen.findByPlaceholderText('product-docs, runbooks…'), {
@@ -114,60 +113,60 @@ describe('KnowledgeTab create', () => {
     )
     expect(await screen.findByRole('heading', { name: 'runbooks' })).toBeTruthy()
   })
-})
 
-describe('KnowledgeTab detail', () => {
-  beforeEach(() => {
-    vi.mocked(getKbCollection).mockResolvedValue(productDocs)
-    vi.mocked(listKbDocuments).mockResolvedValue([readyDoc, failedDoc])
-  })
+  describe('detail', () => {
+    beforeEach(() => {
+      vi.mocked(getKbCollection).mockResolvedValue(productDocs)
+      vi.mocked(listKbDocuments).mockResolvedValue([readyDoc, failedDoc])
+    })
 
-  it('renders documents with status badges', async () => {
-    renderTab('/settings/knowledge/c1')
-    expect(await screen.findByText('onboarding.pdf')).toBeTruthy()
-    expect(screen.getByText('ready')).toBeTruthy()
-    expect(screen.getByText('failed')).toBeTruthy()
-    expect(screen.getByText('broken.docx')).toBeTruthy()
-  })
+    it('a deep link renders documents with status badges', async () => {
+      renderPage('/knowledge/c1')
+      expect(await screen.findByText('onboarding.pdf')).toBeTruthy()
+      expect(screen.getByText('ready')).toBeTruthy()
+      expect(screen.getByText('failed')).toBeTruthy()
+      expect(screen.getByText('broken.docx')).toBeTruthy()
+    })
 
-  it('shows the error as a tooltip on a failed document', async () => {
-    renderTab('/settings/knowledge/c1')
-    await screen.findByText('broken.docx')
-    expect(screen.getByText('failed').closest('span')).toHaveAttribute('title', 'unsupported encoding')
-  })
+    it('shows the error as a tooltip on a failed document', async () => {
+      renderPage('/knowledge/c1')
+      await screen.findByText('broken.docx')
+      expect(screen.getByText('failed').closest('span')).toHaveAttribute('title', 'unsupported encoding')
+    })
 
-  it('uploads a file via the input and adds it to the document list', async () => {
-    const uploaded: KbDocument = { ...readyDoc, id: 'd3', title: 'new.md', status: 'pending' }
-    vi.mocked(uploadKbDocument).mockResolvedValue(uploaded)
+    it('uploads a file via the input and adds it to the document list', async () => {
+      const uploaded: KbDocument = { ...readyDoc, id: 'd3', title: 'new.md', status: 'pending' }
+      vi.mocked(uploadKbDocument).mockResolvedValue(uploaded)
 
-    renderTab('/settings/knowledge/c1')
-    await screen.findByText('onboarding.pdf')
+      renderPage('/knowledge/c1')
+      await screen.findByText('onboarding.pdf')
 
-    const file = new File(['# hi'], 'new.md', { type: 'text/markdown' })
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    fireEvent.change(input, { target: { files: [file] } })
+      const file = new File(['# hi'], 'new.md', { type: 'text/markdown' })
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [file] } })
 
-    await waitFor(() => expect(uploadKbDocument).toHaveBeenCalledWith('c1', file))
-    expect(await screen.findByText('new.md')).toBeTruthy()
-  })
+      await waitFor(() => expect(uploadKbDocument).toHaveBeenCalledWith('c1', file))
+      expect(await screen.findByText('new.md')).toBeTruthy()
+    })
 
-  it('re-ingests a failed document', async () => {
-    vi.mocked(reingestKbDocument).mockResolvedValue()
-    renderTab('/settings/knowledge/c1')
-    await screen.findByText('broken.docx')
+    it('re-ingests a failed document', async () => {
+      vi.mocked(reingestKbDocument).mockResolvedValue()
+      renderPage('/knowledge/c1')
+      await screen.findByText('broken.docx')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Re-ingest broken.docx' }))
-    await waitFor(() => expect(reingestKbDocument).toHaveBeenCalledWith('d2'))
-  })
+      fireEvent.click(screen.getByRole('button', { name: 'Re-ingest broken.docx' }))
+      await waitFor(() => expect(reingestKbDocument).toHaveBeenCalledWith('d2'))
+    })
 
-  it('deletes a document after confirmation', async () => {
-    vi.mocked(deleteKbDocument).mockResolvedValue()
-    renderTab('/settings/knowledge/c1')
-    await screen.findByText('onboarding.pdf')
+    it('deletes a document after confirmation', async () => {
+      vi.mocked(deleteKbDocument).mockResolvedValue()
+      renderPage('/knowledge/c1')
+      await screen.findByText('onboarding.pdf')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete onboarding.pdf' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Delete onboarding.pdf' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
 
-    await waitFor(() => expect(deleteKbDocument).toHaveBeenCalledWith('d1'))
+      await waitFor(() => expect(deleteKbDocument).toHaveBeenCalledWith('d1'))
+    })
   })
 })

@@ -147,12 +147,16 @@ func (s *Store) Events(ctx context.Context, sessionID string) ([]Event, error) {
 
 // Meta is a session listing row.
 type Meta struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Archived     bool      `json:"archived"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Archived  bool      `json:"archived"`
 	LastRoute string    `json:"last_route,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// Knowledge names kb_collections the user pinned to this session
+	// (composer # mentions); unioned with the serving agent's own
+	// Knowledge list per turn (D-060).
+	Knowledge []string `json:"knowledge"`
 }
 
 const listLimit = 100
@@ -182,7 +186,7 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 	var sql string
 	var args []any
 	if query == "" {
-		sql = `SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at
+		sql = `SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at, knowledge
 		       FROM sessions WHERE NOT archived AND (updated_at, id) < ($1, $2::uuid)
 		         AND ` + fmt.Sprintf(notMission, "sessions") + `
 		       ORDER BY updated_at DESC, id DESC LIMIT $3`
@@ -190,7 +194,7 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 	} else {
 		// ILIKE wildcards in the user's query are literals, not patterns.
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
-		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_route, s.created_at, s.updated_at
+		sql = `SELECT DISTINCT s.id, COALESCE(s.title, ''), s.archived, s.last_route, s.created_at, s.updated_at, s.knowledge
 		       FROM sessions s
 		       LEFT JOIN session_events e ON e.session_id = s.id AND e.kind = 'user_message'
 		       WHERE (s.updated_at, s.id) < ($2, $3::uuid)
@@ -211,9 +215,11 @@ func (s *Store) List(ctx context.Context, query string, before time.Time, before
 	var out []Meta
 	for rows.Next() {
 		var m Meta
-		if err := rows.Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		var knowledge []byte
+		if err := rows.Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt, &knowledge); err != nil {
 			return nil, fmt.Errorf("session: list scan: %w", err)
 		}
+		_ = json.Unmarshal(knowledge, &m.Knowledge)
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -226,13 +232,15 @@ func (s *Store) Get(ctx context.Context, id string) (Meta, error) {
 		return Meta{}, fmt.Errorf("session: get: %w", err)
 	}
 	var m Meta
+	var knowledge []byte
 	err = db.QueryRow(ctx,
-		`SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at
+		`SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at, knowledge
 		 FROM sessions WHERE id = $1`, id,
-	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt)
+	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt, &knowledge)
 	if err != nil {
 		return Meta{}, fmt.Errorf("session: get %s: %w", id, err)
 	}
+	_ = json.Unmarshal(knowledge, &m.Knowledge)
 	return m, nil
 }
 
@@ -332,6 +340,74 @@ func (s *Store) SetLastRoute(ctx context.Context, id, route, agent string) error
 	_, err = db.Exec(ctx,
 		"UPDATE sessions SET last_route = $2, agent = $3 WHERE id = $1", id, route, agent)
 	return err
+}
+
+// Knowledge returns a session's pinned kb_collection names.
+func (s *Store) Knowledge(ctx context.Context, id string) ([]string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	var data []byte
+	if err := db.QueryRow(ctx, "SELECT knowledge FROM sessions WHERE id = $1", id).Scan(&data); err != nil {
+		return nil, fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	var names []string
+	_ = json.Unmarshal(data, &names)
+	return names, nil
+}
+
+// SetKnowledge replaces a session's pinned kb_collection names outright.
+func (s *Store) SetKnowledge(ctx context.Context, id string, names []string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	if names == nil {
+		names = []string{}
+	}
+	data, err := json.Marshal(names)
+	if err != nil {
+		return fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	tag, err := db.Exec(ctx,
+		"UPDATE sessions SET knowledge = $2, updated_at = now() WHERE id = $1", id, data)
+	if err != nil {
+		return fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session: knowledge %s: not found", id)
+	}
+	return nil
+}
+
+// AddKnowledge unions names into a session's pinned kb_collection list
+// in a single statement, so concurrent turns naming different
+// collections can't lose entries to a lost read-modify-write.
+func (s *Store) AddKnowledge(ctx context.Context, id string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	tag, err := db.Exec(ctx,
+		`UPDATE sessions SET knowledge = (
+		     SELECT coalesce(jsonb_agg(DISTINCT v), '[]'::jsonb)
+		     FROM (
+		         SELECT jsonb_array_elements_text(knowledge) AS v
+		         UNION
+		         SELECT unnest($2::text[])
+		     ) merged
+		 ), updated_at = now() WHERE id = $1`, id, names)
+	if err != nil {
+		return fmt.Errorf("session: knowledge %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session: knowledge %s: not found", id)
+	}
+	return nil
 }
 
 // PendingPermission is one unresolved permission_request, joined with

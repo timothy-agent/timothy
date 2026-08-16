@@ -62,8 +62,9 @@ Arguments:
 
 Returns numbered passages, each with its document title, section
 breadcrumb, source reference, and content, plus a "Source:" line giving
-a stable kb:// reference — cite that reference when answering from a
-result.`,
+a stable kb:// reference. The kb:// reference is internal plumbing —
+pass it to kb_read to load the full document, but never show it to the
+user; when answering from a result, cite the document by its title.`,
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {

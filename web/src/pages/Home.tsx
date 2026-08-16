@@ -26,6 +26,7 @@ export interface ChatIntent {
   route?: string
   skillHint?: string
   attachments?: PendingAttachment[]
+  knowledge?: string[]
 }
 
 // Home is the workspace launcher: a hero composer that starts a chat,
@@ -40,6 +41,11 @@ export function Home() {
   const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
   const [route, setRoute] = useState(() => localStorage.getItem(routeKey) ?? '')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [knowledge, setKnowledge] = useState<string[]>([])
+  // Same fallback as AgentRoutePicker: an empty/unmatched agent name
+  // resolves to the default agent, the one that actually serves it.
+  const servingAgent = agents.find((a) => a.name === agent) ?? agents.find((a) => a.is_default)
+  const agentKnowledge = servingAgent?.knowledge ?? []
 
   const pickAgent = (a: string) => {
     setAgent(a)
@@ -61,6 +67,7 @@ export function Home() {
         agent,
         route: route || undefined,
         attachments: ready.length > 0 ? ready : undefined,
+        knowledge: knowledge.length > 0 ? knowledge : undefined,
       } satisfies ChatIntent,
     })
   }
@@ -90,6 +97,9 @@ export function Home() {
             placeholder="Ask anything…"
             attachments={attachments}
             onAttachments={setAttachments}
+            knowledge={knowledge}
+            onKnowledge={setKnowledge}
+            agentKnowledge={agentKnowledge}
           />
         </div>
       </div>
