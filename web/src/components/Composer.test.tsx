@@ -489,6 +489,74 @@ describe('Composer knowledge mentions', () => {
     await waitFor(() => expect(client.listKbCollections).toHaveBeenCalledTimes(2))
     await screen.findByText('#observability')
   })
+
+  it('cycles the highlighted option with ArrowDown/ArrowUp, wrapping at both ends', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    const onSend = vi.fn()
+    render(<StatefulComposer onSend={onSend} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#' } })
+    await screen.findByText('#observability')
+
+    const highlighted = () =>
+      screen.getByText('#observability').className.includes('bg-zinc-100')
+        ? '#observability'
+        : '#billing'
+
+    expect(highlighted()).toBe('#observability')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(highlighted()).toBe('#billing')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(highlighted()).toBe('#observability') // wraps past the end
+
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(highlighted()).toBe('#billing') // wraps back past the start
+  })
+
+  it('selects the clicked popup option, adding a chip and stripping the token', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    const onSend = vi.fn()
+    render(<StatefulComposer onSend={onSend} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#' } })
+    await screen.findByText('#billing')
+
+    fireEvent.click(screen.getByText('#billing'))
+
+    expect(input.value).toBe('')
+    expect(screen.queryByText('#observability')).toBeNull() // popup closed
+    expect(screen.getByRole('button', { name: 'Remove billing knowledge' })).toBeTruthy()
+  })
+
+  it('selects the highlighted option on Tab, same as Enter', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listKbCollections).mockResolvedValue([
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, created_at: '', updated_at: '' },
+    ])
+    const onSend = vi.fn()
+    render(<StatefulComposer onSend={onSend} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '#obs' } })
+    await screen.findByText('#observability')
+
+    fireEvent.keyDown(input, { key: 'Tab' })
+
+    expect(input.value).toBe('')
+    expect(screen.getByRole('button', { name: 'Remove observability knowledge' })).toBeTruthy()
+  })
 })
 
 describe('Composer agent-bound knowledge chips', () => {

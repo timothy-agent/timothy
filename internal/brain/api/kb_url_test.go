@@ -36,6 +36,40 @@ func TestTitleFromURL(t *testing.T) {
 	}
 }
 
+// TestFetchURLBlockedStatus pins the bot-block error mapping: 999
+// (LinkedIn) and the other listed statuses get the "blocks automated
+// access" message, everything else keeps the bare "http %d fetching" form.
+func TestFetchURLBlockedStatus(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		status  int
+		wantMsg string
+	}{
+		{"999 reads as bot block", 999, "blocks automated access"},
+		{"500 stays bare", http.StatusInternalServerError, "http 500 fetching"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			t.Cleanup(srv.Close)
+
+			u, _ := url.Parse(srv.URL)
+			h := &kbAPI{fetchHTTP: srv.Client()}
+			_, _, err := h.fetchURL(context.Background(), u)
+			if err == nil || !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Fatalf("fetchURL err = %v, want containing %q", err, tc.wantMsg)
+			}
+			if tc.status == http.StatusInternalServerError && strings.Contains(err.Error(), "blocks automated access") {
+				t.Fatalf("fetchURL err = %v, must not carry the bot-block message", err)
+			}
+		})
+	}
+}
+
 func TestConvertFetched(t *testing.T) {
 	t.Parallel()
 	markitdown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

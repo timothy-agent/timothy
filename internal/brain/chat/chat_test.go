@@ -38,6 +38,9 @@ type fakeLog struct {
 	category  map[string]string
 	knowledge map[string][]string
 	createdN  int
+	// knowledgeErr, when set, makes Knowledge fail instead of reading
+	// the map — for the session-knowledge-lookup-failure fallback test.
+	knowledgeErr error
 }
 
 func newFakeLog() *fakeLog {
@@ -93,6 +96,9 @@ func (f *fakeLog) SetLastRoute(_ context.Context, id, route, agent string) error
 func (f *fakeLog) Knowledge(_ context.Context, id string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.knowledgeErr != nil {
+		return nil, f.knowledgeErr
+	}
 	return append([]string(nil), f.knowledge[id]...), nil
 }
 
@@ -930,6 +936,39 @@ func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
 	sort.Strings(gotCollections)
 	if !slices.Equal(gotCollections, []string{"a", "b"}) {
 		t.Fatalf("bound collections = %v, want [a b]", gotCollections)
+	}
+}
+
+// TestKBToolsFallBackOnSessionKnowledgeLookupFailure pins the
+// best-effort contract: s.log.Knowledge erroring must not kill the
+// turn. kb_search still gets offered from the agent's own Knowledge
+// list, but the "Pinned knowledge" block is skipped since skErr != nil.
+func TestKBToolsFallBackOnSessionKnowledgeLookupFailure(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	log.knowledgeErr = errors.New("session knowledge lookup boom")
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true, Knowledge: []string{"docs"}}, true
+	}
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
+		return nil, nil
+	})
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	req := chatRequest(t, gw)
+	names := extraToolNames(req)
+	if !slices.Contains(names, "kb_search") {
+		t.Fatalf("extra tools = %v, want kb_search from agent knowledge alone", names)
+	}
+	if strings.Contains(req.System, "Pinned knowledge") {
+		t.Fatalf("system prompt has pinned knowledge block despite session knowledge lookup failure:\n%s", req.System)
 	}
 }
 

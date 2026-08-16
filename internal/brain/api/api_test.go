@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -650,6 +651,50 @@ func TestSetKnowledgeRequiresKBConfigured(t *testing.T) {
 	w := doMux(a, http.MethodPut, "/v1/sessions/"+id+"/knowledge", `{"collections":["docs"]}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("PUT knowledge with KB disabled: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSetKnowledgeMalformedBody: unparsable JSON is a 400 before any
+// validation or store call runs.
+func TestSetKnowledgeMalformedBody(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "s")
+
+	w := doMux(a, http.MethodPut, "/v1/sessions/"+id+"/knowledge", `{"collections":`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT knowledge with malformed body: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSetKnowledgeUnknownSession: a well-formed but nonexistent session
+// id passes validSessionID, so the store's "not found" error must
+// surface as 404, not a 500.
+func TestSetKnowledgeUnknownSession(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	bogus := "00000000-0000-4000-8000-000000000000"
+
+	w := doMux(a, http.MethodPut, "/v1/sessions/"+bogus+"/knowledge", `{"collections":[]}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("PUT knowledge for unknown session: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSetKnowledgeCollectionsLookupFails: validateKnowledge propagates
+// a kbCollections error as-is, and the handler maps it to 400 like any
+// other validation failure.
+func TestSetKnowledgeCollectionsLookupFails(t *testing.T) {
+	t.Parallel()
+	a, dir, _ := testAPI(t, "tok", nil)
+	id, _ := dir.Create(t.Context(), "s")
+	a.kbCollections = func(context.Context) ([]kb.Collection, error) {
+		return nil, errors.New("kb store unavailable")
+	}
+
+	w := doMux(a, http.MethodPut, "/v1/sessions/"+id+"/knowledge", `{"collections":["docs"]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT knowledge with kbCollections error: %d %s", w.Code, w.Body.String())
 	}
 }
 
