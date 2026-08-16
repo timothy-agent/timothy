@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -173,6 +174,12 @@ type oaiRequest struct {
 	} `json:"stream_options"`
 	Tools     []oaiTool `json:"tools,omitempty"`
 	MaxTokens int       `json:"max_tokens,omitempty"`
+	// MaxCompletionTokens replaces MaxTokens on retry when the backend
+	// rejects max_tokens outright (OpenAI's reasoning models: "Use
+	// 'max_completion_tokens' instead") — see swapAndRetryOn400. Never
+	// set on the first attempt: plenty of compat backends only know
+	// max_tokens.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 	// ReasoningEffort is the D-020 dial. Not every OpenAI-compatible
 	// backend tolerates the field: Ollama returns HTTP 400 for models
 	// that don't recognize it. Stream retries once without it on that
@@ -271,6 +278,15 @@ func stripReasoningEffortAndRetry(ctx context.Context, o *OpenAICompat, req Comp
 			return
 		}
 		if isHTTP400(ev) {
+			// Two known 400 shapes, mutually exclusive per backend: OpenAI's
+			// reasoning models reject max_tokens (the error names the
+			// replacement field), everything else here is the Ollama-style
+			// reasoning_effort rejection. Mutate only what the error asked
+			// for, so the other knob survives the retry.
+			if ev.Err != nil && strings.Contains(ev.Err.Message, "max_completion_tokens") {
+				retryMaxCompletionTokens(ctx, o, req, wire, out)
+				return
+			}
 			retryReasoningEffortStripped(ctx, o, req, wire, out)
 			return
 		}
@@ -284,6 +300,25 @@ func stripReasoningEffortAndRetry(ctx context.Context, o *OpenAICompat, req Comp
 		}
 	}()
 	return out
+}
+
+// retryMaxCompletionTokens rebuilds the request with the token cap
+// moved from max_tokens to max_completion_tokens and relays the
+// retried stream to out.
+func retryMaxCompletionTokens(ctx context.Context, o *OpenAICompat, req CompletionRequest, wire oaiRequest, out chan<- stream.StreamEvent) {
+	wire.MaxCompletionTokens = wire.MaxTokens
+	wire.MaxTokens = 0
+	body, err := json.Marshal(wire)
+	if err != nil {
+		emit(ctx, out, errEvent(fmt.Errorf("openaicompat: marshal retry request: %w", err)))
+		return
+	}
+	retry := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
+	for ev := range retry {
+		if !emit(ctx, out, ev) {
+			return
+		}
+	}
 }
 
 // retryReasoningEffortStripped rebuilds the request without

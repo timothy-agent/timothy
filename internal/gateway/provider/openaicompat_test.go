@@ -387,6 +387,61 @@ func TestOpenAICompat400TwiceSurfacesError(t *testing.T) {
 	}
 }
 
+func TestOpenAICompat400MaxTokensSwapAndRetry(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	type caps struct{ maxTokens, maxCompletion int }
+	var got []caps
+	var efforts []string
+	var mu sync.Mutex
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			MaxTokens           int    `json:"max_tokens"`
+			MaxCompletionTokens int    `json:"max_completion_tokens"`
+			ReasoningEffort     string `json:"reasoning_effort"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		mu.Lock()
+		got = append(got, caps{req.MaxTokens, req.MaxCompletionTokens})
+		efforts = append(efforts, req.ReasoningEffort)
+		mu.Unlock()
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unsupported_parameter"}}`))
+			return
+		}
+		oaiWrite(w, `{"choices":[{"delta":{"content":"ok"}}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "m", MaxTokens: 512, Effort: "low"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2 (retry after max_tokens 400)", calls.Load())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []caps{{512, 0}, {0, 512}}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("token caps across attempts = %v, want %v", got, want)
+	}
+	if len(efforts) != 2 || efforts[0] != "low" || efforts[1] != "low" {
+		t.Fatalf("efforts across attempts = %v, want reasoning_effort preserved on swap retry", efforts)
+	}
+	if got := textOf(events, stream.EventChunk); got != "ok" {
+		t.Fatalf("chunks = %q, want ok", got)
+	}
+	if len(eventsOfType(events, stream.EventError)) != 0 {
+		t.Fatalf("want no error event surfaced after successful retry: %+v", events)
+	}
+}
+
 func TestOpenAICompat400WithoutReasoningEffortNoRetry(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
