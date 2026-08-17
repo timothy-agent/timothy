@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/admin"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
@@ -38,6 +39,12 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("PUT /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.putSecretBackend))
 	srv.Handle("DELETE /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.deleteSecretBackend))
 	srv.Handle("POST /internal/admin/secret-backends/{backend}/test", http.HandlerFunc(h.testSecretBackend))
+	srv.Handle("POST /internal/admin/catalog/refresh", http.HandlerFunc(h.catalogRefresh))
+	srv.Handle("GET /internal/admin/catalog/status", http.HandlerFunc(h.catalogStatus))
+	srv.Handle("GET /internal/admin/catalog/models", http.HandlerFunc(h.catalogModels))
+	srv.Handle("POST /internal/admin/catalog/prices", http.HandlerFunc(h.catalogPrices))
+	srv.Handle("GET /internal/admin/providers/{id}/catalog-suggestions", http.HandlerFunc(h.catalogSuggestions))
+	srv.Handle("GET /internal/admin/providers/{id}/catalog-models", http.HandlerFunc(h.catalogModelsForProvider))
 }
 
 type adminAPI struct {
@@ -361,4 +368,72 @@ func (h *adminAPI) testSecretBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (h *adminAPI) catalogRefresh(w http.ResponseWriter, r *http.Request) {
+	st, err := h.adm.CatalogRefresh(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "catalog_refresh_failed", err.Error())
+		return
+	}
+	writeJSON(w, st)
+}
+
+func (h *adminAPI) catalogStatus(w http.ResponseWriter, r *http.Request) {
+	st, err := h.adm.CatalogStatus(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
+		return
+	}
+	writeJSON(w, st)
+}
+
+func (h *adminAPI) catalogModels(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	models, err := h.adm.CatalogSearch(r.Context(), r.URL.Query().Get("q"), r.URL.Query().Get("provider"), limit)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"models": models})
+}
+
+func (h *adminAPI) catalogSuggestions(w http.ResponseWriter, r *http.Request) {
+	suggestions, err := h.adm.CatalogSuggestions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"suggestions": suggestions})
+}
+
+func (h *adminAPI) catalogModelsForProvider(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	models, err := h.adm.CatalogModelsForProvider(r.Context(), r.PathValue("id"), r.URL.Query().Get("q"), limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"models": models})
+}
+
+// maxPricesModels caps POST .../catalog/prices' request body — an
+// estimate lookup for a display page, never a bulk export.
+const maxPricesModels = 100
+
+func (h *adminAPI) catalogPrices(w http.ResponseWriter, r *http.Request) {
+	var pairs []admin.ProviderModel
+	if err := json.NewDecoder(r.Body).Decode(&pairs); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be a JSON array of {provider, model}")
+		return
+	}
+	if len(pairs) > maxPricesModels {
+		pairs = pairs[:maxPricesModels]
+	}
+	priced, err := h.adm.CatalogPrices(r.Context(), pairs)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"prices": priced})
 }

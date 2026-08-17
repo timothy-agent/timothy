@@ -1,38 +1,40 @@
-import { modelCatalog } from '../components/settings/modelCatalog'
-import type { UsagePoint } from '../api/types'
+import type { CatalogPrice, UnpricedGroup } from '../api/types'
 
-// catalogPrices flattens the advisory model catalog into one id→price
-// lookup. When the same model id appears under several providers the
-// first entry wins — the catalog keeps duplicates price-identical.
-const catalogPrices = (() => {
-  const m = new Map<string, { input: number; output: number }>()
-  for (const models of Object.values(modelCatalog)) {
-    for (const model of models) {
-      if (model.prices && !m.has(model.id)) {
-        m.set(model.id, {
-          input: model.prices.input_per_mtok,
-          output: model.prices.output_per_mtok,
-        })
-      }
-    }
-  }
-  return m
-})()
+// priceKey matches the key catalogPrices' caller builds from an
+// UnpricedGroup pair — provider alongside model, so a model name that
+// collides across vendors (e.g. a free zai model matching a priced
+// cloudflare one of the same segment) can never borrow the wrong
+// provider's price.
+function priceKey(provider: string, model: string): string {
+  return `${provider} ${model}`
+}
 
-// estimateUnpriced prices a model-grouped series' unpriced tokens from
-// the advisory catalog. The ledger's cost stays the honest record
-// (unknown price = NULL, never guessed server-side); this is a display
-// hint for what the unpriced calls would roughly cost. Models absent
-// from the catalog contribute nothing — the estimate is itself a floor.
-export function estimateUnpriced(byModel: UsagePoint[]): Map<string, number> {
+// estimateUnpriced prices unpriced (provider, model) groups from prices
+// (fetched by the caller via catalogPrices() for exactly those pairs,
+// each resolved within its own provider's catalog candidates). The
+// ledger's cost stays the honest record (unknown price = NULL, never
+// guessed server-side); this is a display hint for what the unpriced
+// calls would roughly cost. Estimates are keyed by model alone (the
+// display groups by model, not provider) so a model served by more than
+// one provider sums its estimate across them. A pair with no priced
+// match contributes nothing — the estimate is itself a floor.
+export function estimateUnpriced(
+  groups: UnpricedGroup[],
+  prices: CatalogPrice[],
+): Map<string, number> {
+  const byPair = new Map<string, CatalogPrice>()
+  for (const p of prices) byPair.set(priceKey(p.provider, p.model), p)
+
   const out = new Map<string, number>()
-  for (const p of byModel) {
-    const price = catalogPrices.get(p.group)
-    if (!price) continue
+  for (const g of groups) {
+    const price = byPair.get(priceKey(g.provider, g.model))?.price
+    if (price?.input_per_mtok == null || price.output_per_mtok == null) continue
     const est =
-      (p.unpriced_input_tokens * price.input + p.unpriced_output_tokens * price.output) / 1_000_000
+      (g.unpriced_input_tokens * price.input_per_mtok +
+        g.unpriced_output_tokens * price.output_per_mtok) /
+      1_000_000
     if (est <= 0) continue
-    out.set(p.group, (out.get(p.group) ?? 0) + est)
+    out.set(g.model, (out.get(g.model) ?? 0) + est)
   }
   return out
 }

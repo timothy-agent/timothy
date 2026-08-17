@@ -6,6 +6,7 @@ import { LatencyBars } from '../components/charts/LatencyBars'
 import { ChartLegend } from '../components/charts/ChartLegend'
 import { palette } from '../components/charts/palette'
 import {
+  catalogPrices,
   usageBudget,
   usageCache,
   usageLatency,
@@ -13,13 +14,16 @@ import {
   usageSessions,
   usageSummary,
   usageTotals,
+  usageUnpriced,
 } from '../api/client'
 import type {
   BudgetStatus,
   CacheRow,
+  CatalogPrice,
   GroupTotal,
   LatencyRow,
   SessionUsage,
+  UnpricedGroup,
   UsagePoint,
   UsageSummary,
 } from '../api/types'
@@ -168,6 +172,8 @@ export function Analytics() {
   const [range, setRange] = useState('today')
   const [data, setData] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [unpriced, setUnpriced] = useState<UnpricedGroup[]>([])
+  const [prices, setPrices] = useState<CatalogPrice[]>([])
 
   useEffect(() => {
     const { from, to, bucket } = rangeDates(range)
@@ -185,6 +191,7 @@ export function Analytics() {
       usageLatency(from, to),
       usageCache(from, to),
       usageBudget(),
+      usageUnpriced(from, to),
     ]).then((results) => {
       if (!live) return
       const failed = results.filter((r) => r.status === 'rejected').length
@@ -204,6 +211,7 @@ export function Analytics() {
         cache: val(results[8], []),
         budget: val<BudgetStatus | null>(results[9], null),
       })
+      setUnpriced(val<UnpricedGroup[]>(results[10], []))
     })
     return () => {
       live = false
@@ -269,12 +277,33 @@ export function Analytics() {
   )
 
   // Advisory estimates for calls the ledger recorded without a price
-  // (cost NULL). Computed client-side from the model catalog and
-  // always shown with a ≈ so they never masquerade as accounting.
-  const estimates = useMemo(
-    () => (data ? estimateUnpriced(data.byModel) : new Map<string, number>()),
-    [data],
-  )
+  // (cost NULL): the (provider, model) pairs from usageUnpriced, each
+  // resolved within its own provider's catalog candidates (never the
+  // whole catalog, so a model name that collides across vendors can't
+  // borrow the wrong one's price). Loading/failure leaves prices at [],
+  // which estimateUnpriced treats as "no estimate" — no error banner
+  // needed beyond the existing widget-failure note.
+  useEffect(() => {
+    if (unpriced.length === 0) {
+      setPrices([])
+      return
+    }
+    let live = true
+    catalogPrices(unpriced.map((g) => ({ provider: g.provider, model: g.model }))).then(
+      (p) => {
+        if (live) setPrices(p)
+      },
+      () => {
+        if (live) setPrices([])
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [unpriced])
+
+  // Always shown with a ≈ so estimates never masquerade as accounting.
+  const estimates = useMemo(() => estimateUnpriced(unpriced, prices), [unpriced, prices])
   const estimatedTotal = totalEstimate(estimates)
 
   const cacheHit = useMemo(() => {

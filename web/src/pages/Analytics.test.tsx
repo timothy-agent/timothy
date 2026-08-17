@@ -5,6 +5,7 @@ import type { BudgetStatus, GroupTotal, UsagePoint, UsageSummary } from '../api/
 import { Analytics } from './Analytics'
 
 vi.mock('../api/client', () => ({
+  catalogPrices: vi.fn(),
   usageBudget: vi.fn(),
   usageCache: vi.fn(),
   usageLatency: vi.fn(),
@@ -12,9 +13,11 @@ vi.mock('../api/client', () => ({
   usageSessions: vi.fn(),
   usageSummary: vi.fn(),
   usageTotals: vi.fn(),
+  usageUnpriced: vi.fn(),
 }))
 
 import {
+  catalogPrices,
   usageBudget,
   usageCache,
   usageLatency,
@@ -22,6 +25,7 @@ import {
   usageSessions,
   usageSummary,
   usageTotals,
+  usageUnpriced,
 } from '../api/client'
 
 const summary: UsageSummary = {
@@ -62,6 +66,8 @@ beforeEach(() => {
   vi.mocked(usageLatency).mockResolvedValue([])
   vi.mocked(usageCache).mockResolvedValue([])
   vi.mocked(usageBudget).mockResolvedValue(calmBudget)
+  vi.mocked(usageUnpriced).mockResolvedValue([])
+  vi.mocked(catalogPrices).mockResolvedValue([])
 })
 
 describe('Analytics budget alert', () => {
@@ -177,7 +183,13 @@ describe('Analytics token tiles', () => {
 describe('Analytics unpriced usage', () => {
   it('notes unpriced calls with a catalog estimate', async () => {
     vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unpriced_requests: 4 }])
-    // gpt-5.6-sol prices in the catalog: $5/mtok in, $30/mtok out.
+    vi.mocked(usageUnpriced).mockResolvedValue([
+      { provider: 'openai', model: 'gpt-5.6-sol', unpriced_input_tokens: 1_000_000, unpriced_output_tokens: 100_000 },
+    ])
+    // gpt-5.6-sol (openai) prices from the synced catalog: $5/mtok in, $30/mtok out.
+    vi.mocked(catalogPrices).mockResolvedValue([
+      { provider: 'openai', model: 'gpt-5.6-sol', price: { input_per_mtok: 5, output_per_mtok: 30 } },
+    ])
     vi.mocked(usageSeries).mockResolvedValue([
       {
         bucket: '2026-07-24T00:00:00Z',

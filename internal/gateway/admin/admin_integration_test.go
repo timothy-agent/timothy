@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
@@ -133,7 +134,7 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	if err != nil {
 		t.Fatalf("secretstore.New: %v", err)
 	}
-	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, log), store, pool
+	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, catalog.New(log), log), store, pool
 }
 
 // waitSnapshot retries reload until the provider reaches the
@@ -1026,5 +1027,55 @@ func TestSecretValueWriteThrough(t *testing.T) {
 	}
 	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "vault" {
 		t.Fatalf("SecretStatus: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+}
+
+// TestCatalogPricesResolvesByProviderRow is CatalogPrices' end-to-end
+// coverage of the DB half resolvePricedModel's unit tests fake out: a
+// real provider row (options.litellm_provider="zai", the repro's
+// z.ai-served provider) resolves the pair within zai's own candidates —
+// never cloudflare's priced entry of the same model segment — and an
+// unknown provider name reports a nil price rather than erroring.
+func TestCatalogPricesResolvesByProviderRow(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"zai/glm-4.7-flash": {"litellm_provider": "zai", "mode": "chat"},
+			"cloudflare/@cf/zai-org/glm-4.7-flash": {"litellm_provider": "cloudflare", "mode": "chat",
+				"input_cost_per_token": 0.00000006, "output_cost_per_token": 0.0000004}
+		}`))
+	}))
+	defer srv.Close()
+	adm.catalog = catalog.NewWithURL(slog.New(slog.NewTextHandler(io.Discard, nil)), srv.URL)
+	if _, err := adm.CatalogRefresh(ctx); err != nil {
+		t.Fatalf("CatalogRefresh: %v", err)
+	}
+
+	name := adminMarker + "zai"
+	if _, err := adm.Create(ctx, Provider{
+		Name: name, Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://api.z.ai/v1", CredentialRef: "SOME_ENV_NAME",
+		Options: map[string]string{"litellm_provider": "zai"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	priced, err := adm.CatalogPrices(ctx, []ProviderModel{
+		{Provider: name, Model: "glm-4.7-flash"},
+		{Provider: adminMarker + "no-such-provider", Model: "glm-4.7-flash"},
+	})
+	if err != nil {
+		t.Fatalf("CatalogPrices: %v", err)
+	}
+	if len(priced) != 2 {
+		t.Fatalf("priced len = %d, want 2", len(priced))
+	}
+	if priced[0].Price != nil {
+		t.Fatalf("zai's glm-4.7-flash priced = %+v, want nil (free on zai, never cloudflare's rate)", priced[0].Price)
+	}
+	if priced[1].Price != nil {
+		t.Fatalf("unknown provider priced = %+v, want nil", priced[1].Price)
 	}
 }

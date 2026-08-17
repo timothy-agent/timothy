@@ -1,12 +1,11 @@
 import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { listProviders, listRoutes, patchRoute } from '../../api/client'
+import { catalogModelsForProvider, listProviders, listRoutes, patchRoute } from '../../api/client'
 import type { AdminProvider, AdminRoute, ChainEntry } from '../../api/types'
 import { Button } from '../ui/button'
-import { Input } from '../ui/input'
 import {
   Select,
   SelectContent,
@@ -14,8 +13,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
+import { catalogMatchForID, catalogRowID, configuredPrice, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
 import { reorder } from './pipeline/useReorderDrag'
+import { matchPreset } from './presets'
+import { ProviderMark } from './ProviderLogo'
 import { Field, Toggle } from './shared'
 import { errText } from './util'
 
@@ -146,10 +148,6 @@ export function RouteEdit() {
   )
 }
 
-// customModel is the sentinel Select value that switches the model
-// picker to free-text entry — declared model ids never collide with it.
-const customModel = '·custom·'
-
 function AddChainEntry({
   providers,
   onAdd,
@@ -159,10 +157,43 @@ function AddChainEntry({
 }) {
   const [providerID, setProviderID] = useState('')
   const [model, setModel] = useState('')
-  const [manual, setManual] = useState(false)
 
   const selected = providers.find((x) => x.id === providerID)
-  const declared = selected?.models.map((m) => m.id) ?? []
+
+  // Live type-ahead over the selected provider's candidate catalog
+  // rows, keyed on the typed model id.
+  const catalogSearch = useCallback(
+    (q: string) => (providerID ? catalogModelsForProvider(providerID, q) : Promise.resolve([])),
+    [providerID],
+  )
+  const catalogModels = useCatalogSearch(model, catalogSearch)
+
+  // Declared models on the selected provider first, then live catalog
+  // rows not already declared — same shape ProviderAdd/ProviderEdit
+  // feed ModelInput, so price labels render the same way everywhere.
+  const suggestions: ModelSuggestion[] = useMemo(() => {
+    if (!selected) return []
+    const seen = new Map<string, ModelSuggestion>()
+    for (const m of selected.models) {
+      const catalogMatch = catalogMatchForID(m.id, catalogModels)
+      const price = configuredPrice(m.prices) ?? {
+        input_per_mtok: catalogMatch?.input_per_mtok,
+        output_per_mtok: catalogMatch?.output_per_mtok,
+      }
+      seen.set(m.id, { id: m.id, ...price })
+    }
+    for (const m of catalogModels) {
+      const id = catalogRowID(m)
+      if (!seen.has(id)) {
+        seen.set(id, {
+          id,
+          input_per_mtok: m.input_per_mtok,
+          output_per_mtok: m.output_per_mtok,
+        })
+      }
+    }
+    return [...seen.values()]
+  }, [selected, catalogModels])
 
   return (
     <Field label="Add a provider to this chain">
@@ -172,7 +203,6 @@ function AddChainEntry({
           onValueChange={(id) => {
             setProviderID(id)
             const p = providers.find((x) => x.id === id)
-            setManual((p?.models.length ?? 0) === 0)
             setModel(p?.default_model ?? '')
           }}
         >
@@ -182,44 +212,20 @@ function AddChainEntry({
           <SelectContent>
             {providers.map((p) => (
               <SelectItem key={p.id} value={p.id}>
+                <ProviderMark preset={matchPreset(p)} />
                 {p.name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        {manual || declared.length === 0 ? (
-          <Input
-            aria-label="Model"
-            placeholder="model id"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="h-10 w-56"
-          />
-        ) : (
-          <Select
-            value={declared.includes(model) ? model : ''}
-            onValueChange={(v) => {
-              if (v === customModel) {
-                setManual(true)
-                setModel('')
-                return
-              }
-              setModel(v)
-            }}
-          >
-            <SelectTrigger className="h-10 w-56" aria-label="Model">
-              <SelectValue placeholder="model…" />
-            </SelectTrigger>
-            <SelectContent>
-              {declared.map((id) => (
-                <SelectItem key={id} value={id}>
-                  {id}
-                </SelectItem>
-              ))}
-              <SelectItem value={customModel}>custom…</SelectItem>
-            </SelectContent>
-          </Select>
-        )}
+        <ModelInput
+          value={model}
+          onChange={setModel}
+          suggestions={suggestions}
+          placeholder="model id"
+          className="h-10 w-56"
+          ariaLabel="Model"
+        />
         <Button
           variant="outline"
           disabled={!providerID || !model}

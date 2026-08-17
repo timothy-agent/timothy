@@ -9,6 +9,7 @@ vi.mock('../../api/client', () => ({
   listProviders: vi.fn(),
   listSecretBackends: vi.fn(),
   listSecretRefs: vi.fn(),
+  searchCatalog: vi.fn(),
   setSecret: vi.fn(),
   validateProvider: vi.fn(),
 }))
@@ -18,6 +19,7 @@ import {
   listProviders,
   listSecretBackends,
   listSecretRefs,
+  searchCatalog,
   setSecret,
   validateProvider,
 } from '../../api/client'
@@ -57,10 +59,14 @@ beforeEach(() => {
     { backend: 'db', configured: true, default: true },
   ])
   vi.mocked(listSecretRefs).mockResolvedValue([])
+  vi.mocked(searchCatalog).mockResolvedValue([])
 })
 
 describe('ProviderAdd model suggestions', () => {
   it('does not suggest another openaicompat provider\'s models when the base_url differs', async () => {
+    vi.mocked(searchCatalog).mockResolvedValue([
+      { id: 'grok-4.5', model_key: 'xai/grok-4.5', litellm_provider: 'xai', mode: 'chat' },
+    ])
     renderPage('grok')
     const input = await screen.findByPlaceholderText('model id')
     fireEvent.focus(input)
@@ -70,11 +76,132 @@ describe('ProviderAdd model suggestions', () => {
   })
 
   it('suggests a matching provider\'s models when driver AND base_url both match', async () => {
+    vi.mocked(searchCatalog).mockResolvedValue([
+      { id: 'glm-4.7-flash', model_key: 'zai/glm-4.7-flash', litellm_provider: 'zai', mode: 'chat' },
+    ])
     renderPage('glm')
     const input = await screen.findByPlaceholderText('model id')
     fireEvent.focus(input)
 
     expect(await screen.findByText('glm-4.7-flash')).toBeInTheDocument()
+  })
+
+  it('shows the catalog price on a priced suggestion row', async () => {
+    vi.mocked(searchCatalog).mockResolvedValue([
+      {
+        id: 'glm-4.7-flash-air',
+        model_key: 'zai/glm-4.7-flash-air',
+        litellm_provider: 'zai',
+        mode: 'chat',
+        input_per_mtok: 0.15,
+        output_per_mtok: 0.6,
+      },
+    ])
+    renderPage('glm')
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.focus(input)
+
+    expect(await screen.findByText('in $0.15 · out $0.60 /MTok')).toBeInTheDocument()
+  })
+
+  it('shows a declared model\'s own configured price', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...glm, models: [{ id: 'glm-5.2', prices: { input_per_mtok: 0.5, output_per_mtok: 1.5 } }] },
+    ])
+    renderPage('glm')
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    expect(await screen.findByText('in $0.50 · out $1.50 /MTok')).toBeInTheDocument()
+  })
+
+  it('falls back to the catalog price for a declared model with no configured price', async () => {
+    vi.mocked(searchCatalog).mockResolvedValue([
+      { id: 'glm-5.2', model_key: 'zai/glm-5.2', litellm_provider: 'zai', mode: 'chat', input_per_mtok: 0.15, output_per_mtok: 0.6 },
+    ])
+    renderPage('glm')
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    expect(await screen.findByText('in $0.15 · out $0.60 /MTok')).toBeInTheDocument()
+  })
+
+  it('falls back to a provider-prefixed catalog key by its last segment', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...glm, name: 'Grok (xAI)', base_url: 'https://api.x.ai/v1', default_model: 'grok-2', models: [{ id: 'grok-2' }] },
+    ])
+    vi.mocked(searchCatalog).mockResolvedValue([
+      { id: 'grok-2', model_key: 'xai/grok-2', litellm_provider: 'xai', mode: 'chat', input_per_mtok: 2, output_per_mtok: 10 },
+    ])
+    renderPage('grok')
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    // The declared "grok-2" (priced via the catalog fallback under
+    // test) and the catalog row's own server-stripped id share the same
+    // id, so they dedupe into a single suggestion row.
+    expect(await screen.findAllByText('in $2 · out $10 /MTok')).toHaveLength(1)
+    expect(screen.getByRole('option', { name: /^grok-2/ })).toHaveTextContent('in $2 · out $10 /MTok')
+  })
+
+  it('debounces typing into a single catalog search call with the typed q', async () => {
+    renderPage('glm')
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: 'glm-4' } })
+    fireEvent.change(input, { target: { value: 'glm-4.7' } })
+
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith('glm-4.7', 'zai'))
+    expect(searchCatalog).not.toHaveBeenCalledWith('glm-4', 'zai')
+  })
+
+  it('picking a namespaced catalog row commits the server-stripped local id, not model_key', async () => {
+    vi.mocked(searchCatalog).mockResolvedValue([
+      { id: 'glm-4.5', model_key: 'zai/glm-4.5', litellm_provider: 'zai', mode: 'chat' },
+    ])
+    renderPage('glm')
+    const input = await screen.findByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    fireEvent.click(await screen.findByRole('option', { name: /^glm-4\.5/ }))
+    expect(input).toHaveValue('glm-4.5')
+  })
+})
+
+describe('ProviderAdd seeds options.litellm_provider', () => {
+  beforeEach(() => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2' })
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createProvider).mockResolvedValue('p-new')
+  })
+
+  it('seeds the preset->litellm_provider mapping on create', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({
+      options: { litellm_provider: 'zai' },
+    })
+  })
+
+  it('leaves options.litellm_provider unset for the custom preset', async () => {
+    renderPage('custom')
+    fireEvent.change(await screen.findByPlaceholderText('my-gateway'), { target: { value: 'my-custom' } })
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'custom-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    const call = vi.mocked(createProvider).mock.calls[0][0]
+    expect(call.options?.litellm_provider).toBeUndefined()
   })
 })
 

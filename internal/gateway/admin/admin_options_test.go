@@ -47,6 +47,44 @@ func TestValidateProviderRejectsInvalidRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestValidateLitellmProvider(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		opts    map[string]string
+		wantErr string
+	}{
+		{name: "absent is valid", opts: map[string]string{}},
+		{name: "nil map is valid", opts: nil},
+		{name: "empty string is valid (unset)", opts: map[string]string{"litellm_provider": ""}},
+		{name: "a bare token is valid", opts: map[string]string{"litellm_provider": "xai"}},
+		{name: "spaces are rejected", opts: map[string]string{"litellm_provider": "not a token"}, wantErr: "litellm_provider"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateLitellmProvider(tt.opts)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateLitellmProvider: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateProviderRejectsInvalidLitellmProvider(t *testing.T) {
+	t.Parallel()
+	p := Provider{Name: "p", Kind: "api", Driver: "openaicompat", Options: map[string]string{"litellm_provider": "not a token"}}
+	if err := validateProvider(p); err == nil || !strings.Contains(err.Error(), "litellm_provider") {
+		t.Fatalf("validateProvider error = %v, want containing litellm_provider", err)
+	}
+}
+
 // TestValidateProviderCLIKind covers D-051's kind='cli' branch: a
 // mission-only executor provider validates driver name only, never a
 // chat-serving base_url or wire-format compatibility — it's inherently

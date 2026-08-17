@@ -5,6 +5,8 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   availableModels,
+  catalogModelsForProvider,
+  catalogSuggestions,
   deleteProvider,
   deleteSecret,
   listProviders,
@@ -13,7 +15,7 @@ import {
   setSecret,
   testProvider,
 } from '../../api/client'
-import type { AdminModel, AdminProvider, TestResult } from '../../api/types'
+import type { AdminModel, AdminProvider, CatalogSuggestion, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -24,8 +26,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { ModelInput, type ModelSuggestion } from './ModelInput'
-import { modelCatalog } from './modelCatalog'
+import { catalogMatchForID, catalogRowID, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field, Toggle } from './shared'
@@ -99,13 +100,19 @@ export function ProviderEdit() {
           />
         )}
         {provider.driver === 'bedrock' && <RegionSection provider={provider} onChanged={refresh} />}
+        {provider.kind !== 'cli' && (
+          <CatalogProviderSection provider={provider} onChanged={refresh} />
+        )}
         {provider.driver === 'openaicompat' && (
           <ReasoningSection provider={provider} onChanged={refresh} />
         )}
         {provider.kind === 'cli' ? (
-          <CliModelsSection provider={provider} />
+          <CliModelsSection provider={provider} onChanged={refresh} />
         ) : (
-          <ModelsSection provider={provider} onChanged={refresh} />
+          <>
+            <ModelsSection provider={provider} onChanged={refresh} />
+            <CatalogSuggestSection provider={provider} onChanged={refresh} />
+          </>
         )}
       </div>
 
@@ -498,43 +505,139 @@ function RegionSection({ provider, onChanged }: { provider: AdminProvider; onCha
   )
 }
 
+// CatalogProviderSection lets an operator set options.litellm_provider
+// — an explicit override of which catalog section (the synced
+// LiteLLM data's own litellm_provider field, e.g. "xai", "zai") this
+// provider's models are matched and priced against. Unset defers to
+// the existing driver/host heuristic (catalog.CandidateProviders);
+// most providers never need this, but it's the escape hatch for a
+// host the heuristic doesn't recognize.
+function CatalogProviderSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
+  const [value, setValue] = useState(provider.options?.litellm_provider ?? '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setValue(provider.options?.litellm_provider ?? '')
+  }, [provider.options?.litellm_provider])
+
+  const save = async () => {
+    const trimmed = value.trim()
+    if (trimmed === (provider.options?.litellm_provider ?? '')) return
+    const { litellm_provider: _litellmProvider, ...rest } = provider.options ?? {}
+    setSaving(true)
+    try {
+      await patchProvider(provider.id, {
+        options: trimmed ? { ...rest, litellm_provider: trimmed } : rest,
+      })
+      onChanged()
+    } catch (err) {
+      setValue(provider.options?.litellm_provider ?? '')
+      toast.error('Could not update catalog provider', { description: errText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-sm font-semibold">Catalog provider</h2>
+      <Field
+        label="LiteLLM provider"
+        hint={
+          saving
+            ? 'Saving…'
+            : 'Which LiteLLM provider section this provider\'s models are priced under. Empty infers it from driver/base URL.'
+        }
+      >
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => void save()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          disabled={saving}
+          placeholder="e.g. xai, zai"
+          className="mt-1.5 block h-10 max-w-40"
+        />
+      </Field>
+    </section>
+  )
+}
+
 // cliModelAliases are the Claude Code CLI's own model aliases (D-051)
 // — a kind='cli' row has no chat driver to enumerate models against,
-// so these are shown as-is rather than an editable declared-models list.
-const cliModelAliases = ['sonnet', 'opus', 'haiku']
+// so these are offered as suggestions rather than an editable
+// declared-models list. 'fable' verified as a recognized alias in the
+// sandbox image (unknown aliases trip a CLI warning, fable doesn't).
+const cliModelAliases = ['fable', 'sonnet', 'opus', 'haiku']
 
 // CliModelsSection replaces ModelsSection for kind='cli' providers:
 // there's no provider API to list or declare models against, so this
-// shows the fixed CLI alias set and which one is the mission default
-// instead of an editable (and here, always-empty) list.
-function CliModelsSection({ provider }: { provider: AdminProvider }) {
+// is just a picker (aliases pinned first, then live Anthropic catalog
+// ids — the gateway maps a claude-cli row to the "anthropic" catalog
+// provider) to set default_model, the model the CLI runs.
+function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
+  const [defaultModel, setDefaultModel] = useState(provider.default_model)
+  const [saving, setSaving] = useState(false)
+
+  const search = useCallback((q: string) => catalogModelsForProvider(provider.id, q), [provider.id])
+  const catalogModels = useCatalogSearch(defaultModel, search)
+
+  useEffect(() => {
+    setDefaultModel(provider.default_model)
+  }, [provider.default_model])
+
+  const suggestions: ModelSuggestion[] = useMemo(() => {
+    const seen = new Map<string, ModelSuggestion>(cliModelAliases.map((a) => [a, { id: a }]))
+    for (const m of catalogModels) {
+      const id = catalogRowID(m)
+      if (!seen.has(id)) {
+        seen.set(id, {
+          id,
+          input_per_mtok: m.input_per_mtok,
+          output_per_mtok: m.output_per_mtok,
+        })
+      }
+    }
+    return [...seen.values()]
+  }, [catalogModels])
+
+  const saveDefaultModel = async (v: string) => {
+    const trimmed = v.trim()
+    if (trimmed === provider.default_model) return
+    setSaving(true)
+    try {
+      await patchProvider(provider.id, { default_model: trimmed })
+      onChanged()
+    } catch (err) {
+      setDefaultModel(provider.default_model)
+      toast.error('Could not update default model', { description: errText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-semibold">Models</h2>
       <p className="text-sm text-muted-foreground">
-        Subscription auth uses the Claude Code CLI's own model aliases, not a declared list.
+        Subscription auth uses the Claude Code CLI's own model aliases, not a declared list. This
+        sets the default model the CLI runs.
       </p>
-      <ul className="space-y-1.5">
-        {cliModelAliases.map((alias) => (
-          <li
-            key={alias}
-            className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"
-          >
-            <span className="truncate font-mono">{alias}</span>
-            {provider.default_model === alias && (
-              <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
-                default
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {!cliModelAliases.includes(provider.default_model) && provider.default_model && (
-        <p className="text-sm text-muted-foreground">
-          Default model <span className="font-mono text-foreground">{provider.default_model}</span>{' '}
-          is not one of the CLI aliases above but is passed through as-is.
-        </p>
-      )}
+      <Field label="Default model" hint={saving ? 'Saving…' : 'An alias, or a full Anthropic model id.'}>
+        <ModelInput
+          value={defaultModel}
+          onChange={setDefaultModel}
+          onCommit={(v) => {
+            setDefaultModel(v)
+            void saveDefaultModel(v)
+          }}
+          suggestions={suggestions}
+          placeholder="sonnet"
+          className="mt-1.5 h-10"
+        />
+      </Field>
     </section>
   )
 }
@@ -558,18 +661,35 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
       .catch(() => setFetched([])) // 422 (bedrock) or fetch failure → manual entry only
   }, [provider.id])
 
-  const preset = useMemo(() => matchPreset(provider), [provider])
+  // Live type-ahead over the synced catalog, restricted server-side to
+  // this provider's candidate litellm_provider(s) — replaces the old
+  // static modelCatalog.ts. Empty entry still fetches a first page (q
+  // omitted server-side).
+  const catalogSearch = useCallback(
+    (q: string) => catalogModelsForProvider(provider.id, q),
+    [provider.id],
+  )
+  const catalogModels = useCatalogSearch(entry, catalogSearch)
 
   const suggestions: ModelSuggestion[] = useMemo(() => {
     const seen = new Map<string, ModelSuggestion>()
     for (const id of fetched) {
       if (!declared.has(id)) seen.set(id, { id })
     }
-    for (const m of modelCatalog[preset.id] ?? []) {
-      if (!declared.has(m.id) && !seen.has(m.id)) seen.set(m.id, { ...m, hint: 'catalog' })
+    for (const m of catalogModels) {
+      const id = catalogRowID(m)
+      if (declared.has(id)) continue
+      const price = { input_per_mtok: m.input_per_mtok, output_per_mtok: m.output_per_mtok }
+      const existing = seen.get(id)
+      // A live-listing row (bare {id}, no price) and a catalog row can
+      // name the same id — attach the catalog's price onto the
+      // existing entry rather than dropping the row, so live-listing
+      // membership never erases price data.
+      if (existing) seen.set(id, { ...existing, ...price })
+      else seen.set(id, { id, ...price })
     }
     return [...seen.values()]
-  }, [fetched, declared, preset])
+  }, [fetched, declared, catalogModels])
 
   const patchModels = async (models: AdminModel[], defaultModel?: string) => {
     setSaving(true)
@@ -589,7 +709,25 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
   const add = async () => {
     const trimmed = entry.trim()
     if (!trimmed || declared.has(trimmed)) return
-    const prices = (modelCatalog[preset.id] ?? []).find((m) => m.id === trimmed)?.prices
+    // A fresh, undebounced lookup for the exact id being added — the
+    // dropdown's catalogModels is a debounced snapshot of entry as
+    // typed so far and may still be empty/stale the instant Add is
+    // clicked (e.g. clicked before the 250ms pause fires).
+    const matches = await catalogSearch(trimmed).catch(() => [])
+    const catalogMatch = catalogMatchForID(trimmed, matches)
+    const prices =
+      catalogMatch?.input_per_mtok != null && catalogMatch.output_per_mtok != null
+        ? {
+            input_per_mtok: catalogMatch.input_per_mtok,
+            output_per_mtok: catalogMatch.output_per_mtok,
+            ...(catalogMatch.cache_read_per_mtok != null
+              ? { cache_read_per_mtok: catalogMatch.cache_read_per_mtok }
+              : {}),
+            ...(catalogMatch.cache_write_per_mtok != null
+              ? { cache_write_per_mtok: catalogMatch.cache_write_per_mtok }
+              : {}),
+          }
+        : undefined
     const capabilities = [...(embeddings ? ['embeddings'] : []), ...(vision ? ['vision'] : [])]
     const model: AdminModel = {
       id: trimmed,
@@ -695,6 +833,138 @@ function ModelsSection({ provider, onChanged }: { provider: AdminProvider; onCha
         />
         Vision, this model can accept image attachments
       </label>
+    </section>
+  )
+}
+
+// CatalogSuggestSection compares a provider's declared models against
+// the synced model catalog and lets the operator selectively apply
+// context-window/price suggestions — suggest-only: nothing changes
+// until Apply is clicked, and only for checked rows.
+function CatalogSuggestSection({
+  provider,
+  onChanged,
+}: {
+  provider: AdminProvider
+  onChanged: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [suggestions, setSuggestions] = useState<CatalogSuggestion[]>([])
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
+  const [applying, setApplying] = useState(false)
+
+  const openDialog = async () => {
+    setOpen(true)
+    setLoading(true)
+    try {
+      const sugs = await catalogSuggestions(provider.id)
+      setSuggestions(sugs)
+      // Pre-check every matched row with an actual change to suggest —
+      // an unmatched row has nothing to check.
+      setChecked(Object.fromEntries(sugs.filter((s) => s.match).map((s) => [s.model_id, true])))
+    } catch (err) {
+      toast.error('Could not load catalog suggestions', { description: errText(err) })
+      setOpen(false)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const apply = async () => {
+    setApplying(true)
+    try {
+      const models = provider.models.map((m) => {
+        const sug = suggestions.find((s) => s.model_id === m.id)
+        if (!sug || !checked[m.id]) return m
+        return {
+          ...m,
+          ...(sug.suggested_context_window != null
+            ? { context_window: sug.suggested_context_window }
+            : {}),
+          ...(sug.suggested_prices ? { prices: sug.suggested_prices } : {}),
+        }
+      })
+      await patchProvider(provider.id, { models })
+      onChanged()
+      setOpen(false)
+      toast.success('Catalog suggestions applied')
+    } catch (err) {
+      toast.error('Could not apply catalog suggestions', { description: errText(err) })
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  const anyChecked = Object.values(checked).some(Boolean)
+
+  return (
+    <section className="space-y-3">
+      <Button variant="outline" onClick={() => void openDialog()}>
+        Suggest from catalog
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Catalog suggestions · {provider.name}</DialogTitle>
+          </DialogHeader>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : suggestions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No declared models to compare.</p>
+          ) : (
+            <ul className="max-h-96 space-y-2 overflow-y-auto">
+              {suggestions.map((s) => (
+                <li
+                  key={s.model_id}
+                  className="rounded-lg border border-border px-3 py-2 text-sm"
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      disabled={!s.match}
+                      checked={!!checked[s.model_id]}
+                      onChange={(e) =>
+                        setChecked((c) => ({ ...c, [s.model_id]: e.target.checked }))
+                      }
+                      className="size-4 rounded border-border"
+                      aria-label={`Apply suggestion for ${s.model_id}`}
+                    />
+                    <span className="truncate font-mono">{s.model_id}</span>
+                    {!s.match && (
+                      <span className="ml-auto text-xs text-muted-foreground">no match</span>
+                    )}
+                  </div>
+                  {s.match && (
+                    <div className="mt-1.5 pl-6 text-xs text-muted-foreground">
+                      <div>matched catalog entry: <span className="font-mono">{s.match}</span></div>
+                      <div>
+                        context window: {s.current_context_window ?? '—'} →{' '}
+                        {s.suggested_context_window ?? '—'}
+                      </div>
+                      <div>
+                        input/output per Mtok: {s.current_prices?.input_per_mtok ?? '—'}/
+                        {s.current_prices?.output_per_mtok ?? '—'} →{' '}
+                        {s.suggested_prices?.input_per_mtok ?? '—'}/
+                        {s.suggested_prices?.output_per_mtok ?? '—'}
+                      </div>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!anyChecked || applying} onClick={() => void apply()}>
+              {applying ? 'Applying…' : 'Apply'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

@@ -1,16 +1,15 @@
 import { AlertCircleIcon, ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { createProvider, listProviders, setSecret, validateProvider } from '../../api/client'
+import { createProvider, listProviders, searchCatalog, setSecret, validateProvider } from '../../api/client'
 import type { AdminProvider, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { ModelInput, type ModelSuggestion } from './ModelInput'
-import { modelCatalog } from './modelCatalog'
+import { catalogMatchForID, catalogRowID, configuredPrice, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
@@ -23,6 +22,22 @@ function refFor(preset: ProviderPreset, name: string): string {
   if (preset.defaultRef) return preset.defaultRef
   const slug = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')
   return slug ? `${slug}_API_KEY` : ''
+}
+
+// presetLitellmProvider maps a preset id to the litellm_provider value
+// its models are filed under in the synced catalog — mirrors
+// catalog.CandidateProviders' driver/host mapping for this fixed set
+// of presets. '' means no restriction, same as an unrecognized
+// driver/host server-side.
+function presetLitellmProvider(presetId: string): string {
+  return {
+    openai: 'openai',
+    anthropic: 'anthropic',
+    bedrock: 'bedrock',
+    glm: 'zai',
+    grok: 'xai',
+    ollama: 'ollama',
+  }[presetId] ?? ''
 }
 
 // AnthropicAuthMode is the Anthropic preset's auth picker (D-051,
@@ -69,6 +84,17 @@ export function ProviderAdd() {
     listProviders().then(setExisting, () => undefined)
   }, [])
 
+  // Live type-ahead over this preset's catalog rows, keyed on the
+  // typed model id — presetLitellmProvider mirrors the gateway's
+  // catalog.CandidateProviders mapping for the fixed set of presets
+  // this form offers; an unmapped preset searches the whole catalog,
+  // same as an unrecognized driver/host does server-side.
+  const catalogSearch = useCallback(
+    (q: string) => (preset ? searchCatalog(q, presetLitellmProvider(preset.id)) : Promise.resolve([])),
+    [preset],
+  )
+  const catalogModels = useCatalogSearch(model, catalogSearch)
+
   useEffect(() => {
     if (!preset) return
     setName(preset.id === 'custom' ? '' : preset.name)
@@ -97,32 +123,46 @@ export function ProviderAdd() {
   // has no base_url to key on (region lives in options.region instead),
   // and its inference-profile model ids aren't region-specific, so any
   // other bedrock provider's declared models qualify. Plus the preset's
-  // own validated default, and the static catalog for this preset.
-  // Advisory only, never blocks a free-typed id.
+  // own validated default, and the live synced catalog for this preset
+  // (ids only — the catalog carries no friendly names). Advisory only,
+  // never blocks a free-typed id. A declared row's price is its own
+  // configured price if set, else the matching catalog row's price.
   const modelSuggestions: ModelSuggestion[] = useMemo(() => {
     if (!preset) return []
     const seen = new Map<string, ModelSuggestion>()
-    const catalog = modelCatalog[preset.id] ?? []
-    const nameFor = (id: string) => catalog.find((m) => m.id === id)?.name
     for (const p of existing) {
       if (p.driver !== preset.driver) continue
       if (preset.driver !== 'bedrock' && p.base_url.trim() !== baseURL.trim()) continue
       for (const m of p.models) {
-        if (!seen.has(m.id)) seen.set(m.id, { id: m.id, name: nameFor(m.id), hint: `on ${p.name}` })
+        if (seen.has(m.id)) continue
+        const catalogMatch = catalogMatchForID(m.id, catalogModels)
+        const price = configuredPrice(m.prices) ?? {
+          input_per_mtok: catalogMatch?.input_per_mtok,
+          output_per_mtok: catalogMatch?.output_per_mtok,
+        }
+        seen.set(m.id, { id: m.id, ...price })
       }
     }
     if (preset.validateModel && !seen.has(preset.validateModel)) {
+      const catalogMatch = catalogMatchForID(preset.validateModel, catalogModels)
       seen.set(preset.validateModel, {
         id: preset.validateModel,
-        name: nameFor(preset.validateModel),
-        hint: 'preset default',
+        input_per_mtok: catalogMatch?.input_per_mtok,
+        output_per_mtok: catalogMatch?.output_per_mtok,
       })
     }
-    for (const m of catalog) {
-      if (!seen.has(m.id)) seen.set(m.id, { ...m, hint: 'catalog' })
+    for (const m of catalogModels) {
+      const id = catalogRowID(m)
+      if (!seen.has(id)) {
+        seen.set(id, {
+          id,
+          input_per_mtok: m.input_per_mtok,
+          output_per_mtok: m.output_per_mtok,
+        })
+      }
     }
     return [...seen.values()]
-  }, [existing, preset, baseURL])
+  }, [existing, preset, baseURL, catalogModels])
 
   if (!preset) return <Navigate to="/settings/providers" replace />
 
@@ -254,7 +294,36 @@ export function ProviderAdd() {
     setBusy(true)
     try {
       const trimmedModel = model.trim()
-      const prices = (modelCatalog[preset.id] ?? []).find((m) => m.id === trimmedModel)?.prices
+      // A fresh, undebounced lookup for the exact model being
+      // submitted — the dropdown's catalogModels is a debounced
+      // snapshot of model as typed so far and may still be
+      // empty/stale the instant Add is clicked.
+      const matches = await catalogSearch(trimmedModel).catch(() => [])
+      const catalogMatch = catalogMatchForID(trimmedModel, matches)
+      const prices =
+        catalogMatch?.input_per_mtok != null && catalogMatch.output_per_mtok != null
+          ? {
+              input_per_mtok: catalogMatch.input_per_mtok,
+              output_per_mtok: catalogMatch.output_per_mtok,
+              ...(catalogMatch.cache_read_per_mtok != null
+                ? { cache_read_per_mtok: catalogMatch.cache_read_per_mtok }
+                : {}),
+              ...(catalogMatch.cache_write_per_mtok != null
+                ? { cache_write_per_mtok: catalogMatch.cache_write_per_mtok }
+                : {}),
+            }
+          : undefined
+      // Seeds options.litellm_provider from the same preset->provider
+      // map this form's own catalog search already uses — an explicit
+      // record of which catalog section this provider's models are
+      // priced under, so ProviderEdit's field starts pre-filled rather
+      // than needing a manual first save. Unset (custom preset) leaves
+      // the driver/host heuristic to keep working as it always has.
+      const litellmProvider = presetLitellmProvider(preset.id)
+      const options = {
+        ...(isBedrock ? { region } : {}),
+        ...(litellmProvider ? { litellm_provider: litellmProvider } : {}),
+      }
       await createProvider({
         name: name.trim(),
         kind: 'api',
@@ -265,7 +334,7 @@ export function ProviderAdd() {
         default_model: trimmedModel,
         models: [{ id: trimmedModel, ...(prices ? { prices } : {}) }],
         enabled: true,
-        ...(isBedrock ? { options: { region } } : {}),
+        ...(Object.keys(options).length > 0 ? { options } : {}),
       })
       toast.success('Provider added', { description: `${name.trim()} is connected and ready to route to.` })
       navigate('/settings/providers')

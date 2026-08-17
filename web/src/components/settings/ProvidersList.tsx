@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { listProviders, patchProvider, providersHealth, testProvider } from '../../api/client'
-import type { AdminProvider, ProviderHealth, TestResult } from '../../api/types'
+import {
+  catalogStatus,
+  listProviders,
+  patchProvider,
+  providersHealth,
+  refreshCatalog,
+  testProvider,
+} from '../../api/client'
+import type { AdminProvider, CatalogSyncStatus, ProviderHealth, TestResult } from '../../api/types'
+import { relativeTime } from '../../lib/format'
 import { Button } from '../ui/button'
 import { matchPreset, providerPresets } from './presets'
 import { ProviderLogo } from './ProviderLogo'
@@ -26,6 +34,8 @@ export function ProvidersList() {
 
   return (
     <div className="mt-6 space-y-8">
+      <CatalogStatusLine />
+
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'}
@@ -163,6 +173,48 @@ function ProviderCard({
           Manage
         </Button>
       </div>
+    </div>
+  )
+}
+
+// CatalogStatusLine reports the last model catalog sync — the local
+// cache of known models + pricing "Suggest from catalog" (on each
+// provider's Manage page) matches against — with a manual Refresh.
+function CatalogStatusLine() {
+  const [status, setStatus] = useState<CatalogSyncStatus | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const refresh = useCallback(() => {
+    catalogStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null))
+  }, [])
+  useEffect(refresh, [refresh])
+
+  const runRefresh = async () => {
+    setRefreshing(true)
+    try {
+      setStatus(await refreshCatalog())
+      toast.success('Model catalog refreshed')
+    } catch (err) {
+      toast.error('Could not refresh model catalog', { description: errText(err) })
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  if (!status) return null
+
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
+      <span>
+        Model catalog: {status.entry_count.toLocaleString()} models
+        {status.fetched_at ? `, synced ${relativeTime(status.fetched_at)}` : ', never synced'}
+        {status.error && <span className="text-destructive"> · last refresh failed: {status.error}</span>}
+      </span>
+      <Button size="sm" variant="outline" disabled={refreshing} onClick={() => void runRefresh()}>
+        {refreshing ? 'Refreshing…' : 'Refresh'}
+      </Button>
     </div>
   )
 }

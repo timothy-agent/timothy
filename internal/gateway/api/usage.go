@@ -18,6 +18,7 @@ func RegisterUsage(srv *httpserver.Server, agg *ledger.Aggregator, budgets *ledg
 	srv.Handle("GET /internal/admin/usage/summary", http.HandlerFunc(u.handleSummary))
 	srv.Handle("GET /internal/admin/usage/series", http.HandlerFunc(u.handleSeries))
 	srv.Handle("GET /internal/admin/usage/totals", http.HandlerFunc(u.handleTotals))
+	srv.Handle("GET /internal/admin/usage/unpriced", http.HandlerFunc(u.handleUnpriced))
 	srv.Handle("GET /internal/admin/usage/sessions", http.HandlerFunc(u.handleSessions))
 	srv.Handle("GET /internal/admin/usage/latency", http.HandlerFunc(u.handleLatency))
 	srv.Handle("GET /internal/admin/usage/cache", http.HandlerFunc(u.handleCache))
@@ -100,6 +101,24 @@ func (u *usageAPI) handleTotals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"totals": totals})
+}
+
+// handleUnpriced serves the (provider, model) pairs with unpriced usage
+// in range — the dashboard's advisory catalog estimate needs the
+// provider alongside the model so CatalogPrices resolves each pair
+// against that provider's own candidate pool only.
+func (u *usageAPI) handleUnpriced(w http.ResponseWriter, r *http.Request) {
+	from, to, err := timeRange(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	groups, err := u.agg.UnpricedByProviderModel(r.Context(), from, to)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "usage_failed", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"groups": groups})
 }
 
 func (u *usageAPI) handleSessions(w http.ResponseWriter, r *http.Request) {

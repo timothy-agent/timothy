@@ -32,6 +32,7 @@ vi.mock('../api/client', async (importOriginal) => {
     patchSettings: vi.fn(),
     providersHealth: vi.fn(),
     putSecretBackendConfig: vi.fn(),
+    searchCatalog: vi.fn(),
     secretStatus: vi.fn(),
     setSecret: vi.fn(),
     testProvider: vi.fn(),
@@ -53,6 +54,7 @@ import {
   patchProvider,
   patchSettingValues,
   providersHealth,
+  searchCatalog,
   secretStatus,
   setDefaultSecretBackend,
   setSecret,
@@ -95,6 +97,7 @@ beforeEach(() => {
   ])
   vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
   vi.mocked(getSecretBackendConfig).mockResolvedValue({})
+  vi.mocked(searchCatalog).mockResolvedValue([])
   vi.mocked(listAgents).mockResolvedValue([
     { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
   ])
@@ -230,6 +233,17 @@ describe('Providers tab', () => {
     vi.mocked(setSecret).mockResolvedValue()
     vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-4.7-flash' })
     vi.mocked(createProvider).mockResolvedValue('p2')
+    // glm-4.7-flash is Z.ai's free tier in the synced catalog.
+    vi.mocked(searchCatalog).mockResolvedValue([
+      {
+        id: 'glm-4.7-flash',
+        model_key: 'zai/glm-4.7-flash',
+        litellm_provider: 'zai',
+        mode: 'chat',
+        input_per_mtok: 0,
+        output_per_mtok: 0,
+      },
+    ])
 
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))

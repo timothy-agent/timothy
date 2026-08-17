@@ -442,12 +442,82 @@ func TestOpenAICompat400MaxTokensSwapAndRetry(t *testing.T) {
 	}
 }
 
+func TestOpenAICompat400MaxTokensSwapAndRetryNoReasoningEffort(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		reqMaxTokens int
+		wantRetryCap int
+	}{
+		// A 1-token admin connection probe: reasoning tokens would consume
+		// the whole budget before any output, so the swap floors the cap.
+		{"floors tiny cap", 1, 512},
+		// A real chat-scale request: already above the floor, so the swap
+		// carries it through unchanged.
+		{"preserves large cap", 2048, 2048},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var calls atomic.Int32
+			type caps struct{ maxTokens, maxCompletion int }
+			var got []caps
+			var mu sync.Mutex
+			p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					MaxTokens           int `json:"max_tokens"`
+					MaxCompletionTokens int `json:"max_completion_tokens"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				mu.Lock()
+				got = append(got, caps{req.MaxTokens, req.MaxCompletionTokens})
+				mu.Unlock()
+				if calls.Add(1) == 1 {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unsupported_parameter"}}`))
+					return
+				}
+				oaiWrite(w, `{"choices":[{"delta":{"content":"ok"}}]}`)
+				oaiWrite(w, "[DONE]")
+			})
+
+			// No Effort set (admin connection probe / plain chat): reasoning_effort
+			// is never sent, so this exercises the max_tokens swap-retry
+			// unconditionally rather than only inside the reasoning_effort wrapper.
+			ch, err := p.Stream(t.Context(), CompletionRequest{Model: "m", MaxTokens: tt.reqMaxTokens})
+			if err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			events := collect(t, ch)
+
+			if calls.Load() != 2 {
+				t.Fatalf("calls = %d, want 2 (retry after max_tokens 400)", calls.Load())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			want := []caps{{tt.reqMaxTokens, 0}, {0, tt.wantRetryCap}}
+			if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+				t.Fatalf("token caps across attempts = %v, want %v", got, want)
+			}
+			if got := textOf(events, stream.EventChunk); got != "ok" {
+				t.Fatalf("chunks = %q, want ok", got)
+			}
+			if len(eventsOfType(events, stream.EventError)) != 0 {
+				t.Fatalf("want no error event surfaced after successful retry: %+v", events)
+			}
+		})
+	}
+}
+
 func TestOpenAICompat400WithoutReasoningEffortNoRetry(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
 	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid value for 'temperature'.","type":"invalid_request_error"}}`))
 	})
 
 	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "m"})

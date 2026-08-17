@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,11 +16,17 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/gateway/admin"
 	"github.com/SumonMSelim/timothy/internal/gateway/api"
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/migrations"
+)
+
+const (
+	catalogSyncInterval  = 24 * time.Hour
+	catalogRetryInterval = 15 * time.Minute
 )
 
 const (
@@ -60,9 +67,11 @@ func main() {
 	led := ledger.New(app.DB, app.Log)
 	agg := ledger.NewAggregator(app.DB)
 	budgets := ledger.NewBudgetStore(app.DB)
+	cat := catalog.New(app.Log)
+	go runCatalogSweep(ctx, cat, app.Log)
 	api.Register(app.Server, store, led, app.Log, app.Metrics)
 	api.RegisterUsage(app.Server, agg, budgets)
-	api.RegisterAdmin(app.Server, admin.New(app.DB, store, led, budgets, secrets, app.Log))
+	api.RegisterAdmin(app.Server, admin.New(app.DB, store, led, budgets, secrets, cat, app.Log))
 
 	spendGauge := app.Metrics.NewGaugeVec("spend_usd",
 		"USD spent in the current UTC calendar window.", "window")
@@ -74,6 +83,40 @@ func main() {
 		app.Log.Error("server exited", "error", err)
 		os.Exit(1)
 	}
+}
+
+// runCatalogSweep syncs the model catalog on its own goroutine. The
+// cache starts empty in memory (no DB-backed persistence), so it always
+// syncs once at boot; from then on it retries every 15 minutes while
+// the last sync failed (or never succeeded), else settles into a
+// jittered 24h interval — the jitter keeps a fleet of restarts from all
+// hitting the upstream URL at once.
+func runCatalogSweep(ctx context.Context, cat *catalog.Store, log *slog.Logger) {
+	st := syncCatalogOnce(ctx, cat, log)
+	for {
+		interval := catalogSyncInterval
+		if st.Error != "" {
+			interval = catalogRetryInterval
+		} else {
+			interval += time.Duration(rand.Int64N(int64(10 * time.Minute))) // #nosec G404 -- jitter, not a secret
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+			st = syncCatalogOnce(ctx, cat, log)
+		}
+	}
+}
+
+func syncCatalogOnce(ctx context.Context, cat *catalog.Store, log *slog.Logger) catalog.SyncStatus {
+	st, err := cat.Sync(ctx)
+	if err != nil {
+		log.Warn("model catalog sync failed", "error", err)
+		return st
+	}
+	log.Info("model catalog synced", "entry_count", st.EntryCount)
+	return st
 }
 
 // credentialLookup resolves a credential_ref via the encrypted secret

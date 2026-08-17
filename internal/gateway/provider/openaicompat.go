@@ -183,7 +183,7 @@ type oaiRequest struct {
 	// ReasoningEffort is the D-020 dial. Not every OpenAI-compatible
 	// backend tolerates the field: Ollama returns HTTP 400 for models
 	// that don't recognize it. Stream retries once without it on that
-	// exact failure (see stripReasoningEffortAndRetry).
+	// exact failure (see retryOn400).
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
@@ -231,16 +231,14 @@ func (o *OpenAICompat) Stream(ctx context.Context, req CompletionRequest) (<-cha
 	}
 
 	ch := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
-	if wire.ReasoningEffort == "" {
-		return ch, nil
-	}
 
-	// Some OpenAI-compatible backends (Ollama, for qwen2.5 family
-	// models) reject an unrecognized reasoning_effort field with HTTP
-	// 400 instead of ignoring it. That surfaces as a single permanent
-	// error event with no prior stream activity — retry once with the
-	// field stripped rather than failing the whole turn over a hint.
-	return stripReasoningEffortAndRetry(ctx, o, req, wire, ch), nil
+	// Two known HTTP 400 shapes, both surfacing as a single permanent
+	// error event with no prior stream activity: OpenAI's reasoning
+	// models reject max_tokens (regardless of reasoning_effort), and
+	// some OpenAI-compatible backends (Ollama, qwen2.5 family) reject an
+	// unrecognized reasoning_effort field. Retry once with whichever fix
+	// applies rather than failing the whole turn over either.
+	return retryOn400(ctx, o, req, wire, ch), nil
 }
 
 // buildFor returns the request builder for a fixed, already-marshaled
@@ -260,16 +258,15 @@ func (o *OpenAICompat) buildFor(body []byte) func(ctx context.Context) (*http.Re
 	}
 }
 
-// stripReasoningEffortAndRetry peeks the first event off first. Per
-// the runStream contract, a request-level failure (doWithRetry
-// returning a permanent error) emits exactly one error event and
-// closes the channel — nothing can follow it. So a bare http_400 as
-// that first event is unambiguously "rejected before any stream
-// activity"; retry once with reasoning_effort cleared. Any other first
-// event means relay already ran, so pass everything through
-// unchanged, event by event, keeping the success path streaming live
-// rather than buffering.
-func stripReasoningEffortAndRetry(ctx context.Context, o *OpenAICompat, req CompletionRequest, wire oaiRequest, first <-chan stream.StreamEvent) <-chan stream.StreamEvent {
+// retryOn400 peeks the first event off first. Per the runStream
+// contract, a request-level failure (doWithRetry returning a permanent
+// error) emits exactly one error event and closes the channel —
+// nothing can follow it. So a bare http_400 as that first event is
+// unambiguously "rejected before any stream activity"; retry once with
+// whichever fix the error names. Any other first event means relay
+// already ran, so pass everything through unchanged, event by event,
+// keeping the success path streaming live rather than buffering.
+func retryOn400(ctx context.Context, o *OpenAICompat, req CompletionRequest, wire oaiRequest, first <-chan stream.StreamEvent) <-chan stream.StreamEvent {
 	out := make(chan stream.StreamEvent)
 	go func() {
 		defer close(out)
@@ -280,15 +277,20 @@ func stripReasoningEffortAndRetry(ctx context.Context, o *OpenAICompat, req Comp
 		if isHTTP400(ev) {
 			// Two known 400 shapes, mutually exclusive per backend: OpenAI's
 			// reasoning models reject max_tokens (the error names the
-			// replacement field), everything else here is the Ollama-style
-			// reasoning_effort rejection. Mutate only what the error asked
-			// for, so the other knob survives the retry.
+			// replacement field) regardless of whether reasoning_effort was
+			// sent; everything else here is the Ollama-style
+			// reasoning_effort rejection, which only applies when that field
+			// was actually on the request. Mutate only what the error asked
+			// for, so the other knob survives the retry; if neither
+			// condition matches, there's nothing safe to retry.
 			if ev.Err != nil && strings.Contains(ev.Err.Message, "max_completion_tokens") {
 				retryMaxCompletionTokens(ctx, o, req, wire, out)
 				return
 			}
-			retryReasoningEffortStripped(ctx, o, req, wire, out)
-			return
+			if wire.ReasoningEffort != "" {
+				retryReasoningEffortStripped(ctx, o, req, wire, out)
+				return
+			}
 		}
 		if !emit(ctx, out, ev) {
 			return
@@ -304,9 +306,15 @@ func stripReasoningEffortAndRetry(ctx context.Context, o *OpenAICompat, req Comp
 
 // retryMaxCompletionTokens rebuilds the request with the token cap
 // moved from max_tokens to max_completion_tokens and relays the
-// retried stream to out.
+// retried stream to out. A model that rejects max_tokens is a
+// reasoning model, whose hidden thinking tokens also draw against
+// max_completion_tokens; honoring a tiny caller cap (e.g. an admin
+// connection probe's MaxTokens=1) would guarantee the completion is
+// cut off before any output. Floor the swapped cap at 512, which
+// covers probe-scale requests — real chat callers already pass larger
+// budgets, so this never shrinks a legitimate request.
 func retryMaxCompletionTokens(ctx context.Context, o *OpenAICompat, req CompletionRequest, wire oaiRequest, out chan<- stream.StreamEvent) {
-	wire.MaxCompletionTokens = wire.MaxTokens
+	wire.MaxCompletionTokens = max(wire.MaxTokens, 512)
 	wire.MaxTokens = 0
 	body, err := json.Marshal(wire)
 	if err != nil {

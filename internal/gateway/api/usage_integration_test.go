@@ -115,6 +115,57 @@ func TestHandleTotalsGroupsWholeRangeAsJSON(t *testing.T) {
 	}
 }
 
+// TestHandleUnpricedGroupsByProviderModel covers the new /usage/unpriced
+// handler: unpriced rows (cost NULL) grouped by (provider, model), a
+// priced row and a test-purpose row both excluded.
+func TestHandleUnpricedGroupsByProviderModel(t *testing.T) {
+	u, led := testUsageAPI(t)
+	ctx := t.Context()
+	from := time.Now().UTC().Add(-time.Hour)
+
+	led.Record(ctx, ledger.Entry{
+		Provider: usageMarker + "p1", Model: "m1",
+		Usage: &stream.Usage{InputTokens: 100, OutputTokens: 50}, Status: "ok",
+	})
+	led.Record(ctx, ledger.Entry{
+		Provider: usageMarker + "p1", Model: "m1",
+		Usage: &stream.Usage{InputTokens: 999, OutputTokens: 999}, Status: "ok", Cost: usd(1.0),
+	})
+	led.Record(ctx, ledger.Entry{
+		Provider: usageMarker + "p1", Model: "m1", Purpose: "test",
+		Usage: &stream.Usage{InputTokens: 999999, OutputTokens: 999999}, Status: "ok",
+	})
+
+	to := time.Now().UTC().Add(time.Hour)
+	url := "/internal/admin/usage/unpriced?from=" + from.Format(time.RFC3339) +
+		"&to=" + to.Format(time.RFC3339)
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	w := httptest.NewRecorder()
+	u.handleUnpriced(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var out struct {
+		Groups []ledger.UnpricedGroup `json:"groups"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var got *ledger.UnpricedGroup
+	for i := range out.Groups {
+		if out.Groups[i].Provider == usageMarker+"p1" && out.Groups[i].Model == "m1" {
+			got = &out.Groups[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("provider/model %q/%q missing from groups: %+v", usageMarker+"p1", "m1", out.Groups)
+	}
+	if got.UnpricedInputTokens != 100 || got.UnpricedOutputTokens != 50 {
+		t.Fatalf("groups[p1/m1] = %+v, want 100 in / 50 out (priced and test rows excluded)", got)
+	}
+}
+
 func TestHandleTotalsRejectsUnknownGroup(t *testing.T) {
 	u, _ := testUsageAPI(t)
 	req := httptest.NewRequest(http.MethodGet, "/internal/admin/usage/totals?group=nope", nil)

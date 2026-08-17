@@ -1,17 +1,19 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider, ProviderHealth } from '../../api/types'
 import { ProvidersList } from './ProvidersList'
 
 vi.mock('../../api/client', () => ({
+  catalogStatus: vi.fn(),
   listProviders: vi.fn(),
   patchProvider: vi.fn(),
   providersHealth: vi.fn(),
+  refreshCatalog: vi.fn(),
   testProvider: vi.fn(),
 }))
 
-import { listProviders, providersHealth } from '../../api/client'
+import { catalogStatus, listProviders, providersHealth, refreshCatalog } from '../../api/client'
 
 const apiProvider: AdminProvider = {
   id: 'p1',
@@ -54,6 +56,7 @@ function renderPage() {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(catalogStatus).mockResolvedValue({ fetched_at: null, entry_count: 0, error: '' })
 })
 
 describe('ProvidersList cli row rendering', () => {
@@ -101,5 +104,57 @@ describe('ProvidersList cli row rendering', () => {
 
     await waitFor(() => expect(screen.getByText('healthy')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Test' })).toBeInTheDocument()
+  })
+})
+
+describe('ProvidersList catalog status line', () => {
+  beforeEach(() => {
+    vi.mocked(listProviders).mockResolvedValue([])
+    vi.mocked(providersHealth).mockResolvedValue([])
+  })
+
+  it('shows entry count and never-synced when fetched_at is null', async () => {
+    vi.mocked(catalogStatus).mockResolvedValue({ fetched_at: null, entry_count: 0, error: '' })
+    renderPage()
+
+    expect(await screen.findByText(/Model catalog: 0 models, never synced/)).toBeInTheDocument()
+  })
+
+  it('shows a relative sync time when fetched_at is set', async () => {
+    vi.mocked(catalogStatus).mockResolvedValue({
+      fetched_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      entry_count: 7432,
+      error: '',
+    })
+    renderPage()
+
+    expect(await screen.findByText(/Model catalog: 7,432 models, synced 2h ago/)).toBeInTheDocument()
+  })
+
+  it('shows the last error alongside the status', async () => {
+    vi.mocked(catalogStatus).mockResolvedValue({
+      fetched_at: null,
+      entry_count: 0,
+      error: 'unexpected status 500',
+    })
+    renderPage()
+
+    expect(await screen.findByText(/last refresh failed: unexpected status 500/)).toBeInTheDocument()
+  })
+
+  it('refreshes on button click and shows the updated status', async () => {
+    vi.mocked(catalogStatus).mockResolvedValue({ fetched_at: null, entry_count: 0, error: '' })
+    vi.mocked(refreshCatalog).mockResolvedValue({
+      fetched_at: new Date().toISOString(),
+      entry_count: 100,
+      error: '',
+    })
+    renderPage()
+
+    await screen.findByText(/never synced/)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await waitFor(() => expect(refreshCatalog).toHaveBeenCalled())
+    expect(await screen.findByText(/Model catalog: 100 models, synced/)).toBeInTheDocument()
   })
 })

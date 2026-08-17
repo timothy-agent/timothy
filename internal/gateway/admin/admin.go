@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
@@ -48,6 +49,12 @@ var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true}
 // pasted secret: no spaces, no long opaque blobs.
 var credentialRefPattern = regexp.MustCompile(`^[A-Za-z0-9_./-]{0,128}$`)
 
+// litellmProviderPattern accepts a bare provider token like "xai" or
+// "zai_something" — the same shape LiteLLM's own litellm_provider
+// values take. It never needs to match anything in the live catalog:
+// that catalog syncs and changes independently of this validation.
+var litellmProviderPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 const testTimeout = 20 * time.Second
 
 // Admin mutates routing configuration. store reloads the serving
@@ -59,11 +66,12 @@ type Admin struct {
 	rec     ledger.Recorder
 	budgets *ledger.BudgetStore
 	secrets *secretstore.Store
+	catalog *catalog.Store
 	log     *slog.Logger
 }
 
-func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, secrets *secretstore.Store, log *slog.Logger) *Admin {
-	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, log: log}
+func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, secrets *secretstore.Store, cat *catalog.Store, log *slog.Logger) *Admin {
+	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, catalog: cat, log: log}
 }
 
 // SetSecret pins refName's value to built-in storage regardless of the
@@ -317,8 +325,10 @@ type Provider struct {
 	// production traffic as a fallback.
 	ExcludeFromBootstrap bool `json:"exclude_from_bootstrap"`
 	// Options is an open bag of driver-specific settings; only
-	// reasoning_effort (D-040, openaicompat) and request_timeout (D-041,
-	// a Go duration string like "20m") are recognized today.
+	// reasoning_effort (D-040, openaicompat), request_timeout (D-041, a
+	// Go duration string like "20m"), and litellm_provider (an explicit
+	// override of the catalog's driver/host-inferred candidate pool,
+	// e.g. "xai", "zai") are recognized today.
 	Options map[string]string `json:"options"`
 }
 
@@ -350,6 +360,9 @@ func validateProvider(p Provider) error {
 		return fmt.Errorf("credential_ref must be a name or path (env var, Vault path, AWS profile), never a secret value")
 	}
 	if _, err := parseRequestTimeout(p.Options); err != nil {
+		return err
+	}
+	if err := validateLitellmProvider(p.Options); err != nil {
 		return err
 	}
 	return nil
@@ -398,6 +411,21 @@ func sortedDrivers(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// validateLitellmProvider checks options.litellm_provider, when
+// present, is a non-empty printable token. It never validates against
+// the live catalog — that syncs and changes independently, so a value
+// unrecognized today may be valid tomorrow.
+func validateLitellmProvider(opts map[string]string) error {
+	raw, ok := opts["litellm_provider"]
+	if !ok || raw == "" {
+		return nil
+	}
+	if !litellmProviderPattern.MatchString(raw) {
+		return fmt.Errorf("options.litellm_provider %q must be a non-empty printable token", raw)
+	}
+	return nil
 }
 
 // parseRequestTimeout parses options.request_timeout (D-041) into a
@@ -570,6 +598,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 	}
 	if patch.Options != nil {
 		if _, err := parseRequestTimeout(*patch.Options); err != nil {
+			return err
+		}
+		if err := validateLitellmProvider(*patch.Options); err != nil {
 			return err
 		}
 	}
@@ -1212,6 +1243,17 @@ func (a *Admin) get(ctx context.Context, id string) (Provider, error) {
 	return scanProvider(ctx, db, id, "")
 }
 
+// getByName looks up a provider row by its name column — cost_ledger
+// rows carry the provider's name, not its id, so CatalogPrices resolves
+// a ledger row's provider this way rather than by id.
+func (a *Admin) getByName(ctx context.Context, name string) (Provider, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return Provider{}, fmt.Errorf("admin get by name: %w", err)
+	}
+	return scanProviderByName(ctx, db, name)
+}
+
 // getForUpdate reads a provider row locked FOR UPDATE within tx: the
 // lock is held until the caller commits or rolls back, so a concurrent
 // Patch/Delete on the same row blocks instead of racing on a stale read.
@@ -1230,6 +1272,25 @@ func scanProvider(ctx context.Context, q pgxQuerier, id, lock string) (Provider,
 			&models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
 	if err != nil {
 		return Provider{}, fmt.Errorf("provider %s: %w", id, ErrNotFound)
+	}
+	_ = json.Unmarshal(models, &p.Models)
+	_ = json.Unmarshal(hdrs, &p.Headers)
+	_ = json.Unmarshal(opts, &p.Options)
+	normalizeProvider(&p)
+	return p, nil
+}
+
+func scanProviderByName(ctx context.Context, q pgxQuerier, name string) (Provider, error) {
+	var (
+		p                  Provider
+		models, hdrs, opts []byte
+	)
+	err := q.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
+			models, credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers WHERE name = $1`, name).
+		Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL, &p.DefaultModel,
+			&models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
+	if err != nil {
+		return Provider{}, fmt.Errorf("provider %s: %w", name, ErrNotFound)
 	}
 	_ = json.Unmarshal(models, &p.Models)
 	_ = json.Unmarshal(hdrs, &p.Headers)

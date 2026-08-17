@@ -9,6 +9,11 @@ import type {
   BudgetLimit,
   BudgetStatus,
   CacheRow,
+  CatalogModel,
+  CatalogPrice,
+  CatalogPriceQuery,
+  CatalogSuggestion,
+  CatalogSyncStatus,
   ChainEntry,
   ChatEvent,
   ChatRequest,
@@ -34,6 +39,7 @@ import type {
   SessionUsage,
   TestResult,
   Transcript,
+  UnpricedGroup,
   UsagePoint,
   UsageSummary,
 } from './types'
@@ -515,6 +521,17 @@ export async function usageTotals(
   return totals ?? []
 }
 
+// usageUnpriced returns the (provider, model) pairs with unpriced usage
+// (cost NULL) in range — the pairs Analytics' catalog estimate needs to
+// price, kept per-provider so catalogPrices resolves each pair against
+// that provider's own catalog candidates only.
+export async function usageUnpriced(from: Date, to: Date): Promise<UnpricedGroup[]> {
+  const { groups } = await request<{ groups: UnpricedGroup[] }>(
+    `/v1/admin/usage/unpriced?${rangeParams(from, to)}`,
+  )
+  return groups ?? []
+}
+
 export async function usageSessions(from: Date, to: Date, limit = 10): Promise<SessionUsage[]> {
   const { sessions } = await request<{ sessions: SessionUsage[] }>(
     `/v1/admin/usage/sessions?${rangeParams(from, to, { limit: String(limit) })}`,
@@ -616,6 +633,71 @@ export async function providersHealth(): Promise<ProviderHealth[]> {
     '/v1/admin/providers/health',
   )
   return providers ?? []
+}
+
+// --- model catalog (LiteLLM-synced pricing/context reference, suggest-only) ---
+
+export async function catalogStatus(): Promise<CatalogSyncStatus> {
+  return request<CatalogSyncStatus>('/v1/admin/catalog/status')
+}
+
+export async function refreshCatalog(): Promise<CatalogSyncStatus> {
+  return request<CatalogSyncStatus>('/v1/admin/catalog/refresh', { method: 'POST' })
+}
+
+export async function searchCatalog(
+  q: string,
+  provider = '',
+  limit = 50,
+): Promise<CatalogModel[]> {
+  const params = new URLSearchParams({ q, provider, limit: String(limit) })
+  const { models } = await request<{ models: CatalogModel[] }>(
+    `/v1/admin/catalog/models?${params}`,
+  )
+  return models ?? []
+}
+
+// catalogSuggestions matches a provider's declared models against the
+// synced catalog — suggest-only, the caller applies a chosen
+// suggestion via patchProvider itself.
+export async function catalogSuggestions(providerId: string): Promise<CatalogSuggestion[]> {
+  const { suggestions } = await request<{ suggestions: CatalogSuggestion[] }>(
+    `/v1/admin/providers/${providerId}/catalog-suggestions`,
+  )
+  return suggestions ?? []
+}
+
+// catalogModelsForProvider searches the synced catalog restricted to a
+// provider's candidate litellm_provider(s) (derived server-side from
+// its driver/base_url, or "anthropic" for a kind='cli' claude-cli row)
+// — the model id picker's live suggestion source, replacing the old
+// static modelCatalog.ts. q filters case-insensitive substring on
+// model_key; omitted fetches the provider's whole candidate pool.
+export async function catalogModelsForProvider(
+  providerId: string,
+  q = '',
+): Promise<CatalogModel[]> {
+  const params = new URLSearchParams(q ? { q } : {})
+  const qs = params.size > 0 ? `?${params}` : ''
+  const { models } = await request<{ models: CatalogModel[] }>(
+    `/v1/admin/providers/${providerId}/catalog-models${qs}`,
+  )
+  return models ?? []
+}
+
+// catalogPrices resolves each (provider, model) pair within that
+// PROVIDER's own catalog candidates only (Analytics' unpriced-call
+// estimate) — never the whole catalog, so a model name that collides
+// with another vendor's catalog entry can never borrow that vendor's
+// price. price is null when the provider name is unknown or the model
+// has no match within its candidates.
+export async function catalogPrices(pairs: CatalogPriceQuery[]): Promise<CatalogPrice[]> {
+  if (pairs.length === 0) return []
+  const { prices } = await request<{ prices: CatalogPrice[] }>('/v1/admin/catalog/prices', {
+    method: 'POST',
+    body: JSON.stringify(pairs),
+  })
+  return prices ?? []
 }
 
 // setSecret writes a raw credential value under refName through the

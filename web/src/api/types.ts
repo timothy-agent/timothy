@@ -307,6 +307,17 @@ export interface GroupTotal extends ConvertedMoney {
   unpriced_output_tokens: number
 }
 
+// UnpricedGroup is one (provider, model) pair's unpriced-token totals
+// over a range (GET /v1/admin/usage/unpriced) — grouped by provider
+// alongside model so the catalog estimate (catalogPrices) can resolve
+// each pair against that provider's own catalog candidates only.
+export interface UnpricedGroup {
+  provider: string
+  model: string
+  unpriced_input_tokens: number
+  unpriced_output_tokens: number
+}
+
 // One mission's total ledger footprint. unpriced_requests counts turns
 // whose cost is unknown (NULL in the ledger) — cost_by_currency is
 // then a floor per currency, not the whole bill.
@@ -411,6 +422,71 @@ export interface AdminModel {
   }
 }
 
+// CatalogModel is one model_catalog row (GET /v1/admin/catalog/models)
+// — LiteLLM's synced pricing/context data. Prices are per MILLION
+// tokens (Timothy's convention); absent means unknown, never guessed.
+// id is the id the provider's own API actually accepts: model_key with
+// LiteLLM's namespacing provider prefix stripped server-side
+// (gateway/catalog.StripOwnPrefix) — model_key is kept alongside for
+// reference/debug, but a picker must display and commit id, never
+// model_key.
+export interface CatalogModel {
+  id: string
+  model_key: string
+  litellm_provider: string
+  mode: string
+  max_input_tokens?: number
+  max_output_tokens?: number
+  input_per_mtok?: number
+  output_per_mtok?: number
+  cache_read_per_mtok?: number
+  cache_write_per_mtok?: number
+}
+
+// CatalogPriceQuery is one (provider, model) pair POST
+// /v1/admin/catalog/prices resolves — provider is a providers row's
+// name exactly as recorded in cost_ledger.provider (UnpricedGroup's own
+// field), so a caller reading unpriced usage can pass its rows straight
+// through.
+export interface CatalogPriceQuery {
+  provider: string
+  model: string
+}
+
+// CatalogPrice is one requested (provider, model) pair's resolved
+// catalog price from POST /v1/admin/catalog/prices — provider/model
+// echo the request pair back; price is null when the provider name is
+// unknown or the model has no match within that provider's catalog
+// candidates (never matched against another vendor's catalog rows).
+export interface CatalogPrice extends CatalogPriceQuery {
+  price: Pick<
+    CatalogModel,
+    'input_per_mtok' | 'output_per_mtok' | 'cache_read_per_mtok' | 'cache_write_per_mtok'
+  > | null
+}
+
+// CatalogSyncStatus mirrors the model_catalog_sync singleton row (GET
+// /v1/admin/catalog/status, POST .../refresh).
+export interface CatalogSyncStatus {
+  fetched_at: string | null
+  entry_count: number
+  error: string
+}
+
+// CatalogSuggestion is one of a provider's declared models compared
+// against the catalog (GET /v1/admin/providers/:id/catalog-suggestions)
+// — suggest-only, applying a suggestion goes through the normal
+// patchProvider models update. match is the catalog model_key, absent
+// when unmatched.
+export interface CatalogSuggestion {
+  model_id: string
+  match?: string
+  current_context_window?: number
+  suggested_context_window?: number
+  current_prices?: AdminModel['prices']
+  suggested_prices?: AdminModel['prices']
+}
+
 export interface AdminProvider {
   id: string
   name: string
@@ -427,6 +503,7 @@ export interface AdminProvider {
     request_timeout?: string
     region?: string
     anthropic_base_url?: string
+    litellm_provider?: string
   }
 }
 
