@@ -206,8 +206,11 @@ describe('Analytics unpriced usage', () => {
       },
     ])
     renderPage()
-    const note = await screen.findByText(/had no configured price/)
-    expect(note).toHaveTextContent('≈$8.00 at catalog prices')
+    // The note appears once usageSummary lands, but the estimate is
+    // appended only after the chained catalogPrices fetch resolves —
+    // await the estimate text itself, not the note.
+    const note = await screen.findByText(/≈\$8\.00 at catalog prices/)
+    expect(note).toHaveTextContent('had no configured price')
   })
 
   it('stays silent when every call is priced', async () => {
