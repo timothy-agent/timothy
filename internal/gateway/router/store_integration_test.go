@@ -284,3 +284,67 @@ func TestStoreLoadFailsOnInvalidRequestTimeout(t *testing.T) {
 		t.Fatal("Load succeeded with an invalid request_timeout, want error")
 	}
 }
+
+// insertLedgerRow inserts one cost_ledger row for loadStats fixtures,
+// timestamped now (inside the 60-minute window) so decay weight stays
+// close to 1.
+func insertLedgerRow(t *testing.T, tx pgx.Tx, provider, model, status, purpose string, latencyMS, outputTokens int) {
+	t.Helper()
+	if _, err := tx.Exec(t.Context(), `
+		INSERT INTO cost_ledger (provider, model, route, latency_ms, status, purpose, output_tokens)
+		VALUES ($1, $2, 'itest-route', $3, $4, NULLIF($5, ''), $6)`,
+		provider, model, latencyMS, status, purpose, outputTokens); err != nil {
+		t.Fatalf("insert cost_ledger row: %v", err)
+	}
+}
+
+// TestLoadStats covers the three correctness fixes: error rows must
+// not inflate/deflate the latency or tps average (their weight now
+// only counts in the ok-filtered numerator when it's also in the
+// denominator), and purpose='executor' rows (whole CLI-harness runs
+// booked under gateway provider/model pairs) are excluded entirely.
+func TestLoadStats(t *testing.T) {
+	s := integrationStore(t)
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	_, _ = db.Exec(t.Context(), "DELETE FROM cost_ledger WHERE provider = 'itest-stats-prov'")
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM cost_ledger WHERE provider = 'itest-stats-prov'")
+	})
+
+	tx, err := db.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	// ok row: 100ms/50 output tokens (tps=500). error row: 10000ms,
+	// same output tokens — its latency/tps must not enter the average,
+	// only its weight must count against uptime.
+	insertLedgerRow(t, tx, "itest-stats-prov", "m1", "ok", "", 100, 50)
+	insertLedgerRow(t, tx, "itest-stats-prov", "m1", "error", "", 10000, 50)
+	// executor row: minutes-long CLI run under the same provider/model,
+	// must be ignored entirely.
+	insertLedgerRow(t, tx, "itest-stats-prov", "m1", "ok", "executor", 600000, 1)
+
+	stats, err := loadStats(t.Context(), tx)
+	if err != nil {
+		t.Fatalf("loadStats: %v", err)
+	}
+	st, ok := stats["itest-stats-prov/m1"]
+	if !ok {
+		t.Fatalf("no stats for itest-stats-prov/m1: %+v", stats)
+	}
+	if st.LatencyMS < 95 || st.LatencyMS > 105 {
+		t.Fatalf("LatencyMS = %v, want ~100 (error/executor rows must not inflate it)", st.LatencyMS)
+	}
+	if st.TokensPerS < 490 || st.TokensPerS > 510 {
+		t.Fatalf("TokensPerS = %v, want ~500", st.TokensPerS)
+	}
+	if st.Uptime >= 1 {
+		t.Fatalf("Uptime = %v, want < 1 (error row must still count against uptime)", st.Uptime)
+	}
+}

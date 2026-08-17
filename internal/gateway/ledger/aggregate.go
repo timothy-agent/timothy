@@ -220,6 +220,49 @@ func (a *Aggregator) Totals(ctx context.Context, from, to time.Time, groupBy str
 	return out, rows.Err()
 }
 
+// UnpricedGroup is one (provider, model) pair's unpriced token totals
+// over a range — rows where cost is NULL (D-013: unknown price is
+// recorded as NULL, never guessed), the pairs the dashboard's advisory
+// catalog estimate needs to price. Grouping by provider alongside model
+// matters: the catalog match must stay scoped to the provider that
+// actually served the tokens (CatalogPrices), never matched against the
+// whole catalog where another vendor's model of the same name could
+// carry a different price.
+type UnpricedGroup struct {
+	Provider             string `json:"provider"`
+	Model                string `json:"model"`
+	UnpricedInputTokens  int64  `json:"unpriced_input_tokens"`
+	UnpricedOutputTokens int64  `json:"unpriced_output_tokens"`
+}
+
+// UnpricedByProviderModel returns one row per (provider, model) pair
+// that had unpriced usage (cost IS NULL) in range.
+func (a *Aggregator) UnpricedByProviderModel(ctx context.Context, from, to time.Time) ([]UnpricedGroup, error) {
+	db, err := a.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("usage unpriced: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT provider, model,
+			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+		FROM cost_ledger
+		WHERE ts >= $1 AND ts < $2 AND cost IS NULL AND `+notTest+`
+		GROUP BY provider, model ORDER BY provider, model`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("usage unpriced: %w", err)
+	}
+	defer rows.Close()
+
+	out := []UnpricedGroup{}
+	for rows.Next() {
+		var g UnpricedGroup
+		if err := rows.Scan(&g.Provider, &g.Model, &g.UnpricedInputTokens, &g.UnpricedOutputTokens); err != nil {
+			return nil, fmt.Errorf("usage unpriced: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // MissionUsage totals one mission's ledger footprint — every turn the
 // missions engine ran for it, across all its sessions. Cost is broken
 // out per currency (CostByCurrency) rather than summed into one
@@ -359,6 +402,15 @@ func (a *Aggregator) missionModels(ctx context.Context, db *pgxpool.Pool, missio
 // winner, batched across many missions — the list view's cheaper
 // question. A mission with no ledger rows is simply absent from the
 // result map.
+//
+// A delegated mission has many native brain rows (explore/plan/verify/
+// review/title) but only one executor row (purpose='executor', the
+// harness CLI run) per attempt, so count alone always favors the
+// native model. Any successful executor row (status='ok') outranks
+// count entirely — that's the model that actually did the work — with
+// ties among executor rows broken by recency. A failed executor row
+// (fallback to native) never gets this priority, so a mission whose
+// harness spawn failed still shows the native model.
 func (a *Aggregator) TopModelByMission(ctx context.Context, missionIDs []string) (map[string]ModelUsed, error) {
 	out := map[string]ModelUsed{}
 	if len(missionIDs) == 0 {
@@ -369,12 +421,13 @@ func (a *Aggregator) TopModelByMission(ctx context.Context, missionIDs []string)
 		return nil, fmt.Errorf("top model by mission: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT DISTINCT ON (mission_id) mission_id, provider, model, requests, last_used FROM (
-			SELECT mission_id, provider, model, COUNT(*) AS requests, MAX(ts) AS last_used
+			SELECT mission_id, provider, model, COUNT(*) AS requests, MAX(ts) AS last_used,
+				BOOL_OR(purpose IS NOT DISTINCT FROM 'executor' AND status = 'ok') AS ok_executor
 			FROM cost_ledger
 			WHERE mission_id = ANY($1) AND `+notTest+`
 			GROUP BY mission_id, provider, model
 		) ranked
-		ORDER BY mission_id, requests DESC, last_used DESC`, missionIDs)
+		ORDER BY mission_id, ok_executor DESC, requests DESC, last_used DESC`, missionIDs)
 	if err != nil {
 		return nil, fmt.Errorf("top model by mission: %w", err)
 	}

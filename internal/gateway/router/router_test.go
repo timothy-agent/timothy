@@ -476,7 +476,7 @@ func TestBedrockUnresolvedCredentialRefDegradesNotFails(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
-		DefaultModel: "us.amazon.nova-pro-v1:0",
+		DefaultModel:  "us.amazon.nova-pro-v1:0",
 		CredentialRef: "missing-secret", Enabled: true,
 		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
@@ -503,7 +503,7 @@ func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.
 	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
-		DefaultModel: "us.amazon.nova-pro-v1:0",
+		DefaultModel:  "us.amazon.nova-pro-v1:0",
 		CredentialRef: "bedrock-static", Enabled: true,
 		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
 	}}
@@ -543,7 +543,7 @@ func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
 	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
-		DefaultModel: "us.amazon.nova-pro-v1:0",
+		DefaultModel:  "us.amazon.nova-pro-v1:0",
 		CredentialRef: "bedrock-static", Enabled: true, Region: "ap-southeast-2",
 		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
 	}}
@@ -805,6 +805,41 @@ func TestResolveDetailSingleEntryScored(t *testing.T) {
 	// Sole candidate is its own best price; latency/tps neutral.
 	if !almostEqual(d[0].Score, 0.9+0.02) || !almostEqual(d[0].NormPrice, 1) {
 		t.Fatalf("solo score = %+v", d[0])
+	}
+}
+
+// A chain entry with no model of its own serves the provider's
+// DefaultModel — prices and stats must be looked up under that
+// resolved model, not the empty raw entry model, or a default-model
+// entry always shows unpriced/no-data and scores neutrally regardless
+// of real ledger history.
+func TestResolveDetailEmptyModelUsesDefaultModelForPricesAndStats(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "defaulted", Kind: "api", Driver: "openaicompat",
+			BaseURL: "https://a.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true,
+			Models: []ModelInfo{{ID: "m1", Prices: &ModelPrices{OutputPerMTok: 5}}}},
+	}
+	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
+		{ProviderID: "p1", Model: ""},
+	}}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap.SetStats(map[string]ModelStats{
+		"defaulted/m1": {Uptime: 0.9, LatencyMS: 500, TokensPerS: 20},
+	})
+
+	d := snap.ResolveDetail("r")
+	if len(d) != 1 {
+		t.Fatalf("detail = %+v", d)
+	}
+	if d[0].Model != "m1" {
+		t.Fatalf("Model = %q, want defaulted m1", d[0].Model)
+	}
+	if d[0].OutputPerMTok != 5 {
+		t.Fatalf("OutputPerMTok = %v, want 5 (from default model's price row)", d[0].OutputPerMTok)
+	}
+	if d[0].Uptime != 0.9 || d[0].LatencyMS != 500 || d[0].TokensPerS != 20 {
+		t.Fatalf("stats not resolved via default model: %+v", d[0])
 	}
 }
 

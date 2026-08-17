@@ -471,15 +471,17 @@ func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 		if d.Model == "" {
 			d.Model = row.DefaultModel
 		}
-		// Stats and prices are keyed by the raw entry model — same
-		// lookup Resolve's scoring has always used.
-		if p := s.Prices(row.Name, e.Model); p != nil && p.OutputPerMTok > 0 {
+		// Stats and prices are keyed by the resolved model (d.Model,
+		// defaulted above) — an entry with no model of its own serves
+		// row.DefaultModel, and that's what the ledger and price rows
+		// are keyed by.
+		if p := s.Prices(row.Name, d.Model); p != nil && p.OutputPerMTok > 0 {
 			d.OutputPerMTok = p.OutputPerMTok
 			if minPrice == 0 || d.OutputPerMTok < minPrice {
 				minPrice = d.OutputPerMTok
 			}
 		}
-		if st, ok := s.stats[row.Name+"/"+e.Model]; ok {
+		if st, ok := s.stats[row.Name+"/"+d.Model]; ok {
 			d.Uptime = st.Uptime
 			d.LatencyMS = st.LatencyMS
 			d.TokensPerS = st.TokensPerS

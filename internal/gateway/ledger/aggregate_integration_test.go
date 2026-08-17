@@ -359,6 +359,58 @@ func TestAggregateTotalsGroupsWholeRangeExcludingTest(t *testing.T) {
 	}
 }
 
+// TestAggregateUnpricedByProviderModel covers the grouping the
+// dashboard's advisory catalog estimate needs: unpriced rows (cost
+// NULL) summed per (provider, model) pair, never collapsed across
+// providers even when two providers happen to serve a model of the
+// same name — a priced row for the same pair, a test-purpose row, and
+// an unrelated priced provider must all be excluded.
+func TestAggregateUnpricedByProviderModel(t *testing.T) {
+	agg, led := testAggregator(t)
+	ctx := t.Context()
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+
+	rows := []Entry{
+		// Unpriced, provider a.
+		{Provider: aggMarker + "a", Model: "shared-model",
+			Usage: &stream.Usage{InputTokens: 100, OutputTokens: 50}, Status: "ok"},
+		{Provider: aggMarker + "a", Model: "shared-model",
+			Usage: &stream.Usage{InputTokens: 20, OutputTokens: 10}, Status: "ok"},
+		// Unpriced, provider b, same model name — must stay its own row.
+		{Provider: aggMarker + "b", Model: "shared-model",
+			Usage: &stream.Usage{InputTokens: 5, OutputTokens: 2}, Status: "ok"},
+		// Priced row for provider a's model — excluded from the sum.
+		{Provider: aggMarker + "a", Model: "shared-model",
+			Usage: &stream.Usage{InputTokens: 999, OutputTokens: 999}, Status: "ok", Cost: usd(1.0)},
+		// Test-connection probe — excluded regardless of cost.
+		{Provider: aggMarker + "a", Model: "shared-model", Purpose: "test",
+			Usage: &stream.Usage{InputTokens: 999999, OutputTokens: 999999}, Status: "ok"},
+	}
+	for _, e := range rows {
+		led.Record(ctx, e)
+	}
+	from, to := base, time.Now().UTC().Add(time.Hour)
+
+	groups, err := agg.UnpricedByProviderModel(ctx, from, to)
+	if err != nil {
+		t.Fatalf("UnpricedByProviderModel: %v", err)
+	}
+	byProvider := map[string]UnpricedGroup{}
+	for _, g := range groups {
+		if g.Model == "shared-model" {
+			byProvider[g.Provider] = g
+		}
+	}
+	a, ok := byProvider[aggMarker+"a"]
+	if !ok || a.UnpricedInputTokens != 120 || a.UnpricedOutputTokens != 60 {
+		t.Fatalf("groups[a] = %+v, want 120 in / 60 out (the two unpriced rows only)", a)
+	}
+	b, ok := byProvider[aggMarker+"b"]
+	if !ok || b.UnpricedInputTokens != 5 || b.UnpricedOutputTokens != 2 {
+		t.Fatalf("groups[b] = %+v, want its own row, never folded into a's", b)
+	}
+}
+
 func TestAggregateMissionUsage(t *testing.T) {
 	agg, led := testAggregator(t)
 	ctx := t.Context()
@@ -611,6 +663,61 @@ func TestAggregateTopModelByMission(t *testing.T) {
 	empty, err := agg.TopModelByMission(ctx, nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("TopModelByMission(nil) = %+v, %v, want empty map and no error", empty, err)
+	}
+}
+
+// TestAggregateTopModelByMissionDelegated confirms a successful
+// executor row always wins the mission list badge over native brain
+// rows, regardless of count — the harness model is the one that
+// actually did the work — but a failed executor row (harness spawn
+// fell back to native) leaves the count ranking untouched.
+func TestAggregateTopModelByMissionDelegated(t *testing.T) {
+	agg, led := testAggregator(t)
+	ctx := t.Context()
+	missionOK := aggMarker + "top-model-delegated-ok"
+	missionFailed := aggMarker + "top-model-delegated-failed"
+
+	rows := []Entry{
+		// Mission with a successful delegation: 5 native rows on model
+		// A must still lose to the single successful executor row on
+		// model B.
+		{Provider: aggMarker + "native", Model: "model-a", Route: "coding", MissionID: missionOK,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "native", Model: "model-a", Route: "coding", MissionID: missionOK,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "native", Model: "model-a", Route: "coding", MissionID: missionOK,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "native", Model: "model-a", Route: "coding", MissionID: missionOK,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "native", Model: "model-a", Route: "coding", MissionID: missionOK,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "harness", Model: "model-b", Route: "coding", MissionID: missionOK, Purpose: "executor",
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.02)},
+		// Mission whose harness spawn failed: the sole executor row is
+		// an error, so it must not out-rank the native model.
+		{Provider: aggMarker + "native", Model: "model-c", Route: "coding", MissionID: missionFailed,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "native", Model: "model-c", Route: "coding", MissionID: missionFailed,
+			Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}, LatencyMS: 100, Status: "ok", Cost: usd(0.01)},
+		{Provider: aggMarker + "harness", Model: "model-d", Route: "coding", MissionID: missionFailed, Purpose: "executor",
+			Status: "error", ErrorCode: "auth_failed"},
+	}
+	for _, e := range rows {
+		led.Record(ctx, e)
+	}
+
+	got, err := agg.TopModelByMission(ctx, []string{missionOK, missionFailed})
+	if err != nil {
+		t.Fatalf("TopModelByMission: %v", err)
+	}
+	ok, exists := got[missionOK]
+	if !exists || ok.Provider != aggMarker+"harness" || ok.Model != "model-b" {
+		t.Fatalf("delegated mission top model = %+v (ok=%v), want the successful executor row provider=%s model=model-b",
+			ok, exists, aggMarker+"harness")
+	}
+	failed, exists := got[missionFailed]
+	if !exists || failed.Provider != aggMarker+"native" || failed.Model != "model-c" {
+		t.Fatalf("mission with failed executor row top model = %+v (ok=%v), want native model-c to win", failed, exists)
 	}
 }
 

@@ -203,13 +203,19 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 // provider+model with exponential time decay (τ = 30 min), so scored
 // strategies react to recent reality without whiplashing on one bad
 // request. Test probes are excluded — a connection test is not
-// serving traffic.
+// serving traffic. Executor runs (purpose='executor') are excluded
+// too — those are whole CLI-harness invocations booked under the same
+// provider/model as gateway traffic, with latency spanning minutes and
+// near-zero tps, not comparable to a served chat request. Latency and
+// tps average only over status='ok' rows — an error row's weight
+// would otherwise inflate/deflate the average without ever landing in
+// its denominator; uptime alone counts every row, ok or not.
 func loadStats(ctx context.Context, tx pgx.Tx) (map[string]ModelStats, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT provider, model,
 		       COALESCE(SUM(CASE WHEN status = 'ok' THEN w END) / NULLIF(SUM(w), 0), 0),
-		       COALESCE(SUM(w * latency_ms) / NULLIF(SUM(CASE WHEN status = 'ok' THEN w END), 0), 0),
-		       COALESCE(SUM(w * tps) / NULLIF(SUM(CASE WHEN status = 'ok' THEN w END), 0), 0)
+		       COALESCE(SUM(CASE WHEN status = 'ok' THEN w * latency_ms END) / NULLIF(SUM(CASE WHEN status = 'ok' THEN w END), 0), 0),
+		       COALESCE(SUM(CASE WHEN status = 'ok' THEN w * tps END) / NULLIF(SUM(CASE WHEN status = 'ok' THEN w END), 0), 0)
 		FROM (
 			SELECT provider, model, status, latency_ms,
 			       COALESCE(output_tokens, 0) * 1000.0 / GREATEST(latency_ms, 1) AS tps,
@@ -217,6 +223,7 @@ func loadStats(ctx context.Context, tx pgx.Tx) (map[string]ModelStats, error) {
 			FROM cost_ledger
 			WHERE ts > now() - interval '60 minutes'
 			  AND purpose IS DISTINCT FROM 'test'
+			  AND purpose IS DISTINCT FROM 'executor'
 		) recent
 		GROUP BY provider, model`)
 	if err != nil {
