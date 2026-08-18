@@ -44,6 +44,7 @@ import {
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
 import { OpenAIIcon } from '../components/icons/OpenAIIcon'
+import { OpenCodeIcon } from '../components/icons/OpenCodeIcon'
 import { PiIcon } from '../components/icons/PiIcon'
 import { envIcon } from '../components/icons/EnvIcons'
 import { Badge } from '../components/ui/badge'
@@ -161,6 +162,7 @@ const harnessDisplayNames: Record<string, string> = {
   'claude-cli': 'Claude Code',
   pi: 'pi',
   'codex-cli': 'Codex CLI',
+  opencode: 'OpenCode',
 }
 
 function harnessDisplayName(harness: string): string {
@@ -172,6 +174,7 @@ function harnessDisplayName(harness: string): string {
 function HarnessIcon({ harness }: { harness: string }) {
   if (harness === 'pi') return <PiIcon />
   if (harness === 'codex-cli') return <OpenAIIcon />
+  if (harness === 'opencode') return <OpenCodeIcon />
   return <ClaudeCodeIcon />
 }
 

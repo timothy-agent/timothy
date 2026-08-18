@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":1787010333397,"sessionID":"ses_SESSION01","part":{"id":"prt_PART01","messageID":"msg_MESSAGE01","sessionID":"ses_SESSION01","type":"step-start"}}
+{"type":"text","timestamp":1787010334480,"sessionID":"ses_SESSION01","part":{"id":"prt_PART02","messageID":"msg_MESSAGE01","sessionID":"ses_SESSION01","type":"text","text":"VERDICT: {\"status\":\"DONE\",\"note\":\"all checks passed\"}","time":{"start":1787010334179,"end":1787010334468}}}
+{"type":"step_finish","timestamp":1787010334480,"sessionID":"ses_SESSION01","part":{"id":"prt_PART03","reason":"stop","messageID":"msg_MESSAGE01","sessionID":"ses_SESSION01","type":"step-finish","tokens":{"total":6267,"input":6212,"output":55,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}

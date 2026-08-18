@@ -85,22 +85,24 @@ type ChainEntry struct {
 // CLIs live in brain (internal/brain/missions/executor); the gateway
 // only validates names and wire-format compatibility, never runs a
 // subprocess itself.
-var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true}
+var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true, "opencode": true}
 
 // harnessDrivers names the set of driver names each known harness
 // accepts directly from its provider row — checked by both admin
 // validation and the resolve endpoint's executor gate so the two can
 // never disagree. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat natively (its whole point is dual-wire
-// support); codex-cli speaks openaicompat only (its own responses wire).
+// support); codex-cli and opencode speak openaicompat only (codex's own
+// responses wire; opencode's config-file baseURL).
 // Independent of this set, the anthropic_base_url override (D-051)
 // always satisfies claude-cli/pi, since it exposes an anthropic-format
-// endpoint regardless of the row's own driver — codex-cli has no such
-// override, since it never speaks anthropic.
+// endpoint regardless of the row's own driver — codex-cli/opencode have
+// no such override, since neither speaks anthropic.
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
+	"opencode":   {"openaicompat": true},
 }
 
 // RouteRow mirrors one routes table row. Strategy picks the chain
