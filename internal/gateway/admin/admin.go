@@ -373,11 +373,13 @@ func validateProvider(p Provider) error {
 // kind='api' provider row, independent of the anthropic_base_url
 // override. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat (its whole point is dual-wire support);
-// codex-cli speaks openaicompat only (its own responses wire).
+// codex-cli and opencode speak openaicompat only (codex's own responses
+// wire; opencode's config-file baseURL).
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
+	"opencode":   {"openaicompat": true},
 }
 
 // validateHarnessWireFormat checks that a kind='api' provider row can
@@ -386,7 +388,7 @@ var harnessDrivers = map[string]map[string]bool{
 // check exactly so admin can never write a provider the resolve
 // endpoint would then mark wire-incompatible: the row's driver must be
 // in harnessDrivers[harness], or — only for a harness that accepts the
-// anthropic wire at all (codex-cli never does) — options.
+// anthropic wire at all (codex-cli/opencode never do) — options.
 // anthropic_base_url must point at an Anthropic-compatible endpoint.
 // Never called for kind='cli' rows — those are inherently
 // wire-compatible (D-051, see validateProvider's "cli" case).

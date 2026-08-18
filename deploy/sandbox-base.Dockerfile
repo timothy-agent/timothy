@@ -44,6 +44,11 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g --ignore-scripts @earendil-works
 # bump both together.
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @openai/codex@0.147.0
 
+# Headless opencode CLI, same rationale as claude/pi/codex above. Pin
+# matches internal/brain/missions/executor/testdata/opencode-1.18.18 -
+# bump both together.
+RUN NPM_CONFIG_PREFIX=/usr/local npm install -g opencode-ai@1.18.18
+
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in
 # nobody has HOME=/nonexistent, which breaks pip/npm; give it a real,

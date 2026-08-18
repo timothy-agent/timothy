@@ -78,6 +78,12 @@ var execEnvAllowlist = map[string]bool{
 	"PI_OFFLINE":            true,
 	"PI_SKIP_VERSION_CHECK": true,
 	"PI_TELEMETRY":          true,
+	// opencode adapter env (executor/opencode.go): OPENCODE_API_KEY is
+	// the credential the config file's "{env:OPENCODE_API_KEY}"
+	// template resolves; OPENCODE_CONFIG points opencode at the config
+	// file the adapter wrote into the run dir.
+	"OPENCODE_API_KEY": true,
+	"OPENCODE_CONFIG":  true,
 }
 
 // execEnvMaxValueLen bounds a single env value — generous for a token
