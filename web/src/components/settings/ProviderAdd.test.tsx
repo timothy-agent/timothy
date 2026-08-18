@@ -1,18 +1,23 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChatError } from '../../api/client'
 import type { AdminProvider } from '../../api/types'
 import { ProviderAdd } from './ProviderAdd'
 
-vi.mock('../../api/client', () => ({
-  createProvider: vi.fn(),
-  listProviders: vi.fn(),
-  listSecretBackends: vi.fn(),
-  listSecretRefs: vi.fn(),
-  searchCatalog: vi.fn(),
-  setSecret: vi.fn(),
-  validateProvider: vi.fn(),
-}))
+vi.mock('../../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/client')>()
+  return {
+    ...actual,
+    createProvider: vi.fn(),
+    listProviders: vi.fn(),
+    listSecretBackends: vi.fn(),
+    listSecretRefs: vi.fn(),
+    searchCatalog: vi.fn(),
+    setSecret: vi.fn(),
+    validateProvider: vi.fn(),
+  }
+})
 
 import {
   createProvider,
@@ -457,5 +462,35 @@ describe('ProviderAdd anthropic auth folding', () => {
 
     expect(await screen.findByText(/claude setup-token/)).toBeInTheDocument()
     expect(screen.getByText(/long-lived/)).toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd Timothy auth failures', () => {
+  it('does not paint a 401 as a failed provider probe', async () => {
+    vi.mocked(setSecret).mockRejectedValue(
+      new ChatError(401, 'missing or invalid bearer token', 'unauthorized'),
+    )
+
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect(screen.queryByText(/Failed after 0 ms/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/missing or invalid bearer token/)).not.toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(validateProvider).not.toHaveBeenCalled()
+  })
+
+  it('does not paint brain\'s bearer message when the error has no status', async () => {
+    vi.mocked(setSecret).mockRejectedValue(new Error('missing or invalid bearer token'))
+
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect(screen.queryByText(/Failed after 0 ms/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/missing or invalid bearer token/)).not.toBeInTheDocument()
   })
 })

@@ -16,6 +16,7 @@ vi.mock('../api/client', () => ({
       this.code = code
     }
   },
+  errorText: (err: unknown) => (err instanceof Error ? err.message : String(err)),
   chatStream: vi.fn(),
   retryStream: vi.fn(),
   streamLive: vi.fn(),

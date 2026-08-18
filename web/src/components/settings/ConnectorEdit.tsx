@@ -24,7 +24,7 @@ import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Field, Toggle } from './shared'
-import { errText } from './util'
+import { errText, isTimothyAuthError } from './util'
 
 export function ConnectorEdit() {
   const { id } = useParams()
@@ -66,6 +66,10 @@ export function ConnectorEdit() {
     try {
       setTest(await testConnector(connector.id))
     } catch (err) {
+      if (isTimothyAuthError(err)) {
+        setTest(null)
+        return
+      }
       setTest({ ok: false, error: errText(err) })
     } finally {
       setTesting(false)

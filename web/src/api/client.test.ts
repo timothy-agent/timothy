@@ -1,22 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  acknowledgeNeedToken,
   ChatError,
   chatStream,
   consumeTokenFragment,
   createSSEParser,
   downloadMissionFile,
+  errorText,
   getToken,
+  isTimothyAuthError,
   listMissionFiles,
   listProviders,
   listSessions,
   openMissionPR,
   patchBudget,
   pushMission,
+  subscribeNeedToken,
+  timothyAuthErrorMessage,
   usageBudget,
 } from './client'
 import type { ChatEvent } from './types'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  acknowledgeNeedToken()
+})
 
 describe('consumeTokenFragment', () => {
   afterEach(() => {
@@ -244,6 +252,79 @@ describe('listProviders', () => {
 
     expect(p.models).toEqual([])
     expect(p.headers).toEqual({})
+  })
+})
+
+describe('Timothy auth errors', () => {
+  function stub401() {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: 'unauthorized', message: 'missing or invalid bearer token' }), {
+          status: 401,
+        }),
+      ),
+    )
+  }
+
+  it('notifies subscribers on a 401 from request()', async () => {
+    stub401()
+    const listener = vi.fn()
+    const stop = subscribeNeedToken(listener)
+
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+    expect(listener).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('replays a pending 401 to a late subscriber', async () => {
+    stub401()
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+
+    const listener = vi.fn()
+    const stop = subscribeNeedToken(listener)
+    expect(listener).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('does not notify on a non-auth failure', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'boom', message: 'nope' }), { status: 500 })),
+    )
+    const listener = vi.fn()
+    const stop = subscribeNeedToken(listener)
+
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+    expect(listener).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('does not replay after acknowledgeNeedToken', async () => {
+    stub401()
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+    acknowledgeNeedToken()
+
+    const listener = vi.fn()
+    const stop = subscribeNeedToken(listener)
+    expect(listener).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('maps 401 onto a message that names TIMOTHY_API_TOKEN, not the provider key', () => {
+    const err = new ChatError(401, 'missing or invalid bearer token', 'unauthorized')
+    expect(isTimothyAuthError(err)).toBe(true)
+    expect(errorText(err)).toBe(timothyAuthErrorMessage)
+    expect(errorText(err)).toMatch(/TIMOTHY_API_TOKEN/)
+    expect(errorText(err)).not.toBe('missing or invalid bearer token')
+  })
+
+  it('maps auth_not_configured the same way', () => {
+    const err = new ChatError(503, 'TIMOTHY_API_TOKEN is not set', 'auth_not_configured')
+    expect(isTimothyAuthError(err)).toBe(true)
+    expect(errorText(err)).toBe(timothyAuthErrorMessage)
   })
 })
 

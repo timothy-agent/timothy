@@ -15,7 +15,7 @@ import { Button } from '../ui/button'
 import { matchPreset, providerPresets } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Toggle } from './shared'
-import { errText } from './util'
+import { errText, humanizeProbeDetail, isTimothyAuthDetail, isTimothyAuthError, timothyAuthErrorMessage } from './util'
 
 export function ProvidersList() {
   const [providers, setProviders] = useState<AdminProvider[]>([])
@@ -109,8 +109,17 @@ function ProviderCard({
     setTesting(true)
     setTest(null)
     try {
-      setTest(await testProvider(provider.id))
+      const res = await testProvider(provider.id)
+      if (!res.ok && isTimothyAuthDetail(res.detail)) {
+        setTest(null)
+        return
+      }
+      setTest(res)
     } catch (err) {
+      if (isTimothyAuthError(err)) {
+        setTest(null)
+        return
+      }
       setTest({ ok: false, latency_ms: 0, model: '', detail: errText(err) })
     } finally {
       setTesting(false)
@@ -159,7 +168,11 @@ function ProviderCard({
         <div
           className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
         >
-          {test.ok ? `OK, ${test.latency_ms} ms` : `Failed: ${test.detail}`}
+          {test.ok
+            ? `OK, ${test.latency_ms} ms`
+            : isTimothyAuthDetail(test.detail)
+              ? timothyAuthErrorMessage
+              : `Failed: ${humanizeProbeDetail(test.detail ?? '')}`}
         </div>
       )}
 

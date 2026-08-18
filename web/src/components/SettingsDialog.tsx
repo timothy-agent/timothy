@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getToken, setToken } from '../api/client'
+import { acknowledgeNeedToken, getToken, setToken } from '../api/client'
 import { Button } from './ui/button'
 import {
   Dialog,
@@ -27,8 +27,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            The API token authenticates this browser against your Timothy instance. It is stored
-            locally, never sent anywhere else.
+            Paste the TIMOTHY_API_TOKEN from deploy/.env. This authenticates the browser against
+            your Timothy instance — it is not an LLM provider API key.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">
@@ -49,6 +49,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <Button
             onClick={() => {
               setToken(value)
+              acknowledgeNeedToken()
               onClose()
             }}
           >

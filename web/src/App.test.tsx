@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { acknowledgeNeedToken } from './api/client'
 import App from './App'
 
 // App wires in a lot of background polling (sessions, pending memories,
@@ -26,6 +27,7 @@ afterEach(() => {
   cleanup()
   localStorage.clear()
   vi.unstubAllGlobals()
+  acknowledgeNeedToken()
 })
 
 function renderAt(initialEntry: string) {
@@ -68,5 +70,22 @@ describe('Settings sidebar submenu', () => {
   it('is collapsed by default off a settings route', () => {
     renderAt('/memory')
     expect(screen.queryByRole('link', { name: 'Providers' })).toBeNull()
+  })
+})
+
+describe('API token dialog', () => {
+  it('opens when a request is unauthorized', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: 'unauthorized', message: 'missing or invalid bearer token' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+    renderAt('/settings/providers')
+    expect(await screen.findByLabelText('API token')).toBeTruthy()
+    expect(screen.getByText(/not an LLM provider API key/)).toBeTruthy()
   })
 })

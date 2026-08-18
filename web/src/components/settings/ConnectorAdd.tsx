@@ -18,7 +18,7 @@ import { connectorPresets } from './connectorPresets'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, secretDestination } from './util'
+import { errText, isTimothyAuthError, secretDestination } from './util'
 
 // slugify turns a display name into a connector name (tool-name
 // prefix): lowercase slug, the backend rejects anything else.
@@ -140,6 +140,10 @@ export function ConnectorAdd() {
       setCreatedID(id)
       setTest(await testConnector(id))
     } catch (err) {
+      if (isTimothyAuthError(err)) {
+        setTest(null)
+        return
+      }
       setTest({ ok: false, error: errText(err) })
     } finally {
       setBusy(false)

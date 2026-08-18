@@ -122,6 +122,50 @@ export class ChatError extends Error {
   }
 }
 
+// Timothy's own bearer (TIMOTHY_API_TOKEN), not an LLM provider key.
+// 401 is a stale/wrong token; auth_not_configured is an unset one.
+export function isTimothyAuthError(err: unknown): boolean {
+  return err instanceof ChatError && (err.status === 401 || err.code === 'auth_not_configured')
+}
+
+export const timothyAuthErrorMessage =
+  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env — this is not an LLM provider key."
+
+export function errorText(err: unknown): string {
+  if (isTimothyAuthError(err)) return timothyAuthErrorMessage
+  return err instanceof Error ? err.message : String(err)
+}
+
+// subscribeNeedToken lets the app shell reopen the token dialog on any
+// 401, including pages that never received Chat's onNeedToken callback.
+// A failure before App has subscribed is kept pending and replayed so
+// a child effect that 401s on mount is not lost (React runs child
+// effects before parent effects).
+const needTokenListeners = new Set<() => void>()
+let pendingNeedToken = false
+
+export function subscribeNeedToken(listener: () => void): () => void {
+  needTokenListeners.add(listener)
+  if (pendingNeedToken) listener()
+  return () => {
+    needTokenListeners.delete(listener)
+  }
+}
+
+export function acknowledgeNeedToken() {
+  pendingNeedToken = false
+}
+
+function emitNeedToken() {
+  pendingNeedToken = true
+  for (const listener of needTokenListeners) listener()
+}
+
+function failChat(status: number, message: string, code?: string, sessionId?: string): never {
+  if (status === 401 || code === 'auth_not_configured') emitNeedToken()
+  throw new ChatError(status, message, code, sessionId)
+}
+
 export interface ChatStreamOptions {
   signal?: AbortSignal
   // Fired as soon as the response headers arrive: the session id is
@@ -195,7 +239,7 @@ export async function streamLive(
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `live stream failed (${res.status})`, code)
+    failChat(res.status, message || `live stream failed (${res.status})`, code)
   }
 
   const reader = res.body.getReader()
@@ -240,7 +284,7 @@ async function postSSE(
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `chat failed (${res.status})`, code, sessionId)
+    failChat(res.status, message || `chat failed (${res.status})`, code, sessionId)
   }
 
   const headerSession = res.headers.get('X-Session-Id')
@@ -279,7 +323,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `request failed (${res.status})`, code)
+    failChat(res.status, message || `request failed (${res.status})`, code)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
@@ -369,7 +413,7 @@ export async function transcribe(blob: Blob, language?: string): Promise<string>
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `transcribe failed (${res.status})`)
+    failChat(res.status, message || `transcribe failed (${res.status})`)
   }
   const { text } = (await res.json()) as { text: string }
   return text
@@ -404,7 +448,7 @@ export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `upload failed (${res.status})`)
+    failChat(res.status, message || `upload failed (${res.status})`)
   }
   return (await res.json()) as AttachmentUpload
 }
@@ -417,7 +461,7 @@ export async function fetchAttachmentBlob(id: string): Promise<Blob> {
     headers: { Authorization: `Bearer ${getToken()}` },
   })
   if (!res.ok) {
-    throw new ChatError(res.status, `request failed (${res.status})`)
+    failChat(res.status, `request failed (${res.status})`)
   }
   return res.blob()
 }
@@ -911,7 +955,7 @@ export async function uploadKbDocument(collectionId: string, file: File): Promis
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `upload failed (${res.status})`)
+    failChat(res.status, message || `upload failed (${res.status})`)
   }
   return (await res.json()) as KbDocument
 }
@@ -1277,7 +1321,7 @@ async function fetchBlobDownload(path: string, fallbackName: string): Promise<vo
     } catch {
       // Non-JSON error body: keep the raw text.
     }
-    throw new ChatError(res.status, message || `request failed (${res.status})`, code)
+    failChat(res.status, message || `request failed (${res.status})`, code)
   }
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
@@ -1320,7 +1364,7 @@ export async function fetchMissionFileBlob(id: string, path: string): Promise<Bl
     headers: { Authorization: `Bearer ${getToken()}` },
   })
   if (!res.ok) {
-    throw new ChatError(res.status, `request failed (${res.status})`)
+    failChat(res.status, `request failed (${res.status})`)
   }
   const len = res.headers.get('Content-Length')
   if (len && Number(len) > missionFilePreviewCap) {

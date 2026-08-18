@@ -14,7 +14,7 @@ import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, secretDestination, stripPaste } from './util'
+import { errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, secretDestination, stripPaste } from './util'
 
 // refFor derives a credential ref for a named provider instance: the
 // preset's conventional storage-key name, or one from the user's name.
@@ -279,11 +279,23 @@ export function ProviderAdd() {
         ...(isBedrock ? { options: { region } } : {}),
       }
       const res = await validateProvider(config, model.trim())
+      if (!res.ok && isTimothyAuthDetail(res.detail)) {
+        setTest(null)
+        setTested(false)
+        return
+      }
       setTest(res)
       setTested(res.ok)
     } catch (err) {
-      setTest({ ok: false, latency_ms: 0, model: model.trim(), detail: errText(err) })
       setTested(false)
+      // Timothy's own bearer failed — App opens the token dialog.
+      // Do not paint this as a provider probe miss (0 ms + the raw
+      // "missing or invalid bearer token" string).
+      if (isTimothyAuthError(err)) {
+        setTest(null)
+        return
+      }
+      setTest({ ok: false, latency_ms: 0, model: model.trim(), detail: errText(err) })
     } finally {
       setBusy(false)
     }
@@ -686,7 +698,7 @@ export function ProviderAdd() {
                 : tested
                   ? `OK, ${test?.model} answered in ${test?.latency_ms} ms.`
                   : test && !test.ok
-                    ? `Failed after ${test.latency_ms} ms: ${test.detail}`
+                    ? probeFailureText(test)
                     : 'Not tested yet, run a test before adding.'}
             </span>
             <Button size="sm" variant="test" disabled={busy} onClick={() => void runTest()}>

@@ -5,6 +5,7 @@ import {
   answerPermission,
   ChatError,
   chatStream,
+  errorText,
   getTranscript,
   retryStream,
   setSessionKnowledge,
@@ -172,7 +173,7 @@ export function Chat({
       .catch((err: unknown) => {
         if (stale) return
         if (err instanceof ChatError && (err.status === 401 || err.status === 503)) onNeedToken()
-        setLoadError(err instanceof Error ? err.message : String(err))
+        setLoadError(errorText(err))
       })
     return () => {
       stale = true
@@ -411,8 +412,10 @@ export function Chat({
       if (err instanceof ChatError) {
         // Brain may have created the session before failing: keep it.
         if (err.sessionId) adoptSession(err.sessionId)
-        if (err.status === 401 || err.status === 503) onNeedToken()
-        else if (err.status === 409 && err.code === 'turn_in_flight') {
+        if (err.status === 401 || err.status === 503) {
+          onNeedToken()
+          updateLast((m) => ({ ...m, streaming: false, error: errorText(err) }))
+        } else if (err.status === 409 && err.code === 'turn_in_flight') {
           // Lost the race to a turn already running elsewhere (another
           // tab, a retry) — not a failure, just attach to it like a
           // page reload mid-turn would. attachLive owns streaming/abort
@@ -493,8 +496,10 @@ export function Chat({
     } catch (err) {
       if (controller.signal.aborted) return
       if (err instanceof ChatError) {
-        if (err.status === 401 || err.status === 503) onNeedToken()
-        else if (err.status === 409 && err.code === 'turn_in_flight') {
+        if (err.status === 401 || err.status === 503) {
+          onNeedToken()
+          updateLast((m) => ({ ...m, streaming: false, error: errorText(err) }))
+        } else if (err.status === 409 && err.code === 'turn_in_flight') {
           // Same handoff as sendMessage: a turn is already running
           // (another tab's send/retry won the race) — attach to it
           // instead of showing a failure. attachLive owns

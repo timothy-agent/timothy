@@ -7,7 +7,7 @@ import { Button } from '../ui/button'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Toggle } from './shared'
-import { errText } from './util'
+import { errText, isTimothyAuthError } from './util'
 
 export function ConnectorsList() {
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
@@ -126,6 +126,10 @@ function ConnectorCard({
     try {
       setTest(await testConnector(connector.id))
     } catch (err) {
+      if (isTimothyAuthError(err)) {
+        setTest(null)
+        return
+      }
       setTest({ ok: false, error: errText(err) })
     } finally {
       setTesting(false)

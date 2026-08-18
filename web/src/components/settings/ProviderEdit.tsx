@@ -31,7 +31,7 @@ import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { backendLabel, errText, secretDestination, stripPaste } from './util'
+import { backendLabel, errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, secretDestination, stripPaste } from './util'
 
 // ProviderEdit is a provider's own page for the controls too heavy for
 // its summary card: rotating the stored key, and declaring which
@@ -236,8 +236,17 @@ function CredentialSection({
     setTesting(true)
     setTest(null)
     try {
-      setTest(await testProvider(provider.id))
+      const res = await testProvider(provider.id)
+      if (!res.ok && isTimothyAuthDetail(res.detail)) {
+        setTest(null)
+        return
+      }
+      setTest(res)
     } catch (err) {
+      if (isTimothyAuthError(err)) {
+        setTest(null)
+        return
+      }
       setTest({ ok: false, latency_ms: 0, model: '', detail: errText(err) })
     } finally {
       setTesting(false)
@@ -275,7 +284,7 @@ function CredentialSection({
               : test?.ok
                 ? `OK, ${test.model} answered in ${test.latency_ms} ms.`
                 : test && !test.ok
-                  ? `Failed after ${test.latency_ms} ms: ${test.detail}`
+                  ? probeFailureText(test)
                   : 'Not tested yet.'}
           </span>
           <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>

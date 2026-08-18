@@ -17,7 +17,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
-import { getToken } from './api/client'
+import { getToken, subscribeNeedToken } from './api/client'
 import { BrandMark } from './components/BrandMark'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
@@ -348,6 +348,19 @@ function App() {
 
   useEffect(() => {
     if (getToken() === '') setTokenOpen(true)
+  }, [])
+
+  useEffect(() => {
+    let lastToast = 0
+    return subscribeNeedToken(() => {
+      setTokenOpen(true)
+      const now = Date.now()
+      if (now - lastToast < 4000) return
+      lastToast = now
+      toast.error("Timothy's API token is missing or invalid", {
+        description: 'Paste TIMOTHY_API_TOKEN from deploy/.env. This is not an LLM provider key.',
+      })
+    })
   }, [])
 
   // Primes the shared AudioContext on the app's FIRST real user
