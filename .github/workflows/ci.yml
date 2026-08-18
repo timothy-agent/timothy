@@ -178,15 +178,20 @@ jobs:
     # whose steps all skip still reports "success" (skipped steps
     # aren't a failure), so ci-ok's blanket check on `images` needs no
     # path-awareness of its own.
+    # The web leg additionally skips on fork PRs: its build needs the
+    # HUGEICONS_TOKEN secret, and GitHub withholds secrets from
+    # fork-triggered runs — the empty token fails npm auth (broke PR
+    # #248). Same-repo pushes and PRs still build it, and the release
+    # workflow builds it again at tag time, so nothing ships unbuilt.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       matrix:
         service: [brain, gateway, memoryd, sandboxd, web]
     steps:
       - uses: actions/checkout@v7
-        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
       - name: Build image
-        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
         env:
           # Web only: HugeIcons Pro registry auth, passed as a BuildKit
           # secret so it never lands in an image layer.
@@ -202,7 +207,7 @@ jobs:
               -t timothy-${{ matrix.service }}:ci .
           fi
       - name: Scan image
-        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: timothy-${{ matrix.service }}:ci
