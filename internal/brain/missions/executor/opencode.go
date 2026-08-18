@@ -105,6 +105,7 @@ func (opencodeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) 
 			"timothy": {
 				NPM:  opencodeProviderNPM(baseURL),
 				Name: "Timothy",
+				//nolint:gosec // G101: apiKey holds opencode's env-substitution template, not a credential value.
 				Options: opencodeProviderOptions{
 					BaseURL: baseURL,
 					APIKey:  "{env:OPENCODE_API_KEY}",
