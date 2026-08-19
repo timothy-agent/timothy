@@ -191,6 +191,16 @@ type Driver struct {
 	// unnamed missions unnamed, same as before this existed.
 	nameMission func(context.Context, string) string
 
+	// deliverDestinations wires the destinations delivery hook fired on
+	// a mission's terminal done transition (see SetDestinationDeliver /
+	// deliverToDestinations) — nil-safe: unset skips delivery entirely.
+	// A func type, not an interface importing the destinations package,
+	// since destinations.Deliverer needs missions.Mission/Event —
+	// importing missions from there and missions from destinations back
+	// would cycle; cmd/brain/main.go's wiring closure bridges the two,
+	// same as SetMemoryExtract does for memoryd.
+	deliverDestinations DestinationDeliver
+
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
 	// rework. Process-local by design: lost on restart is acceptable —
@@ -336,6 +346,54 @@ func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
 // SetMemoryExtract is. Optional — nil leaves unnamed missions unnamed.
 func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
 	d.nameMission = fn
+}
+
+// DestinationDeliver delivers a terminal mission's outcome digest to
+// its attached destination_ids — destinations.Deliverer.Deliver
+// satisfies this signature. Fire-and-forget by contract, same as
+// MemoryExtract: it must never return an error, block, or affect
+// mission state.
+type DestinationDeliver func(ctx context.Context, m Mission, destinationIDs []string, digest string)
+
+// SetDestinationDeliver wires the destinations delivery hook fired on
+// a mission's terminal done transition (see deliverToDestinations) — a
+// setter for the same reason SetMemoryExtract is. Optional — nil skips
+// delivery entirely, same as a mission with no destination_ids.
+func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
+	d.deliverDestinations = fn
+}
+
+// deliverToDestinations fires the destinations delivery hook exactly
+// on a transition into phase=done (never phase=failed — v1 doesn't
+// deliver on failure, the notifier already covers failure alerts) and
+// only when the mission actually has destination_ids attached. Reuses
+// OutcomeDigest the same way extractMissionMemory does — computed once
+// here from a fresh Events() read, not duplicated logic. Detached from
+// ctx like fireOnComplete: the mission is already terminal, so delivery
+// must outlive a request that may be winding down.
+func (d *Driver) deliverToDestinations(ctx context.Context, id string, terminal Phase) {
+	if d.deliverDestinations == nil || terminal != PhaseDone {
+		return
+	}
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		d.log.Warn("driver: destination delivery: reload mission failed", "mission_id", id, "error", err)
+		return
+	}
+	if len(m.DestinationIDs) == 0 {
+		return
+	}
+	events, err := d.store.Events(ctx, id)
+	if err != nil {
+		d.log.Warn("driver: destination delivery: load events failed", "mission_id", id, "error", err)
+		return
+	}
+	// terminal is always PhaseDone here (checked above), so there is no
+	// failure reason to pass — OutcomeDigest only renders one when
+	// terminal == PhaseFailed.
+	digest := OutcomeDigest(m, events, terminal, "")
+	rctx := context.Background()
+	go d.deliverDestinations(rctx, m, m.DestinationIDs, digest) //nolint:gosec // G118: deliberate — the mission is already terminal, delivery must outlive whatever request/ctx observed that transition
 }
 
 // fireOnComplete runs a mission's recorded on_complete choice
@@ -688,6 +746,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		d.removeSandbox(id)
 		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
 		d.backfillMissionName(ctx, id)
+		d.deliverToDestinations(ctx, id, t.Next.Phase)
 	}
 	if t.Next.Phase == PhaseDone {
 		// m is the pre-transition snapshot (re-fetched above, before this
@@ -772,6 +831,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		d.removeSandbox(id)
 		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
 		d.backfillMissionName(ctx, id)
+		d.deliverToDestinations(ctx, id, t.Next.Phase)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {

@@ -64,11 +64,11 @@ type missionAttachmentStore interface {
 // (not *attachments.Store) so the caller's own nil-box guard (a nil
 // *attachments.Store boxed here would be a non-nil interface value)
 // happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, destinationLookupStore destinationLookup) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, destinations: destinationLookupStore}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -146,6 +146,20 @@ type missionAPI struct {
 	// rejects any attachment with a 400 naming the missing sidecar.
 	markitdownURL  string
 	markitdownHTTP *http.Client
+	// destinations resolves a create request's destination_ids against
+	// the operator-owned destinations table (D-061's exfiltration
+	// guard: an id must exist AND be enabled) — nil (destinations
+	// disabled) rejects any non-empty destination_ids.
+	destinations destinationLookup
+}
+
+// destinationLookup is the narrow slice of *destinations.Store the
+// mission create handler needs to validate destination_ids —
+// EnabledByID reports whether id names a real, enabled row (ok=false
+// covers both "unknown id" and "disabled", both rejected identically
+// by validateDestinationIDs below).
+type destinationLookup interface {
+	EnabledByID(ctx context.Context, id string) (ok bool, err error)
 }
 
 // routeExists reports whether name resolves to a real route via
@@ -162,6 +176,35 @@ func (h *missionAPI) routeExists(ctx context.Context, name string) bool {
 	}
 	_, err := h.resolveExecutorOptions(ctx, name, "")
 	return err == nil
+}
+
+// validateDestinationIDs rejects any id that doesn't name a real,
+// enabled destinations row — the exfiltration guard (D-061): a mission
+// create request only ever attaches operator-owned destinations, never
+// an arbitrary string the model might have supplied. Lists every
+// invalid id in one error, same spirit as an unknown-tool rejection
+// naming what's actually valid.
+func (h *missionAPI) validateDestinationIDs(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if h.destinations == nil {
+		return fmt.Errorf("destinations are not enabled")
+	}
+	var invalid []string
+	for _, id := range ids {
+		ok, err := h.destinations.EnabledByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("destination_ids: %w", err)
+		}
+		if !ok {
+			invalid = append(invalid, id)
+		}
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("unknown or disabled destination id(s): %s", strings.Join(invalid, ", "))
+	}
+	return nil
 }
 
 func failMission(w http.ResponseWriter, err error) {
@@ -349,6 +392,12 @@ type createMissionRequest struct {
 	// to markdown once here (see resolveAttachments); images/audio are
 	// unsupported for missions.
 	Attachments []missionAttachmentInput `json:"attachments"`
+	// DestinationIDs names operator-created destinations (email,
+	// webhook) to deliver this mission's outcome digest to on the
+	// terminal done transition — every id is validated to exist AND be
+	// enabled at create time (see create() below); the model never
+	// supplies or addresses a destination (D-061).
+	DestinationIDs []string `json:"destination_ids"`
 }
 
 // missionAttachmentInput names one already-uploaded attachment to
@@ -461,6 +510,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := h.validateDestinationIDs(r.Context(), req.DestinationIDs); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	var parentMissionID, parentContext string
 	if req.ParentMissionID != "" {
 		parent, err := h.store.Get(r.Context(), req.ParentMissionID)
@@ -556,7 +609,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext,
-		Attachments: missionAtts,
+		Attachments: missionAtts, DestinationIDs: req.DestinationIDs,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {

@@ -12,6 +12,7 @@ import {
   getSettings,
   listConnectorRepos,
   listConnectors,
+  listDestinations,
   patchSchedule,
   testConnector,
 } from '../../api/client'
@@ -19,6 +20,7 @@ import type {
   AdminAgent,
   AdminConnector,
   AdminRoute,
+  Destination,
   GitHubIdentity,
   GitHubRepo,
   Schedule,
@@ -251,6 +253,22 @@ export function MissionForm({
   const [kindLocked, setKindLocked] = useState(!!initial?.kind)
   const [classifying, setClassifying] = useState(false)
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
+  // Destinations multi-select — visible, not advanced; default is
+  // empty (deliver nowhere). Only ever offered for a one-off create
+  // (mode === 'create'), same scope as schedule integration being a
+  // later slice.
+  const [destinations, setDestinations] = useState<Destination[] | null>(null)
+  const [destinationIDs, setDestinationIDs] = useState<string[]>([])
+  useEffect(() => {
+    if (mode !== 'create') return
+    listDestinations()
+      .then(setDestinations)
+      .catch(() => {
+        // Non-fatal: the section just stays hidden if this fails, same
+        // degrade as any other optional list fetch in this form.
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [route, setRoute] = useState(initial?.route ?? '')
   const [reviewRoute, setReviewRoute] = useState(initial?.review_route ?? '')
@@ -529,6 +547,7 @@ export function MissionForm({
       parent_mission_id: parentMissionId,
       attachments:
         attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
+      destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
     })
     toast.success('Mission created')
     onDone({ kind: 'mission', id })
@@ -1114,6 +1133,30 @@ export function MissionForm({
             </span>
           </span>
         </label>
+
+        {mode === 'create' && destinations && destinations.length > 0 && (
+          <div className="space-y-1.5">
+            <Label>Deliver results to</Label>
+            <div className="space-y-1.5 rounded-xl border border-border p-3">
+              {destinations.map((d) => (
+                <label key={d.id} htmlFor={`mission-destination-${d.id}`} className="flex items-center gap-2 text-sm">
+                  <input
+                    id={`mission-destination-${d.id}`}
+                    type="checkbox"
+                    checked={destinationIDs.includes(d.id)}
+                    onChange={(e) =>
+                      setDestinationIDs((prev) =>
+                        e.target.checked ? [...prev, d.id] : prev.filter((id) => id !== d.id),
+                      )
+                    }
+                  />
+                  <span>{d.name}</span>
+                  <span className="text-xs text-muted-foreground uppercase">{d.kind}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
           <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">

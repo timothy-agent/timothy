@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useParams } from 'react-router'
 import { AgentsTab } from '../components/settings/AgentsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { CredentialsTab } from '../components/settings/CredentialsTab'
+import { DestinationsTab } from '../components/settings/DestinationsTab'
 import { FeaturesTab } from '../components/settings/FeaturesTab'
 import { ProvidersTab } from '../components/settings/ProvidersTab'
 import { RoutesTab } from '../components/settings/RoutesTab'
@@ -48,6 +49,12 @@ export const settingsAreas = [
     label: 'Credentials',
     description: 'API keys and tokens stored for providers and connectors.',
     render: CredentialsTab,
+  },
+  {
+    key: 'destinations',
+    label: 'Destinations',
+    description: 'Where mission results get delivered: email, webhook.',
+    render: DestinationsTab,
   },
   {
     key: 'features',

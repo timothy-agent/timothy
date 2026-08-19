@@ -20,6 +20,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
@@ -99,7 +100,7 @@ var memoryRoutePatterns = []string{
 // proxy to the gateway's internal control plane, conns the local
 // connector control plane (nil leaves any of them unmounted).
 // whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, destinationStore *destinations.Store, destinationTest destinationTester) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates}
 	if kbStore != nil {
 		a.kbCollections = kbStore.ListCollections
@@ -136,8 +137,24 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if attachmentStore != nil {
 		missionAttachments = attachmentStore
 	}
-	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveExecutorOptions, nameMission, topModels, conns, missionAttachments, markitdownURL)
+	// destinationLookupStore is *destinations.Store itself (EnabledByID)
+	// — nil-boxed the same way connLister is above so a nil
+	// destinationStore keeps registerMissions' create-time validation
+	// honest (rejects any non-empty destination_ids).
+	var destLookup destinationLookup
+	if destinationStore != nil {
+		destLookup = destinationStore
+	}
+	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveExecutorOptions, nameMission, topModels, conns, missionAttachments, markitdownURL, destLookup)
 	a.registerSchedules(srv.Handle, missionStore)
+	// destinationRefs is *missions.Store itself (ActiveMissionReferencesDestination) —
+	// nil-boxed the same way connLister is above so a nil missionStore
+	// keeps registerDestinations' refs check honest.
+	var destRefs destinationRefs
+	if missionStore != nil {
+		destRefs = missionStore
+	}
+	a.registerDestinations(srv.Handle, destinationStore, destRefs, destinationTest)
 	a.registerEvents(srv.Handle, hub)
 	a.registerTranscribe(srv.Handle, whisperClient, whisperURL)
 	a.registerAttachments(srv.Handle, attachmentStore)

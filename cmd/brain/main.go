@@ -24,6 +24,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
@@ -284,6 +285,10 @@ func main() {
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, app.Log)
 	}
+	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, flags, missionStore, app.Log)
+	if missionDriver != nil && destinationDeliverer != nil {
+		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
+	}
 	// Chat-facing mission tools (D-0xx: "is mission X done?" / "push
 	// mission X"): registered here, not inside buildAgent, since both
 	// need missionStore (built above, after buildAgent) and mission_push
@@ -513,10 +518,21 @@ func main() {
 	// ledgerAgg backs the mission list's top_model decoration (D-05x):
 	// same *pgpool.Pool the rest of brain shares, no separate wiring.
 	ledgerAgg := ledger.NewAggregator(app.DB)
+	// destinationTest is nil-boxed the same way connLister is inside
+	// Register itself: a nil *destinations.Deliverer passed straight as
+	// api's destinationTester interface would be a non-nil interface
+	// holding nil. interface{ Test(...) } here structurally matches
+	// api.destinationTester without naming that unexported type.
+	var destinationTest interface {
+		Test(ctx context.Context, id string) error
+	}
+	if destinationDeliverer != nil {
+		destinationTest = destinationDeliverer
+	}
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, destinationStore, destinationTest)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -601,6 +617,53 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 		log.Warn("MARKITDOWN_URL not set; gmail_read falls back to a snippet for HTML-only mail, and gmail_read_attachment is unavailable")
 	}
 	return mgr, goog
+}
+
+// buildDestinations wires the destinations control plane (store +
+// adapters + Deliverer). missionStore nil (WORKSPACES unset) disables
+// it entirely — delivery has no meaning without missions. conns/goog
+// nil still builds the store (webhook destinations work without
+// connectors); an email destination's create/update then fails
+// validation with a clear error, same nil-gated shape as
+// api/missions.go's own repo_url-needs-connectors check.
+func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, flags *settings.Store, missionStore *missions.Store, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
+	if missionStore == nil {
+		return nil, nil
+	}
+	var connLookup destinationConnectorLookup
+	if conns != nil {
+		connLookup = destinationConnectorLookup{conns}
+	}
+	store := destinations.NewStore(db, connLookup, log)
+	// goog nil (no secret store) leaves Mail nil: EmailAdapter.Deliver
+	// then fails per-delivery with a clear error rather than a create-
+	// time block, matching how an email destination's create itself
+	// already requires an enabled google connector to exist.
+	var email *destinations.EmailAdapter
+	if goog != nil {
+		email = &destinations.EmailAdapter{Mail: goog}
+	}
+	webhook := &destinations.WebhookAdapter{}
+	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, flags.WebBaseURL, log)
+	return store, deliverer
+}
+
+// destinationConnectorLookup adapts *connectors.Manager to
+// destinations' own narrow Connector/connectorLookup shape — missions
+// has no compile-time dependency on the connectors package's own
+// Connector type, same reasoning as connsPRSource above. A zero value
+// (conns == nil) is never boxed here; buildDestinations only
+// constructs one when conns is non-nil.
+type destinationConnectorLookup struct {
+	conns *connectors.Manager
+}
+
+func (d destinationConnectorLookup) Get(ctx context.Context, id string) (destinations.Connector, error) {
+	c, err := d.conns.Store().Get(ctx, id)
+	if err != nil {
+		return destinations.Connector{}, err
+	}
+	return destinations.Connector{Kind: c.Kind, Enabled: c.Enabled}, nil
 }
 
 // missionWorkSlotMax bounds how many missions may be status='working'

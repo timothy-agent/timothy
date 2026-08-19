@@ -166,7 +166,13 @@ CREATE TABLE IF NOT EXISTS missions (
     -- branch_pattern is a validated template (internal/brain/missions/
     -- branchtemplate.go); commit_style is 'conventional' or 'plain'.
     branch_pattern        text NOT NULL DEFAULT '',
-    commit_style          text NOT NULL DEFAULT ''
+    commit_style          text NOT NULL DEFAULT '',
+    -- Destination ids to deliver this mission's outcome digest to on
+    -- the terminal done transition (destinations.go's Deliverer,
+    -- driver.go's terminal-transition hook). Never model-decided —
+    -- api/missions.go's create validates every id against the
+    -- operator-owned destinations table before it lands here.
+    destination_ids       uuid[] NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

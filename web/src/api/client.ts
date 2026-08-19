@@ -17,6 +17,7 @@ import type {
   ChainEntry,
   ChatEvent,
   ChatRequest,
+  Destination,
   EntityGraphData,
   GitHubIdentity,
   GitHubRepo,
@@ -1074,6 +1075,43 @@ export async function connectorOAuthStart(id: string): Promise<string> {
   return url
 }
 
+// --- destinations (mission result delivery) ---
+
+export async function listDestinations(): Promise<Destination[]> {
+  const { destinations } = await request<{ destinations: Destination[] }>('/v1/admin/destinations')
+  return destinations ?? []
+}
+
+export async function createDestination(d: Partial<Destination>): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/admin/destinations', {
+    method: 'POST',
+    body: JSON.stringify(d),
+  })
+  return id
+}
+
+export async function patchDestination(
+  id: string,
+  patch: Partial<Pick<Destination, 'config' | 'credential_ref' | 'enabled'>>,
+): Promise<void> {
+  await request<void>(`/v1/admin/destinations/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function deleteDestination(id: string): Promise<void> {
+  await request<void>(`/v1/admin/destinations/${id}`, { method: 'DELETE' })
+}
+
+// testDestination sends a canned "Timothy test delivery" payload
+// through the destination's real adapter and reports success/failure.
+export async function testDestination(id: string): Promise<{ ok: boolean; error?: string }> {
+  return request<{ ok: boolean; error?: string }>(`/v1/admin/destinations/${id}/test`, {
+    method: 'POST',
+  })
+}
+
 export async function listRoutes(): Promise<AdminRoute[]> {
   const { routes } = await request<{ routes: AdminRoute[] }>('/v1/admin/routes')
   return routes ?? []
@@ -1190,6 +1228,10 @@ export interface CreateMissionInput {
   // attachments name already-uploaded PDFs (POST /v1/attachments) to
   // convert to markdown once at create time — PDF only, up to 8.
   attachments?: { id: string; name: string }[]
+  // destination_ids names operator-created destinations to deliver this
+  // mission's outcome digest to on the terminal done transition; omit
+  // (or empty) delivers nowhere.
+  destination_ids?: string[]
 }
 
 // ExecutorOption is one registered harness's usability on a given

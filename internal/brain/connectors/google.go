@@ -300,6 +300,56 @@ func (g *Google) token(ctx context.Context, cfg GoogleConfig, ref string) (strin
 	return fresh.AccessToken, nil
 }
 
+// SendMail sends a plain-text email through connectorID's Gmail
+// account — the same authed-token-plus-raw-MIME send gmailSend's tool
+// uses (google_tools.go), reused directly here so destinations' email
+// adapter and the chat tool can never diverge on how a message
+// actually goes out. connectorID must name a google-kind connector
+// with the gmail scope; callers (destinations' validation) check that
+// before ever reaching here.
+func (g *Google) SendMail(ctx context.Context, connectorID, to, subject, body string) error {
+	c, err := g.Rows.Get(ctx, connectorID)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	cfg, err := googleConfig(c)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	if c.CredentialRef == "" {
+		return fmt.Errorf("send mail: connector %s has no credential_ref", c.Name)
+	}
+	token, err := g.token(ctx, cfg, c.CredentialRef)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+
+	var raw strings.Builder
+	fmt.Fprintf(&raw, "To: %s\r\n", to)
+	fmt.Fprintf(&raw, "Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s", subject, body)
+	payload := map[string]string{"raw": base64.URLEncoding.EncodeToString([]byte(raw.String()))}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.GmailBase+"/gmail/v1/users/me/messages/send", strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := g.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("send mail: gmail api status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 func googleConfig(c Connector) (GoogleConfig, error) {
 	var cfg GoogleConfig
 	if err := json.Unmarshal(c.Config, &cfg); err != nil {

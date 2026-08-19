@@ -18,6 +18,7 @@ vi.mock('../../api/client', () => ({
   getMissionExecutorOptions: vi.fn(),
   testConnector: vi.fn().mockResolvedValue({ ok: true }),
   uploadAttachment: vi.fn(),
+  listDestinations: vi.fn().mockResolvedValue([]),
 }))
 
 import {
@@ -30,10 +31,12 @@ import {
   listAgents,
   listConnectorRepos,
   listConnectors,
+  listDestinations,
   listRoutes,
   patchSchedule,
   uploadAttachment,
 } from '../../api/client'
+import type { Destination } from '../../api/types'
 
 // renderForm wraps MissionForm in a MemoryRouter — the repository
 // section's "no connectors" hint links to Settings → Connectors, which
@@ -239,6 +242,76 @@ describe('MissionForm — create mode, one-off mission', () => {
 
     resolveUpload({ id: 'att1', mime: 'application/pdf', size_bytes: 100 })
     await waitFor(() => expect(createButton.disabled).toBe(false))
+  })
+})
+
+const destinations: Destination[] = [
+  {
+    id: 'd1',
+    name: 'ops-inbox',
+    kind: 'email',
+    config: { connector_id: 'c1', to: 'ops@example.com' },
+    credential_ref: '',
+    enabled: true,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'd2',
+    name: 'ops-hook',
+    kind: 'webhook',
+    config: { url: 'https://example.com/hook', format: 'json' },
+    credential_ref: '',
+    enabled: true,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  },
+]
+
+describe('MissionForm — destinations multi-select', () => {
+  it('hides the section when there are no destinations', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await waitFor(() => expect(listDestinations).toHaveBeenCalled())
+    expect(screen.queryByText('Deliver results to')).toBeNull()
+  })
+
+  it('renders a checkbox per destination, unchecked by default, and submits the picked ids', async () => {
+    vi.mocked(listDestinations).mockResolvedValue(destinations)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await screen.findByText('Deliver results to')
+    const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
+    const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
+    expect(opsInbox.checked).toBe(false)
+    expect(opsHook.checked).toBe(false)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Send me the digest' } })
+    fireEvent.click(opsInbox)
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ destination_ids: ['d1'] }),
+      ),
+    )
+  })
+
+  it('omits destination_ids from the create payload when none are picked', async () => {
+    vi.mocked(listDestinations).mockResolvedValue(destinations)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await screen.findByText('Deliver results to')
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'No delivery please' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() => expect(createMission).toHaveBeenCalled())
+    expect(createMission).toHaveBeenCalledWith(
+      expect.not.objectContaining({ destination_ids: expect.anything() }),
+    )
   })
 })
 

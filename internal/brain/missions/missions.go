@@ -157,9 +157,15 @@ type Mission struct {
 	// worker/reviewer/planner turns run under — loop.Agent's tool-call
 	// bookkeeping (session_events, audit) hard-requires a real session
 	// id, which a mission otherwise has no reason to have.
-	SessionID string    `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	SessionID string `json:"-"`
+	// DestinationIDs names the operator-created destinations (email,
+	// webhook) this mission's outcome digest delivers to on the
+	// terminal done transition (driver.go's deliverToDestinations) —
+	// validated against the destinations table at create time
+	// (api/missions.go), never model-decided.
+	DestinationIDs []string  `json:"destination_ids,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // MissionAttachment is one PDF document attached at mission create

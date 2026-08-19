@@ -762,6 +762,25 @@ export interface Mission {
   // attachments are PDF documents attached at create time — markdown is
   // never sent over the wire (see api/missions.go's sanitizeMission).
   attachments?: { id: string; mime: string; name?: string }[]
+  // destination_ids names operator-created destinations (email,
+  // webhook) this mission delivers its outcome digest to on the
+  // terminal done transition. Validated against the destinations table
+  // at create time — never model-decided.
+  destination_ids?: string[]
+  created_at: string
+  updated_at: string
+}
+
+// Destination is one operator-created outbound sink for mission
+// results (internal/brain/destinations.Destination) — Settings →
+// Destinations CRUD, and the mission form's destinations multi-select.
+export interface Destination {
+  id: string
+  name: string
+  kind: 'email' | 'webhook' | 'telegram'
+  config: Record<string, unknown>
+  credential_ref: string
+  enabled: boolean
   created_at: string
   updated_at: string
 }

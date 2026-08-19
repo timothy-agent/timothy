@@ -71,6 +71,11 @@ const (
 	// mission's own commit_style column overrides this per create
 	// request.
 	ValueGitCommitStyle = "git_commit_style"
+	// ValueWebBaseURL is Timothy's own web UI base address (e.g.
+	// https://timothy.example.lan), used to build a mission detail link
+	// in destination deliveries (destinations/render.go); "" omits the
+	// link entirely rather than guessing a LAN address.
+	ValueWebBaseURL = "web_base_url"
 )
 
 var knownValueKeys = map[string]bool{
@@ -79,6 +84,7 @@ var knownValueKeys = map[string]bool{
 	ValueSensitiveToolRoute: true, ValueDefaultCurrency: true,
 	ValueCodingExecutor:   true,
 	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
+	ValueWebBaseURL: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -184,6 +190,12 @@ func (s *Store) GitBranchPattern(ctx context.Context) string {
 // "" (missions.CommitStyleConventional) when unset.
 func (s *Store) GitCommitStyle(ctx context.Context) string {
 	return s.Value(ctx, ValueGitCommitStyle)
+}
+
+// WebBaseURL returns the configured web UI base address, "" (omit the
+// mission link) when unset.
+func (s *Store) WebBaseURL(ctx context.Context) string {
+	return s.Value(ctx, ValueWebBaseURL)
 }
 
 // SkillAllowed reports whether the allowlist admits a pack name;
