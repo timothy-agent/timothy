@@ -33,6 +33,8 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("PUT /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.setSecret))
 	srv.Handle("DELETE /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.deleteSecret))
 	srv.Handle("GET /internal/admin/secrets/{ref_name}", http.HandlerFunc(h.getSecretStatus))
+	srv.Handle("POST /internal/admin/secrets/{ref_name}/migrate", http.HandlerFunc(h.migrateSecret))
+	srv.Handle("POST /internal/admin/secrets/migrate", http.HandlerFunc(h.migrateAllSecrets))
 	srv.Handle("GET /internal/admin/secret-backends", http.HandlerFunc(h.listSecretBackends))
 	srv.Handle("PUT /internal/admin/secret-backends/default", http.HandlerFunc(h.putDefaultSecretBackend))
 	srv.Handle("GET /internal/admin/secret-backends/{backend}", http.HandlerFunc(h.getSecretBackend))
@@ -299,6 +301,44 @@ func (h *adminAPI) getSecretStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"configured": configured, "backend": backend})
+}
+
+// migrateSecret moves one ref's stored value onto {"backend": ...},
+// wiping its old storage. Registered as a literal .../{ref_name}/migrate
+// suffix, so it never collides with the bulk .../secrets/migrate route
+// (net/http's ServeMux picks the more specific pattern regardless of
+// registration order).
+func (h *adminAPI) migrateSecret(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Backend string `json:"backend"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := h.adm.MigrateSecret(r.Context(), r.PathValue("ref_name"), body.Backend); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// migrateAllSecrets moves every ref not already on {"backend": ...}
+// there; per-ref failures land in the response, never abort the batch.
+func (h *adminAPI) migrateAllSecrets(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Backend string `json:"backend"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	results, err := h.adm.MigrateAllSecrets(r.Context(), body.Backend)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"results": results})
 }
 
 func (h *adminAPI) listSecretBackends(w http.ResponseWriter, r *http.Request) {

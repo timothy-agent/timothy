@@ -119,6 +119,7 @@ func (s *Store) Status(ctx context.Context, refName string) (configured bool, ba
 // the external path an operator otherwise never sees).
 type Ref struct {
 	RefName   string
+	Backend   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -130,7 +131,7 @@ func (s *Store) List(ctx context.Context) ([]Ref, error) {
 	if err != nil {
 		return nil, fmt.Errorf("secretstore: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT ref_name, created_at, updated_at FROM secrets ORDER BY ref_name`)
+	rows, err := db.Query(ctx, `SELECT ref_name, backend, created_at, updated_at FROM secrets ORDER BY ref_name`)
 	if err != nil {
 		return nil, fmt.Errorf("secretstore: list: %w", err)
 	}
@@ -139,7 +140,7 @@ func (s *Store) List(ctx context.Context) ([]Ref, error) {
 	out := []Ref{}
 	for rows.Next() {
 		var r Ref
-		if err := rows.Scan(&r.RefName, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.RefName, &r.Backend, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("secretstore: list: %w", err)
 		}
 		out = append(out, r)
@@ -238,6 +239,91 @@ func (s *Store) upsertRef(ctx context.Context, refName, backend, backendRef stri
 		refName, backend, backendRef)
 	if err != nil {
 		return fmt.Errorf("secretstore: set %s: %w", refName, err)
+	}
+	return nil
+}
+
+// Migrate moves refName's stored value onto targetBackend, replacing
+// its current backend entirely. Idempotent no-op when refName already
+// lives on targetBackend. Ordering matters for crash safety: the new
+// home is written FIRST, the row's backend column flipped SECOND, and
+// only then is the old storage wiped — a crash between any two steps
+// leaves the value readable at its new home (a stray old-backend copy
+// is merely wasteful, never lost) rather than gone. The whole thing
+// cannot be one DB transaction since external writes (vault/asm HTTP
+// calls) aren't transactional with Postgres; the ordering above is the
+// substitute safety net. Deleting the old copy is best-effort, silent
+// (like Delete's own external cleanup) — a leftover external secret is
+// orphaned but harmless once the row no longer points at it, and never
+// fails the migration itself.
+func (s *Store) Migrate(ctx context.Context, refName, targetBackend string) error {
+	if targetBackend != "db" {
+		if err := validExternalBackend(targetBackend); err != nil {
+			return err
+		}
+	}
+	r, err := s.row(ctx, refName)
+	if err != nil {
+		return err
+	}
+	if r.backend == targetBackend {
+		return nil
+	}
+
+	value, err := s.Resolve(ctx, refName)
+	if err != nil {
+		return fmt.Errorf("secretstore: migrate %s: resolve current value: %w", refName, err)
+	}
+
+	// Step 1: write the value into its new home. Nothing about refName's
+	// row changes yet, so a crash here just leaves the old copy in place
+	// with the row still pointing at it — safe, retryable.
+	switch targetBackend {
+	case "db":
+		if err := s.SetDB(ctx, refName, value); err != nil {
+			return fmt.Errorf("secretstore: migrate %s: write db: %w", refName, err)
+		}
+	case "vault":
+		if err := validExternalRefName(refName); err != nil {
+			return err
+		}
+		if err := s.writeVault(ctx, externalRef(refName), value); err != nil {
+			return fmt.Errorf("secretstore: migrate %s: write vault: %w", refName, err)
+		}
+	case "asm":
+		if err := validExternalRefName(refName); err != nil {
+			return err
+		}
+		if err := s.writeASM(ctx, externalRef(refName), value); err != nil {
+			return fmt.Errorf("secretstore: migrate %s: write asm: %w", refName, err)
+		}
+	}
+
+	// Step 2: flip the row to point at the new home. SetDB/upsertRef
+	// already did this as part of step 1 for "db"; external targets need
+	// it done explicitly since writeVault/writeASM only touch the
+	// external system, not the row.
+	if targetBackend != "db" {
+		backendRef := externalRef(refName)
+		if targetBackend == "vault" {
+			backendRef += "#value"
+		}
+		if err := s.upsertRef(ctx, refName, targetBackend, backendRef); err != nil {
+			return fmt.Errorf("secretstore: migrate %s: point row at %s: %w", refName, targetBackend, err)
+		}
+	}
+
+	// Step 3: wipe the old home now that nothing points at it. Best
+	// effort, silently — the row is already correct either way (same as
+	// Delete's own external cleanup, which has nowhere to log either), so
+	// a leftover external secret never fails Migrate. A db old home needs
+	// no separate wipe here: upsertRef (step 2, for an external target)
+	// already cleared ciphertext/nonce as part of the same statement.
+	switch r.backend {
+	case "vault":
+		_ = s.deleteVault(ctx, externalRef(refName))
+	case "asm":
+		_ = s.deleteASM(ctx, externalRef(refName))
 	}
 	return nil
 }

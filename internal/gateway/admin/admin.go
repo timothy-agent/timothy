@@ -145,12 +145,83 @@ func (a *Admin) providersReferencing(ctx context.Context, refName string) ([]str
 	return names, rows.Err()
 }
 
+// validSecretBackends is the known backend set, mirroring
+// secretstore's own (unexported) validExternalBackend plus "db" — the
+// gateway package validates independently since Migrate's target
+// backend needs checking before other work (List, per-ref loop), not
+// just at the secretstore call site.
+var validSecretBackends = map[string]bool{"db": true, "vault": true, "asm": true}
+
+// MigrateSecret moves refName's stored value onto targetBackend,
+// wiping its old storage. Audited with backend names only — never the
+// value, which never leaves secretstore.Migrate's own transaction of
+// external calls.
+func (a *Admin) MigrateSecret(ctx context.Context, refName, targetBackend string) error {
+	if refName == "" {
+		return fmt.Errorf("ref name is required")
+	}
+	if !validSecretBackends[targetBackend] {
+		return fmt.Errorf("unknown backend %q", targetBackend)
+	}
+	if err := a.secrets.Migrate(ctx, refName, targetBackend); err != nil {
+		return err
+	}
+	a.audit(ctx, "migrate", "secret", refName, nil, map[string]string{"backend": targetBackend})
+	a.reload(ctx)
+	return nil
+}
+
+// SecretMigrationResult is one ref's outcome from a bulk migration:
+// exactly one of migrated/skipped is true, or error is set. A partial
+// failure never aborts the rest of the batch.
+type SecretMigrationResult struct {
+	Name     string `json:"name"`
+	Migrated bool   `json:"migrated"`
+	Skipped  bool   `json:"skipped"`
+	Error    string `json:"error,omitempty"`
+}
+
+// MigrateAllSecrets moves every stored ref not already on targetBackend
+// there, one at a time — a single ref's failure (unreachable backend,
+// bad ref name) is recorded and the batch continues, so one bad ref
+// never blocks migrating the rest.
+func (a *Admin) MigrateAllSecrets(ctx context.Context, targetBackend string) ([]SecretMigrationResult, error) {
+	if !validSecretBackends[targetBackend] {
+		return nil, fmt.Errorf("unknown backend %q", targetBackend)
+	}
+	refs, err := a.secrets.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SecretMigrationResult, 0, len(refs))
+	for _, r := range refs {
+		configured, backend, err := a.secrets.Status(ctx, r.RefName)
+		if err != nil {
+			out = append(out, SecretMigrationResult{Name: r.RefName, Error: err.Error()})
+			continue
+		}
+		if !configured || backend == targetBackend {
+			out = append(out, SecretMigrationResult{Name: r.RefName, Skipped: true})
+			continue
+		}
+		if err := a.secrets.Migrate(ctx, r.RefName, targetBackend); err != nil {
+			out = append(out, SecretMigrationResult{Name: r.RefName, Error: err.Error()})
+			continue
+		}
+		a.audit(ctx, "migrate", "secret", r.RefName, nil, map[string]string{"backend": targetBackend})
+		out = append(out, SecretMigrationResult{Name: r.RefName, Migrated: true})
+	}
+	a.reload(ctx)
+	return out, nil
+}
+
 // SecretRef is one stored secret's directory entry: name and
 // timestamps, plus the providers that name it as credential_ref. Values
 // are never included — ListSecrets exists so the UI can show what
 // exists and what would break on delete, nothing more.
 type SecretRef struct {
 	RefName      string    `json:"ref_name"`
+	Backend      string    `json:"backend"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	ReferencedBy []string  `json:"referenced_by_providers"`
@@ -189,7 +260,7 @@ func (a *Admin) ListSecrets(ctx context.Context) ([]SecretRef, error) {
 
 	out := make([]SecretRef, len(refs))
 	for i, r := range refs {
-		out[i] = SecretRef{RefName: r.RefName, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		out[i] = SecretRef{RefName: r.RefName, Backend: r.Backend, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 			ReferencedBy: byRef[r.RefName]}
 	}
 	return out, nil

@@ -1031,6 +1031,188 @@ func TestSecretValueWriteThrough(t *testing.T) {
 	}
 }
 
+// TestMigrateSecretAuditsHasNoValue drives MigrateSecret db->vault
+// against a fake KV v2 server and checks the audit row records only
+// the backend name, never the secret value.
+func TestMigrateSecretAuditsHasNoValue(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+	ref := adminMarker + "migrate-one"
+
+	var wroteValue string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/auth/token/lookup-self":
+			w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/kv/data/timothy/"+ref:
+			var body struct {
+				Data struct {
+					Value string `json:"value"`
+				} `json:"data"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			wroteValue = body.Data.Value
+			w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	origCfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig (orig): %v", err)
+	}
+	origDefault, err := adm.secrets.DefaultBackend(ctx)
+	if err != nil {
+		t.Fatalf("DefaultBackend (orig): %v", err)
+	}
+	defer func() {
+		if string(origCfg) != "{}" {
+			if err := adm.SetSecretBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("remove test vault config: %v", err)
+		}
+		if err := adm.SetDefaultSecretBackend(ctx, origDefault); err != nil {
+			t.Errorf("restore default backend: %v", err)
+		}
+	}()
+
+	if err := adm.SetSecretBackendConfig(ctx, "vault",
+		[]byte(`{"address":"`+srv.URL+`","mount":"kv","token_ref":"`+ref+`_TOKEN"}`)); err != nil {
+		t.Fatalf("SetSecretBackendConfig: %v", err)
+	}
+	if err := adm.SetSecret(ctx, ref+"_TOKEN", "vault-tok"); err != nil {
+		t.Fatalf("SetSecret token: %v", err)
+	}
+
+	// Set the ref itself through built-in storage (default still "db"
+	// at this point), then migrate it onto vault explicitly.
+	if err := adm.SetSecret(ctx, ref, "sk-secret-value"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+
+	if err := adm.MigrateSecret(ctx, ref, "vault"); err != nil {
+		t.Fatalf("MigrateSecret: %v", err)
+	}
+	if wroteValue != "sk-secret-value" {
+		t.Fatalf("vault received value %q, want sk-secret-value", wroteValue)
+	}
+	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "vault" {
+		t.Fatalf("SecretStatus after migrate: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+
+	var before, after []byte
+	if err := db.QueryRow(ctx, `SELECT before, after FROM admin_audit
+		WHERE entity = 'secret' AND entity_id = $1 AND action = 'migrate'
+		ORDER BY ts DESC LIMIT 1`, ref).Scan(&before, &after); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if strings.Contains(string(before), "sk-secret-value") || strings.Contains(string(after), "sk-secret-value") {
+		t.Fatalf("audit row leaked the secret value: before=%s after=%s", before, after)
+	}
+	var afterBody map[string]string
+	if err := json.Unmarshal(after, &afterBody); err != nil {
+		t.Fatalf("audit after %s: %v", after, err)
+	}
+	if afterBody["backend"] != "vault" {
+		t.Fatalf("audit after = %v, want backend=vault", afterBody)
+	}
+
+	// Idempotent: migrating again to the same backend is a no-op.
+	if err := adm.MigrateSecret(ctx, ref, "vault"); err != nil {
+		t.Fatalf("MigrateSecret (idempotent): %v", err)
+	}
+
+	// Unknown target is rejected.
+	if err := adm.MigrateSecret(ctx, ref, "nope"); err == nil {
+		t.Fatal("MigrateSecret with unknown backend accepted")
+	}
+}
+
+// TestMigrateAllSecretsBulkPartialFailure drives the bulk endpoint
+// against two refs: one already on the target backend (skipped), one
+// db-backed that migrates cleanly, and asserts a failure on one ref
+// (unconfigured asm) never aborts the rest of the batch.
+func TestMigrateAllSecretsBulkPartialFailure(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+	refOK := adminMarker + "migrate-all-ok"
+	refSkip := adminMarker + "migrate-all-skip"
+
+	origVaultCfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig (orig): %v", err)
+	}
+	defer func() {
+		if string(origVaultCfg) != "{}" {
+			if err := adm.SetSecretBackendConfig(ctx, "vault", origVaultCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("remove test vault config: %v", err)
+		}
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/auth/token/lookup-self":
+			w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost:
+			w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	if err := adm.SetSecretBackendConfig(ctx, "vault",
+		[]byte(`{"address":"`+srv.URL+`","mount":"kv","token_ref":"`+refOK+`_TOKEN"}`)); err != nil {
+		t.Fatalf("SetSecretBackendConfig: %v", err)
+	}
+	if err := adm.SetSecret(ctx, refOK+"_TOKEN", "vault-tok"); err != nil {
+		t.Fatalf("SetSecret token: %v", err)
+	}
+
+	// refOK: db-backed, migrates cleanly to vault.
+	if err := adm.SetSecret(ctx, refOK, "sk-a"); err != nil {
+		t.Fatalf("SetSecret refOK: %v", err)
+	}
+	// refSkip: migrate it onto vault up front so the bulk call sees it
+	// already there and skips it.
+	if err := adm.MigrateSecret(ctx, refSkip, "vault"); err == nil {
+		t.Fatal("expected refSkip to not exist yet")
+	}
+	if err := adm.SetSecret(ctx, refSkip, "sk-b"); err != nil {
+		t.Fatalf("SetSecret refSkip: %v", err)
+	}
+	if err := adm.MigrateSecret(ctx, refSkip, "vault"); err != nil {
+		t.Fatalf("pre-migrate refSkip: %v", err)
+	}
+
+	results, err := adm.MigrateAllSecrets(ctx, "vault")
+	if err != nil {
+		t.Fatalf("MigrateAllSecrets: %v", err)
+	}
+	byName := map[string]SecretMigrationResult{}
+	for _, r := range results {
+		byName[r.Name] = r
+	}
+	if !byName[refOK].Migrated {
+		t.Fatalf("refOK result = %+v, want migrated", byName[refOK])
+	}
+	if !byName[refSkip].Skipped {
+		t.Fatalf("refSkip result = %+v, want skipped (already on vault)", byName[refSkip])
+	}
+
+	// An unknown target backend fails validation before touching any ref.
+	if _, err := adm.MigrateAllSecrets(ctx, "nope"); err == nil {
+		t.Fatal("MigrateAllSecrets with unknown backend accepted")
+	}
+}
+
 // TestCatalogPricesResolvesByProviderRow is CatalogPrices' end-to-end
 // coverage of the DB half resolvePricedModel's unit tests fake out: a
 // real provider row (options.litellm_provider="zai", the repro's

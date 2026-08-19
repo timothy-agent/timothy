@@ -41,6 +41,8 @@ var adminRoutePatterns = []string{
 	// before forwarding), and net/http's ServeMux panics on a duplicate
 	// pattern — the two registrations must never coexist.
 	"GET /v1/admin/secrets/{ref_name}",
+	"POST /v1/admin/secrets/{ref_name}/migrate",
+	"POST /v1/admin/secrets/migrate",
 	"GET /v1/admin/secret-backends",
 	"PUT /v1/admin/secret-backends/default",
 	"GET /v1/admin/secret-backends/{backend}",
@@ -130,6 +132,7 @@ type connectorLister interface {
 // alone can see both tables. Never a value.
 type secretRefEntry struct {
 	RefName      string          `json:"name"`
+	Backend      string          `json:"backend"`
 	CreatedAt    any             `json:"created_at,omitempty"`
 	UpdatedAt    any             `json:"updated_at,omitempty"`
 	ReferencedBy []referenceInfo `json:"referenced_by"`
@@ -240,7 +243,7 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		}
 		referents = append(referents, byConnector[ref.RefName]...)
 		out[i] = secretRefEntry{
-			RefName: ref.RefName, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
+			RefName: ref.RefName, Backend: ref.Backend, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
 			ReferencedBy: referents,
 		}
 	}

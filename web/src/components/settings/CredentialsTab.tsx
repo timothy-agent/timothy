@@ -2,10 +2,17 @@ import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { deleteSecret, listSecretRefs, type SecretRefEntry } from '../../api/client'
+import { deleteSecret, listSecretRefs, migrateAllSecrets, type SecretRefEntry } from '../../api/client'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText } from './util'
+
+const BACKEND_LABEL: Record<string, string> = {
+  db: 'Timothy storage',
+  vault: 'Vault',
+  asm: 'AWS Secrets Manager',
+}
 
 // CredentialsTab is a read-only directory of every stored secret ref:
 // name, used-by chips, and timestamps when the row has them. There is
@@ -18,6 +25,8 @@ export function CredentialsTab() {
   const [loaded, setLoaded] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [migrating, setMigrating] = useState(false)
+  const defaultBackend = useDefaultSecretBackend()
 
   const refresh = useCallback(() => {
     listSecretRefs()
@@ -43,6 +52,35 @@ export function CredentialsTab() {
     }
   }
 
+  // Migrate all: only offered once an external backend is the default
+  // (moving everything back to "db" isn't this button's job) and at
+  // least one ref still lives elsewhere.
+  const elsewhereCount = refs.filter((r) => r.backend !== defaultBackend).length
+  const showMigrateAll = defaultBackend !== 'db' && elsewhereCount > 0
+
+  const migrateAll = async () => {
+    setMigrating(true)
+    try {
+      const results = await migrateAllSecrets(defaultBackend)
+      const migrated = results.filter((r) => r.migrated).length
+      const failed = results.filter((r) => r.error)
+      if (failed.length > 0) {
+        toast.error(`Migrated ${migrated}, ${failed.length} failed`, {
+          description: failed.map((f) => `${f.name}: ${f.error}`).join('; '),
+        })
+      } else {
+        toast.success(`Migrated ${migrated} credential${migrated === 1 ? '' : 's'}`, {
+          description: `Now stored in ${BACKEND_LABEL[defaultBackend] ?? defaultBackend}.`,
+        })
+      }
+      refresh()
+    } catch (err) {
+      toast.error('Could not migrate credentials', { description: errText(err) })
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   return (
     <div className="mt-6 space-y-4">
       <p className="text-sm text-muted-foreground">
@@ -50,6 +88,17 @@ export function CredentialsTab() {
         this is a directory, not a vault viewer. A credential in use by a provider or connector
         can&apos;t be deleted until nothing references it.
       </p>
+      {showMigrateAll && (
+        <div className="flex items-center gap-3 rounded-xl border border-border p-4">
+          <div className="min-w-0 flex-1 text-sm">
+            {elsewhereCount} credential{elsewhereCount === 1 ? '' : 's'} not yet in{' '}
+            {BACKEND_LABEL[defaultBackend] ?? defaultBackend}.
+          </div>
+          <Button size="sm" disabled={migrating} onClick={() => void migrateAll()}>
+            Migrate all to {BACKEND_LABEL[defaultBackend] ?? defaultBackend}
+          </Button>
+        </div>
+      )}
       {loaded && refs.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
           No credentials stored yet.

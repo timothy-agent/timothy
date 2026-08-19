@@ -6,12 +6,18 @@ import { CredentialsTab } from './CredentialsTab'
 vi.mock('../../api/client', () => ({
   deleteSecret: vi.fn(),
   listSecretRefs: vi.fn(),
+  migrateAllSecrets: vi.fn(),
+}))
+vi.mock('./useDefaultSecretBackend', () => ({
+  useDefaultSecretBackend: vi.fn(() => 'db'),
 }))
 
-import { deleteSecret, listSecretRefs } from '../../api/client'
+import { deleteSecret, listSecretRefs, migrateAllSecrets } from '../../api/client'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 
 const referenced: SecretRefEntry = {
   name: 'GITHUB_PAT',
+  backend: 'db',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-02T00:00:00Z',
   referenced_by: [
@@ -22,12 +28,14 @@ const referenced: SecretRefEntry = {
 
 const orphaned: SecretRefEntry = {
   name: 'OLD_KEY',
+  backend: 'db',
   referenced_by: [],
 }
 
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(useDefaultSecretBackend).mockReturnValue('db')
 })
 
 describe('CredentialsTab', () => {
@@ -80,5 +88,35 @@ describe('CredentialsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     expect(deleteSecret).not.toHaveBeenCalled()
+  })
+
+  it('hides the migrate-all button when the default backend is db', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('db')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'vault' }])
+    render(<CredentialsTab />)
+
+    await screen.findByText('OLD_KEY')
+    expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
+  })
+
+  it('hides the migrate-all button when every ref is already on the default backend', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'vault' }])
+    render(<CredentialsTab />)
+
+    await screen.findByText('OLD_KEY')
+    expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
+  })
+
+  it('shows migrate-all when the default backend is external and a ref lives elsewhere', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
+    vi.mocked(migrateAllSecrets).mockResolvedValue([{ name: 'OLD_KEY', migrated: true, skipped: false }])
+    render(<CredentialsTab />)
+
+    const button = await screen.findByRole('button', { name: 'Migrate all to Vault' })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(migrateAllSecrets).toHaveBeenCalledWith('vault'))
   })
 })

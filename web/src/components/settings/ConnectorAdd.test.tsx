@@ -38,9 +38,14 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'db', configured: true, default: true }])
   vi.mocked(listSecretRefs).mockResolvedValue([
-    { name: 'GITHUB_PAT', referenced_by: [{ kind: 'connector', name: 'github-account', role: 'credential' }] },
+    {
+      name: 'GITHUB_PAT',
+      backend: 'db',
+      referenced_by: [{ kind: 'connector', name: 'github-account', role: 'credential' }],
+    },
     {
       name: 'GMAIL_GOOGLE_OAUTH',
+      backend: 'db',
       referenced_by: [{ kind: 'connector', name: 'gmail', role: 'oauth_tokens' }],
     },
   ])

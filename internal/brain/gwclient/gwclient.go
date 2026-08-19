@@ -264,6 +264,7 @@ func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*Resol
 // a value.
 type SecretRef struct {
 	RefName      string    `json:"ref_name"`
+	Backend      string    `json:"backend"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	ReferencedBy []string  `json:"referenced_by_providers"`

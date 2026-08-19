@@ -305,3 +305,255 @@ func TestDefaultBackendLifecycle(t *testing.T) {
 		t.Fatalf("DefaultBackend after delete = %q, %v; want db", got, err)
 	}
 }
+
+// fakeVaultKV serves a minimal KV v2 mount for TestMigrate*: same
+// shape as TestVaultWriteThrough's inline fake, factored out so both
+// migrate directions can share one server.
+func fakeVaultKV(t *testing.T) (*httptest.Server, map[string]string) {
+	t.Helper()
+	kv := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Vault-Token") != "vault-tok" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch {
+		case r.URL.Path == "/v1/auth/token/lookup-self":
+			w.Write([]byte(`{}`))
+		case strings.HasPrefix(r.URL.Path, "/v1/kv/data/"):
+			path := strings.TrimPrefix(r.URL.Path, "/v1/kv/data/")
+			switch r.Method {
+			case http.MethodPost:
+				var body struct {
+					Data struct {
+						Value string `json:"value"`
+					} `json:"data"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				kv[path] = body.Data.Value
+				w.Write([]byte(`{}`))
+			case http.MethodGet:
+				val, ok := kv[path]
+				if !ok {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(`{"data":{"data":{"value":` + strconv.Quote(val) + `}}}`))
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		case strings.HasPrefix(r.URL.Path, "/v1/kv/metadata/") && r.Method == http.MethodDelete:
+			delete(kv, strings.TrimPrefix(r.URL.Path, "/v1/kv/metadata/"))
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	return srv, kv
+}
+
+// setUpVaultDefault points s at a fake vault mount and makes it the
+// store-wide default, returning a restore func for the caller to defer
+// (mirrors TestVaultWriteThrough's own save/restore dance since the
+// backend config table is shared state).
+func setUpVaultDefault(t *testing.T, s *Store, srv *httptest.Server, tokenRef string) func() {
+	t.Helper()
+	ctx := t.Context()
+	origCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	origDefault, err := s.DefaultBackend(ctx)
+	if err != nil {
+		t.Fatalf("DefaultBackend: %v", err)
+	}
+	cfg := `{"address":"` + srv.URL + `","mount":"kv","token_ref":"` + tokenRef + `"}`
+	if _, err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
+		t.Fatalf("SetBackendConfig: %v", err)
+	}
+	if err := s.SetDB(ctx, tokenRef, "vault-tok"); err != nil {
+		t.Fatalf("SetDB token: %v", err)
+	}
+	if err := s.SetDefaultBackend(ctx, "vault"); err != nil {
+		t.Fatalf("SetDefaultBackend: %v", err)
+	}
+	return func() {
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("delete vault config: %v", err)
+		}
+		if err := s.SetDefaultBackend(ctx, origDefault); err != nil {
+			t.Errorf("restore default backend: %v", err)
+		}
+	}
+}
+
+// TestMigrateDBToVault drives Migrate's db->external direction: the
+// value written under backend='db' must resolve identically after
+// Migrate, live in the fake vault mount, and the db ciphertext/nonce
+// must be gone (cleared by upsertRef in step 2).
+func TestMigrateDBToVault(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	ref := "TEST_MIGRATE_DBVAULT_" + t.Name()
+	tokenRef := ref + "_TOKEN"
+
+	srv, kv := fakeVaultKV(t)
+	defer srv.Close()
+	restore := setUpVaultDefault(t, s, srv, tokenRef)
+	defer restore()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name IN ($1, $2)`, ref, tokenRef)
+	}()
+
+	// Set through db explicitly (SetDB, not Set — the default is vault
+	// by now), so the starting point is a real db-backed row.
+	if err := s.SetDB(ctx, ref, "sk-orig"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+
+	if err := s.Migrate(ctx, ref, "vault"); err != nil {
+		t.Fatalf("Migrate db->vault: %v", err)
+	}
+	if kv["timothy/"+ref] != "sk-orig" {
+		t.Fatalf("vault mount holds %q, want sk-orig", kv["timothy/"+ref])
+	}
+	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "vault" {
+		t.Fatalf("Status after migrate: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+	got, err := s.Resolve(ctx, ref)
+	if err != nil || got != "sk-orig" {
+		t.Fatalf("Resolve after migrate = (%q, %v), want (sk-orig, nil)", got, err)
+	}
+	var ciphertext []byte
+	if err := db.QueryRow(ctx, `SELECT ciphertext FROM secrets WHERE ref_name = $1`, ref).Scan(&ciphertext); err != nil {
+		t.Fatalf("query ciphertext: %v", err)
+	}
+	if ciphertext != nil {
+		t.Error("db ciphertext survived a migrate to vault")
+	}
+
+	// Idempotent: migrating again to the same backend is a no-op, not
+	// a second write.
+	if err := s.Migrate(ctx, ref, "vault"); err != nil {
+		t.Fatalf("Migrate (idempotent): %v", err)
+	}
+}
+
+// TestMigrateVaultToDB drives Migrate's external->db direction and
+// confirms the old vault copy is deleted (step 3's cleanup).
+func TestMigrateVaultToDB(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	ref := "TEST_MIGRATE_VAULTDB_" + t.Name()
+	tokenRef := ref + "_TOKEN"
+
+	srv, kv := fakeVaultKV(t)
+	defer srv.Close()
+	restore := setUpVaultDefault(t, s, srv, tokenRef)
+	defer restore()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name IN ($1, $2)`, ref, tokenRef)
+	}()
+
+	// Set through the (now vault) default so the starting point is a
+	// real vault-backed row.
+	if err := s.Set(ctx, ref, "sk-vault"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := s.Migrate(ctx, ref, "db"); err != nil {
+		t.Fatalf("Migrate vault->db: %v", err)
+	}
+	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("Status after migrate: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+	got, err := s.Resolve(ctx, ref)
+	if err != nil || got != "sk-vault" {
+		t.Fatalf("Resolve after migrate = (%q, %v), want (sk-vault, nil)", got, err)
+	}
+	if _, ok := kv["timothy/"+ref]; ok {
+		t.Error("Migrate vault->db left the old vault copy behind")
+	}
+}
+
+// TestMigrateUnknownTargetErrors pins that Migrate rejects a target
+// backend name outside {db, vault, asm} before touching the row.
+func TestMigrateUnknownTargetErrors(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	ref := "TEST_MIGRATE_UNKNOWN_" + t.Name()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, ref)
+	}()
+
+	if err := s.SetDB(ctx, ref, "sk-x"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+	if err := s.Migrate(ctx, ref, "nope"); err == nil {
+		t.Fatal("unknown target backend accepted")
+	}
+	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("row changed after a rejected migrate: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+}
+
+// TestMigrateUnconfiguredTargetErrors pins that Migrate refuses a known
+// but unconfigured external backend (no vault/asm connection config
+// saved) — the write in step 1 fails cleanly (vaultConfig/asmClient
+// error), leaving the row on its original backend.
+func TestMigrateUnconfiguredTargetErrors(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	ref := "TEST_MIGRATE_NOCFG_" + t.Name()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	origCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, ref)
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("delete vault config: %v", err)
+		}
+	}()
+	if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+		t.Fatalf("DeleteBackendConfig: %v", err)
+	}
+
+	if err := s.SetDB(ctx, ref, "sk-x"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+	if err := s.Migrate(ctx, ref, "vault"); err == nil {
+		t.Fatal("unconfigured vault target accepted")
+	}
+	if configured, backend, err := s.Status(ctx, ref); err != nil || !configured || backend != "db" {
+		t.Fatalf("row changed after a rejected migrate: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+}
