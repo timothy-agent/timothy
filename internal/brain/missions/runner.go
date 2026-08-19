@@ -163,6 +163,45 @@ type nativeRunner struct {
 	// kbRead backs the per-turn kb_read ExtraTool — same nil contract
 	// as kbSearch.
 	kbRead KBReadFunc
+
+	// connectorReads resolves a mission's agent to the read-only
+	// connector tools (gmail/calendar reads) it may use on worker/explore
+	// turns (see SetConnectorReads) — nil-safe: unset means no connector
+	// reads are offered, same as before this existed.
+	connectorReads ConnectorReadsResolver
+}
+
+// ConnectorReadsResolver resolves an agent id to the read-only
+// connector tools a mission turn for that agent may use — the
+// intersection of the agent's Tools allowlist and every built
+// connector's ReadOnly-marked, non-MCP tools (see
+// connectors.Manager.ReadOnlyTools). Connector WRITES are never
+// included regardless of the allowlist: mission turns stay
+// BuiltinsOnly for the base surface, and this resolver only ever
+// layers reads on top via ExtraTools — a worker can never side-channel
+// a connector write around the worktree/human-consented push
+// pipeline. Resolved at DRIVE time (every RunWorker/ExploreSession
+// call), not cached on the mission, so an agent's allowlist or a
+// connector's enabled state edited mid-mission applies on the very
+// next turn. Being offered a read tool here is separate from being
+// pre-approved to call it without asking: these tools are not in
+// tools.Permissions' exempt set (same as chat), so an unattended,
+// schedule-fired mission (Unattended: true, D-039) still needs a
+// standing grant or the call fails fast instead of parking. That grant
+// already exists — driver.go's grantSessionDefaults seeds one from the
+// mission's agent's ApprovalAllowlist (a separate field from Tools) at
+// provisioning time, the same path a chat agent's connector-tool
+// grants take. An agent that wants its scheduled missions to actually
+// read gmail/calendar unattended must list the tool in BOTH Tools (to
+// be offered here) and ApprovalAllowlist (to be pre-approved).
+type ConnectorReadsResolver func(ctx context.Context, agentID string) []*tools.Tool
+
+// SetConnectorReads wires the resolver RunWorker/ExploreSession use to
+// layer read-only connector tools onto a mission turn — a setter (not
+// a NewNativeRunner parameter) because cmd/brain/main.go builds the
+// runner before the connectors.Manager it closes over.
+func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
+	r.connectorReads = resolve
 }
 
 // KBSearchFunc runs one kb_search call scoped to collectionNames — main
@@ -191,7 +230,11 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 // route through it instead of brain's own process — and a kb_search
 // backend (nil disables kb_search on every mission turn, matching
 // SetKBSearch's nil-safe contract).
-func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, kbSearch KBSearchFunc, kbRead KBReadFunc, log *slog.Logger) Runner {
+// The return type is the unexported *nativeRunner, not Runner: callers
+// that need to wire SetConnectorReads (cmd/brain/main.go) must hold the
+// concrete type to call it, before handing the result on as a Runner
+// to buildDelegatedRunner.
+func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, kbSearch KBSearchFunc, kbRead KBReadFunc, log *slog.Logger) *nativeRunner {
 	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, kbRead: kbRead, log: log}
 }
 
@@ -229,6 +272,18 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return r.kbRead(ctx, documentID, collections)
 	})
+}
+
+// connectorReadTools resolves m's read-only connector tools (nil
+// resolver or no agent id means none) — appended to worker/explore
+// ExtraTools so a scheduled mission (daily inbox digest, calendar
+// summary) can read gmail/calendar without the base connector surface
+// (which BuiltinsOnly excludes) ever reopening for a write.
+func (r *nativeRunner) connectorReadTools(ctx context.Context, m Mission) []*tools.Tool {
+	if r.connectorReads == nil {
+		return nil
+	}
+	return r.connectorReads(ctx, m.AgentID)
 }
 
 // kbRefSink accumulates the kb:// refs of documents kb_search actually
@@ -552,6 +607,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if t := r.kbReadTool(m); t != nil {
 		extra = append(extra, t)
 	}
+	extra = append(extra, r.connectorReadTools(ctx, m)...)
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        workerRoute(m),
@@ -663,6 +719,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	if t := r.kbReadTool(m); t != nil {
 		extra = append(extra, t)
 	}
+	extra = append(extra, r.connectorReadTools(ctx, m)...)
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        oversightRoute(m),

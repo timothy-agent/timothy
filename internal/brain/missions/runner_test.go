@@ -909,6 +909,80 @@ func TestRunWorkerGetsMissionScopedShell(t *testing.T) {
 	}
 }
 
+// TestRunWorkerIncludesConnectorReadsWhenResolverSet confirms RunWorker
+// layers the connector reads resolver's tools into ExtraTools —
+// scheduled general missions (daily inbox digest) need gmail/calendar
+// reads despite BuiltinsOnly.
+func TestRunWorkerIncludesConnectorReadsWhenResolverSet(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	var gotAgentID string
+	r.connectorReads = func(ctx context.Context, agentID string) []*tools.Tool {
+		gotAgentID = agentID
+		return []*tools.Tool{{Name: "gmail_gmail_search", ReadOnly: true}}
+	}
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default", Workspace: "/workspace/missions/m1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if gotAgentID != "a1" {
+		t.Fatalf("connectorReads called with agentID %q, want a1", gotAgentID)
+	}
+	var names []string
+	for _, tool := range agent.requests[0].ExtraTools {
+		names = append(names, tool.Name)
+	}
+	if !slices.Contains(names, "gmail_gmail_search") {
+		t.Fatalf("worker ExtraTools = %v, want gmail_gmail_search", names)
+	}
+}
+
+// TestRunWorkerOmitsConnectorReadsWhenResolverUnset confirms unset
+// connectorReads (today's default) never adds connector tools —
+// nil-safe, same as before this existed.
+func TestRunWorkerOmitsConnectorReadsWhenResolverUnset(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Workspace: "/workspace/missions/m1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	for _, tool := range agent.requests[0].ExtraTools {
+		if strings.Contains(tool.Name, "gmail") || strings.Contains(tool.Name, "calendar") {
+			t.Fatalf("worker ExtraTools = %v, want no connector tools", tool.Name)
+		}
+	}
+}
+
+// TestExploreSessionIncludesConnectorReadsWhenResolverSet mirrors
+// TestRunWorkerIncludesConnectorReadsWhenResolverSet for the explore
+// phase — scheduled missions may need connector reads before planning
+// too.
+func TestExploreSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	r.connectorReads = func(ctx context.Context, agentID string) []*tools.Tool {
+		return []*tools.Tool{{Name: "google-calendar_calendar_list_events", ReadOnly: true}}
+	}
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default"}
+	if _, err := r.ExploreSession(context.Background(), m); err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	var names []string
+	for _, tool := range agent.requests[0].ExtraTools {
+		names = append(names, tool.Name)
+	}
+	if !slices.Contains(names, "google-calendar_calendar_list_events") {
+		t.Fatalf("explore ExtraTools = %v, want google-calendar_calendar_list_events", names)
+	}
+}
+
 // shellExtraTool pulls the "shell" tool out of a mission's ExtraTools
 // list — helper for tests exercising missionTools' Runner wiring
 // directly, without going through a full RunWorker turn.

@@ -163,6 +163,38 @@ func (m *Manager) Tools() []*tools.Tool {
 	return out
 }
 
+// ReadOnlyTools returns every built connector's ReadOnly-marked tools,
+// namespaced exactly like Tools — for mission turns, which must see
+// connector reads (gmail search, calendar list) despite BuiltinsOnly
+// but never connector writes (see missions.nativeRunner's connector
+// reads resolver). MCP sources are excluded unconditionally, marker or
+// not: a remote MCP server's tool can change behavior between builds,
+// and nothing here can verify a "read-only" claim actually holds —
+// unlike google's tool constructors, which are Timothy's own code.
+func (m *Manager) ReadOnlyTools() []*tools.Tool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*tools.Tool
+	for name, src := range m.sources {
+		if _, isMCP := src.(*mcpSource); isMCP {
+			continue
+		}
+		for _, t := range src.Tools() {
+			if !t.ReadOnly {
+				continue
+			}
+			full := toolNameSanitizer.ReplaceAllString(name+"_"+t.Name, "_")
+			if len(full) > 128 {
+				full = full[:128]
+			}
+			clone := *t
+			clone.Name = full
+			out = append(out, &clone)
+		}
+	}
+	return out
+}
+
 // SetOnReload registers a hook that fires after every successful
 // Reload — the agent's tool set rebuilds from it. Startup-time only.
 func (m *Manager) SetOnReload(fn func(context.Context)) {

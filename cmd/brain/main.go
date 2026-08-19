@@ -629,6 +629,48 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 	}
 }
 
+// missionConnectorReadsResolver adapts agentReg + conns to
+// missions.ConnectorReadsResolver: an agent's Tools allowlist
+// intersected with every built connector's ReadOnly-marked, non-MCP
+// tools (connectors.Manager.ReadOnlyTools already excludes MCP and
+// non-read-only tools). tools.ToolMatches is the same suffix rule
+// filterDefs/matchGrant use, so an allowlist entry authored before any
+// connector name is known (e.g. "gmail_search") still matches the
+// namespaced tool at resolve time.
+func missionConnectorReadsResolver(agentReg *agents.Store, conns *connectors.Manager) missions.ConnectorReadsResolver {
+	return func(ctx context.Context, agentID string) []*tools.Tool {
+		a, ok := agentReg.ResolveByID(ctx, agentID)
+		if !ok {
+			return nil
+		}
+		return intersectReadOnlyConnectorTools(a.Tools, conns.ReadOnlyTools())
+	}
+}
+
+// intersectReadOnlyConnectorTools is missionConnectorReadsResolver's
+// pure matching step, split out so it's unit-testable without a real
+// agents.Store/connectors.Manager (both need a live Postgres pool):
+// every available (already ReadOnly-marked, non-MCP) tool whose name
+// tools.ToolMatches an entry in allow. Empty allow (agent has no Tools
+// at all) matches nothing, same as filterDefs' empty-allow-means-
+// everything convention does NOT apply here — an agent that has never
+// opted into any tool gets no connector reads either.
+func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []*tools.Tool {
+	if len(allow) == 0 {
+		return nil
+	}
+	var out []*tools.Tool
+	for _, t := range available {
+		for _, a := range allow {
+			if tools.ToolMatches(t.Name, a) {
+				out = append(out, t)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // buildMissions wires the mission engine (Store, Driver, Notifier,
 // Scheduler, Hub). Gated on WORKSPACES: no workspace root configured
 // means missions stay entirely inert — no goroutines started, nothing
@@ -684,6 +726,9 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		return out, nil
 	}
 	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, kbReadFromStore(kb.New(db)), log)
+	if conns != nil {
+		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
+	}
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch — resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,

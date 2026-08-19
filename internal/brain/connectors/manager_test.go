@@ -96,6 +96,33 @@ func TestReloadSkipsFailedBuildAndClosesOld(t *testing.T) {
 	}
 }
 
+// TestReadOnlyToolsExcludesWritesAndMCP pins ReadOnlyTools' two-part
+// filter: only ReadOnly-marked tools, and never from an MCP source —
+// even one whose tool happens to carry ReadOnly, since a remote MCP
+// server's claim can't be verified (see ReadOnlyTools' doc comment).
+func TestReadOnlyToolsExcludesWritesAndMCP(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"gmail": &fakeSource{tools: []*tools.Tool{
+			{Name: "search", ReadOnly: true},
+			{Name: "send", ReadOnly: false},
+		}},
+		"remote": &mcpSource{name: "remote", toolList: []*tools.Tool{
+			{Name: "read", ReadOnly: true},
+		}},
+	}
+
+	got := map[string]bool{}
+	for _, t := range m.ReadOnlyTools() {
+		got[t.Name] = true
+	}
+	want := map[string]bool{"gmail_search": true}
+	if len(got) != len(want) || !got["gmail_search"] {
+		t.Fatalf("ReadOnlyTools = %v, want %v", got, want)
+	}
+}
+
 func TestReloadKeepsSetOnListError(t *testing.T) {
 	t.Parallel()
 	keep := &fakeSource{}

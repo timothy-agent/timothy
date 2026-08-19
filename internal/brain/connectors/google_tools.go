@@ -228,7 +228,8 @@ func htmlPart(parts []gmailPart) []byte {
 
 func (s *googleSource) gmailSearch() *tools.Tool {
 	return &tools.Tool{
-		Name: "gmail_search",
+		Name:     "gmail_search",
+		ReadOnly: true,
 		Description: `Search the connected Gmail account. query uses Gmail search syntax
 (from:, subject:, is:unread, newer_than:7d, after:YYYY/MM/DD, ...).
 Returns up to max_results (default 10) messages as id, date, from,
@@ -335,6 +336,7 @@ func findAttachment(parts []gmailPart, filename string) (string, bool) {
 func (s *googleSource) gmailRead() *tools.Tool {
 	return &tools.Tool{
 		Name:        "gmail_read",
+		ReadOnly:    true,
 		Description: "Read one email's full content by message id (from gmail_search). Returns headers and the body — plain text when available, otherwise the HTML body rendered to readable text (common for booking confirmations and receipts) — plus a list of attachment filenames, if any. Use gmail_read_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"Gmail message id"}
@@ -381,6 +383,7 @@ func (s *googleSource) gmailRead() *tools.Tool {
 func (s *googleSource) gmailReadAttachment() *tools.Tool {
 	return &tools.Tool{
 		Name:        "gmail_read_attachment",
+		ReadOnly:    true,
 		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from gmail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"message_id":{"type":"string","description":"Gmail message id"},
@@ -464,6 +467,7 @@ func (s *googleSource) gmailSend() *tools.Tool {
 func (s *googleSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
 		Name:        "calendar_list_events",
+		ReadOnly:    true,
 		Description: "List events from the connected Google Calendar (primary calendar). time_min/time_max are RFC3339 timestamps; both default to the next 7 days. Returns start, end, summary, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"time_min":{"type":"string","description":"RFC3339, e.g. 2026-07-21T00:00:00Z"},

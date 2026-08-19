@@ -20,4 +20,11 @@ type Tool struct {
 	Description string
 	InputSchema json.RawMessage
 	Execute     func(ctx context.Context, args json.RawMessage) (string, error)
+	// ReadOnly marks a tool as having no side effects — set only on
+	// connector tools a mission turn may see despite BuiltinsOnly (see
+	// loop.Request.BuiltinsOnly and missions.nativeRunner's connector
+	// reads resolver). Unset (false) everywhere else; setting it is a
+	// deliberate, per-tool decision, never inferred from a naming
+	// convention or a connector's kind.
+	ReadOnly bool
 }

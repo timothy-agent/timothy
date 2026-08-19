@@ -455,6 +455,43 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 	}
 }
 
+// TestGoogleReadOnlyToolsPinned pins exactly which google tools carry
+// tools.Tool.ReadOnly — mission worker/explore turns layer these back
+// in despite BuiltinsOnly (see missions.ConnectorReadsResolver); a
+// future tool addition must decide this explicitly rather than
+// silently inheriting read-only exposure to missions.
+func TestGoogleReadOnlyToolsPinned(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(bothScopes)
+	g, _ := testGoogle(t, f, row)
+	src, err := g.Builder()(t.Context(), row, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]bool{
+		"gmail_search":          true,
+		"gmail_read":            true,
+		"gmail_read_attachment": true,
+		"calendar_list_events":  true,
+	}
+	got := map[string]bool{}
+	for _, tl := range src.Tools() {
+		if tl.ReadOnly {
+			got[tl.Name] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("read-only tools = %v, want %v", got, want)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("expected %s to be marked ReadOnly", name)
+		}
+	}
+}
+
 func connectedSource(t *testing.T, f *fakeGoogle) (Source, *fakeSecrets) {
 	t.Helper()
 	row := googleRow(bothScopes)

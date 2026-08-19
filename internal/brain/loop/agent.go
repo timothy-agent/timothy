@@ -265,7 +265,11 @@ type Request struct {
 	// mission turn. Deliberately independent of MissionID (a ledger
 	// attribution tag only) so tool-surface scoping stays an explicit,
 	// intentional choice at each call site rather than inferred.
-	// ExtraTools still layer on top as normal.
+	// ExtraTools still layer on top as normal — missions.nativeRunner's
+	// worker/explore turns use exactly this to add back read-only
+	// connector tools (gmail/calendar reads) that scheduled general
+	// missions need, gated on the agent's Tools allowlist and never
+	// including MCP or write-capable tools (missions.ConnectorReadsResolver).
 	BuiltinsOnly bool
 
 	// ExtraTools are tool defs available ONLY for this turn, on top of
