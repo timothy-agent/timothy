@@ -138,6 +138,7 @@ func TestListSecretsCountsGoogleClientSecretRef(t *testing.T) {
 		{RefName: "GMAIL_GOOGLE_CLIENT_SECRET"},
 	}}
 	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		//nolint:gosec // G101: fixture ref names, not credential values.
 		{Name: "gmail", Kind: "google", CredentialRef: "GMAIL_GOOGLE_OAUTH",
 			Config: json.RawMessage(`{"client_id":"x.apps.googleusercontent.com","client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
@@ -177,6 +178,7 @@ func TestDeleteSecretRefusesGoogleClientSecretRef(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{}
 	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		//nolint:gosec // G101: fixture ref names, not credential values.
 		{Name: "gmail", Kind: "google", CredentialRef: "GMAIL_GOOGLE_OAUTH",
 			Config: json.RawMessage(`{"client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}

@@ -198,7 +198,7 @@ func connectorRefs(ctx context.Context, store connectorLister) (map[string][]ref
 		// OAuth token bundle, never a valid manual pick.
 		credRole := "credential"
 		if c.Kind == "google" {
-			credRole = "oauth_tokens"
+			credRole = "oauth_tokens" //nolint:gosec // G101: role label, not a credential value.
 		}
 		out[c.CredentialRef] = append(out[c.CredentialRef], referenceInfo{Kind: "connector", Name: c.Name, Role: credRole})
 		if c.Kind == "github" {
