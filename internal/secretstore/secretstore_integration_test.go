@@ -557,3 +557,135 @@ func TestMigrateUnconfiguredTargetErrors(t *testing.T) {
 		t.Fatalf("row changed after a rejected migrate: configured=%v backend=%q err=%v", configured, backend, err)
 	}
 }
+
+// TestMigrateRefusesVaultTokenBootstrapRef pins the chicken-and-egg
+// fix: vault's own token_ref must never move into vault itself, since
+// resolving it afterward would need the token it no longer has in db.
+// Migrating it back to db (the recovery path) stays allowed.
+func TestMigrateRefusesVaultTokenBootstrapRef(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	tokenRef := "TEST_MIGRATE_BOOTSTRAP_TOKEN_" + t.Name()
+
+	srv, _ := fakeVaultKV(t)
+	defer srv.Close()
+	restore := setUpVaultDefault(t, s, srv, tokenRef)
+	defer restore()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, tokenRef)
+	}()
+
+	err = s.Migrate(ctx, tokenRef, "vault")
+	if err == nil {
+		t.Fatal("Migrate accepted moving the vault token_ref into vault")
+	}
+	if !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
+	}
+	if configured, backend, err := s.Status(ctx, tokenRef); err != nil || !configured || backend != "db" {
+		t.Fatalf("row changed after a rejected migrate: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+
+	// Recovery path: migrating the bootstrap ref back to db (its
+	// current backend) stays allowed as a no-op.
+	if err := s.Migrate(ctx, tokenRef, "db"); err != nil {
+		t.Fatalf("Migrate bootstrap ref to db (no-op): %v", err)
+	}
+}
+
+// TestMigrateRefusesVaultSecretIDBootstrapRef covers the exact
+// production incident: approle auth's secret_id_ref (defaulting to
+// VAULT_SECRET_ID) must also be refused into vault.
+func TestMigrateRefusesVaultSecretIDBootstrapRef(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	secretIDRef := "TEST_MIGRATE_BOOTSTRAP_SECRETID_" + t.Name()
+
+	srv, _ := fakeVaultKV(t)
+	defer srv.Close()
+
+	origCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, secretIDRef)
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("delete vault config: %v", err)
+		}
+	}()
+
+	cfg := `{"address":"` + srv.URL + `","mount":"kv","auth":"approle","role_id":"role-x","secret_id_ref":"` + secretIDRef + `"}`
+	if _, err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
+		t.Fatalf("SetBackendConfig: %v", err)
+	}
+	if err := s.SetDB(ctx, secretIDRef, "secret-id-x"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+
+	err = s.Migrate(ctx, secretIDRef, "vault")
+	if err == nil {
+		t.Fatal("Migrate accepted moving the vault secret_id_ref into vault")
+	}
+	if !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
+	}
+}
+
+// TestMigrateRefusesASMSecretKeyBootstrapRef covers asm's static-keys
+// auth: the secret_key_ref (defaulting to AWS_SECRET_ACCESS_KEY) must
+// be refused into asm. Only the asm backend config row is saved here
+// (no live AWS client) — bootstrapRefs reads stored config only, so it
+// picks the ref up without needing working AWS credentials.
+func TestMigrateRefusesASMSecretKeyBootstrapRef(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	secretKeyRef := "TEST_MIGRATE_BOOTSTRAP_ASMKEY_" + t.Name()
+
+	origCfg, err := s.GetBackendConfig(ctx, "asm")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, secretKeyRef)
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "asm", origCfg); err != nil {
+				t.Errorf("restore asm config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "asm"); err != nil {
+			t.Errorf("delete asm config: %v", err)
+		}
+	}()
+
+	cfg := `{"auth":"keys","access_key_id":"AKIAEXAMPLE","secret_key_ref":"` + secretKeyRef + `"}`
+	if _, err := s.SetBackendConfig(ctx, "asm", []byte(cfg)); err != nil {
+		t.Fatalf("SetBackendConfig: %v", err)
+	}
+	if err := s.SetDB(ctx, secretKeyRef, "secret-key-x"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+
+	err = s.Migrate(ctx, secretKeyRef, "asm")
+	if err == nil {
+		t.Fatal("Migrate accepted moving the asm secret_key_ref into asm")
+	}
+	if !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
+	}
+}

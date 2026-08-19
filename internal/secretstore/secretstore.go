@@ -12,6 +12,7 @@ package secretstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -243,9 +244,62 @@ func (s *Store) upsertRef(ctx context.Context, refName, backend, backendRef stri
 	return nil
 }
 
+// bootstrapRefs collects the ref names every configured external
+// backend needs to log in with — vault's token/secret_id ref, asm's
+// static secret key ref — applying each config loader's own
+// defaulting for an empty ref field. Unconfigured backends contribute
+// nothing. These refs unlock the backend they name, so migrating one
+// of them into that same backend is a chicken-and-egg lockout: nothing
+// left in db can decrypt the login credential needed to resolve it.
+func (s *Store) bootstrapRefs(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	vaultCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		return nil, err
+	}
+	if string(vaultCfg) != "{}" {
+		var v VaultConfig
+		if err := json.Unmarshal(vaultCfg, &v); err != nil {
+			return nil, fmt.Errorf("secretstore: vault config: %w", err)
+		}
+		tokenRef := v.TokenRef
+		if tokenRef == "" {
+			tokenRef = defaultVaultTokenRef
+		}
+		out[tokenRef] = true
+		if v.Auth == "approle" {
+			secretIDRef := v.SecretIDRef
+			if secretIDRef == "" {
+				secretIDRef = defaultVaultSecretIDRef
+			}
+			out[secretIDRef] = true
+		}
+	}
+	asmCfg, err := s.GetBackendConfig(ctx, "asm")
+	if err != nil {
+		return nil, err
+	}
+	if string(asmCfg) != "{}" {
+		var a ASMConfig
+		if err := json.Unmarshal(asmCfg, &a); err != nil {
+			return nil, fmt.Errorf("secretstore: asm config: %w", err)
+		}
+		if a.Auth == "keys" {
+			secretKeyRef := a.SecretKeyRef
+			if secretKeyRef == "" {
+				secretKeyRef = defaultASMSecretKeyRef
+			}
+			out[secretKeyRef] = true
+		}
+	}
+	return out, nil
+}
+
 // Migrate moves refName's stored value onto targetBackend, replacing
 // its current backend entirely. Idempotent no-op when refName already
-// lives on targetBackend. Ordering matters for crash safety: the new
+// lives on targetBackend. Refuses to move a backend bootstrap
+// credential (see bootstrapRefs) off db into the very backend it
+// unlocks. Ordering matters for crash safety: the new
 // home is written FIRST, the row's backend column flipped SECOND, and
 // only then is the old storage wiped — a crash between any two steps
 // leaves the value readable at its new home (a stray old-backend copy
@@ -260,6 +314,13 @@ func (s *Store) Migrate(ctx context.Context, refName, targetBackend string) erro
 	if targetBackend != "db" {
 		if err := validExternalBackend(targetBackend); err != nil {
 			return err
+		}
+		bootstrap, err := s.bootstrapRefs(ctx)
+		if err != nil {
+			return err
+		}
+		if bootstrap[refName] {
+			return fmt.Errorf("secretstore: %q is a backend bootstrap credential (vault/asm login secret) and must stay in built-in db storage", refName)
 		}
 	}
 	r, err := s.row(ctx, refName)

@@ -1192,6 +1192,10 @@ func TestMigrateAllSecretsBulkPartialFailure(t *testing.T) {
 		t.Fatalf("pre-migrate refSkip: %v", err)
 	}
 
+	// refBootstrap: the vault backend's own token_ref, db-backed. The
+	// bulk migrate must record it as an error, never abort the batch.
+	refBootstrap := refOK + "_TOKEN"
+
 	results, err := adm.MigrateAllSecrets(ctx, "vault")
 	if err != nil {
 		t.Fatalf("MigrateAllSecrets: %v", err)
@@ -1205,6 +1209,13 @@ func TestMigrateAllSecretsBulkPartialFailure(t *testing.T) {
 	}
 	if !byName[refSkip].Skipped {
 		t.Fatalf("refSkip result = %+v, want skipped (already on vault)", byName[refSkip])
+	}
+	bootstrapResult := byName[refBootstrap]
+	if bootstrapResult.Migrated || bootstrapResult.Skipped || bootstrapResult.Error == "" {
+		t.Fatalf("refBootstrap result = %+v, want error only", bootstrapResult)
+	}
+	if !strings.Contains(bootstrapResult.Error, "bootstrap credential") {
+		t.Fatalf("refBootstrap error = %q, want it to mention bootstrap credential", bootstrapResult.Error)
 	}
 
 	// An unknown target backend fails validation before touching any ref.
