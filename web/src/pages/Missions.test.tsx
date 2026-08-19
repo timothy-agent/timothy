@@ -9,13 +9,11 @@ vi.mock('../api/client', () => ({
   listMissions: vi.fn(),
   listNotifications: vi.fn(),
   markNotificationRead: vi.fn(),
-  listSchedules: vi.fn(),
-  listAgents: vi.fn(),
 }))
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
 
-import { listAgents, listMissions, listNotifications, listSchedules } from '../api/client'
+import { listMissions, listNotifications } from '../api/client'
 import { subscribeEvents } from '../lib/events'
 
 // captureSubscribe grabs the onSignal/onReady callbacks subscribeEvents
@@ -64,12 +62,11 @@ function renderPage() {
 
 afterEach(cleanup)
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(subscribeEvents).mockReturnValue(vi.fn())
   vi.mocked(listMissions).mockResolvedValue([mission])
   vi.mocked(listNotifications).mockResolvedValue([])
-  vi.mocked(listAgents).mockResolvedValue([])
-  vi.mocked(listSchedules).mockResolvedValue([])
 })
 
 describe('Missions board', () => {
@@ -220,5 +217,75 @@ describe('Missions board', () => {
     await screen.findByText('Fix the login bug')
     unmount()
     expect(sub.unsubscribe).toHaveBeenCalled()
+  })
+
+  describe('filters', () => {
+    const coding: Mission = {
+      ...mission,
+      id: 'm2',
+      goal: 'Refactor the payments module',
+      kind: 'coding',
+      harness: 'claude-cli',
+      top_model: 'claude-opus-4',
+      schedule_id: 's1',
+    }
+
+    it('narrows by kind', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+      await screen.findByText('Refactor the payments module')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'Coding' }))
+
+      expect(screen.queryByText('Fix the login bug')).toBeNull()
+      expect(screen.getByText('Refactor the payments module')).toBeTruthy()
+      expect(screen.getByText('1 of 2')).toBeTruthy()
+    })
+
+    it('narrows by harness, showing Native for an unset harness', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by harness' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'Native' }))
+
+      expect(screen.getByText('Fix the login bug')).toBeTruthy()
+      expect(screen.queryByText('Refactor the payments module')).toBeNull()
+    })
+
+    it('narrows by model', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by model' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'claude-opus-4' }))
+
+      expect(screen.queryByText('Fix the login bug')).toBeNull()
+      expect(screen.getByText('Refactor the payments module')).toBeTruthy()
+    })
+
+    it('narrows by source: automated means schedule_id is set', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by source' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'Automated' }))
+
+      expect(screen.queryByText('Fix the login bug')).toBeNull()
+      expect(screen.getByText('Refactor the payments module')).toBeTruthy()
+    })
+
+    it('shows no count when no filter is active', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+      expect(screen.queryByText('1 of 2')).toBeNull()
+      expect(screen.queryByText('2 of 2')).toBeNull()
+    })
   })
 })

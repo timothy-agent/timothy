@@ -39,8 +39,8 @@ export function EditSchedule() {
       <div className="mx-auto w-full max-w-full px-8 py-6">
         <p className="text-sm text-muted-foreground">
           Schedule not found.{' '}
-          <Link to="/missions" className="underline underline-offset-2 hover:text-foreground">
-            Back to missions
+          <Link to="/automations" className="underline underline-offset-2 hover:text-foreground">
+            Back to automations
           </Link>
         </p>
       </div>
@@ -60,8 +60,8 @@ export function EditSchedule() {
         <MissionForm
           mode="edit"
           schedule={schedule}
-          onCancel={() => navigate('/missions')}
-          onDone={() => navigate('/missions')}
+          onCancel={() => navigate(`/automations/${id}`)}
+          onDone={() => navigate(`/automations/${id}`)}
         />
       </div>
     </div>

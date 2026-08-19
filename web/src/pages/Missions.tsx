@@ -1,13 +1,29 @@
 import { BellIcon, CancelCircleIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { listMissions, listNotifications, markNotificationRead } from '../api/client'
 import type { Mission, Notification } from '../api/types'
 import { MissionCard } from '../components/missions/MissionCard'
-import { RecurringSchedules } from '../components/missions/RecurringSchedules'
 import { Button } from '../components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select'
 import { subscribeEvents } from '../lib/events'
+
+type KindFilter = 'all' | Mission['kind']
+type SourceFilter = 'all' | 'manual' | 'automated'
+
+// harnessLabel mirrors MissionCard's own "Native" fallback for an
+// unset harness — filter options must read the same as the cards
+// they're filtering.
+function harnessLabel(harness?: string): string {
+  return harness || 'Native'
+}
 
 // notificationSeverityClasses colors the banner by notification kind —
 // same green/amber/red convention MissionCard's statusColor uses for
@@ -40,6 +56,10 @@ export function Missions() {
   const navigate = useNavigate()
   const [missions, setMissions] = useState<Mission[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all')
+  const [harnessFilter, setHarnessFilter] = useState('all')
+  const [modelFilter, setModelFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   const refresh = useCallback(() => {
     listMissions().then(setMissions, () => undefined)
@@ -63,6 +83,34 @@ export function Missions() {
   const dismiss = (id: string) => {
     markNotificationRead(id).then(refresh, () => undefined)
   }
+
+  // Distinct harness/model values present in the loaded missions only —
+  // a picker never offers a value nothing on the board actually has.
+  const harnessOptions = useMemo(
+    () => Array.from(new Set(missions.map((m) => harnessLabel(m.harness)))).sort(),
+    [missions],
+  )
+  const modelOptions = useMemo(
+    () =>
+      Array.from(new Set(missions.map((m) => m.top_model).filter((v): v is string => !!v))).sort(),
+    [missions],
+  )
+
+  const filtersActive =
+    kindFilter !== 'all' || harnessFilter !== 'all' || modelFilter !== 'all' || sourceFilter !== 'all'
+
+  const filteredMissions = useMemo(
+    () =>
+      missions.filter((m) => {
+        if (kindFilter !== 'all' && m.kind !== kindFilter) return false
+        if (harnessFilter !== 'all' && harnessLabel(m.harness) !== harnessFilter) return false
+        if (modelFilter !== 'all' && m.top_model !== modelFilter) return false
+        if (sourceFilter === 'manual' && m.schedule_id) return false
+        if (sourceFilter === 'automated' && !m.schedule_id) return false
+        return true
+      }),
+    [missions, kindFilter, harnessFilter, modelFilter, sourceFilter],
+  )
 
   return (
     <div className="mx-auto w-full max-w-full px-8 py-6">
@@ -104,15 +152,73 @@ export function Missions() {
         </div>
       )}
 
-      <RecurringSchedules />
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Select value={kindFilter} onValueChange={(v) => setKindFilter(v as KindFilter)}>
+          <SelectTrigger size="sm" aria-label="Filter by kind">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All kinds</SelectItem>
+            <SelectItem value="coding">Coding</SelectItem>
+            <SelectItem value="general">General</SelectItem>
+          </SelectContent>
+        </Select>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {missions.map((m) => (
+        <Select value={harnessFilter} onValueChange={setHarnessFilter}>
+          <SelectTrigger size="sm" aria-label="Filter by harness">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All harnesses</SelectItem>
+            {harnessOptions.map((h) => (
+              <SelectItem key={h} value={h}>
+                {h}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={modelFilter} onValueChange={setModelFilter}>
+          <SelectTrigger size="sm" aria-label="Filter by model">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All models</SelectItem>
+            {modelOptions.map((m) => (
+              <SelectItem key={m} value={m}>
+                {m}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>
+          <SelectTrigger size="sm" aria-label="Filter by source">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All sources</SelectItem>
+            <SelectItem value="manual">Manual</SelectItem>
+            <SelectItem value="automated">Automated</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {filtersActive && (
+          <span className="text-xs text-muted-foreground">
+            {filteredMissions.length} of {missions.length}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {filteredMissions.map((m) => (
           <MissionCard key={m.id} mission={m} />
         ))}
-        {missions.length === 0 && (
+        {filteredMissions.length === 0 && (
           <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No missions yet, create one to get started.
+            {missions.length === 0
+              ? 'No missions yet, create one to get started.'
+              : 'No missions match the current filters.'}
           </div>
         )}
       </div>

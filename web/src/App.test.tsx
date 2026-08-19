@@ -45,6 +45,23 @@ describe('Sidebar nav', () => {
     const labels = links.map((l) => l.textContent).filter((t) => t === 'Knowledge' || t === 'Memory')
     expect(labels).toEqual(['Knowledge', 'Memory'])
   })
+
+  it('lists Automations directly below Missions', async () => {
+    renderAt('/')
+    const links = await screen.findAllByRole('link')
+    const labels = links.map((l) => l.textContent).filter((t) => t === 'Missions' || t === 'Automations')
+    expect(labels).toEqual(['Missions', 'Automations'])
+  })
+})
+
+describe('Legacy edit schedule route', () => {
+  it('redirects /missions/schedules/:id/edit to /automations/:id/edit', async () => {
+    renderAt('/missions/schedules/s1/edit')
+    // No GET-by-id for schedules: the redirected EditSchedule page can't
+    // resolve 's1' against an empty (failed-fetch) schedule list, so it
+    // falls back to its own not-found copy — proof the route landed.
+    expect(await screen.findByText('Schedule not found.')).toBeTruthy()
+  })
 })
 
 describe('Settings sidebar submenu', () => {

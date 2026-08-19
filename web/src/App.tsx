@@ -8,6 +8,7 @@ import {
   Key01Icon,
   LibraryIcon,
   Moon02Icon,
+  RepeatIcon,
   RocketIcon,
   Search01Icon,
   Settings02Icon,
@@ -61,6 +62,8 @@ import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
 import { Analytics } from './pages/Analytics'
+import { AutomationDetail } from './pages/AutomationDetail'
+import { Automations } from './pages/Automations'
 import { EditSchedule } from './pages/EditSchedule'
 import { Home } from './pages/Home'
 import { Knowledge } from './pages/Knowledge'
@@ -75,6 +78,7 @@ const nav = [
   { label: 'Home', href: '/', icon: Home01Icon },
   { label: 'Chat', href: '/chat', icon: BubbleChatIcon },
   { label: 'Missions', href: '/missions', icon: RocketIcon },
+  { label: 'Automations', href: '/automations', icon: RepeatIcon },
   { label: 'Knowledge', href: '/knowledge', icon: LibraryIcon },
   { label: 'Memory', href: '/memory', icon: Brain02Icon },
   { label: 'Analytics', href: '/analytics', icon: Analytics01Icon },
@@ -88,6 +92,7 @@ function isActive(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/'
   if (href === '/chat') return pathname === '/chat' || pathname.startsWith('/chat/')
   if (href === '/missions') return pathname === '/missions' || pathname.startsWith('/missions/')
+  if (href === '/automations') return pathname === '/automations' || pathname.startsWith('/automations/')
   if (href === '/knowledge') return pathname === '/knowledge' || pathname.startsWith('/knowledge/')
   if (href === '/settings') return pathname.startsWith('/settings')
   return pathname === href
@@ -338,6 +343,13 @@ function LegacySessionRedirect() {
   return <Navigate to={`/chat/${id}`} replace />
 }
 
+// LegacyEditScheduleRedirect keeps old /missions/schedules/{id}/edit
+// links working now that schedule editing lives under /automations.
+function LegacyEditScheduleRedirect() {
+  const { id } = useParams()
+  return <Navigate to={`/automations/${id}/edit`} replace />
+}
+
 function App() {
   const [tokenOpen, setTokenOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -470,8 +482,15 @@ function App() {
                 <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
                 <Route path="/missions" element={<Missions />} />
                 <Route path="/missions/new" element={<NewMission />} />
-                <Route path="/missions/schedules/:id/edit" element={<EditSchedule />} />
+                {/* Old bookmark: schedule editing lived under /missions before automations got their own page. */}
+                <Route
+                  path="/missions/schedules/:id/edit"
+                  element={<LegacyEditScheduleRedirect />}
+                />
                 <Route path="/missions/:id" element={<MissionDetail />} />
+                <Route path="/automations" element={<Automations />} />
+                <Route path="/automations/:id/edit" element={<EditSchedule />} />
+                <Route path="/automations/:id" element={<AutomationDetail />} />
                 <Route path="/knowledge/*" element={<Knowledge />} />
                 <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />
                 <Route path="/memory/*" element={<Memory />} />

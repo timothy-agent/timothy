@@ -73,7 +73,7 @@ export function NewMission() {
               if (result.kind === 'mission') {
                 navigate(`/missions/${result.id}`)
               } else {
-                navigate('/missions')
+                navigate('/automations')
               }
             }}
           />

@@ -1,18 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Schedule } from '../../api/types'
-import { RecurringSchedules } from './RecurringSchedules'
+import type { Schedule } from '../api/types'
+import { Automations } from './Automations'
 
-vi.mock('../../api/client', () => ({
+vi.mock('../api/client', () => ({
   listSchedules: vi.fn(),
-  createSchedule: vi.fn(),
   patchSchedule: vi.fn(),
   deleteSchedule: vi.fn(),
-  listAgents: vi.fn(),
 }))
 
-import { deleteSchedule, listAgents, listSchedules, patchSchedule } from '../../api/client'
+import { deleteSchedule, listSchedules, patchSchedule } from '../api/client'
 
 const schedule: Schedule = {
   id: 's1',
@@ -26,13 +24,14 @@ const schedule: Schedule = {
   pending_fire: false,
 }
 
-function renderList() {
+function renderPage() {
   const router = createMemoryRouter(
     [
-      { path: '/missions', element: <RecurringSchedules /> },
-      { path: '/missions/schedules/:id/edit', element: <div>edit schedule page</div> },
+      { path: '/automations', element: <Automations /> },
+      { path: '/automations/:id', element: <div>automation detail page</div> },
+      { path: '/automations/:id/edit', element: <div>edit automation page</div> },
     ],
-    { initialEntries: ['/missions'] },
+    { initialEntries: ['/automations'] },
   )
   const result = render(<RouterProvider router={router} />)
   return { router, ...result }
@@ -43,27 +42,25 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listSchedules).mockResolvedValue([])
-  vi.mocked(listAgents).mockResolvedValue([])
 })
 
-describe('RecurringSchedules', () => {
-  it('renders nothing when there are no schedules', async () => {
-    const { container } = renderList()
-    await waitFor(() => expect(listSchedules).toHaveBeenCalled())
-    expect(container).toBeEmptyDOMElement()
+describe('Automations page', () => {
+  it('shows an empty state with no schedules', async () => {
+    renderPage()
+    expect(await screen.findByText(/No automations yet/)).toBeTruthy()
   })
 
   it('lists schedules with cron description and next run', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
-    renderList()
+    renderPage()
     expect(await screen.findByText('weekly-digest')).toBeTruthy()
     expect(screen.getByText('Weekdays, 8:00 AM')).toBeTruthy()
   })
 
-  it('toggles enabled optimistically', async () => {
+  it('toggles enabled and calls PATCH', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     vi.mocked(patchSchedule).mockResolvedValue({ ...schedule, enabled: false })
-    renderList()
+    renderPage()
     await screen.findByText('weekly-digest')
 
     fireEvent.click(screen.getByRole('switch', { name: 'weekly-digest enabled' }))
@@ -73,7 +70,7 @@ describe('RecurringSchedules', () => {
   it('deletes a schedule after confirming', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     vi.mocked(deleteSchedule).mockResolvedValue()
-    renderList()
+    renderPage()
     await screen.findByText('weekly-digest')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete weekly-digest' }))
@@ -82,14 +79,23 @@ describe('RecurringSchedules', () => {
     await waitFor(() => expect(deleteSchedule).toHaveBeenCalledWith('s1'))
   })
 
-  it('navigates to the edit schedule page', async () => {
+  it('navigates to the automation detail page on card click', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
-    const { router } = renderList()
+    const { router } = renderPage()
+    fireEvent.click(await screen.findByText('weekly-digest'))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1'))
+    expect(await screen.findByText('automation detail page')).toBeTruthy()
+  })
+
+  it('navigates to the edit automation page', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    const { router } = renderPage()
     await screen.findByText('weekly-digest')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
 
-    await waitFor(() => expect(router.state.location.pathname).toBe('/missions/schedules/s1/edit'))
-    expect(await screen.findByText('edit schedule page')).toBeTruthy()
+    await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1/edit'))
+    expect(await screen.findByText('edit automation page')).toBeTruthy()
   })
 })

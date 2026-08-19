@@ -1,32 +1,29 @@
 import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { deleteSchedule, patchSchedule, listSchedules } from '../../api/client'
-import type { Schedule } from '../../api/types'
-import { describeCron } from '../../lib/schedules'
-import { Button } from '../ui/button'
+import { deleteSchedule, patchSchedule, listSchedules } from '../api/client'
+import type { Schedule } from '../api/types'
+import { describeCron } from '../lib/schedules'
+import { relativeTime } from '../lib/format'
+import { Button } from '../components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '../ui/dialog'
-import { Toggle } from '../settings/shared'
-import { errText } from '../settings/util'
+} from '../components/ui/dialog'
+import { Toggle } from '../components/settings/shared'
+import { errText } from '../components/settings/util'
 
-function formatDate(v?: string): string {
-  if (!v) return 'N/A'
-  return new Date(v).toLocaleString()
-}
-
-// RecurringSchedules lists the recurring missions created from the new
-// mission page's "Repeat on schedule" option — rendered on the
-// Missions page between the notifications strip and the mission grid,
-// only when at least one schedule exists.
-export function RecurringSchedules() {
+// Automations lists every recurring schedule as a card, folding in what
+// RecurringSchedules used to render inline on the Missions page — same
+// API calls (listSchedules/patchSchedule/deleteSchedule), moved here
+// since a schedule now has its own detail page (run history) to link
+// into.
+export function Automations() {
   const navigate = useNavigate()
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [confirmDelete, setConfirmDelete] = useState<Schedule | null>(null)
@@ -59,48 +56,55 @@ export function RecurringSchedules() {
     }
   }
 
-  if (schedules.length === 0) return null
-
   return (
-    <div className="mt-4 space-y-3">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Recurring · {schedules.length}
-      </h2>
-      <div className="space-y-3">
+    <div className="mx-auto w-full max-w-full px-8 py-6">
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Automations</h1>
+        <p className="text-sm text-muted-foreground">Recurring missions that run on a schedule.</p>
+      </div>
+
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {schedules.map((sc) => (
           <div
             key={sc.id}
-            className="flex items-center gap-4 rounded-xl border border-border bg-card p-4"
+            className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:border-brand hover:shadow-md"
           >
-            <div className="min-w-0 flex-1">
+            <Link to={`/automations/${sc.id}`} className="min-w-0">
               <span className="truncate text-sm font-semibold">{sc.name}</span>
               <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
                 {sc.mission_template.goal}
               </p>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                 <span>{describeCron(sc.cron)}</span>
-                <span>next run {formatDate(sc.next_run)}</span>
-                {sc.last_run && <span>last run {formatDate(sc.last_run)}</span>}
+                {sc.next_run && <span>next {relativeTime(sc.next_run)}</span>}
+                {sc.last_run && <span>last {relativeTime(sc.last_run)}</span>}
               </div>
+            </Link>
+            <div className="flex items-center gap-2">
+              <Toggle on={sc.enabled} onChange={(v) => toggle(sc, v)} label={`${sc.name} enabled`} />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => navigate(`/automations/${sc.id}/edit`)}
+              >
+                Edit
+              </Button>
+              <button
+                type="button"
+                aria-label={`Delete ${sc.name}`}
+                onClick={() => setConfirmDelete(sc)}
+                className="ml-auto text-muted-foreground hover:text-destructive"
+              >
+                <HugeiconsIcon icon={Delete02Icon} className="size-4" />
+              </button>
             </div>
-            <Toggle on={sc.enabled} onChange={(v) => toggle(sc, v)} label={`${sc.name} enabled`} />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => navigate(`/missions/schedules/${sc.id}/edit`)}
-            >
-              Edit
-            </Button>
-            <button
-              type="button"
-              aria-label={`Delete ${sc.name}`}
-              onClick={() => setConfirmDelete(sc)}
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-            </button>
           </div>
         ))}
+        {schedules.length === 0 && (
+          <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+            No automations yet. Create a mission and choose "Repeat on schedule" to add one.
+          </div>
+        )}
       </div>
 
       <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
