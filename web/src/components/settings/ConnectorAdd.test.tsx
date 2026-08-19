@@ -38,7 +38,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'db', configured: true, default: true }])
   vi.mocked(listSecretRefs).mockResolvedValue([
-    { name: 'GITHUB_PAT', referenced_by: [{ kind: 'connector', name: 'github-account' }] },
+    { name: 'GITHUB_PAT', referenced_by: [{ kind: 'connector', name: 'github-account', role: 'credential' }] },
+    {
+      name: 'GMAIL_GOOGLE_OAUTH',
+      referenced_by: [{ kind: 'connector', name: 'gmail', role: 'oauth_tokens' }],
+    },
   ])
 })
 
@@ -65,5 +69,14 @@ describe('ConnectorAdd existing-credential picker (github MCP token)', () => {
     await waitFor(() => expect(createConnector).toHaveBeenCalled())
     expect(setSecret).not.toHaveBeenCalled()
     expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ credential_ref: 'GITHUB_PAT' })
+  })
+
+  it('disables an OAuth token bundle ref with a managed-by-connector label', async () => {
+    renderPage('github')
+    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    const option = await screen.findByRole('option', { name: /GMAIL_GOOGLE_OAUTH.*OAuth tokens \(managed by connector\)/ })
+    expect(option).toHaveAttribute('aria-disabled', 'true')
   })
 })

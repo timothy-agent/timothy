@@ -230,7 +230,7 @@ describe('ProviderAdd existing-credential picker', () => {
     vi.mocked(setSecret).mockResolvedValue()
     vi.mocked(createProvider).mockResolvedValue('p-new')
     vi.mocked(listSecretRefs).mockResolvedValue([
-      { name: 'ZAI_API_KEY', referenced_by: [{ kind: 'provider', name: 'GLM (Z.ai)' }] },
+      { name: 'ZAI_API_KEY', referenced_by: [{ kind: 'provider', name: 'GLM (Z.ai)', role: 'credential' }] },
     ])
   })
 

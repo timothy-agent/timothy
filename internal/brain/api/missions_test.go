@@ -13,6 +13,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -670,6 +671,78 @@ func TestMissionsDecorateTopModels(t *testing.T) {
 
 	if out := h.decorateTopModels(context.Background(), nil); len(out) != 0 {
 		t.Fatalf("decorateTopModels(nil) = %+v, want empty slice", out)
+	}
+}
+
+// TestMissionsExecutorOptionsSurfacesSkipReason: when resolve succeeds
+// but no chain entry is usable, the option's reason must be the first
+// entry's own skip_reason when it's non-empty (e.g. the gateway's
+// responses-probe gate, "endpoint does not serve /v1/responses…") —
+// dropping it in favor of the generic "no usable provider for this
+// route" string would silently strip the actionable detail from the
+// MissionForm tooltip. An entry with no skip_reason of its own still
+// falls back to the generic string, and a route with zero entries
+// keeps its own distinct reason untouched.
+func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
+	t.Parallel()
+
+	h := &missionAPI{log: discard(), resolveExecutorOptions: func(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+		switch harness {
+		case "codex-cli":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "zai", Model: "glm-4.7", Usable: false,
+					SkipReason: "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"},
+			}}, nil
+		case "opencode":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "zai", Model: "glm-4.7", Usable: false},
+			}}, nil
+		default:
+			return &gwclient.ResolvedRoute{Route: route, Entries: nil}, nil
+		}
+	}}
+
+	req := httptest.NewRequest("GET", "/v1/missions/executor-options?route=coding", nil)
+	w := httptest.NewRecorder()
+	h.executorOptions(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Options []executorOption `json:"options"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byHarness := map[string]executorOption{}
+	for _, o := range body.Options {
+		byHarness[o.Harness] = o
+	}
+
+	codex, ok := byHarness["codex-cli"]
+	if !ok {
+		t.Fatal("codex-cli option missing (executor.Registered() should include it)")
+	}
+	wantReason := "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"
+	if codex.Usable || codex.Reason != wantReason {
+		t.Fatalf("codex-cli option = %+v, want unusable with the entry's own skip_reason %q", codex, wantReason)
+	}
+
+	opencode, ok := byHarness["opencode"]
+	if !ok {
+		t.Fatal("opencode option missing (executor.Registered() should include it)")
+	}
+	if opencode.Usable || opencode.Reason != "no usable provider for this route" {
+		t.Fatalf("opencode option = %+v, want the generic reason (entry carries no skip_reason)", opencode)
+	}
+
+	for harness, opt := range byHarness {
+		if harness == "codex-cli" || harness == "opencode" {
+			continue
+		}
+		if opt.Usable || opt.Reason != "route has no chain entries" {
+			t.Fatalf("%s option = %+v, want the no-entries reason untouched", harness, opt)
+		}
 	}
 }
 

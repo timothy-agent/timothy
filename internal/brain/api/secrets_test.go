@@ -88,9 +88,9 @@ func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 		t.Fatalf("GITHUB_PAT referenced_by = %+v, want provider + 2 connectors", got)
 	}
 	want := map[referenceInfo]bool{
-		{Kind: "provider", Name: "github-provider"}: true,
-		{Kind: "connector", Name: "github-mcp"}:     true,
-		{Kind: "connector", Name: "github-signed"}:  true,
+		{Kind: "provider", Name: "github-provider", Role: "credential"}: true,
+		{Kind: "connector", Name: "github-mcp", Role: "credential"}:     true,
+		{Kind: "connector", Name: "github-signed", Role: "credential"}:  true,
 	}
 	for _, r := range got {
 		if !want[r] {
@@ -98,8 +98,8 @@ func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 		}
 	}
 	signKey := byName["GITHUB_PAT_SIGNING_KEY"].ReferencedBy
-	if len(signKey) != 1 || signKey[0] != (referenceInfo{Kind: "connector", Name: "github-signed"}) {
-		t.Fatalf("GITHUB_PAT_SIGNING_KEY referenced_by = %+v, want the signing connector (derived ref must never look orphaned)", signKey)
+	if len(signKey) != 1 || signKey[0] != (referenceInfo{Kind: "connector", Name: "github-signed", Role: "signing_key"}) {
+		t.Fatalf("GITHUB_PAT_SIGNING_KEY referenced_by = %+v, want the signing connector with role signing_key (derived ref must never look orphaned)", signKey)
 	}
 	if len(byName["ORPHAN_KEY"].ReferencedBy) != 0 {
 		t.Fatalf("ORPHAN_KEY referenced_by = %+v, want empty", byName["ORPHAN_KEY"].ReferencedBy)
@@ -127,6 +127,72 @@ func TestListSecretsPropagatesGatewayFailure(t *testing.T) {
 
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", w.Code)
+	}
+}
+
+func TestListSecretsCountsGoogleClientSecretRef(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "GMAIL_GOOGLE_OAUTH"},
+		{RefName: "GMAIL_GOOGLE_CLIENT_SECRET"},
+	}}
+	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		{Name: "gmail", Kind: "google", CredentialRef: "GMAIL_GOOGLE_OAUTH",
+			Config: json.RawMessage(`{"client_id":"x.apps.googleusercontent.com","client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Secrets []secretRefEntry `json:"secrets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byName := map[string]secretRefEntry{}
+	for _, s := range body.Secrets {
+		byName[s.RefName] = s
+	}
+	got := byName["GMAIL_GOOGLE_CLIENT_SECRET"].ReferencedBy
+	if len(got) != 1 || got[0] != (referenceInfo{Kind: "connector", Name: "gmail", Role: "client_secret"}) {
+		t.Fatalf("GMAIL_GOOGLE_CLIENT_SECRET referenced_by = %+v, want the google connector with role client_secret (client secret is resolved on every token refresh, must never look orphaned)", got)
+	}
+	oauth := byName["GMAIL_GOOGLE_OAUTH"].ReferencedBy
+	if len(oauth) != 1 || oauth[0] != (referenceInfo{Kind: "connector", Name: "gmail", Role: "oauth_tokens"}) {
+		t.Fatalf("GMAIL_GOOGLE_OAUTH referenced_by = %+v, want the google connector with role oauth_tokens (machine-managed token bundle, never a manual pick)", oauth)
+	}
+}
+
+func TestDeleteSecretRefusesGoogleClientSecretRef(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		{Name: "gmail", Kind: "google", CredentialRef: "GMAIL_GOOGLE_OAUTH",
+			Config: json.RawMessage(`{"client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GMAIL_GOOGLE_CLIENT_SECRET", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
 	}
 }
 

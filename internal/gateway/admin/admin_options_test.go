@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,37 @@ func TestValidateLitellmProvider(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("validateLitellmProvider: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateOpenAIResponses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		opts    map[string]string
+		wantErr string
+	}{
+		{name: "absent is valid", opts: map[string]string{}},
+		{name: "nil map is valid", opts: nil},
+		{name: "empty string is valid (unset)", opts: map[string]string{"openai_responses": ""}},
+		{name: "true is valid", opts: map[string]string{"openai_responses": "true"}},
+		{name: "false is valid", opts: map[string]string{"openai_responses": "false"}},
+		{name: "arbitrary value rejected", opts: map[string]string{"openai_responses": "yes"}, wantErr: "openai_responses"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateOpenAIResponses(tt.opts)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateOpenAIResponses: %v", err)
 			}
 		})
 	}
@@ -182,6 +215,60 @@ func TestValidateHarnessWireFormat(t *testing.T) {
 		})
 	}
 }
+
+// TestProbeResponsesClassification covers the responses-capability
+// probe's tri-state classification (real incident: Z.ai's coding-plan
+// endpoint 404s /responses while chatting fine over /chat/completions —
+// 404/405 are the only unambiguous "no" signals; everything else stays
+// unknown rather than guessing).
+func TestProbeResponsesClassification(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		status int
+		fail   bool // simulate a network error / no server at all
+		want   *bool
+	}{
+		{name: "2xx is a definite yes", status: http.StatusOK, want: boolPtrAdmin(true)},
+		{name: "201 is still a definite yes", status: http.StatusCreated, want: boolPtrAdmin(true)},
+		{name: "404 is a definite no", status: http.StatusNotFound, want: boolPtrAdmin(false)},
+		{name: "405 is a definite no", status: http.StatusMethodNotAllowed, want: boolPtrAdmin(false)},
+		{name: "401 is unknown", status: http.StatusUnauthorized, want: nil},
+		{name: "403 is unknown", status: http.StatusForbidden, want: nil},
+		{name: "429 is unknown", status: http.StatusTooManyRequests, want: nil},
+		{name: "500 is unknown", status: http.StatusInternalServerError, want: nil},
+		{name: "network failure is unknown", fail: true, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			a := &Admin{}
+			baseURL := "http://127.0.0.1:1" // unreachable, used only for the fail case
+			if !tt.fail {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/responses" {
+						t.Errorf("path = %q, want /responses", r.URL.Path)
+					}
+					w.WriteHeader(tt.status)
+				}))
+				defer srv.Close()
+				baseURL = srv.URL
+			}
+			got := a.probeResponses(t.Context(), baseURL, "", "m1", 2*time.Second)
+			if tt.want == nil {
+				if got != nil {
+					t.Fatalf("probeResponses = %v, want nil", *got)
+				}
+				return
+			}
+			if got == nil || *got != *tt.want {
+				t.Fatalf("probeResponses = %v, want %v", got, *tt.want)
+			}
+		})
+	}
+}
+
+func boolPtrAdmin(b bool) *bool { return &b }
 
 func TestProbeTimeout(t *testing.T) {
 	t.Parallel()

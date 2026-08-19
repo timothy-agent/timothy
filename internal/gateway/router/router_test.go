@@ -1221,3 +1221,81 @@ func TestResolveRouteCarriesPrices(t *testing.T) {
 		t.Fatalf("unpriced entry Prices = %+v, want nil", entries[1].Prices)
 	}
 }
+
+// TestExecutorUsableOpenAIResponsesGate covers the responses capability
+// probe gate (real incident: Z.ai's coding-plan endpoint 404s /responses
+// while its driver is openaicompat, so the static wire check alone said
+// "usable" and codex-cli failed at spawn time). Only codex-cli
+// (harnessNeedsResponses) is gated; nil (never probed, or an ambiguous
+// probe outcome) and true both stay usable — only a definite false
+// flips it.
+func TestExecutorUsableOpenAIResponsesGate(t *testing.T) {
+	t.Parallel()
+	trueVal, falseVal := true, false
+	base := ProviderRow{Kind: "api", Driver: "openaicompat", CredentialRef: "K", Enabled: true}
+
+	tests := []struct {
+		name       string
+		harness    string
+		responses  *bool
+		wantUsable bool
+		wantReason string
+	}{
+		{name: "codex-cli unknown flag stays usable", harness: "codex-cli", responses: nil, wantUsable: true},
+		{name: "codex-cli true flag stays usable", harness: "codex-cli", responses: &trueVal, wantUsable: true},
+		{name: "codex-cli false flag is unusable", harness: "codex-cli", responses: &falseVal, wantUsable: false, wantReason: "does not serve /v1/responses"},
+		{name: "opencode unaffected by false flag", harness: "opencode", responses: &falseVal, wantUsable: true},
+		{name: "pi unaffected by false flag", harness: "pi", responses: &falseVal, wantUsable: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			row := base
+			row.OpenAIResponses = tt.responses
+			usable, reason := executorUsable(row, tt.harness)
+			if usable != tt.wantUsable {
+				t.Fatalf("usable = %v, reason = %q, want usable=%v", usable, reason, tt.wantUsable)
+			}
+			if tt.wantReason != "" && !strings.Contains(reason, tt.wantReason) {
+				t.Fatalf("reason = %q, want containing %q", reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestResolveRouteOpenAIResponsesGate is the same gate exercised through
+// ResolveRoute, confirming the wire-incompatible check still wins when
+// both would otherwise fire (order matters: a provider whose driver
+// can't even speak the harness's wire should report that reason, not
+// the responses one).
+func TestResolveRouteOpenAIResponsesGate(t *testing.T) {
+	t.Parallel()
+	falseVal := false
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "zai-coding-plan", Kind: "api", Driver: "openaicompat",
+			CredentialRef: "Z_KEY", Enabled: true, OpenAIResponses: &falseVal},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding-exec", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "glm-4.7"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+
+	entries, ok := snap.ResolveRoute("coding-exec", "codex-cli")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[0].Usable || !strings.Contains(entries[0].SkipReason, "does not serve /v1/responses") {
+		t.Fatalf("entry = %+v, want unusable with the responses-probe reason", entries[0])
+	}
+
+	// opencode speaks the same wire but doesn't need /responses.
+	entries, ok = snap.ResolveRoute("coding-exec", "opencode")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if !entries[0].Usable || entries[0].SkipReason != "" {
+		t.Fatalf("entry = %+v, want usable (opencode doesn't need /responses)", entries[0])
+	}
+}

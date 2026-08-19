@@ -41,6 +41,14 @@ export function probeFailureText(test: { latency_ms: number; detail?: string }):
   return `Failed after ${test.latency_ms} ms: ${humanizeProbeDetail(test.detail ?? '')}`
 }
 
+// responsesSuffix appends the responses-API capability probe result to
+// a passing test's success line — absent (unprobed or ambiguous) adds
+// nothing.
+export function responsesSuffix(test: { responses_ok?: boolean }): string {
+  if (test.responses_ok === undefined) return ''
+  return ` · responses API: ${test.responses_ok ? 'yes' : 'no'}`
+}
+
 function pickJsonMessage(v: unknown): string | undefined {
   if (typeof v === 'string' && v.trim()) return v.trim()
   if (typeof v !== 'object' || v === null) return undefined

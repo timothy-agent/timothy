@@ -5,6 +5,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1078,4 +1079,152 @@ func TestCatalogPricesResolvesByProviderRow(t *testing.T) {
 	if priced[1].Price != nil {
 		t.Fatalf("unknown provider priced = %+v, want nil", priced[1].Price)
 	}
+}
+
+// TestTestPersistsOpenAIResponsesOnDefiniteResult is the real incident
+// this probe exists for (Z.ai's coding-plan endpoint 404s /responses
+// while chatting fine over /chat/completions): Test's chat probe
+// succeeds, the /responses probe returns a definite 404 → false, Test
+// persists options.openai_responses=false onto the provider row and
+// reloads the snapshot, and TestResult.OK stays true throughout — a
+// provider without /responses is still a perfectly good chat provider.
+func TestTestPersistsOpenAIResponsesOnDefiniteResult(t *testing.T) {
+	adm, store, _ := testAdmin(t)
+	ctx := t.Context()
+
+	var responsesHit bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat/completions":
+			oaiWriteSSE(w, `{"choices":[{"delta":{"content":"pong"}}]}`)
+			oaiWriteSSE(w, `{"choices":[{"delta":{},"finish_reason":"stop"}]}`)
+			oaiWriteSSE(w, "[DONE]")
+		case "/responses":
+			responsesHit = true
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	name := adminMarker + "responses-probe"
+	id, err := adm.Create(ctx, Provider{
+		Name: name, Kind: "api", Driver: "openaicompat",
+		BaseURL: srv.URL, CredentialRef: adminMarker + "responses-probe-key", DefaultModel: "m1",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := adm.Test(ctx, id, "")
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("Test.OK = false, want true (chat probe succeeded): %+v", res)
+	}
+	if !responsesHit {
+		t.Fatal("responses probe never hit /responses")
+	}
+	if res.ResponsesOK == nil || *res.ResponsesOK {
+		t.Fatalf("ResponsesOK = %v, want false (404)", res.ResponsesOK)
+	}
+
+	list, err := adm.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found bool
+	for _, p := range list {
+		if p.ID != id {
+			continue
+		}
+		found = true
+		if p.Options["openai_responses"] != "false" {
+			t.Fatalf("persisted options.openai_responses = %q, want \"false\"", p.Options["openai_responses"])
+		}
+	}
+	if !found {
+		t.Fatal("provider not found after Test")
+	}
+
+	waitSnapshot(t, store, name)
+	rows, _ := store.Snapshot().Providers()
+	var row *router.ProviderRow
+	for i := range rows {
+		if rows[i].Name == name {
+			row = &rows[i]
+		}
+	}
+	if row == nil {
+		t.Fatal("provider row missing from snapshot after reload")
+	}
+	if row.OpenAIResponses == nil || *row.OpenAIResponses {
+		t.Fatalf("snapshot row OpenAIResponses = %v, want false", row.OpenAIResponses)
+	}
+}
+
+// TestValidateNeverPersistsOpenAIResponses: Validate probes an unsaved
+// config (the create-time preview) and must only report the result,
+// never write it anywhere — there's no provider row yet to write onto.
+func TestValidateNeverPersistsOpenAIResponses(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat/completions":
+			oaiWriteSSE(w, `{"choices":[{"delta":{"content":"pong"}}]}`)
+			oaiWriteSSE(w, `{"choices":[{"delta":{},"finish_reason":"stop"}]}`)
+			oaiWriteSSE(w, "[DONE]")
+		case "/responses":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	ref := adminMarker + "validate-responses-key"
+	if err := adm.SetSecret(ctx, ref, "sk-test"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	t.Cleanup(func() { _ = adm.DeleteSecret(context.Background(), ref) })
+
+	res, err := adm.Validate(ctx, Provider{
+		Name: adminMarker + "validate-unsaved", Kind: "api", Driver: "openaicompat",
+		BaseURL: srv.URL, CredentialRef: ref,
+	}, "m1")
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("Validate.OK = false, want true: %+v", res)
+	}
+	if res.ResponsesOK == nil || !*res.ResponsesOK {
+		t.Fatalf("ResponsesOK = %v, want true (2xx)", res.ResponsesOK)
+	}
+
+	// Nothing was ever created, so there is nothing in the providers
+	// table this could have written onto — confirm no stray row exists
+	// under either name Validate touched.
+	list, err := adm.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, p := range list {
+		if strings.HasPrefix(p.Name, adminMarker+"validate") {
+			t.Fatalf("Validate must never persist a provider row, found: %+v", p)
+		}
+	}
+}
+
+// oaiWriteSSE writes one OpenAI-compat chat/completions SSE chunk,
+// mirroring the provider package's own oaiWrite test helper (unexported
+// there, so duplicated here for this package's Stream-driving probes).
+func oaiWriteSSE(w http.ResponseWriter, data string) {
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+	w.(http.Flusher).Flush()
 }

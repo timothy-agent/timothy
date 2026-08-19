@@ -15,7 +15,14 @@ import {
   patchSchedule,
   testConnector,
 } from '../../api/client'
-import type { AdminAgent, AdminConnector, GitHubIdentity, GitHubRepo, Schedule } from '../../api/types'
+import type {
+  AdminAgent,
+  AdminConnector,
+  AdminRoute,
+  GitHubIdentity,
+  GitHubRepo,
+  Schedule,
+} from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
 import { slugify } from '../settings/AgentForm'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
@@ -74,16 +81,17 @@ const kindCopy: Record<Kind, string> = {
   general: 'General · scratch workspace',
 }
 
-// A schedule's mission_template carries route/review_route/budget as
-// explicit undefined when unset (see types.ts) — "non-default" means
-// any of them, or a non-default agent, actually has a value.
+// A schedule's mission_template carries route/review_route as explicit
+// undefined when unset (see types.ts) — "non-default" means any of
+// them, or a non-default agent, actually has a value. Budget and
+// auto-approve are always visible now, so they never force the
+// advanced section open.
 function hasNonDefaults(t: Schedule['mission_template']): boolean {
   return !!(
     t.agent_id ||
     t.route ||
     t.review_route ||
     t.plan_route ||
-    t.budget_amount != null ||
     t.harness ||
     t.environment ||
     t.branch_pattern ||
@@ -96,6 +104,27 @@ function hasNonDefaults(t: Schedule['mission_template']): boolean {
 // Select and the route/reviewRoute/escalationRoute state (which stay ''
 // to match the API's own empty-means-default semantics).
 const ROUTE_DEFAULT = '__default__'
+
+// defaultRouteLabel mirrors the server's own empty-route resolution
+// (internal/brain/api/missions.go's CreateMission handler +
+// missions.DefaultCodingRoute) so the Route select's "Default" option
+// tells the operator where it actually resolves, in the same order the
+// server tries:
+//  1. the picked agent's own route, if it has one
+//  2. for a coding mission, a route literally named "coding" if one exists
+//  3. whichever route carries the "default" role
+//  4. otherwise just "Default"
+export function defaultRouteLabel(
+  kind: Kind,
+  agent: AdminAgent | undefined,
+  routes: AdminRoute[] | null,
+): string {
+  if (agent?.route) return `Default (${agent.route})`
+  if (kind === 'coding' && routes?.some((r) => r.name === 'coding')) return 'Default (coding)'
+  const defaultRoleRoute = routes?.find((r) => r.role === 'default')
+  if (defaultRoleRoute) return `Default (${defaultRoleRoute.name})`
+  return 'Default'
+}
 
 // Sentinel for the executor Select's "apply the settings default"
 // choice — wire value stays '' (omit harness from the create payload)
@@ -1043,6 +1072,49 @@ export function MissionForm({
           </div>
         )}
 
+        <div className="space-y-1.5">
+          <Label htmlFor="mission-budget">Budget</Label>
+          <div className="flex gap-2">
+            <Input
+              id="mission-budget"
+              type="number"
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              placeholder="No limit"
+              className="flex-1"
+            />
+            <Select value={budgetCurrency} onValueChange={setBudgetCurrency}>
+              <SelectTrigger className="w-24" aria-label="Budget currency">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CURRENCIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <label htmlFor="mission-auto-approve" className="flex items-start gap-2 text-sm">
+          <input
+            id="mission-auto-approve"
+            type="checkbox"
+            checked={autoApproveSafe}
+            onChange={(e) => setAutoApproveSafe(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Auto-approve safe tool calls
+            <span className="block text-xs text-muted-foreground">
+              Runs unattended without pausing for approval on routine commands. Destructive
+              or unrecognized commands still always ask.
+            </span>
+          </span>
+        </label>
+
         <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
           <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
             {showAdvanced ? 'Hide advanced options' : 'Show advanced options'}
@@ -1067,7 +1139,9 @@ export function MissionForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={ROUTE_DEFAULT}>Default</SelectItem>
+                      <SelectItem value={ROUTE_DEFAULT}>
+                        {defaultRouteLabel(kind, agents.find((a) => a.id === agentID), routes)}
+                      </SelectItem>
                       {enabledRoutes.map((r) => (
                         <SelectItem key={r.name} value={r.name}>
                           {r.name}
@@ -1095,7 +1169,7 @@ export function MissionForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={ROUTE_DEFAULT}>Default</SelectItem>
+                      <SelectItem value={ROUTE_DEFAULT}>Default (same as plan/execute route)</SelectItem>
                       {enabledRoutes.map((r) => (
                         <SelectItem key={r.name} value={r.name}>
                           {r.name}
@@ -1198,31 +1272,6 @@ export function MissionForm({
                   </Select>
                 </div>
               )}
-              <div className="space-y-1.5">
-                <Label htmlFor="mission-budget">Budget</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="mission-budget"
-                    type="number"
-                    value={budget}
-                    onChange={(e) => setBudget(e.target.value)}
-                    placeholder="No limit"
-                    className="flex-1"
-                  />
-                  <Select value={budgetCurrency} onValueChange={setBudgetCurrency}>
-                    <SelectTrigger className="w-24" aria-label="Budget currency">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CURRENCIES.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
               {repeat && (
                 <div className="space-y-1.5">
                   <Label htmlFor="mission-max-iterations">Max iterations</Label>
@@ -1235,25 +1284,6 @@ export function MissionForm({
                   />
                 </div>
               )}
-              <label
-                htmlFor="mission-auto-approve"
-                className="flex items-start gap-2 text-sm sm:col-span-2"
-              >
-                <input
-                  id="mission-auto-approve"
-                  type="checkbox"
-                  checked={autoApproveSafe}
-                  onChange={(e) => setAutoApproveSafe(e.target.checked)}
-                  className="mt-0.5"
-                />
-                <span>
-                  Auto-approve safe tool calls
-                  <span className="block text-xs text-muted-foreground">
-                    Runs unattended without pausing for approval on routine commands. Destructive
-                    or unrecognized commands still always ask.
-                  </span>
-                </span>
-              </label>
             </div>
           </CollapsibleContent>
         </Collapsible>

@@ -14,7 +14,7 @@ import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, secretDestination, stripPaste } from './util'
+import { errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
 
 // refFor derives a credential ref for a named provider instance: the
 // preset's conventional storage-key name, or one from the user's name.
@@ -696,7 +696,7 @@ export function ProviderAdd() {
               {busy
                 ? `Sending test completion to ${model.trim() || '…'}…`
                 : tested
-                  ? `OK, ${test?.model} answered in ${test?.latency_ms} ms.`
+                  ? `OK, ${test?.model} answered in ${test?.latency_ms} ms.${test ? responsesSuffix(test) : ''}`
                   : test && !test.ok
                     ? probeFailureText(test)
                     : 'Not tested yet, run a test before adding.'}

@@ -69,6 +69,12 @@ type ProviderRow struct {
 	// (e.g. a subscription-auth row with no chat driver at all). Ignored
 	// by every chat-serving driver.
 	AnthropicBaseURL string
+	// OpenAIResponses comes from options.openai_responses — whether this
+	// row's endpoint serves POST /v1/responses, set by Admin.Test's probe
+	// (never guessed): nil is unknown (never probed, or the probe result
+	// was ambiguous), true/false is a definite probe result. Only checked
+	// for harnesses in harnessNeedsResponses (codex-cli).
+	OpenAIResponses *bool
 }
 
 // ChainEntry is one step of a route chain. Harness selection moved to
@@ -104,6 +110,14 @@ var harnessDrivers = map[string]map[string]bool{
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
 }
+
+// harnessNeedsResponses names harnesses that speak the OpenAI Responses
+// API (POST /responses) exclusively — codex 0.147.0 has no chat/
+// completions fallback, so a wire-compatible (openaicompat) provider
+// whose endpoint doesn't actually serve /responses still fails at
+// spawn time (the real Z.ai incident this gate exists for). Checked by
+// executorUsable against the row's probed OpenAIResponses flag.
+var harnessNeedsResponses = map[string]bool{"codex-cli": true}
 
 // RouteRow mirrors one routes table row. Strategy picks the chain
 // order at resolve time: "ordered" keeps the written priority; "auto",
@@ -682,6 +696,12 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 	}
 	if row.CredentialRef == "" {
 		return false, "credential_ref is required"
+	}
+	// A known-false probe means the endpoint answered and rejected
+	// /responses (404/405) — an unknown result (nil, never probed or an
+	// ambiguous probe outcome) stays usable rather than guessing.
+	if harnessNeedsResponses[harness] && row.OpenAIResponses != nil && !*row.OpenAIResponses {
+		return false, "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"
 	}
 	return true, ""
 }

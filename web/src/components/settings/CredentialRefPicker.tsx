@@ -13,6 +13,16 @@ function referentLabel(ref: SecretRefEntry): string {
   return `${ref.name} (used by ${refs.map((r) => r.name).join(', ')})`
 }
 
+// managedRoleSuffix flags a ref as machine-managed, never a valid
+// manual pick: a google connector's OAuth token bundle, or a github
+// connector's derived signing key.
+function managedRoleSuffix(ref: SecretRefEntry): string | null {
+  const refs = ref.referenced_by ?? []
+  if (refs.some((r) => r.role === 'oauth_tokens')) return ' — OAuth tokens (managed by connector)'
+  if (refs.some((r) => r.role === 'signing_key')) return ' — signing key (managed)'
+  return null
+}
+
 // ModeToggle is the segmented "New credential" / "Use existing"
 // control shared by every form offering credential reuse.
 export function CredentialModeToggle({
@@ -64,11 +74,15 @@ export function ExistingCredentialSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
-        {refs.map((r) => (
-          <SelectItem key={r.name} value={r.name}>
-            {referentLabel(r)}
-          </SelectItem>
-        ))}
+        {refs.map((r) => {
+          const managedSuffix = managedRoleSuffix(r)
+          return (
+            <SelectItem key={r.name} value={r.name} disabled={managedSuffix !== null}>
+              {referentLabel(r)}
+              {managedSuffix}
+            </SelectItem>
+          )
+        })}
       </SelectContent>
     </Select>
   )

@@ -777,6 +777,7 @@ export async function deleteSecret(refName: string): Promise<void> {
 export interface SecretReference {
   kind: 'provider' | 'connector'
   name: string
+  role: 'credential' | 'oauth_tokens' | 'signing_key' | 'client_secret'
 }
 
 // SecretRefEntry is one stored secret's directory entry: name,

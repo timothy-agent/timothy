@@ -138,6 +138,13 @@ type secretRefEntry struct {
 type referenceInfo struct {
 	Kind string `json:"kind"` // "provider" | "connector"
 	Name string `json:"name"`
+	// Role distinguishes what the ref is used for, so the frontend can
+	// refuse manual picks of machine-managed refs: "credential" (a
+	// normal manually-set secret), "oauth_tokens" (a google connector's
+	// machine-written token bundle — never a valid manual pick),
+	// "signing_key" (a github connector's derived signing key), or
+	// "client_secret" (a google connector's OAuth client secret).
+	Role string `json:"role"`
 }
 
 // registerSecrets mounts brain's own credentials-directory endpoints.
@@ -170,26 +177,41 @@ type secretsAPI struct {
 // connector with commit signing enabled — the derived
 // connectors.SigningKeyRefSuffix ref its private signing key lives
 // under, so the signing key never looks orphaned in the panel or
-// becomes deletable while the connector still signs with it.
-func connectorRefs(ctx context.Context, store connectorLister) (map[string][]string, error) {
+// becomes deletable while the connector still signs with it. A google
+// connector's config.client_secret_ref counts the same way: it is
+// resolved on every OAuth token refresh, so deleting it would break
+// the connector at the next refresh.
+func connectorRefs(ctx context.Context, store connectorLister) (map[string][]referenceInfo, error) {
 	if store == nil {
-		return map[string][]string{}, nil
+		return map[string][]referenceInfo{}, nil
 	}
 	rows, err := store.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string][]string{}
+	out := map[string][]referenceInfo{}
 	for _, c := range rows {
 		if c.CredentialRef == "" {
 			continue
 		}
-		out[c.CredentialRef] = append(out[c.CredentialRef], c.Name)
+		// A google connector's credential_ref is the machine-written
+		// OAuth token bundle, never a valid manual pick.
+		credRole := "credential"
+		if c.Kind == "google" {
+			credRole = "oauth_tokens"
+		}
+		out[c.CredentialRef] = append(out[c.CredentialRef], referenceInfo{Kind: "connector", Name: c.Name, Role: credRole})
 		if c.Kind == "github" {
 			var cfg connectors.GitHubConfig
 			if json.Unmarshal(c.Config, &cfg) == nil && (cfg.SignCommits || cfg.SigningPublicKey != "") {
 				ref := connectors.SigningKeyRefSuffix(c.CredentialRef)
-				out[ref] = append(out[ref], c.Name)
+				out[ref] = append(out[ref], referenceInfo{Kind: "connector", Name: c.Name, Role: "signing_key"})
+			}
+		}
+		if c.Kind == "google" {
+			var cfg connectors.GoogleConfig
+			if json.Unmarshal(c.Config, &cfg) == nil && cfg.ClientSecretRef != "" {
+				out[cfg.ClientSecretRef] = append(out[cfg.ClientSecretRef], referenceInfo{Kind: "connector", Name: c.Name, Role: "client_secret"})
 			}
 		}
 	}
@@ -214,11 +236,9 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		// referenced_by unconditionally.
 		referents := []referenceInfo{}
 		for _, name := range ref.ReferencedBy {
-			referents = append(referents, referenceInfo{Kind: "provider", Name: name})
+			referents = append(referents, referenceInfo{Kind: "provider", Name: name, Role: "credential"})
 		}
-		for _, name := range byConnector[ref.RefName] {
-			referents = append(referents, referenceInfo{Kind: "connector", Name: name})
-		}
+		referents = append(referents, byConnector[ref.RefName]...)
 		out[i] = secretRefEntry{
 			RefName: ref.RefName, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
 			ReferencedBy: referents,
@@ -238,7 +258,11 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
 		return
 	}
-	if names := byConnector[refName]; len(names) > 0 {
+	if refs := byConnector[refName]; len(refs) > 0 {
+		names := make([]string, len(refs))
+		for i, ref := range refs {
+			names[i] = ref.Name
+		}
 		jsonError(w, http.StatusConflict, "in_use",
 			refName+" is referenced by connector(s) "+joinNames(names))
 		return

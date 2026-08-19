@@ -5,13 +5,17 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -365,6 +369,9 @@ func validateProvider(p Provider) error {
 	if err := validateLitellmProvider(p.Options); err != nil {
 		return err
 	}
+	if err := validateOpenAIResponses(p.Options); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -392,6 +399,11 @@ var harnessDrivers = map[string]map[string]bool{
 // anthropic_base_url must point at an Anthropic-compatible endpoint.
 // Never called for kind='cli' rows — those are inherently
 // wire-compatible (D-051, see validateProvider's "cli" case).
+// Deliberately does NOT check options.openai_responses (codex-cli's
+// stricter requirement, router.harnessNeedsResponses): that flag is
+// runtime-probed by Admin.Test, never known at write time, so a
+// wire-compatible openaicompat row always validates here regardless of
+// whether its endpoint actually serves /responses.
 func validateHarnessWireFormat(harness, driver string, opts map[string]string) error {
 	accepted, known := harnessDrivers[harness]
 	if !known {
@@ -444,6 +456,21 @@ func parseRequestTimeout(opts map[string]string) (time.Duration, error) {
 		return 0, fmt.Errorf("options.request_timeout %q: %w", raw, err)
 	}
 	return d, nil
+}
+
+// validateOpenAIResponses checks options.openai_responses, when
+// present, is exactly "true" or "false" — the two literals the
+// responses probe (Admin.Test) ever writes. Absent means unknown,
+// never guessed; an operator should never hand-write anything else here.
+func validateOpenAIResponses(opts map[string]string) error {
+	raw, ok := opts["openai_responses"]
+	if !ok || raw == "" {
+		return nil
+	}
+	if raw != "true" && raw != "false" {
+		return fmt.Errorf("options.openai_responses %q must be \"true\" or \"false\"", raw)
+	}
+	return nil
 }
 
 // List returns every provider row, config order by name.
@@ -603,6 +630,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 			return err
 		}
 		if err := validateLitellmProvider(*patch.Options); err != nil {
+			return err
+		}
+		if err := validateOpenAIResponses(*patch.Options); err != nil {
 			return err
 		}
 	}
@@ -1059,6 +1089,13 @@ type TestResult struct {
 	LatencyMS int64  `json:"latency_ms"`
 	Model     string `json:"model"`
 	Detail    string `json:"detail,omitempty"`
+	// ResponsesOK is whether the endpoint serves POST /responses (the
+	// OpenAI Responses API codex-cli requires) — nil when unprobed or
+	// the probe outcome was ambiguous (never guessed), set only for an
+	// openaicompat provider with a base_url. Never affects OK: a
+	// provider without /responses is still a perfectly good chat
+	// provider for every harness/route that doesn't need it.
+	ResponsesOK *bool `json:"responses_ok,omitempty"`
 }
 
 // Test runs a one-token completion against the provider and books it
@@ -1084,9 +1121,54 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 		return TestResult{}, fmt.Errorf("provider %s has no default model; pass one", p.Name)
 	}
 
-	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model), probeTimeout(p.Options))
+	timeout := probeTimeout(p.Options)
+	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model), timeout)
+	if res.OK && p.Driver == "openaicompat" && p.BaseURL != "" {
+		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, timeout)
+		if res.ResponsesOK != nil {
+			if err := a.setOpenAIResponses(ctx, id, *res.ResponsesOK); err != nil {
+				a.log.Warn("persist openai_responses probe result failed", "provider", id, "error", err)
+			}
+		}
+	}
 	a.audit(ctx, "test", "provider", id, nil, res)
 	return res, nil
+}
+
+// setOpenAIResponses merges options.openai_responses into the provider
+// row's existing options (never clobbering other keys) and reloads the
+// serving snapshot, mirroring Patch's own read-modify-write-then-reload
+// shape but scoped to this one key.
+func (a *Admin) setOpenAIResponses(ctx context.Context, id string, ok bool) error {
+	db, err := a.db.Get()
+	if err != nil {
+		return fmt.Errorf("admin set openai_responses: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin set openai_responses: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	before, err := a.getForUpdate(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	opts := map[string]string{}
+	for k, v := range before.Options {
+		opts[k] = v
+	}
+	opts["openai_responses"] = strconv.FormatBool(ok)
+
+	if _, err := tx.Exec(ctx, `UPDATE providers SET options = $2, updated_at = now() WHERE id = $1`,
+		id, jsonOr(opts, "{}")); err != nil {
+		return fmt.Errorf("admin set openai_responses: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin set openai_responses: %w", err)
+	}
+	a.reload(ctx)
+	return nil
 }
 
 // Validate runs the same one-token probe as Test against a provider
@@ -1125,7 +1207,13 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 	}
 	drv, _ := reg.Get(p.Name)
 
-	res := a.probe(ctx, drv, p.Name, model, nil, probeTimeout(p.Options))
+	probeTO := probeTimeout(p.Options)
+	res := a.probe(ctx, drv, p.Name, model, nil, probeTO)
+	if res.OK && p.Driver == "openaicompat" && p.BaseURL != "" {
+		// Report-only: Validate probes an unsaved config, so there is
+		// nothing to persist the result onto.
+		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, probeTO)
+	}
 	a.audit(ctx, "validate", "provider", p.Name, nil, res)
 	return res, nil
 }
@@ -1228,6 +1316,63 @@ func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, 
 	entry.LatencyMS = res.LatencyMS
 	a.rec.Record(ctx, entry)
 	return res
+}
+
+// responsesProbeBody is the minimal OpenAI Responses API request the
+// capability probe sends: max_output_tokens' floor is 16 (the API
+// rejects anything lower), so this is the smallest legal request that
+// still exercises the endpoint.
+type responsesProbeBody struct {
+	Model           string `json:"model"`
+	Input           string `json:"input"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+}
+
+// probeResponses checks whether baseURL serves POST /responses — the
+// OpenAI Responses API wire codex-cli requires (D-051 follow-up: the
+// Z.ai coding-plan endpoint 404s /responses despite chatting fine over
+// /chat/completions, so the static openaicompat wire check alone can't
+// tell missions codex-cli will actually work there). Only ever called
+// after the chat probe already succeeded, and never affects
+// TestResult.OK — a provider without /responses is still a perfectly
+// good chat provider. Result is deliberately tri-state: 2xx is a
+// confirmed true, 404/405 (route not found/not allowed — the
+// unambiguous "this endpoint doesn't have /responses" signals) is a
+// confirmed false, anything else (network error, timeout, 401/403/429,
+// 5xx) is nil — an ambiguous signal must never be recorded as a
+// definite no. No ledger entry: this is capability detection, not
+// spend, and cost is unknown either way (never guessed) even if the
+// response happens to carry a usage field.
+func (a *Admin) probeResponses(ctx context.Context, baseURL, credentialRef, model string, timeout time.Duration) *bool {
+	body, err := json.Marshal(responsesProbeBody{Model: model, Input: "ping", MaxOutputTokens: 16})
+	if err != nil {
+		return nil
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(tctx, http.MethodPost, strings.TrimSuffix(baseURL, "/")+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if credentialRef != "" {
+		req.Header.Set("Authorization", "Bearer "+a.credentialLookup()(credentialRef))
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		v := true
+		return &v
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed:
+		v := false
+		return &v
+	default:
+		return nil
+	}
 }
 
 // Sentinel errors the HTTP layer maps onto status codes.

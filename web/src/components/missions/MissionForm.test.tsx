@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminConnector, AdminRoute, GitHubRepo, Mission, Schedule } from '../../api/types'
-import { MissionForm } from './MissionForm'
+import type { AdminAgent, AdminConnector, AdminRoute, GitHubRepo, Mission, Schedule } from '../../api/types'
+import { defaultRouteLabel, MissionForm } from './MissionForm'
 
 vi.mock('../../api/client', () => ({
   classifyMission: vi.fn(),
@@ -66,6 +66,58 @@ const schedule: Schedule = {
   pending_fire: false,
 }
 
+function makeAgent(overrides: Partial<AdminAgent> = {}): AdminAgent {
+  return {
+    id: 'a1',
+    name: 'agent',
+    description: '',
+    prompt_overlay: '',
+    route: '',
+    skills: [],
+    tools: [],
+    memory: false,
+    is_default: false,
+    enabled: true,
+    ...overrides,
+  }
+}
+
+describe('defaultRouteLabel', () => {
+  it("uses the agent's own route when the agent has one", () => {
+    const agent = makeAgent({ route: 'careful' })
+    expect(defaultRouteLabel('general', agent, routes)).toBe('Default (careful)')
+    // Takes priority even for coding with a "coding" route present.
+    expect(
+      defaultRouteLabel('coding', agent, [...routes, { name: 'coding', strategy: 'ordered', enabled: true, chain: [] }]),
+    ).toBe('Default (careful)')
+  })
+
+  it('falls back to a route literally named "coding" for coding missions when no agent route is set', () => {
+    const codingRoutes: AdminRoute[] = [
+      ...routes,
+      { name: 'coding', strategy: 'ordered', enabled: true, chain: [] },
+    ]
+    expect(defaultRouteLabel('coding', undefined, codingRoutes)).toBe('Default (coding)')
+    expect(defaultRouteLabel('coding', makeAgent({ route: '' }), codingRoutes)).toBe('Default (coding)')
+  })
+
+  it('falls back to the route carrying the "default" role otherwise', () => {
+    const withDefaultRole: AdminRoute[] = [
+      { name: 'default', strategy: 'ordered', enabled: true, chain: [], role: 'default' },
+      { name: 'careful', strategy: 'ordered', enabled: true, chain: [] },
+    ]
+    expect(defaultRouteLabel('general', undefined, withDefaultRole)).toBe('Default (default)')
+    // Also applies to a coding mission when no "coding"-named route exists.
+    expect(defaultRouteLabel('coding', undefined, withDefaultRole)).toBe('Default (default)')
+  })
+
+  it('falls back to plain "Default" when nothing resolves', () => {
+    expect(defaultRouteLabel('general', undefined, routes)).toBe('Default')
+    expect(defaultRouteLabel('coding', undefined, routes)).toBe('Default')
+    expect(defaultRouteLabel('general', undefined, null)).toBe('Default')
+  })
+})
+
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
@@ -120,7 +172,6 @@ describe('MissionForm — create mode, one-off mission', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
     fireEvent.click(screen.getByLabelText(/Auto-approve safe tool calls/))
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
 
@@ -779,7 +830,7 @@ describe('MissionForm — create mode, repeat on schedule', () => {
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
-    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('Custom'))
     fireEvent.change(screen.getByLabelText('Cron expression'), { target: { value: 'bad cron' } })
 

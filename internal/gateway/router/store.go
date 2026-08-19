@@ -169,19 +169,24 @@ func (s *Store) Load(ctx context.Context) error {
 }
 
 // applyProviderOptions decodes a providers row's options jsonb into row.
-// Only reasoning_effort, request_timeout, and region are recognized
-// today (D-040, D-041, D-048); unknown keys are ignored silently. An
-// unparseable request_timeout fails the load outright — config honesty,
-// never a silent fallback to the driver default. region gets no such
+// Only reasoning_effort, request_timeout, region, anthropic_base_url,
+// and openai_responses are recognized today (D-040, D-041, D-048,
+// D-051); unknown keys are ignored silently. An unparseable
+// request_timeout fails the load outright — config honesty, never a
+// silent fallback to the driver default. region gets no such
 // validation beyond being present: AWS region ids change over time, so
 // the gateway never hardcodes a valid set — an unknown region simply
-// fails at the AWS SDK when used.
+// fails at the AWS SDK when used. openai_responses is tri-state
+// ("true"/"false"/absent); absent leaves row.OpenAIResponses nil
+// (unknown), anything else fails the load — Admin.Test/Patch are the
+// only writers and only ever write those two literals.
 func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	var opts struct {
 		ReasoningEffort  string `json:"reasoning_effort"`
 		RequestTimeout   string `json:"request_timeout"`
 		Region           string `json:"region"`
 		AnthropicBaseURL string `json:"anthropic_base_url"`
+		OpenAIResponses  string `json:"openai_responses"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
@@ -195,6 +200,18 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 			return fmt.Errorf("request_timeout %q: %w", opts.RequestTimeout, err)
 		}
 		row.Timeout = d
+	}
+	switch opts.OpenAIResponses {
+	case "":
+		// absent = unknown, row.OpenAIResponses stays nil.
+	case "true":
+		v := true
+		row.OpenAIResponses = &v
+	case "false":
+		v := false
+		row.OpenAIResponses = &v
+	default:
+		return fmt.Errorf("openai_responses %q must be \"true\" or \"false\"", opts.OpenAIResponses)
 	}
 	return nil
 }

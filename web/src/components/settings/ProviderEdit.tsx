@@ -31,7 +31,7 @@ import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { backendLabel, errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, secretDestination, stripPaste } from './util'
+import { backendLabel, errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
 
 // ProviderEdit is a provider's own page for the controls too heavy for
 // its summary card: rotating the stored key, and declaring which
@@ -282,7 +282,7 @@ function CredentialSection({
             {testing
               ? 'Testing connection…'
               : test?.ok
-                ? `OK, ${test.model} answered in ${test.latency_ms} ms.`
+                ? `OK, ${test.model} answered in ${test.latency_ms} ms.${responsesSuffix(test)}`
                 : test && !test.ok
                   ? probeFailureText(test)
                   : 'Not tested yet.'}

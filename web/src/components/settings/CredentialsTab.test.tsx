@@ -15,8 +15,8 @@ const referenced: SecretRefEntry = {
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-02T00:00:00Z',
   referenced_by: [
-    { kind: 'connector', name: 'github-mcp' },
-    { kind: 'provider', name: 'github-provider' },
+    { kind: 'connector', name: 'github-mcp', role: 'credential' },
+    { kind: 'provider', name: 'github-provider', role: 'credential' },
   ],
 }
 

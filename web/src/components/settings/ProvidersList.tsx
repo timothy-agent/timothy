@@ -15,7 +15,7 @@ import { Button } from '../ui/button'
 import { matchPreset, providerPresets } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Toggle } from './shared'
-import { errText, humanizeProbeDetail, isTimothyAuthDetail, isTimothyAuthError, timothyAuthErrorMessage } from './util'
+import { errText, humanizeProbeDetail, isTimothyAuthDetail, isTimothyAuthError, responsesSuffix, timothyAuthErrorMessage } from './util'
 
 export function ProvidersList() {
   const [providers, setProviders] = useState<AdminProvider[]>([])
@@ -169,7 +169,7 @@ function ProviderCard({
           className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
         >
           {test.ok
-            ? `OK, ${test.latency_ms} ms`
+            ? `OK, ${test.latency_ms} ms${responsesSuffix(test)}`
             : isTimothyAuthDetail(test.detail)
               ? timothyAuthErrorMessage
               : `Failed: ${humanizeProbeDetail(test.detail ?? '')}`}

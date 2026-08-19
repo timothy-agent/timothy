@@ -567,6 +567,10 @@ export interface TestResult {
   latency_ms: number
   model: string
   detail?: string
+  // responses_ok: whether the endpoint serves POST /responses (the
+  // OpenAI Responses API codex-cli requires) — absent when unprobed or
+  // the probe outcome was ambiguous, never affects ok.
+  responses_ok?: boolean
 }
 
 // AvailableModel is one model reported by a provider's own listing

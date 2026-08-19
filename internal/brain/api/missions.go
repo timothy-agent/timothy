@@ -748,7 +748,16 @@ func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
 		case resolved == nil || len(resolved.Entries) == 0:
 			opt.Reason = "route has no chain entries"
 		default:
+			// No entry usable: surface the first entry's own skip_reason
+			// (e.g. the responses-probe gate's "endpoint does not serve
+			// /v1/responses…") so the MissionForm tooltip stays
+			// actionable instead of falling back to a generic string —
+			// only when that reason is itself empty does the generic
+			// string apply.
 			opt.Reason = "no usable provider for this route"
+			if resolved.Entries[0].SkipReason != "" {
+				opt.Reason = resolved.Entries[0].SkipReason
+			}
 			for _, e := range resolved.Entries {
 				if e.Usable {
 					opt.Usable, opt.ProviderName, opt.Model, opt.Reason = true, e.ProviderName, e.Model, ""
