@@ -689,3 +689,179 @@ func TestMigrateRefusesASMSecretKeyBootstrapRef(t *testing.T) {
 		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
 	}
 }
+
+// TestDeleteRefusesVaultTokenBootstrapRef pins the delete-side lockout
+// fix: vault's token_ref must never be deleted while vault is
+// configured, since resolving anything else stored in vault would need
+// a token that no longer exists anywhere.
+func TestDeleteRefusesVaultTokenBootstrapRef(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	tokenRef := "TEST_DELETE_BOOTSTRAP_TOKEN_" + t.Name()
+
+	srv, _ := fakeVaultKV(t)
+	defer srv.Close()
+	restore := setUpVaultDefault(t, s, srv, tokenRef)
+	defer restore()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, tokenRef)
+	}()
+
+	err = s.Delete(ctx, tokenRef)
+	if err == nil {
+		t.Fatal("Delete accepted removing the vault token_ref while vault is configured")
+	}
+	if !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
+	}
+	if configured, backend, err := s.Status(ctx, tokenRef); err != nil || !configured || backend != "db" {
+		t.Fatalf("row changed after a rejected delete: configured=%v backend=%q err=%v", configured, backend, err)
+	}
+}
+
+// TestDeleteRefusesVaultSecretIDBootstrapRef covers approle auth's
+// secret_id_ref (defaulting to VAULT_SECRET_ID) — the same production
+// incident Migrate's guard covers, on the delete path.
+func TestDeleteRefusesVaultSecretIDBootstrapRef(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	secretIDRef := "TEST_DELETE_BOOTSTRAP_SECRETID_" + t.Name()
+
+	srv, _ := fakeVaultKV(t)
+	defer srv.Close()
+
+	origCfg, err := s.GetBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, secretIDRef)
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("delete vault config: %v", err)
+		}
+	}()
+
+	cfg := `{"address":"` + srv.URL + `","mount":"kv","auth":"approle","role_id":"role-x","secret_id_ref":"` + secretIDRef + `"}`
+	if _, err := s.SetBackendConfig(ctx, "vault", []byte(cfg)); err != nil {
+		t.Fatalf("SetBackendConfig: %v", err)
+	}
+	if err := s.SetDB(ctx, secretIDRef, "secret-id-x"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+
+	err = s.Delete(ctx, secretIDRef)
+	if err == nil {
+		t.Fatal("Delete accepted removing the vault secret_id_ref while vault approle is configured")
+	}
+	if !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
+	}
+}
+
+// TestDeleteRefusesASMSecretKeyBootstrapRef covers asm's static-keys
+// auth: the secret_key_ref (defaulting to AWS_SECRET_ACCESS_KEY) must
+// be refused on delete while asm is configured for keys auth.
+func TestDeleteRefusesASMSecretKeyBootstrapRef(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	secretKeyRef := "TEST_DELETE_BOOTSTRAP_ASMKEY_" + t.Name()
+
+	origCfg, err := s.GetBackendConfig(ctx, "asm")
+	if err != nil {
+		t.Fatalf("GetBackendConfig: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, secretKeyRef)
+		if string(origCfg) != "{}" {
+			if _, err := s.SetBackendConfig(ctx, "asm", origCfg); err != nil {
+				t.Errorf("restore asm config: %v", err)
+			}
+		} else if err := s.DeleteBackendConfig(ctx, "asm"); err != nil {
+			t.Errorf("delete asm config: %v", err)
+		}
+	}()
+
+	cfg := `{"auth":"keys","access_key_id":"AKIAEXAMPLE","secret_key_ref":"` + secretKeyRef + `"}`
+	if _, err := s.SetBackendConfig(ctx, "asm", []byte(cfg)); err != nil {
+		t.Fatalf("SetBackendConfig: %v", err)
+	}
+	if err := s.SetDB(ctx, secretKeyRef, "secret-key-x"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+
+	err = s.Delete(ctx, secretKeyRef)
+	if err == nil {
+		t.Fatal("Delete accepted removing the asm secret_key_ref while asm keys auth is configured")
+	}
+	if !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("error = %v, want it to mention bootstrap credential", err)
+	}
+}
+
+// TestDeleteAllowsOrdinaryRefWhenNoBackendConfigured pins that the new
+// guard only ever blocks an actual bootstrap ref: with no external
+// backend configured, bootstrapRefs is empty and any ordinary secret
+// deletes exactly as before.
+func TestDeleteAllowsOrdinaryRefWhenNoBackendConfigured(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	ref := "TEST_DELETE_ORDINARY_" + t.Name()
+
+	if err := s.SetDB(ctx, ref, "sk-ordinary"); err != nil {
+		t.Fatalf("SetDB: %v", err)
+	}
+	if err := s.Delete(ctx, ref); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if configured, _, err := s.Status(ctx, ref); err != nil || configured {
+		t.Fatalf("Status after Delete: configured=%v err=%v", configured, err)
+	}
+}
+
+// TestBootstrapRefsExported pins BootstrapRefs (the exported wrapper
+// admin.ListSecrets uses to flag "system" refs) against a configured
+// vault backend with a non-default token_ref name.
+func TestBootstrapRefsExported(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	tokenRef := "TEST_BOOTSTRAPREFS_CUSTOM_TOKEN_" + t.Name()
+
+	srv, _ := fakeVaultKV(t)
+	defer srv.Close()
+	restore := setUpVaultDefault(t, s, srv, tokenRef)
+	defer restore()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(ctx, `DELETE FROM secrets WHERE ref_name = $1`, tokenRef)
+	}()
+
+	refs, err := s.BootstrapRefs(ctx)
+	if err != nil {
+		t.Fatalf("BootstrapRefs: %v", err)
+	}
+	if refs[tokenRef] != "vault" {
+		t.Fatalf("BootstrapRefs[%q] = %q, want vault", tokenRef, refs[tokenRef])
+	}
+	if refs["SOME_OTHER_REF"] != "" {
+		t.Fatalf("BootstrapRefs flagged an unrelated ref: %q", refs["SOME_OTHER_REF"])
+	}
+}

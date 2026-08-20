@@ -24,12 +24,21 @@ const referenced: SecretRefEntry = {
     { kind: 'connector', name: 'github-mcp', role: 'credential' },
     { kind: 'provider', name: 'github-provider', role: 'credential' },
   ],
+  system: false,
 }
 
 const orphaned: SecretRefEntry = {
   name: 'OLD_KEY',
   backend: 'db',
   referenced_by: [],
+  system: false,
+}
+
+const systemRef: SecretRefEntry = {
+  name: 'VAULT_TOKEN',
+  backend: 'db',
+  referenced_by: [],
+  system: true,
 }
 
 afterEach(cleanup)
@@ -88,6 +97,16 @@ describe('CredentialsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     expect(deleteSecret).not.toHaveBeenCalled()
+  })
+
+  it('shows a System badge and disables delete for a bootstrap-credential ref', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([systemRef])
+    render(<CredentialsTab />)
+
+    expect(await screen.findByText('VAULT_TOKEN')).toBeInTheDocument()
+    expect(screen.getByText('System')).toBeInTheDocument()
+    expect(screen.queryByText('orphaned')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete VAULT_TOKEN' })).not.toBeInTheDocument()
   })
 
   it('hides the migrate-all button when the default backend is db', async () => {

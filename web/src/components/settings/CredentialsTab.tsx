@@ -19,7 +19,11 @@ const BACKEND_LABEL: Record<string, string> = {
 // no reveal/show-value affordance anywhere — this lists what exists
 // and what references it, never a value. Delete is only offered for
 // orphaned refs; a referenced ref's delete button is replaced by its
-// used-by chips explaining why.
+// used-by chips explaining why. A "system" ref (a configured secret
+// backend's own bootstrap credential, e.g. the vault token) gets a
+// System badge instead and its delete action is disabled with an
+// explanatory tooltip — the gateway refuses the delete regardless
+// (secretstore.Delete's own guard), this is purely cosmetic.
 export function CredentialsTab() {
   const [refs, setRefs] = useState<SecretRefEntry[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -120,7 +124,11 @@ export function CredentialsTab() {
                 <tr key={r.name}>
                   <td className="px-4 py-2 font-mono text-xs">{r.name}</td>
                   <td className="px-4 py-2">
-                    {r.referenced_by.length === 0 ? (
+                    {r.system ? (
+                      <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                        System
+                      </span>
+                    ) : r.referenced_by.length === 0 ? (
                       <span className="text-xs text-muted-foreground">orphaned</span>
                     ) : (
                       <div className="flex flex-wrap gap-1">
@@ -142,15 +150,24 @@ export function CredentialsTab() {
                     {r.updated_at ? new Date(r.updated_at).toLocaleDateString() : '—'}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    {r.referenced_by.length === 0 && (
-                      <button
-                        type="button"
-                        aria-label={`Delete ${r.name}`}
-                        onClick={() => setPendingDelete(r.name)}
-                        className="text-muted-foreground hover:text-red-500"
+                    {r.system ? (
+                      <span
+                        className="inline-block text-muted-foreground/40"
+                        title={`${r.name} is the bootstrap credential for the ${BACKEND_LABEL[r.backend] ?? r.backend} secret backend and can't be deleted while it's configured.`}
                       >
                         <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-                      </button>
+                      </span>
+                    ) : (
+                      r.referenced_by.length === 0 && (
+                        <button
+                          type="button"
+                          aria-label={`Delete ${r.name}`}
+                          onClick={() => setPendingDelete(r.name)}
+                          className="text-muted-foreground hover:text-red-500"
+                        >
+                          <HugeiconsIcon icon={Delete02Icon} className="size-4" />
+                        </button>
+                      )
                     )}
                   </td>
                 </tr>

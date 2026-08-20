@@ -908,6 +908,63 @@ func TestDeleteSecretRefusesWhileProviderReferencesIt(t *testing.T) {
 	}
 }
 
+// TestDeleteSecretRefusesBootstrapRef pins the delete-side lockout
+// guard at the admin layer: with vault configured (default token_ref),
+// DeleteSecret must refuse to remove VAULT_TOKEN, and ListSecrets must
+// flag it System: true so the UI can hide its delete action up front.
+func TestDeleteSecretRefusesBootstrapRef(t *testing.T) {
+	adm, _, _ := testAdmin(t)
+	ctx := t.Context()
+
+	origCfg, err := adm.SecretBackendConfig(ctx, "vault")
+	if err != nil {
+		t.Fatalf("SecretBackendConfig (orig): %v", err)
+	}
+	defer func() {
+		if string(origCfg) != "{}" {
+			if err := adm.SetSecretBackendConfig(ctx, "vault", origCfg); err != nil {
+				t.Errorf("restore vault config: %v", err)
+			}
+		} else if err := adm.DeleteSecretBackendConfig(ctx, "vault"); err != nil {
+			t.Errorf("remove test vault config: %v", err)
+		}
+		_ = adm.secrets.Delete(ctx, "VAULT_TOKEN")
+	}()
+
+	if err := adm.SetSecretBackendConfig(ctx, "vault",
+		[]byte(`{"address":"http://`+adminMarker+`vault.invalid:8200","mount":"kv"}`)); err != nil {
+		t.Fatalf("SetSecretBackendConfig: %v", err)
+	}
+	if err := adm.SetSecret(ctx, "VAULT_TOKEN", "vault-tok-x"); err != nil {
+		t.Fatalf("SetSecret VAULT_TOKEN: %v", err)
+	}
+
+	if err := adm.DeleteSecret(ctx, "VAULT_TOKEN"); err == nil || !strings.Contains(err.Error(), "bootstrap credential") {
+		t.Fatalf("DeleteSecret(VAULT_TOKEN) = %v, want a bootstrap-credential refusal", err)
+	}
+	if configured, _, err := adm.SecretStatus(ctx, "VAULT_TOKEN"); err != nil || !configured {
+		t.Fatalf("SecretStatus after refused delete: configured=%v err=%v, want still configured", configured, err)
+	}
+
+	refs, err := adm.ListSecrets(ctx)
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+	var found bool
+	for _, r := range refs {
+		if r.RefName != "VAULT_TOKEN" {
+			continue
+		}
+		found = true
+		if !r.System {
+			t.Errorf("ListSecrets VAULT_TOKEN.System = false, want true while vault is configured")
+		}
+	}
+	if !found {
+		t.Fatal("ListSecrets did not report VAULT_TOKEN")
+	}
+}
+
 func TestSecretExternalBackendConfig(t *testing.T) {
 	adm, _, _ := testAdmin(t)
 	ctx := t.Context()

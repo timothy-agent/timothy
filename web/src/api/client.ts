@@ -811,13 +811,17 @@ export interface SecretReference {
 // SecretRefEntry is one stored secret's directory entry: name,
 // timestamps (when the row has them), and every referent across both
 // providers and connectors. Never a value — the credentials panel is a
-// directory, not a vault viewer.
+// directory, not a vault viewer. system marks a configured secret
+// backend's own bootstrap credential (e.g. the vault token) — the
+// gateway refuses to delete these regardless, but the panel hides the
+// delete action for them up front.
 export interface SecretRefEntry {
   name: string
   backend: string
   created_at?: string
   updated_at?: string
   referenced_by: SecretReference[]
+  system?: boolean
 }
 
 // listSecretRefs lists every stored credential ref for the Credentials

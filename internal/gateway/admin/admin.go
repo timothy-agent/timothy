@@ -218,13 +218,17 @@ func (a *Admin) MigrateAllSecrets(ctx context.Context, targetBackend string) ([]
 // SecretRef is one stored secret's directory entry: name and
 // timestamps, plus the providers that name it as credential_ref. Values
 // are never included — ListSecrets exists so the UI can show what
-// exists and what would break on delete, nothing more.
+// exists and what would break on delete, nothing more. System marks a
+// configured secret backend's own bootstrap credential (see
+// secretstore.bootstrapRefs) — Delete refuses these regardless, but the
+// UI uses the flag to hide the delete action up front.
 type SecretRef struct {
 	RefName      string    `json:"ref_name"`
 	Backend      string    `json:"backend"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	ReferencedBy []string  `json:"referenced_by_providers"`
+	System       bool      `json:"system"`
 }
 
 // ListSecrets returns every stored secret's directory metadata with the
@@ -234,6 +238,10 @@ type SecretRef struct {
 // tables know about.
 func (a *Admin) ListSecrets(ctx context.Context) ([]SecretRef, error) {
 	refs, err := a.secrets.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bootstrap, err := a.secrets.BootstrapRefs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +269,7 @@ func (a *Admin) ListSecrets(ctx context.Context) ([]SecretRef, error) {
 	out := make([]SecretRef, len(refs))
 	for i, r := range refs {
 		out[i] = SecretRef{RefName: r.RefName, Backend: r.Backend, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-			ReferencedBy: byRef[r.RefName]}
+			ReferencedBy: byRef[r.RefName], System: bootstrap[r.RefName] != ""}
 	}
 	return out, nil
 }

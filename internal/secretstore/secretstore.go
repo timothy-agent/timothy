@@ -244,15 +244,24 @@ func (s *Store) upsertRef(ctx context.Context, refName, backend, backendRef stri
 	return nil
 }
 
+// BootstrapRefs is the exported form of bootstrapRefs, for callers
+// outside this package (the gateway admin's secrets list, which flags
+// each ref as "system" so the UI can hide its delete action).
+func (s *Store) BootstrapRefs(ctx context.Context) (map[string]string, error) {
+	return s.bootstrapRefs(ctx)
+}
+
 // bootstrapRefs collects the ref names every configured external
 // backend needs to log in with — vault's token/secret_id ref, asm's
 // static secret key ref — applying each config loader's own
-// defaulting for an empty ref field. Unconfigured backends contribute
-// nothing. These refs unlock the backend they name, so migrating one
-// of them into that same backend is a chicken-and-egg lockout: nothing
-// left in db can decrypt the login credential needed to resolve it.
-func (s *Store) bootstrapRefs(ctx context.Context) (map[string]bool, error) {
-	out := map[string]bool{}
+// defaulting for an empty ref field, mapped to the backend name that
+// needs it. Unconfigured backends contribute nothing. These refs
+// unlock the backend they name, so migrating or deleting one of them
+// is a chicken-and-egg lockout: nothing left in db can decrypt (or
+// nothing remains at all for) the login credential needed to resolve
+// every other secret in that backend.
+func (s *Store) bootstrapRefs(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
 	vaultCfg, err := s.GetBackendConfig(ctx, "vault")
 	if err != nil {
 		return nil, err
@@ -266,13 +275,13 @@ func (s *Store) bootstrapRefs(ctx context.Context) (map[string]bool, error) {
 		if tokenRef == "" {
 			tokenRef = defaultVaultTokenRef
 		}
-		out[tokenRef] = true
+		out[tokenRef] = "vault"
 		if v.Auth == "approle" {
 			secretIDRef := v.SecretIDRef
 			if secretIDRef == "" {
 				secretIDRef = defaultVaultSecretIDRef
 			}
-			out[secretIDRef] = true
+			out[secretIDRef] = "vault"
 		}
 	}
 	asmCfg, err := s.GetBackendConfig(ctx, "asm")
@@ -289,7 +298,7 @@ func (s *Store) bootstrapRefs(ctx context.Context) (map[string]bool, error) {
 			if secretKeyRef == "" {
 				secretKeyRef = defaultASMSecretKeyRef
 			}
-			out[secretKeyRef] = true
+			out[secretKeyRef] = "asm"
 		}
 	}
 	return out, nil
@@ -319,7 +328,7 @@ func (s *Store) Migrate(ctx context.Context, refName, targetBackend string) erro
 		if err != nil {
 			return err
 		}
-		if bootstrap[refName] {
+		if bootstrap[refName] != "" {
 			return fmt.Errorf("secretstore: %q is a backend bootstrap credential (vault/asm login secret) and must stay in built-in db storage", refName)
 		}
 	}
@@ -393,8 +402,21 @@ func (s *Store) Migrate(ctx context.Context, refName, targetBackend string) erro
 // external copy first when this store owns it (backend_ref follows the
 // timothy/<ref_name> convention it writes in Set) — a reference typed
 // against the old external-reference model points at a secret Timothy
-// never owned and must never delete.
+// never owned and must never delete. Refused for a backend bootstrap
+// credential (see bootstrapRefs): deleting the login secret a
+// configured backend needs would strand every other secret already
+// stored there, unresolvable, with no recovery path (Migrate at least
+// leaves the old copy in place on a rejected move; a delete has
+// nothing to fall back to).
 func (s *Store) Delete(ctx context.Context, refName string) error {
+	bootstrap, err := s.bootstrapRefs(ctx)
+	if err != nil {
+		return err
+	}
+	if backend := bootstrap[refName]; backend != "" {
+		return fmt.Errorf("secretstore: refusing to delete %q: it is the bootstrap credential for the %s secret backend; deleting it would make every %s-stored secret unresolvable",
+			refName, backend, backend)
+	}
 	r, err := s.row(ctx, refName)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err

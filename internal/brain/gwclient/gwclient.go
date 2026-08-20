@@ -261,13 +261,16 @@ func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*Resol
 
 // SecretRef mirrors the gateway admin's SecretRef: a stored secret's
 // directory metadata plus the provider names that reference it. Never
-// a value.
+// a value. System marks a configured secret backend's own bootstrap
+// credential — the gateway refuses to delete these regardless, but the
+// UI uses the flag to hide the delete action up front.
 type SecretRef struct {
 	RefName      string    `json:"ref_name"`
 	Backend      string    `json:"backend"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	ReferencedBy []string  `json:"referenced_by_providers"`
+	System       bool      `json:"system"`
 }
 
 // ListSecrets fetches the gateway's secrets directory (names,

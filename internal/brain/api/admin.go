@@ -129,13 +129,16 @@ type connectorLister interface {
 // secretRefEntry is the credentials panel's per-ref shape: the
 // gateway's directory metadata plus every referent (provider or
 // connector) across both services, merged here because neither service
-// alone can see both tables. Never a value.
+// alone can see both tables. Never a value. System marks a configured
+// secret backend's own bootstrap credential (passed straight through
+// from the gateway) — the panel hides the delete action for these.
 type secretRefEntry struct {
 	RefName      string          `json:"name"`
 	Backend      string          `json:"backend"`
 	CreatedAt    any             `json:"created_at,omitempty"`
 	UpdatedAt    any             `json:"updated_at,omitempty"`
 	ReferencedBy []referenceInfo `json:"referenced_by"`
+	System       bool            `json:"system"`
 }
 
 type referenceInfo struct {
@@ -244,7 +247,7 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		referents = append(referents, byConnector[ref.RefName]...)
 		out[i] = secretRefEntry{
 			RefName: ref.RefName, Backend: ref.Backend, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
-			ReferencedBy: referents,
+			ReferencedBy: referents, System: ref.System,
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
