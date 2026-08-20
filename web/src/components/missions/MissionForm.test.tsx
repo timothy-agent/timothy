@@ -313,6 +313,55 @@ describe('MissionForm — destinations multi-select', () => {
       expect.not.objectContaining({ destination_ids: expect.anything() }),
     )
   })
+
+  it('offers the multi-select for a new schedule (repeat on) and submits picked ids', async () => {
+    vi.mocked(listDestinations).mockResolvedValue(destinations)
+    vi.mocked(createSchedule).mockResolvedValue({ id: 'sched1' })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Weekly digest' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+
+    await screen.findByText('Deliver results to')
+    fireEvent.click(screen.getByLabelText(/^ops-hook/))
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+
+    await waitFor(() =>
+      expect(createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mission_template: expect.objectContaining({ destination_ids: ['d2'] }),
+        }),
+      ),
+    )
+  })
+
+  it('seeds the multi-select from an edited schedule and submits the updated picks', async () => {
+    vi.mocked(listDestinations).mockResolvedValue(destinations)
+    vi.mocked(patchSchedule).mockResolvedValue(schedule)
+    const seeded: Schedule = {
+      ...schedule,
+      mission_template: { ...schedule.mission_template, destination_ids: ['d1'] },
+    }
+    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await screen.findByText('Deliver results to')
+    const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
+    const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
+    expect(opsInbox.checked).toBe(true)
+    expect(opsHook.checked).toBe(false)
+
+    fireEvent.click(opsHook) // now both picked
+    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+
+    await waitFor(() =>
+      expect(patchSchedule).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({
+          mission_template: expect.objectContaining({ destination_ids: ['d1', 'd2'] }),
+        }),
+      ),
+    )
+  })
 })
 
 describe('MissionForm — follow-up', () => {

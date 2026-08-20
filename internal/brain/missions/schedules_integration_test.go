@@ -121,3 +121,54 @@ func TestScheduleDeleteBlockedByReferencingMission(t *testing.T) {
 		t.Fatalf("DeleteSchedule with a referencing mission = %v, want ErrScheduleInUse", err)
 	}
 }
+
+// TestScheduleReferencingDestinationID is the destinations delete
+// guard's other half (ActiveMissionReferencesDestination covers
+// missions; this covers schedules): an enabled schedule whose
+// mission_template still names a destination id must be found and
+// named, a disabled schedule's reference must never block, and no
+// match must report ok=false cleanly.
+func TestScheduleReferencingDestinationID(t *testing.T) {
+	store := testStore(t)
+	ctx := t.Context()
+
+	destID := "11111111-1111-1111-1111-111111111111"
+
+	name, ok, err := store.ScheduleReferencingDestinationID(ctx, destID)
+	if err != nil {
+		t.Fatalf("ScheduleReferencingDestinationID with no schedules: %v", err)
+	}
+	if ok {
+		t.Fatalf("ScheduleReferencingDestinationID = %q, true; want false with no schedules referencing it", name)
+	}
+
+	scID, err := store.CreateSchedule(ctx, Schedule{
+		Name: slugMarker + "-dest-ref", Cron: "0 7 * * *", Enabled: true,
+		MissionTemplate: MissionTemplate{Goal: marker + "digest", Kind: "general", DestinationIDs: []string{destID}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+
+	name, ok, err = store.ScheduleReferencingDestinationID(ctx, destID)
+	if err != nil {
+		t.Fatalf("ScheduleReferencingDestinationID: %v", err)
+	}
+	if !ok || name != slugMarker+"-dest-ref" {
+		t.Fatalf("ScheduleReferencingDestinationID = %q, %v; want %q, true", name, ok, slugMarker+"-dest-ref")
+	}
+
+	// Disabling the schedule stops it from blocking deletion — same
+	// "active only" rule the mission-side check applies.
+	disabled := false
+	if err := store.PatchSchedule(ctx, scID, SchedulePatch{Enabled: &disabled}); err != nil {
+		t.Fatalf("PatchSchedule disable: %v", err)
+	}
+	_, ok, err = store.ScheduleReferencingDestinationID(ctx, destID)
+	if err != nil {
+		t.Fatalf("ScheduleReferencingDestinationID after disable: %v", err)
+	}
+	if ok {
+		t.Fatal("ScheduleReferencingDestinationID after disabling the schedule = true, want false")
+	}
+}

@@ -281,13 +281,16 @@ func main() {
 		}
 		return name
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, app.Log)
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, flags, missionStore, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
 		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
+	}
+	if missionScheduler != nil && destinationStore != nil {
+		missionScheduler.SetDestinationEnabled(destinationStore.EnabledByID)
 	}
 	// Chat-facing mission tools (D-0xx: "is mission X done?" / "push
 	// mission X"): registered here, not inside buildAgent, since both
@@ -743,11 +746,11 @@ func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 	hub := missions.NewHub()
 	store := missions.NewStore(db, log)
@@ -894,9 +897,9 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		_, err := gwc.ResolveRoute(ctx, name, "")
 		return err == nil
 	}
-	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, routeExists, flags.CodingExecutor, log)
+	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, routeExists, flags.CodingExecutor, nil, log)
 	go scheduler.Run(ctx)
-	return store, driver, notifier, workspace, hub
+	return store, driver, notifier, workspace, hub, scheduler
 }
 
 // connsPRSource adapts *connectors.Manager to missions.PRSource for the

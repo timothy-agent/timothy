@@ -225,6 +225,43 @@ func (s *Store) DeleteSchedule(ctx context.Context, id string) error {
 	return nil
 }
 
+// ScheduleReferencingDestinationID reports the name of the first
+// enabled schedule whose mission_template.destination_ids still names
+// destinationID — the guard destinations.Store.Delete calls before
+// removing a row, so a schedule's next fire can't lose its delivery
+// target out from under it. Disabled schedules never block deletion
+// (same "active only" rule ActiveMissionReferencesDestination applies
+// to non-terminal missions): a disabled schedule cannot fire again
+// until re-enabled, at which point re-attaching or removing the
+// destination is the operator's own call. ok reports whether any
+// schedule references it.
+func (s *Store) ScheduleReferencingDestinationID(ctx context.Context, destinationID string) (name string, ok bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", false, fmt.Errorf("schedules destination reference: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT name, mission_template FROM schedules WHERE enabled`)
+	if err != nil {
+		return "", false, fmt.Errorf("schedules destination reference: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var scName string
+		var templateJSON []byte
+		if err := rows.Scan(&scName, &templateJSON); err != nil {
+			return "", false, fmt.Errorf("schedules destination reference: %w", err)
+		}
+		var t MissionTemplate
+		_ = json.Unmarshal(templateJSON, &t)
+		for _, d := range t.DestinationIDs {
+			if d == destinationID {
+				return scName, true, rows.Err()
+			}
+		}
+	}
+	return "", false, rows.Err()
+}
+
 // isForeignKeyViolation reports whether err is Postgres's
 // foreign_key_violation (23503) — a schedule delete blocked by
 // missions still referencing it.

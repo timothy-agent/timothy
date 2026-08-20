@@ -1,6 +1,7 @@
 package destinations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -124,4 +125,72 @@ func TestValidateEmailNoConnectors(t *testing.T) {
 	if err := validate(t.Context(), nil, d); err == nil {
 		t.Fatal("expected error when connectors are disabled")
 	}
+}
+
+// fakeMissionRefs/fakeScheduleRefs let TestDeleteReferenceGuards
+// exercise Delete's two reference checks without a real Postgres pool
+// — both fakes return before Delete ever reaches s.db.Get() when they
+// report a reference, which is the only path this test needs (a
+// non-referenced Delete would go on to hit the db and belongs in the
+// integration suite instead).
+type fakeMissionRefs struct {
+	referenced bool
+	err        error
+}
+
+func (f fakeMissionRefs) ActiveMissionReferencesDestination(context.Context, string) (bool, error) {
+	return f.referenced, f.err
+}
+
+type fakeScheduleRefs struct {
+	name       string
+	referenced bool
+	err        error
+}
+
+func (f fakeScheduleRefs) ScheduleReferencingDestinationID(context.Context, string) (string, bool, error) {
+	return f.name, f.referenced, f.err
+}
+
+func TestDeleteReferenceGuards(t *testing.T) {
+	t.Parallel()
+
+	t.Run("active mission reference refuses with ErrReferenced", func(t *testing.T) {
+		t.Parallel()
+		s := &Store{}
+		err := s.Delete(t.Context(), "d1", fakeMissionRefs{referenced: true}, nil)
+		if !errors.Is(err, ErrReferenced) {
+			t.Fatalf("Delete = %v, want ErrReferenced", err)
+		}
+	})
+
+	t.Run("mission reference lookup error propagates", func(t *testing.T) {
+		t.Parallel()
+		s := &Store{}
+		err := s.Delete(t.Context(), "d1", fakeMissionRefs{err: errors.New("db down")}, nil)
+		if err == nil || errors.Is(err, ErrReferenced) {
+			t.Fatalf("Delete = %v, want a propagated (non-ErrReferenced) error", err)
+		}
+	})
+
+	t.Run("enabled schedule reference refuses with ErrReferenced naming the schedule", func(t *testing.T) {
+		t.Parallel()
+		s := &Store{}
+		err := s.Delete(t.Context(), "d1", nil, fakeScheduleRefs{name: "daily-brief", referenced: true})
+		if !errors.Is(err, ErrReferenced) {
+			t.Fatalf("Delete = %v, want ErrReferenced", err)
+		}
+		if !bytes.Contains([]byte(err.Error()), []byte("daily-brief")) {
+			t.Fatalf("Delete error %q does not name the referencing schedule", err.Error())
+		}
+	})
+
+	t.Run("schedule reference lookup error propagates", func(t *testing.T) {
+		t.Parallel()
+		s := &Store{}
+		err := s.Delete(t.Context(), "d1", nil, fakeScheduleRefs{err: errors.New("db down")})
+		if err == nil || errors.Is(err, ErrReferenced) {
+			t.Fatalf("Delete = %v, want a propagated (non-ErrReferenced) error", err)
+		}
+	})
 }

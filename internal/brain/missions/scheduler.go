@@ -80,6 +80,14 @@ type MissionTemplate struct {
 	// needs the same standing shell approval a UI-created one gets by
 	// default, or its very first shell call parks with nobody watching.
 	AutoApproveSafe bool `json:"auto_approve_safe"`
+	// DestinationIDs names operator-created destinations (D-061) this
+	// template's fired missions deliver their outcome digest to.
+	// Validated at schedule create/patch time (same rule as mission
+	// create, api/missions.go's validateDestinationIDs); re-filtered at
+	// FIRE time by resolveTemplateDefaults since a destination can be
+	// deleted or disabled between when the schedule was made and when
+	// it next fires.
+	DestinationIDs []string `json:"destination_ids,omitempty"`
 }
 
 // AgentDefaults is the slice of an agents row a fired mission borrows
@@ -109,6 +117,15 @@ type AgentDefaults struct {
 // created. ok reports whether the id resolved to a real agent.
 type AgentResolver func(ctx context.Context, agentID string) (AgentDefaults, bool)
 
+// DestinationEnabled reports whether id names a real, enabled
+// destinations row — the fire-time re-check resolveTemplateDefaults
+// runs on a template's DestinationIDs, mirroring
+// api/missions.go's validateDestinationIDs but tolerant instead of
+// rejecting: a destination deleted or disabled since the schedule was
+// created is dropped silently (with a log warning), never blocks the
+// fire.
+type DestinationEnabled func(ctx context.Context, id string) (bool, error)
+
 // Scheduler ticks every schedulerTick, evaluating schedules rows
 // against their cron expression (5-field, parsed via robfig/cron/v3's
 // standard parser — parsing only, not its own goroutine scheduler: the
@@ -123,6 +140,7 @@ type Scheduler struct {
 	routeForRole          func(context.Context, string) string
 	routeExists           func(context.Context, string) bool
 	codingExecutorDefault func(context.Context) string
+	destinationEnabled    DestinationEnabled
 	log                   *slog.Logger
 }
 
@@ -133,17 +151,29 @@ type Scheduler struct {
 // the "default" system role's route when an agent's own route is also
 // empty, routeExists for a coding template's route preferring the
 // operator's "coding" route over "default" when it exists (see
-// DefaultCodingRoute), and codingExecutorDefault (D-051) for a coding
-// template that omits harness — nil-safe on all five: a nil resolve
-// leaves an unresolved AgentID's fields at whatever the template
-// already specified, a nil enabled defaults every tick to enabled
-// (degrade open, since a config-read hiccup pausing every schedule
-// silently would be worse than one that keeps firing), a nil/unbound
-// routeForRole leaves the route "", a nil routeExists skips straight
-// to the default route, and a nil codingExecutorDefault leaves harness
-// at whatever the template specified (native if empty).
-func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string, log *slog.Logger) *Scheduler {
-	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, routeExists: routeExists, codingExecutorDefault: codingExecutorDefault, log: log}
+// DefaultCodingRoute), codingExecutorDefault (D-051) for a coding
+// template that omits harness, and destinationEnabled for the
+// fire-time re-check of a template's DestinationIDs — nil-safe on all
+// six: a nil resolve leaves an unresolved AgentID's fields at whatever
+// the template already specified, a nil enabled defaults every tick to
+// enabled (degrade open, since a config-read hiccup pausing every
+// schedule silently would be worse than one that keeps firing), a
+// nil/unbound routeForRole leaves the route "", a nil routeExists
+// skips straight to the default route, a nil codingExecutorDefault
+// leaves harness at whatever the template specified (native if
+// empty), and a nil destinationEnabled leaves DestinationIDs
+// unfiltered (destinations disabled entirely — nothing to check
+// against).
+func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string, destinationEnabled DestinationEnabled, log *slog.Logger) *Scheduler {
+	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, routeExists: routeExists, codingExecutorDefault: codingExecutorDefault, destinationEnabled: destinationEnabled, log: log}
+}
+
+// SetDestinationEnabled wires the fire-time destination re-check after
+// construction — main.go builds the destinations store AFTER the
+// scheduler (buildDestinations needs missionStore, built inside
+// buildMissions), same late-wiring shape as Driver.SetDestinationDeliver.
+func (s *Scheduler) SetDestinationEnabled(fn DestinationEnabled) {
+	s.destinationEnabled = fn
 }
 
 // Run ticks forever until ctx is done. Double-fire protection across
@@ -381,6 +411,12 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // ensureProvisioned).
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
 	t, promptOverlay, knowledge := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
+	// destination_ids is NOT NULL; a nil slice binds as a NULL array
+	// parameter, same fix as store.go's Create.
+	destinationIDs := s.filterDestinationIDs(ctx, t.DestinationIDs)
+	if destinationIDs == nil {
+		destinationIDs = []string{}
+	}
 	spec, _ := json.Marshal(Spec{})
 	budgetCurrency := t.BudgetCurrency
 	if budgetCurrency == "" {
@@ -394,11 +430,41 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 		return fmt.Errorf("marshal knowledge: %w", err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment, destination_ids)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		t.Goal, sc.Name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, knowledgeJSON, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment)
+		promptOverlay, knowledgeJSON, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment, destinationIDs)
 	return err
+}
+
+// filterDestinationIDs is the fire-time re-check on a template's
+// DestinationIDs: a destination deleted or disabled since the
+// schedule was created must not silently attach to the new mission
+// row, but must also never fail the fire — it's dropped and logged
+// instead. A nil destinationEnabled (destinations disabled) drops
+// every id, since none of them can be verified to still be valid.
+func (s *Scheduler) filterDestinationIDs(ctx context.Context, ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	if s.destinationEnabled == nil {
+		s.log.Warn("scheduler: dropping schedule destination_ids, destinations are not enabled", "destination_ids", ids)
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		ok, err := s.destinationEnabled(ctx, id)
+		if err != nil {
+			s.log.Warn("scheduler: dropping schedule destination id, lookup failed", "destination_id", id, "error", err)
+			continue
+		}
+		if !ok {
+			s.log.Warn("scheduler: dropping schedule destination id, unknown or disabled", "destination_id", id)
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // resolveTemplateDefaults is the pure fire-time resolution step

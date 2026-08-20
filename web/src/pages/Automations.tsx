@@ -3,10 +3,11 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { deleteSchedule, patchSchedule, listSchedules } from '../api/client'
-import type { Schedule } from '../api/types'
+import { deleteSchedule, listDestinations, patchSchedule, listSchedules } from '../api/client'
+import type { Destination, Schedule } from '../api/types'
 import { describeCron } from '../lib/schedules'
 import { relativeTime } from '../lib/format'
+import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import {
   Dialog,
@@ -27,6 +28,17 @@ export function Automations() {
   const navigate = useNavigate()
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [confirmDelete, setConfirmDelete] = useState<Schedule | null>(null)
+  // Destinations fetched once per page, just to resolve a schedule's
+  // destination_ids into display names for the badges below — best
+  // effort, an empty/failed fetch just renders no badges.
+  const [destinations, setDestinations] = useState<Destination[]>([])
+  useEffect(() => {
+    listDestinations()
+      .then(setDestinations)
+      .catch(() => {
+        // Non-fatal: badges just don't render if this fails.
+      })
+  }, [])
 
   const refresh = useCallback(() => {
     listSchedules()
@@ -79,6 +91,18 @@ export function Automations() {
                 {sc.next_run && <span>next {relativeTime(sc.next_run)}</span>}
                 {sc.last_run && <span>last {relativeTime(sc.last_run)}</span>}
               </div>
+              {sc.mission_template.destination_ids && sc.mission_template.destination_ids.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {sc.mission_template.destination_ids.map((id) => {
+                    const d = destinations.find((d) => d.id === id)
+                    return (
+                      <Badge key={id} variant="outline" className="text-xs">
+                        {d?.name ?? id}
+                      </Badge>
+                    )
+                  })}
+                </div>
+              )}
             </Link>
             <div className="flex items-center gap-2">
               <Toggle on={sc.enabled} onChange={(v) => toggle(sc, v)} label={`${sc.name} enabled`} />

@@ -2,6 +2,9 @@ package missions
 
 import (
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"slices"
 	"testing"
 	"time"
@@ -308,4 +311,65 @@ func TestTickNilEnabledDegradesOpen(t *testing.T) {
 	}()
 	s := &Scheduler{enabled: nil}
 	_ = s.tick(context.Background(), time.Now())
+}
+
+// TestFilterDestinationIDs covers the fire-time re-check on a
+// template's DestinationIDs: dropped ids never fail the fire, they're
+// just excluded from what actually lands on the fired mission's row.
+func TestFilterDestinationIDs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty input returns nil without consulting the lookup", func(t *testing.T) {
+		t.Parallel()
+		s := &Scheduler{log: discardLog()}
+		if got := s.filterDestinationIDs(context.Background(), nil); got != nil {
+			t.Fatalf("filterDestinationIDs(nil) = %v, want nil", got)
+		}
+	})
+
+	t.Run("nil destinationEnabled drops every id (destinations disabled)", func(t *testing.T) {
+		t.Parallel()
+		s := &Scheduler{log: discardLog()}
+		got := s.filterDestinationIDs(context.Background(), []string{"d1", "d2"})
+		if len(got) != 0 {
+			t.Fatalf("filterDestinationIDs with nil destinationEnabled = %v, want empty", got)
+		}
+	})
+
+	t.Run("drops disabled and missing ids, passes valid ones", func(t *testing.T) {
+		t.Parallel()
+		lookup := map[string]bool{"d1": true, "d2": false} // d3 absent entirely
+		s := &Scheduler{
+			log: discardLog(),
+			destinationEnabled: func(_ context.Context, id string) (bool, error) {
+				ok, exists := lookup[id]
+				return exists && ok, nil
+			},
+		}
+		got := s.filterDestinationIDs(context.Background(), []string{"d1", "d2", "d3"})
+		if !slices.Equal(got, []string{"d1"}) {
+			t.Fatalf("filterDestinationIDs = %v, want [d1]", got)
+		}
+	})
+
+	t.Run("a lookup error drops that id without failing the fire", func(t *testing.T) {
+		t.Parallel()
+		s := &Scheduler{
+			log: discardLog(),
+			destinationEnabled: func(_ context.Context, id string) (bool, error) {
+				if id == "d1" {
+					return false, errors.New("db unreachable")
+				}
+				return true, nil
+			},
+		}
+		got := s.filterDestinationIDs(context.Background(), []string{"d1", "d2"})
+		if !slices.Equal(got, []string{"d2"}) {
+			t.Fatalf("filterDestinationIDs = %v, want [d2]", got)
+		}
+	})
+}
+
+func discardLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

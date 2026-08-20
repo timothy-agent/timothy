@@ -146,15 +146,18 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		destLookup = destinationStore
 	}
 	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveExecutorOptions, nameMission, topModels, conns, missionAttachments, markitdownURL, destLookup)
-	a.registerSchedules(srv.Handle, missionStore)
-	// destinationRefs is *missions.Store itself (ActiveMissionReferencesDestination) —
+	a.registerSchedules(srv.Handle, missionStore, destLookup)
+	// destinationRefs/destinationScheduleRefs are *missions.Store itself
+	// (ActiveMissionReferencesDestination / ScheduleReferencingDestinationID) —
 	// nil-boxed the same way connLister is above so a nil missionStore
-	// keeps registerDestinations' refs check honest.
+	// keeps registerDestinations' refs checks honest.
 	var destRefs destinationRefs
+	var destScheduleRefs destinationScheduleRefs
 	if missionStore != nil {
 		destRefs = missionStore
+		destScheduleRefs = missionStore
 	}
-	a.registerDestinations(srv.Handle, destinationStore, destRefs, destinationTest)
+	a.registerDestinations(srv.Handle, destinationStore, destRefs, destScheduleRefs, destinationTest)
 	a.registerEvents(srv.Handle, hub)
 	a.registerTranscribe(srv.Handle, whisperClient, whisperURL)
 	a.registerAttachments(srv.Handle, attachmentStore)

@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -13,12 +16,15 @@ import (
 // schedules is missions' domain (the table lives in
 // internal/brain/missions), same nil-gating pattern as agents/
 // connectors. store is *missions.Store — schedules and missions share
-// one store since schedules is this package's own table.
-func (a *API) registerSchedules(handle func(pattern string, h http.Handler), store *missions.Store) {
+// one store since schedules is this package's own table. destinations
+// validates a create/patch request's mission_template.destination_ids
+// (D-061) the same way missionAPI.validateDestinationIDs does — nil
+// (destinations disabled) rejects any non-empty destination_ids.
+func (a *API) registerSchedules(handle func(pattern string, h http.Handler), store *missions.Store, destinations destinationLookup) {
 	if store == nil {
 		return
 	}
-	h := &scheduleAPI{store: store}
+	h := &scheduleAPI{store: store, destinations: destinations}
 	handle("GET /v1/schedules", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/schedules", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/schedules/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -26,7 +32,35 @@ func (a *API) registerSchedules(handle func(pattern string, h http.Handler), sto
 }
 
 type scheduleAPI struct {
-	store *missions.Store
+	store        *missions.Store
+	destinations destinationLookup
+}
+
+// validateDestinationIDs rejects any id that doesn't name a real,
+// enabled destinations row — same rule and error shape as
+// missionAPI.validateDestinationIDs (api/missions.go), applied to a
+// schedule's mission_template instead of a one-off mission create.
+func (h *scheduleAPI) validateDestinationIDs(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if h.destinations == nil {
+		return fmt.Errorf("destinations are not enabled")
+	}
+	var invalid []string
+	for _, id := range ids {
+		ok, err := h.destinations.EnabledByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("mission_template.destination_ids: %w", err)
+		}
+		if !ok {
+			invalid = append(invalid, id)
+		}
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("unknown or disabled destination id(s): %s", strings.Join(invalid, ", "))
+	}
+	return nil
 }
 
 func failSchedule(w http.ResponseWriter, err error) {
@@ -95,6 +129,10 @@ func (h *scheduleAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := h.validateDestinationIDs(r.Context(), req.MissionTemplate.DestinationIDs); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -128,6 +166,12 @@ func (h *scheduleAPI) patch(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
+	}
+	if req.MissionTemplate != nil {
+		if err := h.validateDestinationIDs(r.Context(), req.MissionTemplate.DestinationIDs); err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 	}
 	p := missions.SchedulePatch{
 		Name: req.Name, Cron: req.Cron,

@@ -285,10 +285,23 @@ type missionReferenceChecker interface {
 	ActiveMissionReferencesDestination(ctx context.Context, destinationID string) (bool, error)
 }
 
+// scheduleReferenceChecker is the narrow slice of *missions.Store
+// Delete needs to refuse removing a destination still referenced by an
+// enabled schedule's mission_template — same interface-boundary
+// reasoning as missionReferenceChecker. Returns the schedule's name
+// (not just a bool) so Delete's error can name it, same reason the
+// mission-side check settles for a bare bool: a mission has no
+// operator-facing name worth surfacing, a schedule does.
+type scheduleReferenceChecker interface {
+	ScheduleReferencingDestinationID(ctx context.Context, destinationID string) (name string, ok bool, err error)
+}
+
 // Delete removes a destination, refusing with ErrReferenced while any
-// non-terminal mission's destination_ids still names it — a historical
-// (terminal) mission's reference never blocks deletion.
-func (s *Store) Delete(ctx context.Context, id string, refs missionReferenceChecker) error {
+// non-terminal mission's destination_ids still names it, or any
+// enabled schedule's mission_template still names it (naming the
+// schedule in the error) — a historical (terminal) mission's
+// reference, or a disabled schedule's, never blocks deletion.
+func (s *Store) Delete(ctx context.Context, id string, refs missionReferenceChecker, scheduleRefs scheduleReferenceChecker) error {
 	if refs != nil {
 		referenced, err := refs.ActiveMissionReferencesDestination(ctx, id)
 		if err != nil {
@@ -296,6 +309,15 @@ func (s *Store) Delete(ctx context.Context, id string, refs missionReferenceChec
 		}
 		if referenced {
 			return ErrReferenced
+		}
+	}
+	if scheduleRefs != nil {
+		name, referenced, err := scheduleRefs.ScheduleReferencingDestinationID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("destinations delete: check schedule references: %w", err)
+		}
+		if referenced {
+			return fmt.Errorf("%w: schedule %q", ErrReferenced, name)
 		}
 	}
 	db, err := s.db.Get()

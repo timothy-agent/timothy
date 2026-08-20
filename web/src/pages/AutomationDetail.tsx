@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { listMissions, listSchedules } from '../api/client'
-import type { Mission, Schedule } from '../api/types'
+import { listDestinations, listMissions, listSchedules } from '../api/client'
+import type { Destination, Mission, Schedule } from '../api/types'
 import { MissionCard } from '../components/missions/MissionCard'
+import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { describeCron } from '../lib/schedules'
 import { relativeTime } from '../lib/format'
@@ -16,6 +17,16 @@ export function AutomationDetail() {
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [loading, setLoading] = useState(true)
   const [missions, setMissions] = useState<Mission[]>([])
+  // Destinations fetched once per page, just to resolve
+  // destination_ids into display names for the badges below.
+  const [destinations, setDestinations] = useState<Destination[]>([])
+  useEffect(() => {
+    listDestinations()
+      .then(setDestinations)
+      .catch(() => {
+        // Non-fatal: badges just don't render if this fails.
+      })
+  }, [])
 
   const refresh = useCallback(() => {
     if (!id) return
@@ -66,6 +77,19 @@ export function AutomationDetail() {
             {schedule.last_run && <span>last {relativeTime(schedule.last_run)}</span>}
             <span>{schedule.enabled ? 'enabled' : 'disabled'}</span>
           </div>
+          {schedule.mission_template.destination_ids &&
+            schedule.mission_template.destination_ids.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {schedule.mission_template.destination_ids.map((did) => {
+                  const d = destinations.find((d) => d.id === did)
+                  return (
+                    <Badge key={did} variant="outline" className="text-xs">
+                      {d?.name ?? did}
+                    </Badge>
+                  )
+                })}
+              </div>
+            )}
         </div>
         <Button variant="outline" onClick={() => navigate(`/automations/${id}/edit`)}>
           Edit

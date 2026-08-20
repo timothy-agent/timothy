@@ -1,15 +1,16 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Mission, Schedule } from '../api/types'
+import type { Destination, Mission, Schedule } from '../api/types'
 import { AutomationDetail } from './AutomationDetail'
 
 vi.mock('../api/client', () => ({
   listSchedules: vi.fn(),
   listMissions: vi.fn(),
+  listDestinations: vi.fn(),
 }))
 
-import { listMissions, listSchedules } from '../api/client'
+import { listDestinations, listMissions, listSchedules } from '../api/client'
 
 const schedule: Schedule = {
   id: 's1',
@@ -21,6 +22,17 @@ const schedule: Schedule = {
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
   pending_fire: false,
+}
+
+const destination: Destination = {
+  id: 'd1',
+  name: 'ops-inbox',
+  kind: 'email',
+  config: {},
+  credential_ref: '',
+  enabled: true,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
 }
 
 const firedMission: Mission = {
@@ -56,6 +68,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listSchedules).mockResolvedValue([])
   vi.mocked(listMissions).mockResolvedValue([])
+  vi.mocked(listDestinations).mockResolvedValue([])
 })
 
 describe('AutomationDetail', () => {
@@ -79,5 +92,22 @@ describe('AutomationDetail', () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     renderAt('s1')
     expect(await screen.findByText('No missions fired yet.')).toBeTruthy()
+  })
+
+  it('shows destination badges when the schedule has destination_ids', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([destination])
+    vi.mocked(listSchedules).mockResolvedValue([
+      { ...schedule, mission_template: { ...schedule.mission_template, destination_ids: ['d1'] } },
+    ])
+    renderAt('s1')
+    expect(await screen.findByText('ops-inbox')).toBeTruthy()
+  })
+
+  it('shows no destination badges when the schedule has none attached', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([destination])
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    renderAt('s1')
+    await screen.findByText('weekly-digest')
+    expect(screen.queryByText('ops-inbox')).toBeNull()
   })
 })

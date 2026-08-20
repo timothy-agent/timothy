@@ -106,7 +106,7 @@ func TestStoreCRUDIntegration(t *testing.T) {
 		t.Fatalf("EnabledByID after disable = %v, %v; want false, nil", enabled, err)
 	}
 
-	if err := store.Delete(ctx, id, nil); err != nil {
+	if err := store.Delete(ctx, id, nil, nil); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, err := store.Get(ctx, id); err == nil {

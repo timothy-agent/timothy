@@ -47,8 +47,8 @@ func TestSchedulerNoDoubleFireAcrossInstances(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched1 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
-	sched2 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched1 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched2 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 
 	now := time.Now()
 	var wg sync.WaitGroup
@@ -87,7 +87,7 @@ func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -98,6 +98,63 @@ func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 	}
 	if name != marker+"named-schedule" {
 		t.Fatalf("fired mission name = %q, want the schedule's own name %q", name, marker+"named-schedule")
+	}
+}
+
+// TestSchedulerFireFiltersDestinationIDs confirms the fire-time
+// re-check (filterDestinationIDs) drops ids that no longer resolve
+// through destinationEnabled — missing/disabled destinations never
+// fail the fire, they're just excluded from what lands on the new
+// mission row.
+func TestSchedulerFireFiltersDestinationIDs(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	// destination_ids is a uuid[] column — the ids exercised here must
+	// parse as UUIDs even though no destinations row backs them (the
+	// fake destinationEnabled below stands in for the real lookup).
+	const (
+		kept            = "11111111-1111-1111-1111-111111111111"
+		droppedDisabled = "22222222-2222-2222-2222-222222222222"
+		droppedMissing  = "33333333-3333-3333-3333-333333333333"
+	)
+	scID, err := store.CreateSchedule(ctx, Schedule{
+		Name: slugMarker + "-dest-filter", Cron: "* * * * *", Enabled: true,
+		MissionTemplate: MissionTemplate{
+			Goal: marker + "digest", Kind: "general",
+			DestinationIDs: []string{kept, droppedDisabled, droppedMissing},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+	db, _ := store.db.Get()
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", scID, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	destinationEnabled := func(_ context.Context, id string) (bool, error) {
+		switch id {
+		case kept:
+			return true, nil
+		case droppedDisabled:
+			return false, nil // exists, disabled
+		default:
+			return false, nil // droppedMissing: unknown id
+		}
+	}
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, destinationEnabled, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var got []string
+	if err := db.QueryRow(ctx, `SELECT destination_ids FROM missions WHERE schedule_id = $1`, scID).Scan(&got); err != nil {
+		t.Fatalf("query fired mission's destination_ids: %v", err)
+	}
+	if len(got) != 1 || got[0] != kept {
+		t.Fatalf("fired mission destination_ids = %v, want [%s]", got, kept)
 	}
 }
 
@@ -124,7 +181,7 @@ func TestSchedulerLiveQueueDedup(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 	now := time.Now()
 	if err := sched.tick(ctx, now); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -180,7 +237,7 @@ func TestSchedulerDedupSkipSetsPendingFireAndRecordsReason(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -217,7 +274,7 @@ func TestSchedulerPendingFireResolvesOnceMissionClears(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 	// First tick: due, but the mission above is active -> dedup skip,
 	// pending_fire set.
 	if err := sched.tick(ctx, time.Now()); err != nil {
@@ -270,7 +327,7 @@ func TestSchedulerDueAndPendingFiresOnce(t *testing.T) {
 		t.Fatalf("seed pending schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -305,7 +362,7 @@ func TestSchedulerBackfillSkipRecordsReason(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, store.log)
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}

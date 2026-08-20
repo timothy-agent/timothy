@@ -959,6 +959,11 @@ export interface MissionTemplate {
   environment?: string
   branch_pattern?: string
   commit_style?: string
+  // destination_ids names operator-created destinations this template's
+  // fired missions deliver their outcome digest to. Re-validated at
+  // fire time — a destination deleted or disabled since the schedule
+  // was created is dropped silently rather than failing the fire.
+  destination_ids?: string[]
 }
 
 // Schedule is a recurring cron trigger that fires mission_template

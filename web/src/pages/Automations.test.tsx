@@ -1,16 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Schedule } from '../api/types'
+import type { Destination, Schedule } from '../api/types'
 import { Automations } from './Automations'
 
 vi.mock('../api/client', () => ({
   listSchedules: vi.fn(),
   patchSchedule: vi.fn(),
   deleteSchedule: vi.fn(),
+  listDestinations: vi.fn(),
 }))
 
-import { deleteSchedule, listSchedules, patchSchedule } from '../api/client'
+import { deleteSchedule, listDestinations, listSchedules, patchSchedule } from '../api/client'
 
 const schedule: Schedule = {
   id: 's1',
@@ -22,6 +23,17 @@ const schedule: Schedule = {
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
   pending_fire: false,
+}
+
+const destination: Destination = {
+  id: 'd1',
+  name: 'ops-inbox',
+  kind: 'email',
+  config: {},
+  credential_ref: '',
+  enabled: true,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
 }
 
 function renderPage() {
@@ -42,6 +54,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listSchedules).mockResolvedValue([])
+  vi.mocked(listDestinations).mockResolvedValue([])
 })
 
 describe('Automations page', () => {
@@ -86,6 +99,24 @@ describe('Automations page', () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1'))
     expect(await screen.findByText('automation detail page')).toBeTruthy()
+  })
+
+  it('shows destination badges when the schedule has destination_ids', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([destination])
+    vi.mocked(listSchedules).mockResolvedValue([
+      { ...schedule, mission_template: { ...schedule.mission_template, destination_ids: ['d1'] } },
+    ])
+    renderPage()
+    await screen.findByText('weekly-digest')
+    expect(await screen.findByText('ops-inbox')).toBeTruthy()
+  })
+
+  it('shows no destination badges when the schedule has none attached', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([destination])
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    renderPage()
+    await screen.findByText('weekly-digest')
+    expect(screen.queryByText('ops-inbox')).toBeNull()
   })
 
   it('navigates to the edit automation page', async () => {

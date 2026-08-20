@@ -13,7 +13,7 @@ func TestDestinationsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerDestinations(m.Handle, nil, nil, nil)
+	a.registerDestinations(m.Handle, nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/admin/destinations"},
@@ -68,7 +68,7 @@ func TestDestinationTestHandler(t *testing.T) {
 	m := mux(a)
 
 	t.Run("nil tester 404s", func(t *testing.T) {
-		a.registerDestinations(m.Handle, nil, nil, nil)
+		a.registerDestinations(m.Handle, nil, nil, nil, nil)
 		// store is nil so the whole surface is unmounted; nothing to
 		// assert beyond the unmounted test above — covered there.
 	})

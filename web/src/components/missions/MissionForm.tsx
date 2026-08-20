@@ -254,20 +254,18 @@ export function MissionForm({
   const [classifying, setClassifying] = useState(false)
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
   // Destinations multi-select — visible, not advanced; default is
-  // empty (deliver nowhere). Only ever offered for a one-off create
-  // (mode === 'create'), same scope as schedule integration being a
-  // later slice.
+  // empty (deliver nowhere). Offered for a one-off create, a new
+  // schedule (repeat on), and editing an existing schedule — fetched
+  // once per form regardless of mode.
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
   const [destinationIDs, setDestinationIDs] = useState<string[]>([])
   useEffect(() => {
-    if (mode !== 'create') return
     listDestinations()
       .then(setDestinations)
       .catch(() => {
         // Non-fatal: the section just stays hidden if this fails, same
         // degrade as any other optional list fetch in this form.
       })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [route, setRoute] = useState(initial?.route ?? '')
@@ -426,6 +424,7 @@ export function MissionForm({
     setEnvironment(schedule.mission_template.environment ?? '')
     setBranchPattern(schedule.mission_template.branch_pattern ?? '')
     setCommitStyle(schedule.mission_template.commit_style ?? '')
+    setDestinationIDs(schedule.mission_template.destination_ids ?? [])
     setExpiresAt(schedule.expires_at ? schedule.expires_at.slice(0, 16) : '')
     setCronError(null)
   }, [mode, schedule])
@@ -572,6 +571,7 @@ export function MissionForm({
         environment: kind === 'coding' ? environment || undefined : undefined,
         branch_pattern: kind === 'coding' ? branchPattern.trim() || undefined : undefined,
         commit_style: kind === 'coding' ? commitStyle || undefined : undefined,
+        destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
     })
@@ -604,6 +604,7 @@ export function MissionForm({
             : undefined,
         commit_style:
           schedule.mission_template.kind === 'coding' ? commitStyle || undefined : undefined,
+        destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
     })
@@ -1134,7 +1135,7 @@ export function MissionForm({
           </span>
         </label>
 
-        {mode === 'create' && destinations && destinations.length > 0 && (
+        {destinations && destinations.length > 0 && (
           <div className="space-y-1.5">
             <Label>Deliver results to</Label>
             <div className="space-y-1.5 rounded-xl border border-border p-3">
