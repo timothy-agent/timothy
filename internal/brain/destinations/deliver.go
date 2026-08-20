@@ -187,6 +187,32 @@ func (d *Deliverer) Test(ctx context.Context, id string) error {
 	return adapter.Deliver(ctx, dest.Config, dest.CredentialRef, testPayload)
 }
 
+// DeliverNow sends subject+body to one destination synchronously, no
+// retry — the deliver tool's backing call (chat and mission turns
+// alike). Unlike Deliver/Test this never touches mission_events (the
+// tool's own result string is the caller's record) and carries no
+// files: attachments are the harness terminal-delivery path's concern
+// only. Returns the destination's name and kind on success so the
+// tool can report what it delivered to.
+func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (name, kind string, err error) {
+	dest, err := d.store.Get(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	if !dest.Enabled {
+		return "", "", fmt.Errorf("destination %q is disabled", dest.Name)
+	}
+	adapter := d.adapters[dest.Kind]
+	if adapter == nil {
+		return "", "", fmt.Errorf("no adapter for kind %q", dest.Kind)
+	}
+	payload := Payload{Subject: subject, Body: body}
+	if err := adapter.Deliver(ctx, dest.Config, dest.CredentialRef, payload); err != nil {
+		return "", "", err
+	}
+	return dest.Name, dest.Kind, nil
+}
+
 // alreadyDelivered scans a mission's events for prior
 // mission.delivered/mission.delivery_failed rows, keyed by
 // destination_id — the one-per-destination-per-mission idempotency

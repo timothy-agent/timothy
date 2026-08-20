@@ -14,9 +14,13 @@ import (
 // they carry through only for the email/telegram adapters, which read
 // the fields directly rather than through JSON.
 type Payload struct {
-	MissionID     string   `json:"mission_id"`
-	Name          string   `json:"name"`
-	Goal          string   `json:"goal"`
+	MissionID string `json:"mission_id"`
+	Name      string `json:"name"`
+	Goal      string `json:"goal"`
+	// Subject is set only by the ad-hoc deliver tool (missions never
+	// set it); the email adapter uses it as the subject line in place
+	// of its mission-derived default when non-empty.
+	Subject       string   `json:"subject,omitempty"`
 	Body          string   `json:"body"`
 	Links         []string `json:"links"`
 	Files         []File   `json:"-"`
