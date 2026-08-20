@@ -87,6 +87,10 @@ func (a *TelegramAdapter) Deliver(ctx context.Context, config json.RawMessage, c
 // after truncation rather than being the first thing cut).
 func renderTelegramText(p Payload) string {
 	var b strings.Builder
+	if p.Subject != "" {
+		b.WriteString(escapeMarkdownV2(p.Subject))
+		b.WriteString("\n\n")
+	}
 	b.WriteString(escapeMarkdownV2(p.Body))
 	if len(p.Links) > 0 {
 		b.WriteString("\n\n")

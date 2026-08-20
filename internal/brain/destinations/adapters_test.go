@@ -10,13 +10,15 @@ import (
 )
 
 type fakeMailSender struct {
-	plainCalls int
-	lastBody   string
-	attached   []MailAttachment
+	plainCalls  int
+	lastSubject string
+	lastBody    string
+	attached    []MailAttachment
 }
 
-func (f *fakeMailSender) SendMail(_ context.Context, _, _, _, body string) error {
+func (f *fakeMailSender) SendMail(_ context.Context, _, _, subject, body string) error {
 	f.plainCalls++
+	f.lastSubject = subject
 	f.lastBody = body
 	return nil
 }
@@ -52,6 +54,30 @@ func TestEmailAdapterDeliverWithFilesUsesAttachments(t *testing.T) {
 	}
 	if len(mail.attached) != 1 || mail.attached[0].Name != "out.md" || string(mail.attached[0].Data) != "content" {
 		t.Fatalf("unexpected attachments: %+v", mail.attached)
+	}
+}
+
+func TestEmailAdapterUsesMissionSubjectByDefault(t *testing.T) {
+	mail := &fakeMailSender{}
+	a := &EmailAdapter{Mail: mail}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"connector_id":"c1","to":"a@b.com"}`), "", Payload{Name: "Ship it", Body: "digest"})
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if mail.lastSubject != "Timothy mission: Ship it" {
+		t.Fatalf("subject = %q, want mission-derived default", mail.lastSubject)
+	}
+}
+
+func TestEmailAdapterUsesPayloadSubjectWhenSet(t *testing.T) {
+	mail := &fakeMailSender{}
+	a := &EmailAdapter{Mail: mail}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"connector_id":"c1","to":"a@b.com"}`), "", Payload{Name: "Ship it", Subject: "Daily digest", Body: "digest"})
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if mail.lastSubject != "Daily digest" {
+		t.Fatalf("subject = %q, want the payload's own subject", mail.lastSubject)
 	}
 }
 
@@ -97,5 +123,47 @@ func TestWebhookAdapterTextMentionsOversizeByNameOnly(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, "huge.zip") {
 		t.Fatalf("expected the oversize file name mentioned in text body, got %q", gotBody)
+	}
+}
+
+func TestWebhookAdapterTextPrependsSubjectWhenSet(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := &WebhookAdapter{}
+	payload := Payload{Subject: "Daily digest", Body: "the content"}
+	cfg, _ := json.Marshal(WebhookConfig{URL: srv.URL, Format: "text"})
+	if err := a.Deliver(t.Context(), cfg, "", payload); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if !strings.HasPrefix(gotBody, "Daily digest\n\nthe content") {
+		t.Fatalf("gotBody = %q, want subject prepended", gotBody)
+	}
+}
+
+func TestWebhookAdapterJSONIncludesSubjectField(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := &WebhookAdapter{}
+	payload := Payload{Subject: "Daily digest", Body: "the content"}
+	cfg, _ := json.Marshal(WebhookConfig{URL: srv.URL, Format: "json"})
+	if err := a.Deliver(t.Context(), cfg, "", payload); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if !strings.Contains(gotBody, `"subject":"Daily digest"`) {
+		t.Fatalf("gotBody = %q, want subject field present", gotBody)
 	}
 }

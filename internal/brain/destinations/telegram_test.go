@@ -43,6 +43,14 @@ func TestRenderTelegramTextUnderLimit(t *testing.T) {
 	}
 }
 
+func TestRenderTelegramTextPrependsSubjectWhenSet(t *testing.T) {
+	p := Payload{Subject: "Daily digest", Body: "the content"}
+	got := renderTelegramText(p)
+	if !strings.HasPrefix(got, "Daily digest\n\nthe content") {
+		t.Fatalf("got = %q, want subject prepended", got)
+	}
+}
+
 func TestRenderTelegramTextTruncatesOverLimit(t *testing.T) {
 	p := Payload{Body: strings.Repeat("x", telegramMessageLimit*2), Links: []string{"https://timothy.example/missions/m1"}}
 	got := renderTelegramText(p)

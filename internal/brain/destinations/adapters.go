@@ -54,7 +54,10 @@ func (a *EmailAdapter) Deliver(ctx context.Context, config json.RawMessage, _ st
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return fmt.Errorf("email adapter: config: %w", err)
 	}
-	subject := "Timothy mission: " + payload.Name
+	subject := payload.Subject
+	if subject == "" {
+		subject = "Timothy mission: " + payload.Name
+	}
 	if len(payload.Files) == 0 {
 		return a.Mail.SendMail(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload))
 	}
@@ -122,6 +125,9 @@ func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, _ 
 // still gets to know they exist.
 func renderText(p Payload) string {
 	out := p.Body
+	if p.Subject != "" {
+		out = p.Subject + "\n\n" + out
+	}
 	if len(p.Links) > 0 {
 		out += "\n\nLinks:\n"
 		for _, l := range p.Links {

@@ -292,6 +292,28 @@ func main() {
 	if missionScheduler != nil && destinationStore != nil {
 		missionScheduler.SetDestinationEnabled(destinationStore.EnabledByID)
 	}
+	// deliver: chat-facing ad-hoc send to one operator-configured
+	// destination. Registered here, not inside buildAgent, for the same
+	// reason as the mission tools below — destinationStore/Deliverer
+	// don't exist yet at that point. Like missions/mission_push, this
+	// reaches the live tool surface (chat + connector-reload swaps)
+	// only, never the BuiltinsOnly base surface a mission worker turn
+	// resolves to: a mission worker must never gain an outward-write
+	// tool the harness itself doesn't grant it (same reasoning as
+	// BuiltinsOnly excluding connector writes in loop.Request's doc
+	// comment). A mission that wants a destination attaches it at
+	// create instead; the harness delivers on terminal done.
+	if destinationStore != nil && destinationDeliverer != nil {
+		deliverTool := builtin.Deliver(destinationLister{destinationStore}.List, destinationDeliverer.DeliverNow)
+		current := builtinSet.add(deliverTool)
+		if conns != nil {
+			swapAgentTools(agent, current, conns, app.Log, toolCalls)
+		} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+			app.Log.Warn("deliver tool registration failed; agent keeps its previous tool surface", "error", err)
+		} else {
+			agent.SwapTools(constrained, defs)
+		}
+	}
 	// Chat-facing mission tools (D-0xx: "is mission X done?" / "push
 	// mission X"): registered here, not inside buildAgent, since both
 	// need missionStore (built above, after buildAgent) and mission_push
@@ -691,6 +713,26 @@ func (d destinationConnectorLookup) Get(ctx context.Context, id string) (destina
 		return destinations.Connector{}, err
 	}
 	return destinations.Connector{Kind: c.Kind, Enabled: c.Enabled}, nil
+}
+
+// destinationLister adapts *destinations.Store.List to the deliver
+// tool's own DestinationInfo shape — builtin never imports
+// destinations directly (import cycle: destinations -> missions ->
+// builtin), same reasoning as builtin.MissionRecord.
+type destinationLister struct {
+	store *destinations.Store
+}
+
+func (d destinationLister) List(ctx context.Context) ([]builtin.DestinationInfo, error) {
+	rows, err := d.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]builtin.DestinationInfo, len(rows))
+	for i, r := range rows {
+		out[i] = builtin.DestinationInfo{ID: r.ID, Name: r.Name, Enabled: r.Enabled}
+	}
+	return out, nil
 }
 
 // missionWorkSlotMax bounds how many missions may be status='working'
