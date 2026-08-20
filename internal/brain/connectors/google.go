@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"sync"
@@ -346,6 +348,89 @@ func (g *Google) SendMail(ctx context.Context, connectorID, to, subject, body st
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("send mail: gmail api status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// Attachment is one file to include on a SendMailWithAttachments call.
+type Attachment struct {
+	Name string
+	Data []byte
+}
+
+// SendMailWithAttachments is SendMail plus a multipart/mixed body for
+// destinations' artifact-file delivery — a separate method rather than
+// an optional param on SendMail so the plain-text tool-call path
+// (gmailSend) never builds MIME multipart machinery it doesn't need.
+func (g *Google) SendMailWithAttachments(ctx context.Context, connectorID, to, subject, body string, attachments []Attachment) error {
+	if len(attachments) == 0 {
+		return g.SendMail(ctx, connectorID, to, subject, body)
+	}
+	c, err := g.Rows.Get(ctx, connectorID)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	cfg, err := googleConfig(c)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	if c.CredentialRef == "" {
+		return fmt.Errorf("send mail: connector %s has no credential_ref", c.Name)
+	}
+	token, err := g.token(ctx, cfg, c.CredentialRef)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+
+	var mime strings.Builder
+	w := multipart.NewWriter(&mime)
+	fmt.Fprintf(&mime, "To: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\n", to, subject)
+	fmt.Fprintf(&mime, "Content-Type: multipart/mixed; boundary=%s\r\n\r\n", w.Boundary())
+
+	textPart, err := w.CreatePart(textproto.MIMEHeader{"Content-Type": {"text/plain; charset=UTF-8"}})
+	if err != nil {
+		return fmt.Errorf("send mail: build text part: %w", err)
+	}
+	if _, err := textPart.Write([]byte(body)); err != nil {
+		return fmt.Errorf("send mail: write text part: %w", err)
+	}
+	for _, a := range attachments {
+		header := textproto.MIMEHeader{
+			"Content-Type":              {"application/octet-stream"},
+			"Content-Transfer-Encoding": {"base64"},
+			"Content-Disposition":       {fmt.Sprintf(`attachment; filename=%q`, a.Name)},
+		}
+		part, err := w.CreatePart(header)
+		if err != nil {
+			return fmt.Errorf("send mail: build attachment part: %w", err)
+		}
+		if _, err := part.Write([]byte(base64.StdEncoding.EncodeToString(a.Data))); err != nil {
+			return fmt.Errorf("send mail: write attachment part: %w", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("send mail: close multipart: %w", err)
+	}
+
+	payload := map[string]string{"raw": base64.URLEncoding.EncodeToString([]byte(mime.String()))}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.GmailBase+"/gmail/v1/users/me/messages/send", strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := g.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("send mail: gmail api status %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }

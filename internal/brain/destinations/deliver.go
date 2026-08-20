@@ -44,15 +44,19 @@ type Deliverer struct {
 
 // NewDeliverer builds a Deliverer. webURL resolves the web_base_url
 // setting fresh at delivery time (never cached on the struct) so an
-// operator's later change applies without a restart. email nil (no
-// google connectors wired) leaves "email" unregistered in adapters —
-// deliverOne's map lookup then reports "no adapter for kind" rather
-// than boxing a nil *EmailAdapter as a non-nil Adapter (which would
-// panic on first field access inside Deliver).
-func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, webURL func(ctx context.Context) string, log *slog.Logger) *Deliverer {
+// operator's later change applies without a restart. email/telegram
+// nil (no google connectors / no secret store wired, respectively)
+// leaves that kind unregistered in adapters — deliverOne's map lookup
+// then reports "no adapter for kind" rather than boxing a nil adapter
+// as a non-nil Adapter (which would panic on first field access
+// inside Deliver).
+func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, webURL func(ctx context.Context) string, log *slog.Logger) *Deliverer {
 	adapters := map[string]Adapter{"webhook": webhook}
 	if email != nil {
 		adapters["email"] = email
+	}
+	if telegram != nil {
+		adapters["telegram"] = telegram
 	}
 	return &Deliverer{
 		store:    store,
@@ -135,7 +139,7 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID str
 			case <-timer.C:
 			}
 		}
-		lastErr = adapter.Deliver(ctx, dest.Config, payload)
+		lastErr = adapter.Deliver(ctx, dest.Config, dest.CredentialRef, payload)
 		if lastErr == nil {
 			d.recordOutcome(ctx, missionID, destinationID, dest.Name, true, "")
 			return
@@ -180,7 +184,7 @@ func (d *Deliverer) Test(ctx context.Context, id string) error {
 	if adapter == nil {
 		return fmt.Errorf("no adapter for kind %q", dest.Kind)
 	}
-	return adapter.Deliver(ctx, dest.Config, testPayload)
+	return adapter.Deliver(ctx, dest.Config, dest.CredentialRef, testPayload)
 }
 
 // alreadyDelivered scans a mission's events for prior

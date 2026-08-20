@@ -285,7 +285,7 @@ func main() {
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, app.Log)
 	}
-	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, flags, missionStore, app.Log)
+	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
 		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
 	}
@@ -628,8 +628,9 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 // nil still builds the store (webhook destinations work without
 // connectors); an email destination's create/update then fails
 // validation with a clear error, same nil-gated shape as
-// api/missions.go's own repo_url-needs-connectors check.
-func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, flags *settings.Store, missionStore *missions.Store, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
+// api/missions.go's own repo_url-needs-connectors check. secrets nil
+// (no valid master key) leaves telegram unregistered the same way.
+func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
 	if missionStore == nil {
 		return nil, nil
 	}
@@ -644,11 +645,34 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	// already requires an enabled google connector to exist.
 	var email *destinations.EmailAdapter
 	if goog != nil {
-		email = &destinations.EmailAdapter{Mail: goog}
+		email = &destinations.EmailAdapter{Mail: destinationMailSender{goog}}
 	}
 	webhook := &destinations.WebhookAdapter{}
-	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, flags.WebBaseURL, log)
+	var telegram *destinations.TelegramAdapter
+	if secrets != nil {
+		telegram = &destinations.TelegramAdapter{ResolveToken: secrets.Resolve}
+	}
+	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, flags.WebBaseURL, log)
 	return store, deliverer
+}
+
+// destinationMailSender adapts *connectors.Google's attachment type to
+// destinations' own narrow mailAttachment shape — same
+// never-import-connectors reasoning as destinationConnectorLookup.
+type destinationMailSender struct {
+	goog *connectors.Google
+}
+
+func (d destinationMailSender) SendMail(ctx context.Context, connectorID, to, subject, body string) error {
+	return d.goog.SendMail(ctx, connectorID, to, subject, body)
+}
+
+func (d destinationMailSender) SendMailWithAttachments(ctx context.Context, connectorID, to, subject, body string, attachments []destinations.MailAttachment) error {
+	converted := make([]connectors.Attachment, len(attachments))
+	for i, a := range attachments {
+		converted[i] = connectors.Attachment{Name: a.Name, Data: a.Data}
+	}
+	return d.goog.SendMailWithAttachments(ctx, connectorID, to, subject, body, converted)
 }
 
 // destinationConnectorLookup adapts *connectors.Manager to

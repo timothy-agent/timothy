@@ -9,7 +9,9 @@ vi.mock('../../api/client', () => ({
   deleteDestination: vi.fn(),
   listConnectors: vi.fn(),
   listDestinations: vi.fn(),
+  listSecretRefs: vi.fn(),
   patchDestination: vi.fn(),
+  setSecret: vi.fn(),
   testDestination: vi.fn(),
 }))
 
@@ -20,7 +22,9 @@ import {
   deleteDestination,
   listConnectors,
   listDestinations,
+  listSecretRefs,
   patchDestination,
+  setSecret,
   testDestination,
 } from '../../api/client'
 import { toast } from 'sonner'
@@ -31,6 +35,17 @@ const webhookDestination: Destination = {
   kind: 'webhook',
   config: { url: 'https://example.com/hook', format: 'json' },
   credential_ref: '',
+  enabled: true,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+
+const telegramDestination: Destination = {
+  id: 'd4',
+  name: 'ops-telegram',
+  kind: 'telegram',
+  config: { chat_id: '123456' },
+  credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN',
   enabled: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
@@ -62,6 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listDestinations).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([googleConnector])
+  vi.mocked(listSecretRefs).mockResolvedValue([])
 })
 
 describe('Destinations tab', () => {
@@ -204,5 +220,84 @@ describe('Destinations tab', () => {
       config: { connector_id: 'c1', to: 'ops@example.com' },
       enabled: false,
     })
+  })
+
+  it('adds a telegram destination: writes the bot token secret then creates', async () => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createDestination).mockResolvedValue('d4')
+    vi.mocked(testDestination).mockResolvedValue({ ok: true })
+    vi.mocked(patchDestination).mockResolvedValue()
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: /^Telegram/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
+    fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
+    fireEvent.change(screen.getByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'bot-token-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+
+    const addButton = await screen.findByRole('button', { name: 'Add destination' })
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
+
+    await waitFor(() => expect(patchDestination).toHaveBeenCalledWith('d4', { enabled: true }))
+    expect(setSecret).toHaveBeenCalledWith('OPS_TELEGRAM_TELEGRAM_BOT_TOKEN', 'bot-token-value')
+    expect(createDestination).toHaveBeenCalledWith({
+      name: 'ops-telegram',
+      kind: 'telegram',
+      config: { chat_id: '123456' },
+      credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN',
+      enabled: false,
+    })
+  })
+
+  it('reuses an existing credential for a telegram bot token, skipping the secret write', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([{ name: 'SHARED_BOT_TOKEN', backend: 'db', referenced_by: [] }])
+    vi.mocked(createDestination).mockResolvedValue('d4')
+    vi.mocked(testDestination).mockResolvedValue({ ok: true })
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: /^Telegram/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
+    fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: 'SHARED_BOT_TOKEN' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+
+    await waitFor(() => expect(testDestination).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(createDestination).toHaveBeenCalledWith({
+      name: 'ops-telegram',
+      kind: 'telegram',
+      config: { chat_id: '123456' },
+      credential_ref: 'SHARED_BOT_TOKEN',
+      enabled: false,
+    })
+  })
+
+  it('edits a telegram destination config and rotates its bot token', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
+    vi.mocked(patchDestination).mockResolvedValue()
+    vi.mocked(setSecret).mockResolvedValue()
+
+    render(
+      <MemoryRouter initialEntries={['/settings/destinations/d4']}>
+        <Routes>
+          <Route path="/settings/destinations/*" element={<DestinationsTab />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const chatIDInput = await screen.findByDisplayValue('123456')
+    fireEvent.change(chatIDInput, { target: { value: '987654' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(patchDestination).toHaveBeenCalledWith('d4', { config: { chat_id: '987654' } }),
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'new-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('OPS_TELEGRAM_TELEGRAM_BOT_TOKEN', 'new-token'))
+    expect(patchDestination).toHaveBeenCalledWith('d4', { credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN' })
   })
 })

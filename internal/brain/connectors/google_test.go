@@ -565,6 +565,55 @@ func TestGmailToolsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSendMailWithAttachments(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(bothScopes)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+
+	err := g.SendMailWithAttachments(t.Context(), row.ID, "ops@example.com", "digest", "body text",
+		[]Attachment{{Name: "report.txt", Data: []byte("report contents")}})
+	if err != nil {
+		t.Fatalf("SendMailWithAttachments: %v", err)
+	}
+	if len(f.gmailSent) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(f.gmailSent))
+	}
+	raw := f.gmailSent[0]
+	if !strings.Contains(raw, "multipart/mixed") {
+		t.Fatalf("expected a multipart/mixed message, got %q", raw)
+	}
+	if !strings.Contains(raw, "body text") {
+		t.Fatalf("expected the body text part, got %q", raw)
+	}
+	if !strings.Contains(raw, `filename="report.txt"`) {
+		t.Fatalf("expected the attachment filename, got %q", raw)
+	}
+	if !strings.Contains(raw, base64.StdEncoding.EncodeToString([]byte("report contents"))) {
+		t.Fatalf("expected the base64 attachment content, got %q", raw)
+	}
+}
+
+func TestSendMailWithAttachmentsFallsBackToPlainSend(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(bothScopes)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+
+	if err := g.SendMailWithAttachments(t.Context(), row.ID, "ops@example.com", "digest", "body text", nil); err != nil {
+		t.Fatalf("SendMailWithAttachments: %v", err)
+	}
+	if len(f.gmailSent) != 1 || strings.Contains(f.gmailSent[0], "multipart/mixed") {
+		t.Fatalf("expected a plain (non-multipart) send with no attachments, got %q", f.gmailSent)
+	}
+}
+
 // TestGmailSearchZeroResultsSuggestsBroadening pins a real search-
 // coverage miss found in production: a from:-scoped query missed a
 // real email (the sender's exact address differed from what was

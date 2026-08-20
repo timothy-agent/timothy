@@ -58,7 +58,7 @@ type fakeAdapter struct {
 	failCount int
 }
 
-func (f *fakeAdapter) Deliver(_ context.Context, _ json.RawMessage, _ Payload) error {
+func (f *fakeAdapter) Deliver(_ context.Context, _ json.RawMessage, _ string, _ Payload) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
@@ -84,7 +84,7 @@ func withFastBackoff(t *testing.T) {
 func TestDeliverZeroDestinationsNoop(t *testing.T) {
 	destStore := &fakeDestStore{rows: map[string]Destination{}}
 	eventStore := &fakeEventStore{}
-	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, discardLog())
+	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, nil, discardLog())
 
 	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, nil, "digest")
 

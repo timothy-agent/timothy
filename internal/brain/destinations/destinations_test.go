@@ -93,7 +93,20 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "telegram rejected at go layer",
+			name: "valid telegram",
+			//nolint:gosec // G101: a ref NAME, not a credential value.
+			d: Destination{Name: "tg", Kind: "telegram", CredentialRef: "TG_BOT_TOKEN",
+				Config: json.RawMessage(`{"chat_id":"123"}`)},
+			wantErr: false,
+		},
+		{
+			name: "telegram missing chat_id",
+			//nolint:gosec // G101: a ref NAME, not a credential value.
+			d:       Destination{Name: "tg", Kind: "telegram", CredentialRef: "TG_BOT_TOKEN", Config: json.RawMessage(`{}`)},
+			wantErr: true,
+		},
+		{
+			name:    "telegram missing credential_ref",
 			d:       Destination{Name: "tg", Kind: "telegram", Config: json.RawMessage(`{"chat_id":"123"}`)},
 			wantErr: true,
 		},

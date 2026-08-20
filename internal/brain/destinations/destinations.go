@@ -1,9 +1,9 @@
 // Package destinations implements operator-created outbound sinks
 // mission results deliver to: email (rides a google connector's Gmail
-// send path) and webhook in slice 1. Delivery is harness-owned and
-// deterministic (D-061) — the model never supplies or addresses a
-// destination, only ids resolved against this operator-owned table are
-// ever reachable.
+// send path), webhook, and telegram (Bot API). Delivery is
+// harness-owned and deterministic (D-061) — the model never supplies
+// or addresses a destination, only ids resolved against this
+// operator-owned table are ever reachable.
 package destinations
 
 import (
@@ -43,6 +43,12 @@ type EmailConfig struct {
 type WebhookConfig struct {
 	URL    string `json:"url"`
 	Format string `json:"format"` // json | text
+}
+
+// TelegramConfig is the config shape for kind='telegram'. The bot
+// token lives in Destination.CredentialRef, never here.
+type TelegramConfig struct {
+	ChatID string `json:"chat_id"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
@@ -113,11 +119,19 @@ func validate(ctx context.Context, conns connectorLookup, d Destination) error {
 		default:
 			return fmt.Errorf(`webhook destination requires config.format to be "json" or "text"`)
 		}
+	case "telegram":
+		var cfg TelegramConfig
+		if err := json.Unmarshal(d.Config, &cfg); err != nil {
+			return fmt.Errorf("telegram config: %w", err)
+		}
+		if cfg.ChatID == "" {
+			return fmt.Errorf("telegram destination requires config.chat_id")
+		}
+		if d.CredentialRef == "" {
+			return fmt.Errorf("telegram destination requires credential_ref (bot token)")
+		}
 	default:
-		// Slice 1 accepts only email/webhook at the Go layer, even
-		// though the DB CHECK also allows 'telegram' for forward
-		// compatibility (see 0014_destinations.sql).
-		return fmt.Errorf("unsupported kind %q (only email, webhook in this release)", d.Kind)
+		return fmt.Errorf("unsupported kind %q (only email, webhook, telegram in this release)", d.Kind)
 	}
 	return nil
 }

@@ -15,8 +15,20 @@ import (
 const webhookTimeout = 10 * time.Second
 
 // Adapter delivers one rendered Payload to a destination's config.
+// credentialRef is the destination's stored credential_ref name (never
+// a resolved value) — only TelegramAdapter uses it; email/webhook
+// ignore it (email rides its connector's own auth, webhook has none in
+// this slice).
 type Adapter interface {
-	Deliver(ctx context.Context, config json.RawMessage, payload Payload) error
+	Deliver(ctx context.Context, config json.RawMessage, credentialRef string, payload Payload) error
+}
+
+// MailAttachment mirrors connectors.Attachment — a local copy so this
+// package never imports connectors, mirroring the rest of
+// destinations' dependency direction (connectorLookup above).
+type MailAttachment struct {
+	Name string
+	Data []byte
 }
 
 // mailSender is the narrow slice of *connectors.Google the email
@@ -25,37 +37,47 @@ type Adapter interface {
 // direction (connectorLookup above).
 type mailSender interface {
 	SendMail(ctx context.Context, connectorID, to, subject, body string) error
+	SendMailWithAttachments(ctx context.Context, connectorID, to, subject, body string, attachments []MailAttachment) error
 }
 
 // EmailAdapter sends a destination's payload via the SAME Gmail send
-// path gmail_send's tool uses (connectors.Google.SendMail) — never the
-// tool-execution layer, so a destination's delivery never depends on
-// the agent loop or permission chain.
+// path gmail_send's tool uses (connectors.Google.SendMail /
+// SendMailWithAttachments) — never the tool-execution layer, so a
+// destination's delivery never depends on the agent loop or
+// permission chain.
 type EmailAdapter struct {
 	Mail mailSender
 }
 
-func (a *EmailAdapter) Deliver(ctx context.Context, config json.RawMessage, payload Payload) error {
+func (a *EmailAdapter) Deliver(ctx context.Context, config json.RawMessage, _ string, payload Payload) error {
 	var cfg EmailConfig
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return fmt.Errorf("email adapter: config: %w", err)
 	}
 	subject := "Timothy mission: " + payload.Name
-	return a.Mail.SendMail(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload))
+	if len(payload.Files) == 0 {
+		return a.Mail.SendMail(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload))
+	}
+	attachments := make([]MailAttachment, len(payload.Files))
+	for i, f := range payload.Files {
+		attachments[i] = MailAttachment(f)
+	}
+	return a.Mail.SendMailWithAttachments(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload), attachments)
 }
 
 // WebhookAdapter POSTs a destination's payload as JSON or plain text
 // per config.format. credential_ref-based Authorization is
-// deliberately OMITTED in this slice: brain has no secret-value
-// resolution path of its own for arbitrary credential refs (secrets
-// resolve gateway/connector-side); wiring one here would mean
-// inventing a new resolution path rather than reusing an existing one.
-// Revisit if a real need for authenticated webhooks shows up.
+// deliberately OMITTED in this slice: the plan named no header config
+// for it yet (see 2026-08-19-destinations-plan.md's open questions),
+// not a resolution-path limitation — brain's own secret store
+// (secretstore.Store.Resolve) is already used directly elsewhere
+// (connectors, telegram below). Revisit if a real need for
+// authenticated webhooks shows up.
 type WebhookAdapter struct {
 	HTTP *http.Client
 }
 
-func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, payload Payload) error {
+func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, _ string, payload Payload) error {
 	var cfg WebhookConfig
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return fmt.Errorf("webhook adapter: config: %w", err)
@@ -95,7 +117,9 @@ func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, pa
 }
 
 // renderText is the plain-text rendering shared by the email body and
-// a text-format webhook.
+// a text-format webhook. Oversize artifact names are listed here for
+// every kind — a webhook never receives the files themselves, but
+// still gets to know they exist.
 func renderText(p Payload) string {
 	out := p.Body
 	if len(p.Links) > 0 {
@@ -104,5 +128,6 @@ func renderText(p Payload) string {
 			out += "- " + l + "\n"
 		}
 	}
+	out += oversizeNotice(p.OversizeFiles)
 	return out
 }

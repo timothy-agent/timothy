@@ -1,4 +1,4 @@
-import { Mail01Icon, GlobalIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { Mail01Icon, GlobalIcon, TelegramIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -16,7 +16,7 @@ import {
 import { Toggle } from './shared'
 import { errText } from './util'
 
-const kindIcon = { email: Mail01Icon, webhook: GlobalIcon, telegram: GlobalIcon } as const
+const kindIcon = { email: Mail01Icon, webhook: GlobalIcon, telegram: TelegramIcon } as const
 
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
@@ -88,6 +88,19 @@ export function DestinationsList() {
               </span>
             </span>
           </button>
+          <button
+            type="button"
+            onClick={() => navigate('/settings/destinations/new/telegram')}
+            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+          >
+            <HugeiconsIcon icon={TelegramIcon} className="size-9" />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">Telegram</span>
+              <span className="block truncate text-sm text-muted-foreground">
+                Sends via a bot to a chat
+              </span>
+            </span>
+          </button>
         </div>
       </section>
     </div>
@@ -151,7 +164,9 @@ function DestinationCard({
       <div className="truncate text-xs text-muted-foreground">
         {destination.kind === 'email'
           ? String(destination.config.to ?? '')
-          : String(destination.config.url ?? '')}
+          : destination.kind === 'telegram'
+            ? `chat ${String(destination.config.chat_id ?? '')}`
+            : String(destination.config.url ?? '')}
       </div>
 
       {test && (

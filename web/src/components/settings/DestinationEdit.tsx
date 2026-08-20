@@ -8,6 +8,7 @@ import {
   listConnectors,
   listDestinations,
   patchDestination,
+  setSecret,
   testDestination,
 } from '../../api/client'
 import type { AdminConnector, Destination } from '../../api/types'
@@ -21,6 +22,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field, Toggle } from './shared'
 import { errText } from './util'
 
@@ -39,7 +41,15 @@ export function DestinationEdit() {
   const [connectorID, setConnectorID] = useState('')
   const [url, setURL] = useState('')
   const [format, setFormat] = useState<'json' | 'text'>('json')
+  const [chatID, setChatID] = useState('')
   const [savingConfig, setSavingConfig] = useState(false)
+
+  // Rotating the bot token is a separate save from the rest of the
+  // config: it writes credential_ref's value, not config.
+  const [botToken, setBotToken] = useState('')
+  const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
+  const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
+  const [savingToken, setSavingToken] = useState(false)
 
   const refresh = useCallback(() => {
     listDestinations()
@@ -52,6 +62,8 @@ export function DestinationEdit() {
         } else if (found?.kind === 'webhook') {
           setURL(String(found.config.url ?? ''))
           setFormat((found.config.format as 'json' | 'text') ?? 'json')
+        } else if (found?.kind === 'telegram') {
+          setChatID(String(found.config.chat_id ?? ''))
         }
       })
       .catch((err: unknown) => toast.error('Could not load destination', { description: errText(err) }))
@@ -104,7 +116,11 @@ export function DestinationEdit() {
     setSavingConfig(true)
     try {
       const config =
-        destination.kind === 'email' ? { connector_id: connectorID, to: to.trim() } : { url: url.trim(), format }
+        destination.kind === 'email'
+          ? { connector_id: connectorID, to: to.trim() }
+          : destination.kind === 'telegram'
+            ? { chat_id: chatID.trim() }
+            : { url: url.trim(), format }
       await patchDestination(destination.id, { config })
       toast.success('Destination updated')
       refresh()
@@ -112,6 +128,25 @@ export function DestinationEdit() {
       toast.error('Could not update destination', { description: errText(err) })
     } finally {
       setSavingConfig(false)
+    }
+  }
+
+  const usingExistingBotToken = botTokenMode === 'existing'
+
+  const saveBotToken = async () => {
+    if (!destination) return
+    setSavingToken(true)
+    try {
+      const ref = usingExistingBotToken ? existingBotTokenRef : destination.credential_ref
+      if (!usingExistingBotToken) await setSecret(ref, botToken.trim())
+      await patchDestination(destination.id, { credential_ref: ref })
+      toast.success('Bot token updated')
+      setBotToken('')
+      refresh()
+    } catch (err) {
+      toast.error('Could not update bot token', { description: errText(err) })
+    } finally {
+      setSavingToken(false)
     }
   }
 
@@ -195,6 +230,12 @@ export function DestinationEdit() {
               <Input value={to} onChange={(e) => setTo(e.target.value)} className="mt-1.5 h-10" />
             </Field>
           </>
+        ) : destination.kind === 'telegram' ? (
+          <>
+            <Field label="Chat ID">
+              <Input value={chatID} onChange={(e) => setChatID(e.target.value)} className="mt-1.5 h-10" />
+            </Field>
+          </>
         ) : (
           <>
             <Field label="URL">
@@ -220,6 +261,34 @@ export function DestinationEdit() {
             {savingConfig ? 'Saving…' : 'Save changes'}
           </Button>
         </div>
+
+        {destination.kind === 'telegram' && (
+          <div className="space-y-3 rounded-xl border border-border p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-foreground">Rotate bot token</span>
+              <CredentialModeToggle mode={botTokenMode} onChange={setBotTokenMode} />
+            </div>
+            {botTokenMode === 'existing' ? (
+              <Field label="Existing credential">
+                <ExistingCredentialSelect value={existingBotTokenRef} onChange={setExistingBotTokenRef} />
+              </Field>
+            ) : (
+              <Input
+                value={botToken}
+                onChange={(e) => setBotToken(e.target.value)}
+                placeholder="123456:ABC-DEF..."
+                className="h-10"
+              />
+            )}
+            <Button
+              size="sm"
+              disabled={savingToken || (usingExistingBotToken ? !existingBotTokenRef : !botToken.trim())}
+              onClick={() => void saveBotToken()}
+            >
+              {savingToken ? 'Saving…' : 'Save token'}
+            </Button>
+          </div>
+        )}
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>

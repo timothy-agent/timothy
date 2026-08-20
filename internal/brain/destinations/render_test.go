@@ -2,6 +2,8 @@ package destinations
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -73,6 +75,20 @@ func TestRender(t *testing.T) {
 		p := Render(noName, digest, "", nil)
 		if p.Name != "ship the thing" {
 			t.Fatalf("Name = %q, want fallback to goal", p.Name)
+		}
+	})
+
+	t.Run("includes declared artifact files", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("report"), 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		withArtifact := m
+		withArtifact.Workspace = root
+		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"report.md"}}}}
+		p := Render(withArtifact, digest, "", nil)
+		if len(p.Files) != 1 || p.Files[0].Name != "report.md" {
+			t.Fatalf("expected report.md attached, got %+v", p.Files)
 		}
 	})
 }

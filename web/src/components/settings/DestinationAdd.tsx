@@ -3,11 +3,12 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { createDestination, listConnectors, patchDestination, testDestination } from '../../api/client'
+import { createDestination, listConnectors, patchDestination, setSecret, testDestination } from '../../api/client'
 import type { AdminConnector } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from './shared'
 import { errText } from './util'
 
@@ -18,11 +19,12 @@ function slugify(v: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-// DestinationAdd is kind-aware (email vs webhook) and its own page,
-// mirroring ConnectorAdd's shape: the destination row is created
-// (disabled) as part of testing, and a passing test enables it.
+// DestinationAdd is kind-aware (email vs webhook vs telegram) and its
+// own page, mirroring ConnectorAdd's shape: the destination row is
+// created (disabled) as part of testing, and a passing test enables
+// it.
 export function DestinationAdd() {
-  const { kind } = useParams<{ kind: 'email' | 'webhook' }>()
+  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' }>()
   const navigate = useNavigate()
 
   const [name, setName] = useState('')
@@ -39,6 +41,12 @@ export function DestinationAdd() {
   const [url, setURL] = useState('')
   const [format, setFormat] = useState<'json' | 'text'>('json')
 
+  // telegram fields
+  const [chatID, setChatID] = useState('')
+  const [botToken, setBotToken] = useState('')
+  const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
+  const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
+
   useEffect(() => {
     if (kind !== 'email') return
     listConnectors()
@@ -46,27 +54,44 @@ export function DestinationAdd() {
       .catch((err: unknown) => toast.error('Could not load connectors', { description: errText(err) }))
   }, [kind])
 
-  if (kind !== 'email' && kind !== 'webhook') return <Navigate to="/settings/destinations" replace />
+  if (kind !== 'email' && kind !== 'webhook' && kind !== 'telegram') {
+    return <Navigate to="/settings/destinations" replace />
+  }
 
   const invalidate = () => {
     setTest(null)
     setCreatedID(null)
   }
 
-  const config = kind === 'email' ? { connector_id: connectorID, to: to.trim() } : { url: url.trim(), format }
+  const slug = slugify(name)
+  const usingExistingBotToken = botTokenMode === 'existing'
+  const botTokenRef = usingExistingBotToken ? existingBotTokenRef : `${slug.toUpperCase().replace(/-/g, '_')}_TELEGRAM_BOT_TOKEN`
+
+  const config =
+    kind === 'email'
+      ? { connector_id: connectorID, to: to.trim() }
+      : kind === 'telegram'
+        ? { chat_id: chatID.trim() }
+        : { url: url.trim(), format }
 
   const canTest =
-    slugify(name) !== '' &&
-    (kind === 'email' ? connectorID !== '' && to.trim() !== '' : url.trim() !== '')
+    slug !== '' &&
+    (kind === 'email'
+      ? connectorID !== '' && to.trim() !== ''
+      : kind === 'telegram'
+        ? chatID.trim() !== '' && (usingExistingBotToken ? existingBotTokenRef !== '' : botToken.trim() !== '')
+        : url.trim() !== '')
 
   const runTest = async () => {
     setBusy(true)
     setTest(null)
     try {
+      if (kind === 'telegram' && !usingExistingBotToken) await setSecret(botTokenRef, botToken.trim())
       const id = await createDestination({
-        name: slugify(name),
+        name: slug,
         kind,
         config,
+        credential_ref: kind === 'telegram' ? botTokenRef : undefined,
         enabled: false,
       })
       setCreatedID(id)
@@ -109,7 +134,7 @@ export function DestinationAdd() {
 
       <div className="border-b border-border pb-6">
         <h1 className="text-xl font-semibold tracking-tight">
-          Add {kind === 'email' ? 'Email' : 'Webhook'} destination
+          Add {kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : 'Webhook'} destination
         </h1>
         <p className="text-sm text-muted-foreground">kind: {kind}</p>
       </div>
@@ -166,6 +191,53 @@ export function DestinationAdd() {
                 className="mt-1.5 h-10"
               />
             </Field>
+          </>
+        ) : kind === 'telegram' ? (
+          <>
+            <Field label="Chat ID" hint="the numeric chat or channel id the bot posts to">
+              <Input
+                value={chatID}
+                onChange={(e) => {
+                  setChatID(e.target.value)
+                  invalidate()
+                }}
+                placeholder="123456789"
+                className="mt-1.5 h-10"
+              />
+            </Field>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">Bot token</span>
+                <CredentialModeToggle
+                  mode={botTokenMode}
+                  onChange={(m) => {
+                    setBotTokenMode(m)
+                    invalidate()
+                  }}
+                />
+              </div>
+              {botTokenMode === 'existing' ? (
+                <Field label="Existing credential">
+                  <ExistingCredentialSelect
+                    value={existingBotTokenRef}
+                    onChange={(v) => {
+                      setExistingBotTokenRef(v)
+                      invalidate()
+                    }}
+                  />
+                </Field>
+              ) : (
+                <Input
+                  value={botToken}
+                  onChange={(e) => {
+                    setBotToken(e.target.value)
+                    invalidate()
+                  }}
+                  placeholder="123456:ABC-DEF..."
+                  className="h-10"
+                />
+              )}
+            </div>
           </>
         ) : (
           <>
