@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEscapeMarkdownV2(t *testing.T) {
@@ -99,9 +100,14 @@ func fakeTokenResolver(ref, value string) tokenResolver {
 	}
 }
 
-func TestTelegramAdapterDeliverSendsMessageAndDocument(t *testing.T) {
+// TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent covers
+// the files-only delivery contract: recipients want the mission's
+// generated output, not a separate text body alongside it. The bold
+// title + completion date go on the first file's caption instead of a
+// standalone sendMessage call.
+func TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent(t *testing.T) {
 	var gotMessages []map[string]any
-	var gotDocuments []string
+	var gotDocuments []map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
@@ -112,7 +118,11 @@ func TestTelegramAdapterDeliverSendsMessageAndDocument(t *testing.T) {
 			if err := r.ParseMultipartForm(1 << 20); err != nil { //nolint:gosec // G120: test server, fixed small fixture body
 				t.Fatalf("parse multipart: %v", err)
 			}
-			gotDocuments = append(gotDocuments, r.FormValue("chat_id"))
+			gotDocuments = append(gotDocuments, map[string]string{
+				"chat_id":    r.FormValue("chat_id"),
+				"caption":    r.FormValue("caption"),
+				"parse_mode": r.FormValue("parse_mode"),
+			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -125,7 +135,45 @@ func TestTelegramAdapterDeliverSendsMessageAndDocument(t *testing.T) {
 		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"),
 		APIBase:      srv.URL,
 	}
-	payload := Payload{Body: "mission done", Files: []File{{Name: "out.txt", Data: []byte("data")}}}
+	payload := Payload{Name: "inbox-digest-8h", Body: "Mission complete: inbox-digest-8h", Files: []File{{Name: "out.txt", Data: []byte("data")}}}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", payload)
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if len(gotMessages) != 0 {
+		t.Fatalf("expected no sendMessage when files are present, got %+v", gotMessages)
+	}
+	if len(gotDocuments) != 1 || gotDocuments[0]["chat_id"] != "123" {
+		t.Fatalf("expected one sendDocument to chat 123, got %v", gotDocuments)
+	}
+	if !strings.Contains(gotDocuments[0]["caption"], "inbox\\-digest\\-8h") {
+		t.Fatalf("expected the bold title in the document caption, got %q", gotDocuments[0]["caption"])
+	}
+	if gotDocuments[0]["parse_mode"] != "MarkdownV2" {
+		t.Fatalf("expected MarkdownV2 parse_mode on the document, got %+v", gotDocuments[0])
+	}
+}
+
+// TestTelegramAdapterDeliverSendsMessageWhenNoFiles covers the other
+// leg: a payload with no artifacts still gets its short completion
+// line as a plain sendMessage, since there's no file to caption.
+func TestTelegramAdapterDeliverSendsMessageWhenNoFiles(t *testing.T) {
+	var gotMessages []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotMessages = append(gotMessages, body)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	a := &TelegramAdapter{
+		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"),
+		APIBase:      srv.URL,
+	}
+	payload := Payload{Body: "Mission complete: inbox-digest-8h"}
 	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", payload)
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
@@ -136,8 +184,27 @@ func TestTelegramAdapterDeliverSendsMessageAndDocument(t *testing.T) {
 	if gotMessages[0]["parse_mode"] != "MarkdownV2" {
 		t.Fatalf("expected MarkdownV2 parse_mode, got %+v", gotMessages[0])
 	}
-	if len(gotDocuments) != 1 || gotDocuments[0] != "123" {
-		t.Fatalf("expected one sendDocument to chat 123, got %v", gotDocuments)
+}
+
+func TestRenderTelegramCaption(t *testing.T) {
+	completedAt, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00Z")
+	if err != nil {
+		t.Fatalf("parse fixture time: %v", err)
+	}
+	p := Payload{Name: "inbox-digest-8h", CompletedAt: completedAt}
+	got := renderTelegramCaption(p)
+	if !strings.HasPrefix(got, "*inbox\\-digest\\-8h*\n") {
+		t.Fatalf("expected a bold title line, got %q", got)
+	}
+	if !strings.Contains(got, "21 Aug 2026, 20:30 UTC") {
+		t.Fatalf("expected the formatted completion date, got %q", got)
+	}
+}
+
+func TestRenderTelegramCaptionOmitsDateWhenZero(t *testing.T) {
+	got := renderTelegramCaption(Payload{Name: "ad-hoc send"})
+	if strings.Contains(got, "\n") {
+		t.Fatalf("expected no date line for a zero CompletedAt, got %q", got)
 	}
 }
 

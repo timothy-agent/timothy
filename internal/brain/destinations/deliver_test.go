@@ -87,7 +87,7 @@ func TestDeliverZeroDestinationsNoop(t *testing.T) {
 	eventStore := &fakeEventStore{}
 	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, nil, discardLog())
 
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, nil, "digest")
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, nil)
 
 	if len(eventStore.events) != 0 {
 		t.Fatalf("expected no events for zero destinations, got %d", len(eventStore.events))
@@ -103,7 +103,7 @@ func TestDeliverRetryThenSucceed(t *testing.T) {
 	eventStore := &fakeEventStore{}
 	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"webhook": adapter}, log: discardLog()}
 
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"}, "digest")
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"})
 
 	if adapter.callCount() != 3 {
 		t.Fatalf("expected 3 attempts, got %d", adapter.callCount())
@@ -122,7 +122,7 @@ func TestDeliverRetryExhaustedThenFail(t *testing.T) {
 	eventStore := &fakeEventStore{}
 	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"webhook": adapter}, log: discardLog()}
 
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"}, "digest")
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"})
 
 	if adapter.callCount() != 3 {
 		t.Fatalf("expected 3 attempts (1 + 2 retries), got %d", adapter.callCount())
@@ -141,8 +141,8 @@ func TestDeliverOncePerMissionGuard(t *testing.T) {
 	eventStore := &fakeEventStore{}
 	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"webhook": adapter}, log: discardLog()}
 
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"}, "digest")
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"}, "digest") // re-drive
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"})
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"}) // re-drive
 
 	if adapter.callCount() != 1 {
 		t.Fatalf("expected exactly 1 delivery attempt across both calls, got %d", adapter.callCount())
@@ -157,7 +157,7 @@ func TestDeliverUnknownDestinationRecordsFailure(t *testing.T) {
 	eventStore := &fakeEventStore{}
 	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"webhook": &WebhookAdapter{}}, log: discardLog()}
 
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"missing"}, "digest")
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"missing"})
 
 	if len(eventStore.events) != 1 || eventStore.events[0].Kind != eventDeliveryFailed {
 		t.Fatalf("expected one mission.delivery_failed event, got %+v", eventStore.events)
@@ -171,7 +171,7 @@ func TestDeliverDisabledDestinationRecordsFailure(t *testing.T) {
 	eventStore := &fakeEventStore{}
 	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"webhook": &WebhookAdapter{}}, log: discardLog()}
 
-	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"}, "digest")
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"})
 
 	if len(eventStore.events) != 1 || eventStore.events[0].Kind != eventDeliveryFailed {
 		t.Fatalf("expected one mission.delivery_failed event, got %+v", eventStore.events)

@@ -16,19 +16,17 @@ type recordingDeliver struct {
 	calls []struct {
 		missionID string
 		destIDs   []string
-		digest    string
 	}
 }
 
 func (r *recordingDeliver) fn() DestinationDeliver {
-	return func(ctx context.Context, m Mission, destinationIDs []string, digest string) {
+	return func(ctx context.Context, m Mission, destinationIDs []string) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.calls = append(r.calls, struct {
 			missionID string
 			destIDs   []string
-			digest    string
-		}{m.ID, destinationIDs, digest})
+		}{m.ID, destinationIDs})
 	}
 }
 

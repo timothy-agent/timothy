@@ -76,13 +76,14 @@ const (
 )
 
 // Deliver runs delivery for every id in destinationIDs, best-effort.
-// digest is the mission's already-computed OutcomeDigest (the driver's
-// terminal-transition hook computes it once and passes it through —
-// this never recomputes it). Guards against a mission that already
-// recorded an outcome event for a given destination (idempotent under
-// a re-drive), and no-ops immediately for an empty destinationIDs —
-// zero adapter/store calls for a mission with no destinations.
-func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destinationIDs []string, digest string) {
+// Recipients get the mission's generated output (Render's Files, from
+// the mission's declared plan-unit artifacts) plus a short completion
+// line — never the goal/plan/review process digest. Guards against a
+// mission that already recorded an outcome event for a given
+// destination (idempotent under a re-drive), and no-ops immediately for
+// an empty destinationIDs — zero adapter/store calls for a mission with
+// no destinations.
+func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destinationIDs []string) {
 	if len(destinationIDs) == 0 {
 		return
 	}
@@ -100,7 +101,7 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destination
 	if d.webURL != nil {
 		webBaseURL = d.webURL(ctx)
 	}
-	payload := Render(m, digest, webBaseURL, events)
+	payload := Render(m, webBaseURL, events)
 
 	for _, id := range destinationIDs {
 		if already[id] {

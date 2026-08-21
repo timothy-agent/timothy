@@ -5,17 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
 func TestRender(t *testing.T) {
 	m := missions.Mission{ID: "m1", Goal: "ship the thing", Name: "Ship it"}
-	digest := "mission goal: ship the thing\nterminal state: done\n"
 
 	t.Run("no web base url, no branch, no pr", func(t *testing.T) {
-		p := Render(m, digest, "", nil)
-		if p.MissionID != "m1" || p.Name != "Ship it" || p.Goal != "ship the thing" || p.Body != digest {
+		p := Render(m, "", nil)
+		if p.MissionID != "m1" || p.Name != "Ship it" || p.Goal != "ship the thing" || p.Body != "Mission complete: Ship it" {
 			t.Fatalf("unexpected payload: %+v", p)
 		}
 		if len(p.Links) != 0 {
@@ -24,7 +24,7 @@ func TestRender(t *testing.T) {
 	})
 
 	t.Run("with web base url", func(t *testing.T) {
-		p := Render(m, digest, "https://timothy.example.lan/", nil)
+		p := Render(m, "https://timothy.example.lan/", nil)
 		if len(p.Links) != 1 || p.Links[0] != "https://timothy.example.lan/missions/m1" {
 			t.Fatalf("unexpected links: %v", p.Links)
 		}
@@ -33,7 +33,7 @@ func TestRender(t *testing.T) {
 	t.Run("with branch", func(t *testing.T) {
 		coding := m
 		coding.Branch = "feat/ship-it"
-		p := Render(coding, digest, "", nil)
+		p := Render(coding, "", nil)
 		if len(p.Links) != 1 || p.Links[0] != "branch: feat/ship-it" {
 			t.Fatalf("unexpected links: %v", p.Links)
 		}
@@ -42,7 +42,7 @@ func TestRender(t *testing.T) {
 	t.Run("with pr opened event", func(t *testing.T) {
 		payload, _ := json.Marshal(map[string]any{"url": "https://github.com/org/repo/pull/1", "number": 1})
 		events := []missions.Event{{Kind: "mission.pr_opened", Payload: payload}}
-		p := Render(m, digest, "", events)
+		p := Render(m, "", events)
 		if len(p.Links) != 1 || p.Links[0] != "https://github.com/org/repo/pull/1" {
 			t.Fatalf("unexpected links: %v", p.Links)
 		}
@@ -53,7 +53,7 @@ func TestRender(t *testing.T) {
 		coding.Branch = "feat/ship-it"
 		payload, _ := json.Marshal(map[string]any{"url": "https://github.com/org/repo/pull/1"})
 		events := []missions.Event{{Kind: "mission.pr_opened", Payload: payload}}
-		p := Render(coding, digest, "https://timothy.example.lan", events)
+		p := Render(coding, "https://timothy.example.lan", events)
 		want := []string{
 			"https://timothy.example.lan/missions/m1",
 			"branch: feat/ship-it",
@@ -72,9 +72,12 @@ func TestRender(t *testing.T) {
 	t.Run("falls back to goal when name empty", func(t *testing.T) {
 		noName := m
 		noName.Name = ""
-		p := Render(noName, digest, "", nil)
+		p := Render(noName, "", nil)
 		if p.Name != "ship the thing" {
 			t.Fatalf("Name = %q, want fallback to goal", p.Name)
+		}
+		if p.Body != "Mission complete: ship the thing" {
+			t.Fatalf("Body = %q, want completion line using the goal fallback", p.Body)
 		}
 	})
 
@@ -86,9 +89,25 @@ func TestRender(t *testing.T) {
 		withArtifact := m
 		withArtifact.Workspace = root
 		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"report.md"}}}}
-		p := Render(withArtifact, digest, "", nil)
+		p := Render(withArtifact, "", nil)
 		if len(p.Files) != 1 || p.Files[0].Name != "report.md" {
 			t.Fatalf("expected report.md attached, got %+v", p.Files)
+		}
+	})
+
+	t.Run("CompletedAt carries the mission's UpdatedAt in UTC", func(t *testing.T) {
+		withTime := m
+		parsed, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00+02:00")
+		if err != nil {
+			t.Fatalf("parse fixture time: %v", err)
+		}
+		withTime.UpdatedAt = parsed
+		p := Render(withTime, "", nil)
+		if p.CompletedAt.IsZero() {
+			t.Fatal("CompletedAt is zero, want the mission's UpdatedAt")
+		}
+		if got, want := p.CompletedAt.UTC().Format("2006-01-02T15:04:05Z"), "2026-08-21T18:30:00Z"; got != want {
+			t.Fatalf("CompletedAt = %q, want %q", got, want)
 		}
 	})
 }
