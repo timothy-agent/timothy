@@ -697,6 +697,14 @@ func (d destinationMailSender) SendMailWithAttachments(ctx context.Context, conn
 	return d.goog.SendMailWithAttachments(ctx, connectorID, to, subject, body, converted)
 }
 
+func (d destinationMailSender) SendMailHTML(ctx context.Context, connectorID, to, subject, plainFallback, htmlBody string, attachments []destinations.MailAttachment) error {
+	converted := make([]connectors.Attachment, len(attachments))
+	for i, a := range attachments {
+		converted[i] = connectors.Attachment{Name: a.Name, Data: a.Data}
+	}
+	return d.goog.SendMailHTML(ctx, connectorID, to, subject, plainFallback, htmlBody, converted)
+}
+
 // destinationConnectorLookup adapts *connectors.Manager to
 // destinations' own narrow Connector/connectorLookup shape — missions
 // has no compile-time dependency on the connectors package's own

@@ -26,25 +26,28 @@ type Payload struct {
 	// CompletedAt is the mission's terminal-transition time, UTC. Zero
 	// for the ad-hoc deliver tool (no mission behind it) — adapters
 	// render nothing when zero, never a guessed "now".
-	CompletedAt   time.Time `json:"completed_at,omitempty"`
-	Links         []string  `json:"links"`
-	Files         []File    `json:"-"`
-	OversizeFiles []string  `json:"-"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+	Links       []string  `json:"links"`
+	Files       []File    `json:"-"`
+	// TextArtifacts are .md/.txt declared artifacts, rendered inline as
+	// delivery content (Telegram MarkdownV2, email HTML) instead of
+	// attached — see resolveArtifactFiles.
+	TextArtifacts []TextArtifact `json:"-"`
+	OversizeFiles []string       `json:"-"`
 }
 
 // Render builds a mission's delivery Payload: body is a short
 // completion line, not the outcome digest — recipients want the
-// mission's generated output (delivered as Files, its declared plan-
-// unit artifacts) not the goal/plan/review process digest.
+// mission's generated output, not the goal/plan/review process digest.
 // missions.OutcomeDigest keeps serving memory extraction and follow-up
 // parent_context, both untouched by this. CompletedAt is the mission's
 // terminal-transition timestamp (UpdatedAt), UTC — never a guessed
 // local timezone, since destinations carry no per-mission timezone
 // setting. links is the mission detail URL (built from webBaseURL when
 // non-empty) plus branch/PR URL when the mission has them.
-// Files/OversizeFiles come from the mission's declared plan-unit
-// artifacts, read from its workspace (resolveArtifactFiles) — exactly
-// what CheckArtifacts already verified exists.
+// Files/TextArtifacts/OversizeFiles come from the mission's declared
+// plan-unit artifacts, read from its workspace (resolveArtifactFiles) —
+// exactly what CheckArtifacts already verified exists.
 func Render(m missions.Mission, webBaseURL string, events []missions.Event) Payload {
 	name := m.Name
 	if name == "" {
@@ -60,7 +63,7 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event) Payl
 	if url, ok := lastPROpenedURL(events); ok {
 		links = append(links, url)
 	}
-	files, oversize := resolveArtifactFiles(m)
+	files, texts, oversize := resolveArtifactFiles(m)
 	return Payload{
 		MissionID:     m.ID,
 		Name:          name,
@@ -69,6 +72,7 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event) Payl
 		CompletedAt:   m.UpdatedAt.UTC(),
 		Links:         links,
 		Files:         files,
+		TextArtifacts: texts,
 		OversizeFiles: oversize,
 	}
 }

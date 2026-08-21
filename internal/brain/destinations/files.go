@@ -17,6 +17,23 @@ type File struct {
 	Data []byte
 }
 
+// TextArtifact is one .txt/.md artifact resolved and read from a
+// mission's workspace, ready to render inline as delivery content
+// (Telegram MarkdownV2, email HTML) rather than sent as a file
+// attachment — recipients read a digest in the message itself, no tap-
+// to-download needed. Content is the raw markdown/text, unconverted;
+// each adapter renders it in its own format.
+type TextArtifact struct {
+	Name    string // base name, for a heading when multiple artifacts exist
+	Content string
+}
+
+// textArtifactExts names the extensions rendered inline instead of
+// attached — deliberately narrow (markdown/plain text only): anything
+// else (csv, pdf, images, scripts, ...) keeps today's file-attachment
+// behavior, since inline rendering only makes sense for prose.
+var textArtifactExts = map[string]bool{".md": true, ".txt": true}
+
 // MaxAttachBytes bounds a single artifact file this package will read
 // into memory and attach — an operator-declared plan artifact, not
 // user upload, but still worth a ceiling. Telegram's own sendDocument
@@ -46,17 +63,19 @@ func artifactPaths(m missions.Mission) []string {
 }
 
 // resolveArtifactFiles reads a mission's declared artifact files from
-// its workspace for attachment. files holds every path that read
-// clean and within ceiling; oversize holds the names of paths that
-// exist but exceed MaxAttachBytes (listed by name in the body
-// instead). A path that fails the same within-workspace guard
-// CheckArtifacts uses, or that no longer reads back (moved/removed
-// since verification), is silently skipped — delivery is best-effort
-// and must never fail a mission over a since-vanished file.
-func resolveArtifactFiles(m missions.Mission) (files []File, oversize []string) {
+// its workspace for delivery. .md/.txt artifacts (textArtifactExts) go
+// to texts, rendered inline by each adapter rather than attached —
+// files holds everything else, attached as before. oversize holds the
+// names of paths that exist but exceed MaxAttachBytes (listed by name
+// in the body instead), checked for both kinds alike. A path that
+// fails the same within-workspace guard CheckArtifacts uses, or that
+// no longer reads back (moved/removed since verification), is silently
+// skipped — delivery is best-effort and must never fail a mission over
+// a since-vanished file.
+func resolveArtifactFiles(m missions.Mission) (files []File, texts []TextArtifact, oversize []string) {
 	root := m.WorkRoot()
 	if root == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, rel := range artifactPaths(m) {
 		cleaned := filepath.Clean(rel)
@@ -79,9 +98,14 @@ func resolveArtifactFiles(m missions.Mission) (files []File, oversize []string) 
 		if err != nil {
 			continue
 		}
-		files = append(files, File{Name: filepath.Base(cleaned), Data: data})
+		name := filepath.Base(cleaned)
+		if textArtifactExts[strings.ToLower(filepath.Ext(name))] {
+			texts = append(texts, TextArtifact{Name: name, Content: string(data)})
+			continue
+		}
+		files = append(files, File{Name: name, Data: data})
 	}
-	return files, oversize
+	return files, texts, oversize
 }
 
 // oversizeNotice renders the oversize-files line appended to a

@@ -10,10 +10,13 @@ import (
 )
 
 type fakeMailSender struct {
-	plainCalls  int
-	lastSubject string
-	lastBody    string
-	attached    []MailAttachment
+	plainCalls    int
+	htmlCalls     int
+	lastSubject   string
+	lastBody      string
+	lastPlainText string
+	lastHTML      string
+	attached      []MailAttachment
 }
 
 func (f *fakeMailSender) SendMail(_ context.Context, _, _, subject, body string) error {
@@ -25,6 +28,15 @@ func (f *fakeMailSender) SendMail(_ context.Context, _, _, subject, body string)
 
 func (f *fakeMailSender) SendMailWithAttachments(_ context.Context, _, _, _, body string, attachments []MailAttachment) error {
 	f.lastBody = body
+	f.attached = attachments
+	return nil
+}
+
+func (f *fakeMailSender) SendMailHTML(_ context.Context, _, _, subject, plainFallback, htmlBody string, attachments []MailAttachment) error {
+	f.htmlCalls++
+	f.lastSubject = subject
+	f.lastPlainText = plainFallback
+	f.lastHTML = htmlBody
 	f.attached = attachments
 	return nil
 }
@@ -78,6 +90,25 @@ func TestEmailAdapterUsesPayloadSubjectWhenSet(t *testing.T) {
 	}
 	if mail.lastSubject != "Daily digest" {
 		t.Fatalf("subject = %q, want the payload's own subject", mail.lastSubject)
+	}
+}
+
+func TestEmailAdapterDeliverWithTextArtifactsUsesHTML(t *testing.T) {
+	mail := &fakeMailSender{}
+	a := &EmailAdapter{Mail: mail}
+	texts := []TextArtifact{{Name: "digest.md", Content: "# Digest\n\nsomething **important**."}}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"connector_id":"c1","to":"a@b.com"}`), "", Payload{Name: "Ship it", Body: "Mission complete: Ship it", TextArtifacts: texts})
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if mail.htmlCalls != 1 || mail.plainCalls != 0 {
+		t.Fatalf("expected the HTML send path, got htmlCalls=%d plainCalls=%d", mail.htmlCalls, mail.plainCalls)
+	}
+	if !strings.Contains(mail.lastHTML, "<strong>important</strong>") {
+		t.Fatalf("expected rendered HTML content, got %q", mail.lastHTML)
+	}
+	if !strings.Contains(mail.lastPlainText, "**important**") {
+		t.Fatalf("expected the raw markdown in the plain-text fallback, got %q", mail.lastPlainText)
 	}
 }
 

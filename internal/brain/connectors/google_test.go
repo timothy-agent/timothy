@@ -597,6 +597,72 @@ func TestSendMailWithAttachments(t *testing.T) {
 	}
 }
 
+func TestSendMailHTMLNoAttachments(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(bothScopes)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+
+	err := g.SendMailHTML(t.Context(), row.ID, "ops@example.com", "digest", "plain fallback", "<p>html body</p>", nil)
+	if err != nil {
+		t.Fatalf("SendMailHTML: %v", err)
+	}
+	if len(f.gmailSent) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(f.gmailSent))
+	}
+	raw := f.gmailSent[0]
+	if !strings.Contains(raw, "multipart/alternative") {
+		t.Fatalf("expected a multipart/alternative message, got %q", raw)
+	}
+	if !strings.Contains(raw, "plain fallback") {
+		t.Fatalf("expected the plain-text fallback part, got %q", raw)
+	}
+	if !strings.Contains(raw, "<p>html body</p>") {
+		t.Fatalf("expected the html part, got %q", raw)
+	}
+	if strings.Contains(raw, "multipart/mixed") {
+		t.Fatalf("expected no outer mixed part with no attachments, got %q", raw)
+	}
+}
+
+func TestSendMailHTMLWithAttachments(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(bothScopes)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+
+	err := g.SendMailHTML(t.Context(), row.ID, "ops@example.com", "digest", "plain fallback", "<p>html body</p>",
+		[]Attachment{{Name: "report.csv", Data: []byte("a,b\n1,2\n")}})
+	if err != nil {
+		t.Fatalf("SendMailHTML: %v", err)
+	}
+	if len(f.gmailSent) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(f.gmailSent))
+	}
+	raw := f.gmailSent[0]
+	if !strings.Contains(raw, "multipart/mixed") {
+		t.Fatalf("expected an outer multipart/mixed message, got %q", raw)
+	}
+	if !strings.Contains(raw, "multipart/alternative") {
+		t.Fatalf("expected a nested multipart/alternative part, got %q", raw)
+	}
+	if !strings.Contains(raw, "plain fallback") || !strings.Contains(raw, "<p>html body</p>") {
+		t.Fatalf("expected both the plain and html parts, got %q", raw)
+	}
+	if !strings.Contains(raw, `filename="report.csv"`) {
+		t.Fatalf("expected the attachment filename, got %q", raw)
+	}
+	if !strings.Contains(raw, base64.StdEncoding.EncodeToString([]byte("a,b\n1,2\n"))) {
+		t.Fatalf("expected the base64 attachment content, got %q", raw)
+	}
+}
+
 func TestSendMailWithAttachmentsFallsBackToPlainSend(t *testing.T) {
 	t.Parallel()
 	f := &fakeGoogle{}

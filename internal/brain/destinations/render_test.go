@@ -81,7 +81,7 @@ func TestRender(t *testing.T) {
 		}
 	})
 
-	t.Run("includes declared artifact files", func(t *testing.T) {
+	t.Run("renders declared markdown artifacts inline, not attached", func(t *testing.T) {
 		root := t.TempDir()
 		if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("report"), 0o600); err != nil {
 			t.Fatalf("write fixture: %v", err)
@@ -90,8 +90,28 @@ func TestRender(t *testing.T) {
 		withArtifact.Workspace = root
 		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"report.md"}}}}
 		p := Render(withArtifact, "", nil)
-		if len(p.Files) != 1 || p.Files[0].Name != "report.md" {
-			t.Fatalf("expected report.md attached, got %+v", p.Files)
+		if len(p.Files) != 0 {
+			t.Fatalf("expected report.md NOT attached as a file, got %+v", p.Files)
+		}
+		if len(p.TextArtifacts) != 1 || p.TextArtifacts[0].Name != "report.md" || p.TextArtifacts[0].Content != "report" {
+			t.Fatalf("expected report.md rendered inline, got %+v", p.TextArtifacts)
+		}
+	})
+
+	t.Run("still attaches non-markdown declared artifact files", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "data.csv"), []byte("a,b\n1,2\n"), 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		withArtifact := m
+		withArtifact.Workspace = root
+		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"data.csv"}}}}
+		p := Render(withArtifact, "", nil)
+		if len(p.TextArtifacts) != 0 {
+			t.Fatalf("expected data.csv NOT rendered inline, got %+v", p.TextArtifacts)
+		}
+		if len(p.Files) != 1 || p.Files[0].Name != "data.csv" {
+			t.Fatalf("expected data.csv attached, got %+v", p.Files)
 		}
 	})
 

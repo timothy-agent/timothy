@@ -38,13 +38,14 @@ type MailAttachment struct {
 type mailSender interface {
 	SendMail(ctx context.Context, connectorID, to, subject, body string) error
 	SendMailWithAttachments(ctx context.Context, connectorID, to, subject, body string, attachments []MailAttachment) error
+	SendMailHTML(ctx context.Context, connectorID, to, subject, plainFallback, htmlBody string, attachments []MailAttachment) error
 }
 
 // EmailAdapter sends a destination's payload via the SAME Gmail send
 // path gmail_send's tool uses (connectors.Google.SendMail /
-// SendMailWithAttachments) — never the tool-execution layer, so a
-// destination's delivery never depends on the agent loop or
-// permission chain.
+// SendMailWithAttachments / SendMailHTML) — never the tool-execution
+// layer, so a destination's delivery never depends on the agent loop
+// or permission chain.
 type EmailAdapter struct {
 	Mail mailSender
 }
@@ -58,12 +59,21 @@ func (a *EmailAdapter) Deliver(ctx context.Context, config json.RawMessage, _ st
 	if subject == "" {
 		subject = "Timothy mission: " + payload.Name
 	}
-	if len(payload.Files) == 0 {
-		return a.Mail.SendMail(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload))
-	}
 	attachments := make([]MailAttachment, len(payload.Files))
 	for i, f := range payload.Files {
 		attachments[i] = MailAttachment(f)
+	}
+	// .md/.txt artifacts render as the email's actual HTML body — a
+	// digest reads as formatted prose, not a raw markdown-syntax dump.
+	// plainFallback carries the same artifact content as plain text (not
+	// just renderText's completion line) so a non-HTML client, or a spam
+	// filter penalizing HTML-only mail, still shows something readable.
+	if len(payload.TextArtifacts) > 0 {
+		plainFallback := renderText(payload) + "\n\n" + renderTextArtifactsPlain(payload.TextArtifacts)
+		return a.Mail.SendMailHTML(ctx, cfg.ConnectorID, cfg.To, subject, plainFallback, RenderTextArtifactsHTML(payload.TextArtifacts), attachments)
+	}
+	if len(payload.Files) == 0 {
+		return a.Mail.SendMail(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload))
 	}
 	return a.Mail.SendMailWithAttachments(ctx, cfg.ConnectorID, cfg.To, subject, renderText(payload), attachments)
 }
@@ -117,6 +127,27 @@ func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, _ 
 		return fmt.Errorf("webhook adapter: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// renderTextArtifactsPlain joins every .md/.txt artifact's raw content
+// as plain text, each headed by its own name when there's more than
+// one — email's plain-text fallback part when TextArtifacts is set.
+// Deliberately raw markdown source, not HTML-stripped: a plain-text
+// email client showing literal "**bold**"/"# heading" syntax is a
+// minor readability cost, well below the alternative of showing
+// nothing at all.
+func renderTextArtifactsPlain(artifacts []TextArtifact) string {
+	var out string
+	for i, ta := range artifacts {
+		if i > 0 {
+			out += "\n\n---\n\n"
+		}
+		if len(artifacts) > 1 {
+			out += ta.Name + "\n\n"
+		}
+		out += ta.Content
+	}
+	return out
 }
 
 // renderText is the plain-text rendering shared by the email body and

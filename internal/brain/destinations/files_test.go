@@ -35,12 +35,15 @@ func TestResolveArtifactFilesReadsUnderWorkspace(t *testing.T) {
 		{Artifacts: []string{"out.md"}},
 	}}}
 
-	files, oversize := resolveArtifactFiles(m)
+	files, texts, oversize := resolveArtifactFiles(m)
 	if len(oversize) != 0 {
 		t.Fatalf("expected no oversize files, got %v", oversize)
 	}
-	if len(files) != 1 || files[0].Name != "out.md" || string(files[0].Data) != "report body" {
-		t.Fatalf("unexpected files: %+v", files)
+	if len(files) != 0 {
+		t.Fatalf("expected .md to route to texts, not files: %+v", files)
+	}
+	if len(texts) != 1 || texts[0].Name != "out.md" || texts[0].Content != "report body" {
+		t.Fatalf("unexpected texts: %+v", texts)
 	}
 }
 
@@ -54,9 +57,9 @@ func TestResolveArtifactFilesUsesWorktreeOverWorkspace(t *testing.T) {
 		{Artifacts: []string{"out.md"}},
 	}}}
 
-	files, _ := resolveArtifactFiles(m)
-	if len(files) != 1 || string(files[0].Data) != "from worktree" {
-		t.Fatalf("expected the worktree copy to win, got %+v", files)
+	_, texts, _ := resolveArtifactFiles(m)
+	if len(texts) != 1 || texts[0].Content != "from worktree" {
+		t.Fatalf("expected the worktree copy to win, got %+v", texts)
 	}
 }
 
@@ -80,7 +83,7 @@ func TestResolveArtifactFilesRejectsPathTraversal(t *testing.T) {
 		m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
 			{Artifacts: []string{artifact}},
 		}}}
-		files, _ := resolveArtifactFiles(m)
+		files, _, _ := resolveArtifactFiles(m)
 		if len(files) != 0 {
 			t.Fatalf("artifact %q: expected no files resolved (path escapes workspace), got %+v", artifact, files)
 		}
@@ -92,7 +95,7 @@ func TestResolveArtifactFilesSkipsMissingFile(t *testing.T) {
 	m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
 		{Artifacts: []string{"never-written.md"}},
 	}}}
-	files, oversize := resolveArtifactFiles(m)
+	files, _, oversize := resolveArtifactFiles(m)
 	if len(files) != 0 || len(oversize) != 0 {
 		t.Fatalf("expected nothing resolved for a missing file, got files=%v oversize=%v", files, oversize)
 	}
@@ -107,7 +110,7 @@ func TestResolveArtifactFilesOversizeListedByName(t *testing.T) {
 	m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
 		{Artifacts: []string{"huge.bin"}},
 	}}}
-	files, oversize := resolveArtifactFiles(m)
+	files, _, oversize := resolveArtifactFiles(m)
 	if len(files) != 0 {
 		t.Fatalf("expected the oversize file not attached, got %+v", files)
 	}
@@ -118,7 +121,7 @@ func TestResolveArtifactFilesOversizeListedByName(t *testing.T) {
 
 func TestResolveArtifactFilesNoWorkspace(t *testing.T) {
 	m := missions.Mission{Spec: missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"a.md"}}}}}
-	files, oversize := resolveArtifactFiles(m)
+	files, _, oversize := resolveArtifactFiles(m)
 	if len(files) != 0 || len(oversize) != 0 {
 		t.Fatalf("expected nothing resolved with no workspace, got files=%v oversize=%v", files, oversize)
 	}

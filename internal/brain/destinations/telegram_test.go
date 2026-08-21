@@ -154,6 +154,75 @@ func TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent(t *testing.T) {
 	}
 }
 
+// TestTelegramAdapterDeliverRendersTextArtifactsInline covers the
+// primary case in the priority order: a .md/.txt declared artifact
+// (payload.TextArtifacts) renders as formatted MarkdownV2 sendMessage
+// calls, never a file attachment — even when Files is also non-empty,
+// text artifacts win.
+func TestTelegramAdapterDeliverRendersTextArtifactsInline(t *testing.T) {
+	var gotMessages []map[string]any
+	var gotDocuments []map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotMessages = append(gotMessages, body)
+		case strings.HasSuffix(r.URL.Path, "/sendDocument"):
+			if err := r.ParseMultipartForm(1 << 20); err != nil { //nolint:gosec // G120: test server, fixed small fixture body
+				t.Fatalf("parse multipart: %v", err)
+			}
+			gotDocuments = append(gotDocuments, map[string]string{"chat_id": r.FormValue("chat_id")})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	a := &TelegramAdapter{
+		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"),
+		APIBase:      srv.URL,
+	}
+	completedAt, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00Z")
+	if err != nil {
+		t.Fatalf("parse fixture time: %v", err)
+	}
+	payload := Payload{
+		Name:        "inbox-digest-8h",
+		CompletedAt: completedAt,
+		TextArtifacts: []TextArtifact{
+			{Name: "digest.md", Content: "# Digest\n\nsomething **important**."},
+		},
+		// Files present too — text artifacts must still win the priority
+		// order, this must never turn into a sendDocument call.
+		Files: []File{{Name: "raw.csv", Data: []byte("a,b")}},
+	}
+	if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", payload); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if len(gotDocuments) != 0 {
+		t.Fatalf("expected no sendDocument when text artifacts are present, got %v", gotDocuments)
+	}
+	if len(gotMessages) != 1 || gotMessages[0]["chat_id"] != "123" {
+		t.Fatalf("expected one sendMessage to chat 123, got %+v", gotMessages)
+	}
+	text, _ := gotMessages[0]["text"].(string)
+	if !strings.Contains(text, "*inbox\\-digest\\-8h*") {
+		t.Fatalf("expected the bold title heading the rendered content, got %q", text)
+	}
+	if !strings.Contains(text, "*Digest*") {
+		t.Fatalf("expected the artifact's own heading rendered bold, got %q", text)
+	}
+	if !strings.Contains(text, "*important*") {
+		t.Fatalf("expected the bold markdown converted to MarkdownV2, got %q", text)
+	}
+	if gotMessages[0]["parse_mode"] != "MarkdownV2" {
+		t.Fatalf("expected MarkdownV2 parse_mode, got %+v", gotMessages[0])
+	}
+}
+
 // TestTelegramAdapterDeliverSendsMessageWhenNoFiles covers the other
 // leg: a payload with no artifacts still gets its short completion
 // line as a plain sendMessage, since there's no file to caption.

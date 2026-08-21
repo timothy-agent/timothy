@@ -69,26 +69,72 @@ func (a *TelegramAdapter) Deliver(ctx context.Context, config json.RawMessage, c
 		return fmt.Errorf("telegram adapter: resolve bot token: %w", err)
 	}
 
-	// Files-only delivery: recipients want the mission's generated
-	// output (the attached artifacts), not a separate text body — the
-	// bold title+date goes on the first file's caption instead. The
-	// text-only message only stands alone when there's nothing to
-	// attach.
-	if len(payload.Files) == 0 {
+	// Recipients want the mission's generated output, not a separate
+	// process digest alongside it — three cases, in priority order:
+	// text artifacts (.md/.txt) render inline as formatted, chunked
+	// MarkdownV2 messages (the bold title+date heads the first chunk);
+	// otherwise, non-text artifacts attach as files, with the same
+	// title+date on the first file's caption; only when there's neither
+	// does the plain completion-line message stand alone.
+	switch {
+	case len(payload.TextArtifacts) > 0:
+		if err := a.sendTextArtifacts(ctx, token, cfg.ChatID, payload); err != nil {
+			return fmt.Errorf("telegram adapter: send text artifacts: %w", err)
+		}
+	case len(payload.Files) > 0:
+		caption := renderTelegramCaption(payload)
+		for i, f := range payload.Files {
+			c := ""
+			if i == 0 {
+				c = caption
+			}
+			if err := a.sendDocument(ctx, token, cfg.ChatID, f, c); err != nil {
+				return fmt.Errorf("telegram adapter: send document %s: %w", f.Name, err)
+			}
+		}
+	default:
 		text := renderTelegramText(payload)
 		if err := a.sendMessage(ctx, token, cfg.ChatID, text); err != nil {
 			return fmt.Errorf("telegram adapter: send message: %w", err)
 		}
-		return nil
 	}
-	caption := renderTelegramCaption(payload)
-	for i, f := range payload.Files {
-		c := ""
-		if i == 0 {
-			c = caption
+	return nil
+}
+
+// sendTextArtifactSeparator visually separates consecutive text
+// artifacts within the same delivery when there's more than one —
+// each gets its own name heading, joined into one render pass so
+// chunking treats the whole set as one flow of blocks rather than
+// resetting per artifact (which could otherwise waste a chunk on a
+// single short trailing artifact).
+const sendTextArtifactSeparator = "\n\n---\n\n"
+
+// sendTextArtifacts renders every .md/.txt artifact as MarkdownV2,
+// heads the whole rendered content with the bold title + completion
+// date (same content the file-caption path would show), and sends it
+// as one or more sendMessage calls via ChunkMarkdownV2 — never a file
+// attachment, so a digest reads directly in the chat.
+func (a *TelegramAdapter) sendTextArtifacts(ctx context.Context, token, chatID string, payload Payload) error {
+	var sourceParts []string
+	for i, ta := range payload.TextArtifacts {
+		if i > 0 {
+			sourceParts = append(sourceParts, sendTextArtifactSeparator)
 		}
-		if err := a.sendDocument(ctx, token, cfg.ChatID, f, c); err != nil {
-			return fmt.Errorf("telegram adapter: send document %s: %w", f.Name, err)
+		if len(payload.TextArtifacts) > 1 {
+			sourceParts = append(sourceParts, "## "+ta.Name+"\n\n")
+		}
+		sourceParts = append(sourceParts, ta.Content)
+	}
+	rendered := RenderMarkdownV2(strings.Join(sourceParts, ""))
+	header := renderTelegramCaption(payload)
+	full := rendered
+	if header != "" {
+		full = header + "\n\n" + rendered
+	}
+	chunks := ChunkMarkdownV2(full, telegramMessageLimit)
+	for _, chunk := range chunks {
+		if err := a.sendMessage(ctx, token, chatID, chunk); err != nil {
+			return err
 		}
 	}
 	return nil
