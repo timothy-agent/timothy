@@ -325,6 +325,18 @@ func (s *kbRefSink) all() []string {
 // a longer ceiling here is a capability tradeoff, not a safety one.
 const sandboxShellMaxTimeout = 15 * time.Minute
 
+// turnTimeout bounds one runTurn call (worker, explore, plan, or
+// review). Without this, a stream that never emits an error or
+// terminal event — no chunk, no EventDone, no EventError, just
+// silence — hangs runTurn's `for ev := range events` forever: nothing
+// upstream aborts it, and driveTimeBound (4h) is the mission's own
+// lifetime cap, not a per-turn one. Set above sandboxShellMaxTimeout
+// (15m) plus headroom for a turn issuing several tool calls in
+// sequence (e.g. multiple gmail searches/reads), well under
+// driveTimeBound.
+// var, not const, so tests can shrink it instead of waiting 20 real minutes.
+var turnTimeout = 20 * time.Minute
+
 func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 	shell := r.missionShell(m)
 	if shell == nil {
@@ -421,6 +433,8 @@ func (r *nativeRunner) belowFloor(model string) bool {
 // sentinel means — that's the caller's job (worker vs review have
 // different enforcement/parsing needs).
 func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string) (text string, sentinelArgs json.RawMessage, seenURLs []string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
+	defer cancel()
 	events, err := r.agent.Start(ctx, req)
 	if err != nil {
 		return "", nil, nil, err

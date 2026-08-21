@@ -1351,6 +1351,49 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 	}
 }
 
+// hangingAgent is a fake agentStream whose Start never sends and never
+// closes its channel on its own — it only closes once ctx is
+// cancelled, modeling a stream that emits no chunk, no terminal, and
+// no error (the observed production hang: a worker turn silently wedged
+// for 35+ minutes with driveTimeBound, at 4h, nowhere near catching it).
+type hangingAgent struct{}
+
+func (hangingAgent) Start(ctx context.Context, req loop.Request) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
+}
+
+// TestRunTurnTimesOutOnHungStream: runTurn must not block forever on a
+// stream that never emits anything — turnTimeout bounds it, and the
+// resulting bare channel close falls into the same "stream ended
+// without a terminal event" retryable-failure path as a real stream
+// cut, rather than hanging the driver's Drive goroutine.
+func TestRunTurnTimesOutOnHungStream(t *testing.T) {
+	old := turnTimeout
+	turnTimeout = 50 * time.Millisecond
+	defer func() { turnTimeout = old }()
+
+	r := newTestRunner(hangingAgent{})
+	done := make(chan struct{})
+	var err error
+	go func() {
+		_, _, _, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runTurn did not return after turnTimeout elapsed")
+	}
+	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
+		t.Fatalf("err = %v, want no-terminal error", err)
+	}
+}
+
 // TestMissionRunnerRequestsAreBuiltinsOnly guards the security fix:
 // every loop.Request the native runner builds — worker, explorer,
 // reviewer, planner — must set BuiltinsOnly, so a mission turn's base
