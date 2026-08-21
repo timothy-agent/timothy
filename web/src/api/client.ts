@@ -12,7 +12,6 @@ import type {
   CatalogModel,
   CatalogPrice,
   CatalogPriceQuery,
-  CatalogSuggestion,
   CatalogSyncStatus,
   ChainEntry,
   ChatEvent,
@@ -619,9 +618,9 @@ export async function patchBudget(changes: {
 export async function listProviders(): Promise<AdminProvider[]> {
   const { providers } = await request<{ providers: AdminProvider[] }>('/v1/admin/providers')
   // Rows written before the backend guarded typed nils can carry
-  // models/headers as JSON null; a null models array would crash every
-  // component that maps over it, blanking the whole settings page.
-  return (providers ?? []).map((p) => ({ ...p, models: p.models ?? [], headers: p.headers ?? {} }))
+  // headers as JSON null; a null headers object would crash every
+  // component that reads it, blanking the whole settings page.
+  return (providers ?? []).map((p) => ({ ...p, headers: p.headers ?? {} }))
 }
 
 export async function createProvider(p: Partial<AdminProvider>): Promise<string> {
@@ -702,27 +701,20 @@ export async function searchCatalog(
   return models ?? []
 }
 
-// catalogSuggestions matches a provider's declared models against the
-// synced catalog — suggest-only, the caller applies a chosen
-// suggestion via patchProvider itself.
-export async function catalogSuggestions(providerId: string): Promise<CatalogSuggestion[]> {
-  const { suggestions } = await request<{ suggestions: CatalogSuggestion[] }>(
-    `/v1/admin/providers/${providerId}/catalog-suggestions`,
-  )
-  return suggestions ?? []
-}
-
 // catalogModelsForProvider searches the synced catalog restricted to a
 // provider's candidate litellm_provider(s) (derived server-side from
 // its driver/base_url, or "anthropic" for a kind='cli' claude-cli row)
-// — the model id picker's live suggestion source, replacing the old
-// static modelCatalog.ts. q filters case-insensitive substring on
-// model_key; omitted fetches the provider's whole candidate pool.
+// — the model id picker's live suggestion source, and the provider
+// detail page's read-only Models list. q filters case-insensitive
+// substring on model_key; omitted fetches the provider's whole
+// candidate pool. limit defaults to the server's normal cap (50);
+// pass the server's max (200) for a page that wants the whole pool.
 export async function catalogModelsForProvider(
   providerId: string,
   q = '',
+  limit?: number,
 ): Promise<CatalogModel[]> {
-  const params = new URLSearchParams(q ? { q } : {})
+  const params = new URLSearchParams({ ...(q ? { q } : {}), ...(limit ? { limit: String(limit) } : {}) })
   const qs = params.size > 0 ? `?${params}` : ''
   const { models } = await request<{ models: CatalogModel[] }>(
     `/v1/admin/providers/${providerId}/catalog-models${qs}`,

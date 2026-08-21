@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
-	"github.com/SumonMSelim/timothy/internal/gateway/router"
 )
 
 // CatalogRefresh fetches and syncs the model catalog now, audited so a
@@ -44,35 +43,11 @@ func (a *Admin) CatalogModelsForProvider(ctx context.Context, id, q string, limi
 	if err != nil {
 		return nil, err
 	}
-	models, err := a.catalog.SearchProviders(ctx, q, candidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options), limit)
+	models, err := a.catalog.SearchProviders(ctx, q, catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options), limit)
 	if err != nil {
 		return nil, fmt.Errorf("admin catalog models: %w", err)
 	}
 	return models, nil
-}
-
-// candidateProvidersForRow is catalog.CandidateProviders extended with
-// two admin-layer additions. First, options.litellm_provider (when
-// set) always wins over the driver/host heuristic — an operator's
-// explicit mapping beats inference, and "bedrock" still expands to the
-// pair ["bedrock", "bedrock_converse"] like the heuristic does, since
-// the catalog files Bedrock models under either key. Second, absent
-// that override, a kind='cli' claude-cli row has no chat driver
-// (D-051), but the CLI talks Anthropic's own API under the hood, so
-// its candidate pool is "anthropic" rather than falling back to an
-// unrestricted search. Every other row (api-kind, or a cli driver
-// other than claude-cli) defers to CandidateProviders as-is.
-func candidateProvidersForRow(kind, driver, baseURL string, opts map[string]string) []string {
-	if lp := opts["litellm_provider"]; lp != "" {
-		if lp == "bedrock" {
-			return []string{"bedrock", "bedrock_converse"}
-		}
-		return []string{lp}
-	}
-	if kind == "cli" && driver == "claude-cli" {
-		return []string{"anthropic"}
-	}
-	return catalog.CandidateProviders(driver, baseURL)
 }
 
 // ProviderModel is one (provider row name, model id) pair CatalogPrices
@@ -148,7 +123,7 @@ func resolvePricedModel(ctx context.Context, cat catalogSuggester, pair Provider
 		return out, nil
 	}
 
-	candidates := candidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options)
+	candidates := catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options)
 	sugs, err := cat.Suggest(ctx, candidates, []string{pair.Model})
 	if err != nil {
 		return PricedModel{}, err
@@ -170,79 +145,3 @@ func resolvePricedModel(ctx context.Context, cat catalogSuggester, pair Provider
 	return out, nil
 }
 
-// CatalogSuggestion is one declared model's catalog comparison: current
-// values from the provider row next to the catalog's suggested ones.
-// Match is the catalog model_key, empty when unmatched.
-type CatalogSuggestion struct {
-	ModelID                string              `json:"model_id"`
-	Match                  string              `json:"match,omitempty"`
-	CurrentContextWindow   int                 `json:"current_context_window,omitempty"`
-	SuggestedContextWindow *int64              `json:"suggested_context_window,omitempty"`
-	CurrentPrices          *router.ModelPrices `json:"current_prices,omitempty"`
-	SuggestedPrices        *router.ModelPrices `json:"suggested_prices,omitempty"`
-}
-
-// CatalogSuggestions matches a provider's declared models against the
-// catalog (D-0XX: suggest-only — never applied automatically). The
-// candidate litellm_provider(s) come from candidateProvidersForRow —
-// options.litellm_provider when the row sets one, else the row's
-// driver and, for openaicompat, its base_url host — same derivation
-// CatalogModelsForProvider uses, so the type-ahead and the suggest
-// dialog always agree on which catalog rows a provider's models can
-// match against.
-func (a *Admin) CatalogSuggestions(ctx context.Context, id string) ([]CatalogSuggestion, error) {
-	p, err := a.get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, len(p.Models))
-	for i, m := range p.Models {
-		ids[i] = m.ID
-	}
-	sugs, err := a.catalog.Suggest(ctx, candidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options), ids)
-	if err != nil {
-		return nil, fmt.Errorf("admin catalog suggestions: %w", err)
-	}
-	return catalogSuggestionsWireShape(p.Models, sugs), nil
-}
-
-// catalogSuggestionsWireShape maps the catalog's match results onto the
-// declared models' wire shape, pairing each suggestion with its
-// provider row's current values.
-func catalogSuggestionsWireShape(models []router.ModelInfo, sugs []catalog.Suggestion) []CatalogSuggestion {
-	byID := make(map[string]router.ModelInfo, len(models))
-	for _, m := range models {
-		byID[m.ID] = m
-	}
-
-	out := make([]CatalogSuggestion, len(sugs))
-	for i, sg := range sugs {
-		cur := byID[sg.ModelID]
-		cs := CatalogSuggestion{
-			ModelID:              sg.ModelID,
-			Match:                sg.Match,
-			CurrentContextWindow: cur.ContextWindow,
-			CurrentPrices:        cur.Prices,
-		}
-		if sg.MaxInputTokens != nil {
-			cs.SuggestedContextWindow = sg.MaxInputTokens
-		}
-		if sg.InputPerMTok != nil || sg.OutputPerMTok != nil || sg.CacheReadPerMTok != nil || sg.CacheWritePerMTok != nil {
-			cs.SuggestedPrices = &router.ModelPrices{}
-			if sg.InputPerMTok != nil {
-				cs.SuggestedPrices.InputPerMTok = *sg.InputPerMTok
-			}
-			if sg.OutputPerMTok != nil {
-				cs.SuggestedPrices.OutputPerMTok = *sg.OutputPerMTok
-			}
-			if sg.CacheReadPerMTok != nil {
-				cs.SuggestedPrices.CacheReadPerMTok = *sg.CacheReadPerMTok
-			}
-			if sg.CacheWritePerMTok != nil {
-				cs.SuggestedPrices.CacheWritePerMTok = *sg.CacheWritePerMTok
-			}
-		}
-		out[i] = cs
-	}
-	return out
-}

@@ -10,7 +10,6 @@ function provider(overrides: Partial<AdminProvider>): AdminProvider {
     driver: 'openaicompat',
     base_url: '',
     default_model: '',
-    models: [],
     credential_ref: '',
     headers: {},
     enabled: true,

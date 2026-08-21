@@ -64,7 +64,7 @@ function formatMtokPrice(v: number): string {
 // both are present and 0; otherwise a known side renders its price and
 // an unknown side renders "N/A" (same missing-number convention as
 // PipelineCard).
-function priceLabel(s: ModelSuggestion): string {
+export function priceLabel(s: ModelSuggestion): string {
   const { input_per_mtok: in_, output_per_mtok: out } = s
   if (in_ == null && out == null) return 'unpriced'
   if (in_ === 0 && out === 0) return 'free'
@@ -185,7 +185,7 @@ export function ModelInput({
       </PopoverAnchor>
       <PopoverContent
         align="start"
-        className="w-(--radix-popover-trigger-width) p-1"
+        className="w-max min-w-(--radix-popover-trigger-width) max-w-[min(32rem,90vw)] p-1"
         onOpenAutoFocus={(e) => e.preventDefault()}
         // The anchor is a plain input focused by the same click that
         // opens this popover — Radix's outside-click detection can
@@ -216,15 +216,15 @@ export function ModelInput({
                 }}
                 className="flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted"
               >
-                <span className="min-w-0 truncate">
+                <span className="min-w-0 whitespace-nowrap">
                   {s.name ?? s.id}
                   {s.name && (
-                    <span className="ml-1.5 truncate font-mono text-xs text-muted-foreground">
+                    <span className="ml-1.5 font-mono text-xs text-muted-foreground">
                       {s.id}
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                <span className="ml-auto shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
                   {priceLabel(s)}
                 </span>
               </button>

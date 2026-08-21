@@ -102,6 +102,7 @@ type Model struct {
 	OutputPerMTok     *float64 `json:"output_per_mtok,omitempty"`
 	CacheReadPerMTok  *float64 `json:"cache_read_per_mtok,omitempty"`
 	CacheWritePerMTok *float64 `json:"cache_write_per_mtok,omitempty"`
+	SupportsVision    *bool    `json:"supports_vision,omitempty"`
 }
 
 const defaultSearchLimit = 50
@@ -236,5 +237,6 @@ func toModel(e Entry) Model {
 		OutputPerMTok:     e.OutputPerMTok,
 		CacheReadPerMTok:  e.CacheReadPerMTok,
 		CacheWritePerMTok: e.CacheWritePerMTok,
+		SupportsVision:    e.SupportsVision,
 	}
 }

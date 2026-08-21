@@ -29,8 +29,6 @@ import {
   validateProvider,
 } from '../../api/client'
 
-// Both openaicompat, but different endpoints — models declared on one
-// must never suggest for the other.
 const glm: AdminProvider = {
   id: 'p1',
   name: 'GLM (Z.ai)',
@@ -38,7 +36,6 @@ const glm: AdminProvider = {
   driver: 'openaicompat',
   base_url: 'https://api.z.ai/api/paas/v4',
   default_model: 'glm-5.2',
-  models: [{ id: 'glm-5.2' }],
   credential_ref: 'ZAI_API_KEY',
   headers: {},
   enabled: true,
@@ -109,18 +106,6 @@ describe('ProviderAdd model suggestions', () => {
     expect(await screen.findByText('in $0.15 · out $0.60 /MTok')).toBeInTheDocument()
   })
 
-  it('shows a declared model\'s own configured price', async () => {
-    vi.mocked(listProviders).mockResolvedValue([
-      { ...glm, models: [{ id: 'glm-5.2', prices: { input_per_mtok: 0.5, output_per_mtok: 1.5 } }] },
-    ])
-    renderPage('glm')
-    const input = await screen.findByPlaceholderText('model id')
-    fireEvent.change(input, { target: { value: '' } })
-    fireEvent.focus(input)
-
-    expect(await screen.findByText('in $0.50 · out $1.50 /MTok')).toBeInTheDocument()
-  })
-
   it('falls back to the catalog price for a declared model with no configured price', async () => {
     vi.mocked(searchCatalog).mockResolvedValue([
       { id: 'glm-5.2', model_key: 'zai/glm-5.2', litellm_provider: 'zai', mode: 'chat', input_per_mtok: 0.15, output_per_mtok: 0.6 },
@@ -131,25 +116,6 @@ describe('ProviderAdd model suggestions', () => {
     fireEvent.focus(input)
 
     expect(await screen.findByText('in $0.15 · out $0.60 /MTok')).toBeInTheDocument()
-  })
-
-  it('falls back to a provider-prefixed catalog key by its last segment', async () => {
-    vi.mocked(listProviders).mockResolvedValue([
-      { ...glm, name: 'Grok (xAI)', base_url: 'https://api.x.ai/v1', default_model: 'grok-2', models: [{ id: 'grok-2' }] },
-    ])
-    vi.mocked(searchCatalog).mockResolvedValue([
-      { id: 'grok-2', model_key: 'xai/grok-2', litellm_provider: 'xai', mode: 'chat', input_per_mtok: 2, output_per_mtok: 10 },
-    ])
-    renderPage('grok')
-    const input = await screen.findByPlaceholderText('model id')
-    fireEvent.change(input, { target: { value: '' } })
-    fireEvent.focus(input)
-
-    // The declared "grok-2" (priced via the catalog fallback under
-    // test) and the catalog row's own server-stripped id share the same
-    // id, so they dedupe into a single suggestion row.
-    expect(await screen.findAllByText('in $2 · out $10 /MTok')).toHaveLength(1)
-    expect(screen.getByRole('option', { name: /^grok-2/ })).toHaveTextContent('in $2 · out $10 /MTok')
   })
 
   it('debounces typing into a single catalog search call with the typed q', async () => {

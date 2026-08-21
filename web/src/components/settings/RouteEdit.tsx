@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
-import { catalogMatchForID, catalogRowID, configuredPrice, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
+import { catalogRowID, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
 import { reorder } from './pipeline/useReorderDrag'
 import { matchPreset } from './presets'
@@ -168,31 +168,16 @@ function AddChainEntry({
   )
   const catalogModels = useCatalogSearch(model, catalogSearch)
 
-  // Declared models on the selected provider first, then live catalog
-  // rows not already declared — same shape ProviderAdd/ProviderEdit
-  // feed ModelInput, so price labels render the same way everywhere.
+  // Live catalog rows for the selected provider — same shape
+  // ProviderAdd/ProviderEdit feed ModelInput, so price labels render
+  // the same way everywhere.
   const suggestions: ModelSuggestion[] = useMemo(() => {
     if (!selected) return []
-    const seen = new Map<string, ModelSuggestion>()
-    for (const m of selected.models) {
-      const catalogMatch = catalogMatchForID(m.id, catalogModels)
-      const price = configuredPrice(m.prices) ?? {
-        input_per_mtok: catalogMatch?.input_per_mtok,
-        output_per_mtok: catalogMatch?.output_per_mtok,
-      }
-      seen.set(m.id, { id: m.id, ...price })
-    }
-    for (const m of catalogModels) {
-      const id = catalogRowID(m)
-      if (!seen.has(id)) {
-        seen.set(id, {
-          id,
-          input_per_mtok: m.input_per_mtok,
-          output_per_mtok: m.output_per_mtok,
-        })
-      }
-    }
-    return [...seen.values()]
+    return catalogModels.map((m) => ({
+      id: catalogRowID(m),
+      input_per_mtok: m.input_per_mtok,
+      output_per_mtok: m.output_per_mtok,
+    }))
   }, [selected, catalogModels])
 
   return (

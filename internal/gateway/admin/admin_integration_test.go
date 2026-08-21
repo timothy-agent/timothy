@@ -44,6 +44,17 @@ func chainJSON(t *testing.T, entries []router.ChainEntry) *json.RawMessage {
 
 func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	t.Helper()
+	return testAdminWithCatalog(t, catalog.New(slog.New(slog.NewTextHandler(io.Discard, nil))))
+}
+
+// testAdminWithCatalog is testAdmin with the model catalog supplied by
+// the caller instead of built fresh: router.Store's pricing lookup
+// (Snapshot.Prices, behind Test's cost probe) reads an unexported
+// field set at construction, so a test needing seeded catalog prices
+// on the ROUTER side (not just admin.catalog, which Create/CatalogPrices
+// read directly) must pass its fixture in before the store is built.
+func testAdminWithCatalog(t *testing.T, cat *catalog.Store) (*Admin, *router.Store, *pgpool.Pool) {
+	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set; skipping integration test")
@@ -126,7 +137,7 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	// bedrock fixture, or a real "AWS Bedrock" row in a shared dev DB.
 	store := router.NewStore(pool, func(string) string {
 		return `{"access_key_id":"itest","secret_access_key":"itest"}`
-	}, log)
+	}, cat, log)
 	if err := store.Load(ctx); err != nil {
 		t.Fatalf("store load: %v", err)
 	}
@@ -135,7 +146,7 @@ func testAdmin(t *testing.T) (*Admin, *router.Store, *pgpool.Pool) {
 	if err != nil {
 		t.Fatalf("secretstore.New: %v", err)
 	}
-	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, catalog.New(log), log), store, pool
+	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, cat, log), store, pool
 }
 
 // waitSnapshot retries reload until the provider reaches the
@@ -165,8 +176,8 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 	name := adminMarker + "crud"
 	id, err := adm.Create(ctx, Provider{
 		Name: name, Kind: "api", Driver: "openaicompat",
-		BaseURL: "https://example.invalid/v1", DefaultModel: "m1",
-		Models:        []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat"}}},
+		BaseURL:       "https://example.invalid/v1",
+		DefaultModel:  "m1",
 		CredentialRef: "SOME_ENV_NAME",
 	})
 	if err != nil {
@@ -262,50 +273,6 @@ func TestSetSecretValueFollowsDefaultBackend(t *testing.T) {
 	if configured, backend, err := adm.SecretStatus(ctx, ref); err != nil || !configured || backend != "db" {
 		t.Fatalf("Status = %v %q %v, want configured via db", configured, backend, err)
 	}
-}
-
-// A provider created without models/headers, and rows that already
-// hold jsonb null (written before jsonOr guarded typed nils), must
-// come back as [] / {} — a null models array crashes the settings UI.
-func TestProviderNilModelsRoundTripsAsEmpty(t *testing.T) {
-	adm, _, pool := testAdmin(t)
-	ctx := t.Context()
-
-	id, err := adm.Create(ctx, Provider{
-		Name: adminMarker + "nilmodels", Kind: "api", Driver: "bedrock",
-		BaseURL: "us-east-1", CredentialRef: "SOME_ENV_NAME",
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	db, _ := pool.Get()
-	var raw string
-	if err := db.QueryRow(ctx, `SELECT models::text FROM providers WHERE id = $1`, id).Scan(&raw); err != nil {
-		t.Fatalf("models query: %v", err)
-	}
-	if raw != "[]" {
-		t.Fatalf("stored models = %s, want []", raw)
-	}
-
-	// Simulate a pre-fix row: jsonb null in both columns.
-	if _, err := db.Exec(ctx, `UPDATE providers SET models = 'null', headers = 'null' WHERE id = $1`, id); err != nil {
-		t.Fatalf("force null: %v", err)
-	}
-	list, err := adm.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	for _, p := range list {
-		if p.ID != id {
-			continue
-		}
-		if p.Models == nil || p.Headers == nil {
-			t.Fatalf("List returned nil models/headers: %+v", p)
-		}
-		return
-	}
-	t.Fatal("created provider missing from List")
 }
 
 // seedRoute inserts an enabled route whose chain references the
@@ -650,6 +617,24 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	ctx := t.Context()
 	db, _ := pool.Get()
 
+	// BootstrapChain now sources candidate models from the catalog
+	// instead of a per-request Models field: seed a fake LiteLLM
+	// source covering the three fixture models. The provider's
+	// base_url is unrecognized, so CandidateProvidersForRow leaves the
+	// search unrestricted — any litellm_provider value matches.
+	catSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"chat-cheap": {"litellm_provider": "openaicompat", "mode": "chat", "input_cost_per_token": 0.000001},
+			"chat-pricey": {"litellm_provider": "openaicompat", "mode": "chat", "input_cost_per_token": 0.000009},
+			"embed-only": {"litellm_provider": "openaicompat", "mode": "embedding", "input_cost_per_token": 0.0000001}
+		}`))
+	}))
+	defer catSrv.Close()
+	adm.catalog = catalog.NewWithURL(slog.New(slog.NewTextHandler(io.Discard, nil)), catSrv.URL)
+	if _, err := adm.CatalogRefresh(ctx); err != nil {
+		t.Fatalf("CatalogRefresh: %v", err)
+	}
+
 	type saved struct {
 		chain   []byte
 		enabled bool
@@ -682,11 +667,6 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	id, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "bootstrap", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "chat-cheap",
-		Models: []router.ModelInfo{
-			{ID: "chat-cheap", Capabilities: []string{"chat"}, Prices: &router.ModelPrices{InputPerMTok: 1}},
-			{ID: "chat-pricey", Capabilities: []string{"chat"}, Prices: &router.ModelPrices{InputPerMTok: 9}},
-			{ID: "embed-only", Capabilities: []string{"embeddings"}, Prices: &router.ModelPrices{InputPerMTok: 0.1}},
-		},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -728,8 +708,6 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	secondID, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "bootstrap2", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "chat-cheap",
-		Models: []router.ModelInfo{{ID: "chat-cheap", Capabilities: []string{"chat"},
-			Prices: &router.ModelPrices{InputPerMTok: 1}}},
 	})
 	if err != nil {
 		t.Fatalf("Create second provider: %v", err)
@@ -766,6 +744,20 @@ func TestCreateExcludeFromBootstrapSkipsFixedRoutes(t *testing.T) {
 	ctx := t.Context()
 	db, _ := pool.Get()
 
+	// Seed a catalog entry matching this provider's model so the
+	// exclusion actually has a chat-capable candidate to skip — an
+	// empty catalog would pass this test vacuously.
+	catSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"qwen2.5:7b": {"litellm_provider": "ollama", "mode": "chat", "input_cost_per_token": 0}
+		}`))
+	}))
+	defer catSrv.Close()
+	adm.catalog = catalog.NewWithURL(slog.New(slog.NewTextHandler(io.Discard, nil)), catSrv.URL)
+	if _, err := adm.CatalogRefresh(ctx); err != nil {
+		t.Fatalf("CatalogRefresh: %v", err)
+	}
+
 	type saved struct {
 		chain   []byte
 		enabled bool
@@ -788,11 +780,9 @@ func TestCreateExcludeFromBootstrapSkipsFixedRoutes(t *testing.T) {
 
 	id, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "excluded", Kind: "api", Driver: "openaicompat",
-		BaseURL: "http://ollama.invalid:11434", DefaultModel: "qwen2.5:7b",
+		BaseURL:              "http://ollama.invalid:11434",
+		DefaultModel:         "qwen2.5:7b",
 		ExcludeFromBootstrap: true,
-		Models: []router.ModelInfo{
-			{ID: "qwen2.5:7b", Capabilities: []string{"chat"}, Prices: &router.ModelPrices{InputPerMTok: 0}},
-		},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

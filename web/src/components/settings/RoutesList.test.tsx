@@ -15,7 +15,7 @@ import { listProviders, listRoutes } from '../../api/client'
 const providers: AdminProvider[] = [
   {
     id: 'p1', name: 'anthropic', kind: 'api', driver: 'anthropic', base_url: '',
-    default_model: 'sonnet', models: [], credential_ref: 'A_KEY', headers: {}, enabled: true,
+    default_model: 'sonnet', credential_ref: 'A_KEY', headers: {}, enabled: true,
   },
 ]
 

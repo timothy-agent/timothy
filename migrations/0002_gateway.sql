@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS providers (
     driver         text NOT NULL,
     base_url       text NOT NULL DEFAULT '',
     default_model  text NOT NULL DEFAULT '',
-    models         jsonb NOT NULL DEFAULT '[]',
     credential_ref text NOT NULL DEFAULT '',
     headers        jsonb NOT NULL DEFAULT '{}',
     options        jsonb NOT NULL DEFAULT '{}',

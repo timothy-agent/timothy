@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/SumonMSelim/timothy/internal/gateway/router"
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 )
 
 // stubOpenAI serves the two endpoints the admin layer touches: a
@@ -96,17 +98,32 @@ func TestValidateProbesWithoutPersisting(t *testing.T) {
 }
 
 func TestConnectionProbePricesACostedModel(t *testing.T) {
-	adm, _, pool := testAdmin(t)
 	ctx := t.Context()
 	srv := stubOpenAI(t)
 	name := adminMarker + "priced-probe"
 
+	// Test's cost probe prices via the router snapshot (Snapshot.Prices),
+	// which reads router.Store's own catalog reference set at
+	// construction — swapping admin.catalog after the fact (as
+	// CatalogPrices-only tests do) never reaches it. Seed the shared
+	// catalog before building admin/store. stubOpenAI's httptest server
+	// binds 127.0.0.1, which candidatesForHost restricts to
+	// litellm_provider "ollama" — match that so the seeded model is
+	// actually a candidate.
+	catSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"m-alpha": {"litellm_provider": "ollama", "mode": "chat",
+			"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002}}`))
+	}))
+	defer catSrv.Close()
+	cat := catalog.NewWithURL(slog.New(slog.NewTextHandler(io.Discard, nil)), catSrv.URL)
+	if _, err := cat.Sync(ctx); err != nil {
+		t.Fatalf("catalog sync: %v", err)
+	}
+	adm, _, pool := testAdminWithCatalog(t, cat)
+
 	id, err := adm.Create(ctx, Provider{
 		Name: name, Kind: "api", Driver: "openaicompat", BaseURL: srv.URL,
 		DefaultModel: "m-alpha",
-		Models: []router.ModelInfo{
-			{ID: "m-alpha", Prices: &router.ModelPrices{InputPerMTok: 1, OutputPerMTok: 2}},
-		},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -156,7 +173,6 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	id, err := adm.Create(ctx, Provider{
 		Name: name, Kind: "api", Driver: "openaicompat",
 		BaseURL: srv.URL, DefaultModel: "m-alpha",
-		Models: []router.ModelInfo{{ID: "m-alpha"}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

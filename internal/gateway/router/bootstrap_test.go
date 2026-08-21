@@ -1,23 +1,35 @@
 package router
 
-import "testing"
+import (
+	"testing"
 
-func priced(id string, input float64, caps ...string) ModelInfo {
-	return ModelInfo{ID: id, Capabilities: caps, Prices: &ModelPrices{InputPerMTok: input}}
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
+)
+
+func ptrF(v float64) *float64 { return &v }
+func ptrB(v bool) *bool       { return &v }
+
+func priced(id string, input float64, mode string, vision bool) catalog.Model {
+	m := catalog.Model{ID: id, ModelKey: id, Mode: mode, InputPerMTok: ptrF(input)}
+	if vision {
+		m.SupportsVision = ptrB(true)
+	}
+	return m
 }
 
-func unpriced(id string, caps ...string) ModelInfo {
-	return ModelInfo{ID: id, Capabilities: caps}
+func unpriced(id string, mode string) catalog.Model {
+	return catalog.Model{ID: id, ModelKey: id, Mode: mode}
 }
 
 func TestBootstrapChainSeedsEmptyRoutes(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{
-		priced("cheap", 1, "chat", "streaming"),
-		priced("pricey", 5, "chat", "streaming"),
-		priced("embed-1", 0.1, "embeddings"),
-	}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{
+		priced("cheap", 1, "chat", false),
+		priced("pricey", 5, "chat", false),
+		priced("embed-1", 0.1, "embedding", false),
+	}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	for _, route := range []string{"default", "summarize"} {
 		chain := got[route]
@@ -31,12 +43,13 @@ func TestBootstrapChainSeedsEmptyRoutes(t *testing.T) {
 }
 
 func TestBootstrapChainAppendsAsLastFallback(t *testing.T) {
-	p := ProviderRow{ID: "new", Models: []ModelInfo{priced("m", 2, "chat")}}
+	p := ProviderRow{ID: "new"}
+	candidates := []catalog.Model{priced("m", 2, "chat", false)}
 	existing := map[string][]ChainEntry{
 		"default": {{ProviderID: "old", Model: "old-model"}},
 	}
 
-	got := BootstrapChain(p, existing)
+	got := BootstrapChain(p, existing, candidates)
 
 	chain := got["default"]
 	if len(chain) != 2 || chain[0].ProviderID != "old" || chain[1].ProviderID != "new" {
@@ -45,14 +58,15 @@ func TestBootstrapChainAppendsAsLastFallback(t *testing.T) {
 }
 
 func TestBootstrapChainPicksCheapestCapable(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{
-		priced("mid", 3, "chat"),
-		priced("cheapest", 1, "chat"),
-		priced("pricey", 9, "chat"),
-		priced("wrong-cap", 0.01, "embeddings"), // cheaper but can't serve chat
-	}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{
+		priced("mid", 3, "chat", false),
+		priced("cheapest", 1, "chat", false),
+		priced("pricey", 9, "chat", false),
+		priced("wrong-cap", 0.01, "embedding", false), // cheaper but can't serve chat
+	}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	if chain := got["default"]; len(chain) != 1 || chain[0].Model != "cheapest" {
 		t.Fatalf("default chain = %+v, want cheapest", chain)
@@ -60,12 +74,13 @@ func TestBootstrapChainPicksCheapestCapable(t *testing.T) {
 }
 
 func TestBootstrapChainUnpricedModelsSortLast(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{
 		unpriced("unknown-cost", "chat"),
-		priced("known-cheap", 1, "chat"),
-	}}
+		priced("known-cheap", 1, "chat", false),
+	}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	if chain := got["default"]; len(chain) != 1 || chain[0].Model != "known-cheap" {
 		t.Fatalf("default chain = %+v, want known-cheap over unpriced", chain)
@@ -73,12 +88,13 @@ func TestBootstrapChainUnpricedModelsSortLast(t *testing.T) {
 }
 
 func TestBootstrapChainTiesBreakOnModelID(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{
-		priced("z-model", 1, "chat"),
-		priced("a-model", 1, "chat"),
-	}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{
+		priced("z-model", 1, "chat", false),
+		priced("a-model", 1, "chat", false),
+	}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	if chain := got["default"]; len(chain) != 1 || chain[0].Model != "a-model" {
 		t.Fatalf("default chain = %+v, want deterministic a-model tie-break", chain)
@@ -86,9 +102,10 @@ func TestBootstrapChainTiesBreakOnModelID(t *testing.T) {
 }
 
 func TestBootstrapChainOmitsRouteWithNoCapableModel(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("chat-only", 1, "chat")}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{priced("chat-only", 1, "chat", false)}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	if _, ok := got["embedding"]; ok {
 		t.Fatalf("embedding present = %+v, want omitted (no embeddings-capable model)", got["embedding"])
@@ -99,12 +116,13 @@ func TestBootstrapChainOmitsRouteWithNoCapableModel(t *testing.T) {
 }
 
 func TestBootstrapChainSkipsExistingDuplicate(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("m", 1, "chat")}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{priced("m", 1, "chat", false)}
 	existing := map[string][]ChainEntry{
 		"default": {{ProviderID: "p1", Model: "m"}},
 	}
 
-	got := BootstrapChain(p, existing)
+	got := BootstrapChain(p, existing, candidates)
 
 	if _, ok := got["default"]; ok {
 		t.Fatalf("default present = %+v, want omitted (already chained)", got["default"])
@@ -114,9 +132,10 @@ func TestBootstrapChainSkipsExistingDuplicate(t *testing.T) {
 func TestBootstrapChainNeverMutatesExistingSlice(t *testing.T) {
 	existingChain := []ChainEntry{{ProviderID: "old", Model: "old-model"}}
 	existing := map[string][]ChainEntry{"default": existingChain}
-	p := ProviderRow{ID: "new", Models: []ModelInfo{priced("m", 1, "chat")}}
+	p := ProviderRow{ID: "new"}
+	candidates := []catalog.Model{priced("m", 1, "chat", false)}
 
-	BootstrapChain(p, existing)
+	BootstrapChain(p, existing, candidates)
 
 	if len(existingChain) != 1 {
 		t.Fatalf("caller's chain slice mutated: %+v", existingChain)
@@ -124,11 +143,10 @@ func TestBootstrapChainNeverMutatesExistingSlice(t *testing.T) {
 }
 
 func TestBootstrapChainExcludedProviderYieldsNoUpdates(t *testing.T) {
-	p := ProviderRow{ID: "ollama", ExcludeFromBootstrap: true, Models: []ModelInfo{
-		priced("qwen2.5:7b", 0, "chat"),
-	}}
+	p := ProviderRow{ID: "ollama", ExcludeFromBootstrap: true}
+	candidates := []catalog.Model{priced("qwen2.5:7b", 0, "chat", false)}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	if got != nil {
 		t.Fatalf("BootstrapChain(excluded) = %+v, want nil (no route touched)", got)
@@ -139,12 +157,13 @@ func TestBootstrapChainExcludedProviderYieldsNoUpdates(t *testing.T) {
 // vision-capable provider auto-chains into the "vision" route (D-046),
 // the same as the other fixed bootstrap routes.
 func TestBootstrapChainSeedsVisionRoute(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{
-		priced("cheap-vision", 2, "chat", "vision"),
-		priced("pricey-vision", 8, "chat", "vision"),
-	}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{
+		priced("cheap-vision", 2, "chat", true),
+		priced("pricey-vision", 8, "chat", true),
+	}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	chain := got["vision"]
 	if len(chain) != 1 || chain[0].ProviderID != "p1" || chain[0].Model != "cheap-vision" {
@@ -155,9 +174,10 @@ func TestBootstrapChainSeedsVisionRoute(t *testing.T) {
 // TestBootstrapChainOmitsVisionForNonVisionProvider confirms a provider
 // with no vision-capable model never touches the "vision" route.
 func TestBootstrapChainOmitsVisionForNonVisionProvider(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("chat-only", 1, "chat")}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{priced("chat-only", 1, "chat", false)}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{})
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
 	if _, ok := got["vision"]; ok {
 		t.Fatalf("vision present = %+v, want omitted (no vision-capable model)", got["vision"])
@@ -165,9 +185,10 @@ func TestBootstrapChainOmitsVisionForNonVisionProvider(t *testing.T) {
 }
 
 func TestBootstrapChainIgnoresResearchRoute(t *testing.T) {
-	p := ProviderRow{ID: "p1", Models: []ModelInfo{priced("m", 1, "chat")}}
+	p := ProviderRow{ID: "p1"}
+	candidates := []catalog.Model{priced("m", 1, "chat", false)}
 
-	got := BootstrapChain(p, map[string][]ChainEntry{"research": {}})
+	got := BootstrapChain(p, map[string][]ChainEntry{"research": {}}, candidates)
 
 	if _, ok := got["research"]; ok {
 		t.Fatal("research route bootstrapped; it must stay hand-configured")

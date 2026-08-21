@@ -23,6 +23,31 @@ func CandidateProviders(driver, baseURL string) []string {
 	}
 }
 
+// CandidateProvidersForRow is CandidateProviders extended with two
+// admin-layer additions, relocated here so both admin and router can
+// call it without an import cycle. First, options["litellm_provider"]
+// (when set) always wins over the driver/host heuristic — an
+// operator's explicit mapping beats inference, and "bedrock" still
+// expands to the pair ["bedrock", "bedrock_converse"] like the
+// heuristic does, since the catalog files Bedrock models under either
+// key. Second, absent that override, a kind='cli' claude-cli row has
+// no chat driver (D-051), but the CLI talks Anthropic's own API under
+// the hood, so its candidate pool is "anthropic" rather than falling
+// back to an unrestricted search. Every other row (api-kind, or a cli
+// driver other than claude-cli) defers to CandidateProviders as-is.
+func CandidateProvidersForRow(kind, driver, baseURL string, opts map[string]string) []string {
+	if lp := opts["litellm_provider"]; lp != "" {
+		if lp == "bedrock" {
+			return []string{"bedrock", "bedrock_converse"}
+		}
+		return []string{lp}
+	}
+	if kind == "cli" && driver == "claude-cli" {
+		return []string{"anthropic"}
+	}
+	return CandidateProviders(driver, baseURL)
+}
+
 func candidatesForHost(baseURL string) []string {
 	u, err := url.Parse(baseURL)
 	if err != nil {

@@ -236,11 +236,11 @@ describe('spend budgets', () => {
 })
 
 describe('listProviders', () => {
-  it('normalizes null models/headers so the settings page never maps over null', async () => {
+  it('normalizes null headers so the settings page never maps over null', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
     const body = {
       providers: [
-        { id: 'p1', name: 'legacy', kind: 'api', driver: 'bedrock', models: null, headers: null },
+        { id: 'p1', name: 'legacy', kind: 'api', driver: 'bedrock', headers: null },
       ],
     }
     vi.stubGlobal(
@@ -250,7 +250,6 @@ describe('listProviders', () => {
 
     const [p] = await listProviders()
 
-    expect(p.models).toEqual([])
     expect(p.headers).toEqual({})
   })
 })

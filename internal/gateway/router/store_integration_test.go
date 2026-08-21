@@ -37,7 +37,7 @@ func integrationStore(t *testing.T) *Store {
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return NewStore(pool, resolveCredential, log)
+	return NewStore(pool, resolveCredential, nil, log)
 }
 
 // resolveCredential is the store's credential resolver for integration

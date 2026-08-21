@@ -62,13 +62,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := router.NewStore(app.DB, credentialLookup(secrets, app.Log), app.Log)
+	cat := catalog.New(app.Log)
+	go runCatalogSweep(ctx, cat, app.Log)
+	store := router.NewStore(app.DB, credentialLookup(secrets, app.Log), cat, app.Log)
 	go store.Run(ctx)
 	led := ledger.New(app.DB, app.Log)
 	agg := ledger.NewAggregator(app.DB)
 	budgets := ledger.NewBudgetStore(app.DB)
-	cat := catalog.New(app.Log)
-	go runCatalogSweep(ctx, cat, app.Log)
 	api.Register(app.Server, store, led, app.Log, app.Metrics)
 	api.RegisterUsage(app.Server, agg, budgets)
 	api.RegisterAdmin(app.Server, admin.New(app.DB, store, led, budgets, secrets, cat, app.Log))

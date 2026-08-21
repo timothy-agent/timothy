@@ -1,20 +1,31 @@
 package admin
 
 import (
+	"context"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 )
+
+func f64(v float64) *float64 { return &v }
+
+// fakeCatalog is a minimal in-memory catalogLookup for router tests: it
+// returns its whole seeded pool regardless of q/litellmProviders, since
+// these tests only care about catalog.Match's downstream lookup by id.
+type fakeCatalog struct{ models []catalog.Model }
+
+func (f fakeCatalog) SearchProviders(ctx context.Context, q string, litellmProviders []string, limit int) ([]catalog.Model, error) {
+	return f.models, nil
+}
 
 func routesSnapshot(t *testing.T, strategy string) *router.Snapshot {
 	t.Helper()
 	provRows := []router.ProviderRow{
 		{ID: "p1", Name: "pricey", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true,
-			Models: []router.ModelInfo{{ID: "big", Prices: &router.ModelPrices{OutputPerMTok: 25}}}},
+			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true},
 		{ID: "p2", Name: "cheap", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true,
-			Models: []router.ModelInfo{{ID: "small", Prices: &router.ModelPrices{OutputPerMTok: 1}}}},
+			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true},
 		{ID: "p3", Name: "off", Kind: "api", Driver: "openaicompat",
 			BaseURL: "https://c.example/v1", DefaultModel: "m", CredentialRef: "K3", Enabled: false},
 	}
@@ -23,7 +34,11 @@ func routesSnapshot(t *testing.T, strategy string) *router.Snapshot {
 		{ProviderID: "p3", Model: "m"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	cat := fakeCatalog{models: []catalog.Model{
+		{ID: "big", ModelKey: "big", Mode: "chat", OutputPerMTok: f64(25)},
+		{ID: "small", ModelKey: "small", Mode: "chat", OutputPerMTok: f64(1)},
+	}}
+	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 	return snap
 }
 
@@ -94,7 +109,7 @@ func TestResolvedForRouteSkipsAllUnusable(t *testing.T) {
 	routeRows := []router.RouteRow{{Name: "r", Enabled: true, Chain: []router.ChainEntry{
 		{ProviderID: "p1", Model: "m"},
 	}}}
-	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
 
 	resolved, serving := resolvedForRoute(snap, "r")
 	if len(resolved) != 1 || resolved[0].Usable {
@@ -127,7 +142,7 @@ func TestResolvedForRouteSurfacesProviderKind(t *testing.T) {
 		{ProviderID: "p1", Model: "sonnet"},
 		{ProviderID: "p2", Model: "claude-sonnet-4"},
 	}}}
-	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	resolved, serving := resolvedForRoute(snap, "r")
 	if len(resolved) != 2 {

@@ -398,7 +398,6 @@ type Provider struct {
 	Driver        string             `json:"driver"`
 	BaseURL       string             `json:"base_url"`
 	DefaultModel  string             `json:"default_model"`
-	Models        []router.ModelInfo `json:"models"`
 	CredentialRef string             `json:"credential_ref"`
 	Headers       map[string]string  `json:"headers"`
 	Enabled       bool               `json:"enabled"`
@@ -559,7 +558,7 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 		return nil, fmt.Errorf("admin providers: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-		models, credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers ORDER BY name`)
+		credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("admin providers: %w", err)
 	}
@@ -568,15 +567,12 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 	out := []Provider{}
 	for rows.Next() {
 		var (
-			p                  Provider
-			models, hdrs, opts []byte
+			p          Provider
+			hdrs, opts []byte
 		)
 		if err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL,
-			&p.DefaultModel, &models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap); err != nil {
+			&p.DefaultModel, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap); err != nil {
 			return nil, fmt.Errorf("admin providers: %w", err)
-		}
-		if err := json.Unmarshal(models, &p.Models); err != nil {
-			return nil, fmt.Errorf("admin providers: models: %w", err)
 		}
 		if err := json.Unmarshal(hdrs, &p.Headers); err != nil {
 			return nil, fmt.Errorf("admin providers: headers: %w", err)
@@ -591,27 +587,38 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 }
 
 // Create inserts a provider (disabled by default is the caller's
-// choice), audits, bootstraps the fixed system routes' chains from its
-// model metadata, and reloads the snapshot.
+// choice), audits, auto-seeds default_model when left blank,
+// bootstraps the fixed system routes' chains from the catalog's
+// candidate models for this provider, and reloads the snapshot.
 func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 	if err := validateProvider(p); err != nil {
 		return "", err
+	}
+	candidates, err := a.catalog.SearchProviders(ctx, "",
+		catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options), 0)
+	if err != nil {
+		a.log.Warn("provider create: catalog lookup failed", "error", err)
+	}
+	if p.DefaultModel == "" {
+		if model, ok := router.CheapestCapable(candidates, "chat"); ok {
+			p.DefaultModel = model
+		}
 	}
 	db, err := a.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
-	models, hdrs, opts := jsonOr(p.Models, "[]"), jsonOr(p.Headers, "{}"), jsonOr(p.Options, "{}")
+	hdrs, opts := jsonOr(p.Headers, "{}"), jsonOr(p.Options, "{}")
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO providers
-			(name, kind, driver, base_url, default_model, models, credential_ref, headers, options, enabled, exclude_from_bootstrap)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-		p.Name, p.Kind, p.Driver, p.BaseURL, p.DefaultModel, models, p.CredentialRef, hdrs, opts, p.Enabled, p.ExcludeFromBootstrap).Scan(&id)
+			(name, kind, driver, base_url, default_model, credential_ref, headers, options, enabled, exclude_from_bootstrap)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+		p.Name, p.Kind, p.Driver, p.BaseURL, p.DefaultModel, p.CredentialRef, hdrs, opts, p.Enabled, p.ExcludeFromBootstrap).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
 	a.audit(ctx, "create", "provider", id, nil, p)
-	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, Models: p.Models, ExcludeFromBootstrap: p.ExcludeFromBootstrap})
+	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, ExcludeFromBootstrap: p.ExcludeFromBootstrap}, candidates)
 	a.reload(ctx)
 	return id, nil
 }
@@ -625,7 +632,7 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 // truth from then on, and the name is freely renamable. Best-effort —
 // a failure here must never fail provider creation; the user can
 // always wire routes by hand from the Routing tab.
-func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
+func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow, candidates []catalog.Model) {
 	db, err := a.db.Get()
 	if err != nil {
 		a.log.Warn("route bootstrap skipped", "error", err)
@@ -660,7 +667,7 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 		routeName[sr.Role] = name
 		existing[sr.Role] = chain
 	}
-	updates := router.BootstrapChain(p, existing)
+	updates := router.BootstrapChain(p, existing, candidates)
 	for role, chain := range updates {
 		name := routeName[role]
 		// A route seeded from empty was unusable before (disabled by
@@ -690,14 +697,13 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow) {
 // Patch applies a partial update. Only fields present in the request
 // change; before/after land in the audit row.
 type ProviderPatch struct {
-	BaseURL              *string             `json:"base_url"`
-	DefaultModel         *string             `json:"default_model"`
-	Models               *[]router.ModelInfo `json:"models"`
-	CredentialRef        *string             `json:"credential_ref"`
-	Headers              *map[string]string  `json:"headers"`
-	Enabled              *bool               `json:"enabled"`
-	ExcludeFromBootstrap *bool               `json:"exclude_from_bootstrap"`
-	Options              *map[string]string  `json:"options"`
+	BaseURL              *string            `json:"base_url"`
+	DefaultModel         *string            `json:"default_model"`
+	CredentialRef        *string            `json:"credential_ref"`
+	Headers              *map[string]string `json:"headers"`
+	Enabled              *bool              `json:"enabled"`
+	ExcludeFromBootstrap *bool              `json:"exclude_from_bootstrap"`
+	Options              *map[string]string `json:"options"`
 }
 
 func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error {
@@ -740,9 +746,6 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 	if patch.DefaultModel != nil {
 		after.DefaultModel = *patch.DefaultModel
 	}
-	if patch.Models != nil {
-		after.Models = *patch.Models
-	}
 	if patch.CredentialRef != nil {
 		after.CredentialRef = *patch.CredentialRef
 	}
@@ -760,9 +763,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 	}
 
 	tag, err := tx.Exec(ctx, `UPDATE providers SET base_url = $2, default_model = $3,
-			models = $4, credential_ref = $5, headers = $6, enabled = $7, exclude_from_bootstrap = $8, options = $9, updated_at = now()
+			credential_ref = $4, headers = $5, enabled = $6, exclude_from_bootstrap = $7, options = $8, updated_at = now()
 		WHERE id = $1`,
-		id, after.BaseURL, after.DefaultModel, jsonOr(after.Models, "[]"),
+		id, after.BaseURL, after.DefaultModel,
 		after.CredentialRef, jsonOr(after.Headers, "{}"), after.Enabled, after.ExcludeFromBootstrap, jsonOr(after.Options, "{}"))
 	if err != nil {
 		return fmt.Errorf("admin patch: %w", err)
@@ -1489,17 +1492,16 @@ func (a *Admin) getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Provide
 
 func scanProvider(ctx context.Context, q pgxQuerier, id, lock string) (Provider, error) {
 	var (
-		p                  Provider
-		models, hdrs, opts []byte
+		p          Provider
+		hdrs, opts []byte
 	)
 	err := q.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-			models, credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers WHERE id = $1 `+lock, id).
+			credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers WHERE id = $1 `+lock, id).
 		Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL, &p.DefaultModel,
-			&models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
+			&p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
 	if err != nil {
 		return Provider{}, fmt.Errorf("provider %s: %w", id, ErrNotFound)
 	}
-	_ = json.Unmarshal(models, &p.Models)
 	_ = json.Unmarshal(hdrs, &p.Headers)
 	_ = json.Unmarshal(opts, &p.Options)
 	normalizeProvider(&p)
@@ -1508,17 +1510,16 @@ func scanProvider(ctx context.Context, q pgxQuerier, id, lock string) (Provider,
 
 func scanProviderByName(ctx context.Context, q pgxQuerier, name string) (Provider, error) {
 	var (
-		p                  Provider
-		models, hdrs, opts []byte
+		p          Provider
+		hdrs, opts []byte
 	)
 	err := q.QueryRow(ctx, `SELECT id, name, kind, driver, base_url, default_model,
-			models, credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers WHERE name = $1`, name).
+			credential_ref, headers, options, enabled, exclude_from_bootstrap FROM providers WHERE name = $1`, name).
 		Scan(&p.ID, &p.Name, &p.Kind, &p.Driver, &p.BaseURL, &p.DefaultModel,
-			&models, &p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
+			&p.CredentialRef, &hdrs, &opts, &p.Enabled, &p.ExcludeFromBootstrap)
 	if err != nil {
 		return Provider{}, fmt.Errorf("provider %s: %w", name, ErrNotFound)
 	}
-	_ = json.Unmarshal(models, &p.Models)
 	_ = json.Unmarshal(hdrs, &p.Headers)
 	_ = json.Unmarshal(opts, &p.Options)
 	normalizeProvider(&p)
@@ -1528,9 +1529,6 @@ func scanProviderByName(ctx context.Context, q pgxQuerier, name string) (Provide
 // normalizeProvider papers over jsonb null in rows written before
 // jsonOr guarded against typed nils: clients get [] / {}, never null.
 func normalizeProvider(p *Provider) {
-	if p.Models == nil {
-		p.Models = []router.ModelInfo{}
-	}
 	if p.Headers == nil {
 		p.Headers = map[string]string{}
 	}

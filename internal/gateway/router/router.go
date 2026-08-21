@@ -5,11 +5,13 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
@@ -26,14 +28,6 @@ type ModelPrices struct {
 	Currency          string  `json:"currency,omitempty"`
 }
 
-// ModelInfo is one entry of a provider's models jsonb.
-type ModelInfo struct {
-	ID            string       `json:"id"`
-	ContextWindow int          `json:"context_window,omitempty"`
-	Capabilities  []string     `json:"capabilities,omitempty"`
-	Prices        *ModelPrices `json:"prices,omitempty"`
-}
-
 // ProviderRow mirrors one providers table row.
 type ProviderRow struct {
 	ID            string
@@ -42,7 +36,6 @@ type ProviderRow struct {
 	Driver        string
 	BaseURL       string
 	DefaultModel  string
-	Models        []ModelInfo
 	CredentialRef string
 	Headers       map[string]string
 	Enabled       bool
@@ -75,6 +68,11 @@ type ProviderRow struct {
 	// was ambiguous), true/false is a definite probe result. Only checked
 	// for harnesses in harnessNeedsResponses (codex-cli).
 	OpenAIResponses *bool
+	// LitellmProvider comes from options.litellm_provider — an
+	// operator's explicit override of which catalog namespace this
+	// row's models match against (catalog.CandidateProvidersForRow),
+	// beating the driver/host heuristic when set.
+	LitellmProvider string
 }
 
 // ChainEntry is one step of a route chain. Harness selection moved to
@@ -138,6 +136,13 @@ type RouteRow struct {
 	Role string
 }
 
+// catalogLookup is the slice of *catalog.Store attemptCapable/Prices/
+// findModel need — an interface so tests can inject an in-memory fake
+// instead of a real synced catalog.
+type catalogLookup interface {
+	SearchProviders(ctx context.Context, q string, litellmProviders []string, limit int) ([]catalog.Model, error)
+}
+
 // Snapshot is an immutable view of the routing configuration plus the
 // providers built from it. Store swaps whole snapshots atomically.
 type Snapshot struct {
@@ -151,6 +156,7 @@ type Snapshot struct {
 	registry   *provider.Registry
 	healthy    map[string]bool   // by name: credential ref resolved and driver built
 	unhealthy  map[string]string // by name: reason, set whenever healthy[name] is false
+	cat        catalogLookup     // model capability/pricing source; nil-safe (permissive fallback)
 }
 
 // ModelStats are time-decayed aggregates from the recent cost ledger,
@@ -210,7 +216,7 @@ type BuildWarning struct {
 // duplicate rows can't reach BuildSnapshot; a bad or disabled provider
 // is reported via the returned warnings — BuildSnapshot itself never
 // fails.
-func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string) (*Snapshot, []BuildWarning) {
+func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string, cat catalogLookup) (*Snapshot, []BuildWarning) {
 	s := &Snapshot{
 		rows:       make(map[string]ProviderRow, len(provRows)),
 		byName:     make(map[string]ProviderRow, len(provRows)),
@@ -221,6 +227,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 		healthy:    make(map[string]bool, len(provRows)),
 		unhealthy:  map[string]string{},
 		registry:   provider.NewRegistry(),
+		cat:        cat,
 	}
 
 	var warnings []BuildWarning
@@ -413,7 +420,7 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.
 		return nil, row.Name, "not in registry"
 	}
 	for _, want := range required {
-		if !attemptCapable(p, row, model, want) {
+		if !s.attemptCapable(p, row, model, want) {
 			return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", want)
 		}
 	}
@@ -739,30 +746,77 @@ func harnessWire(driver string, overrideApplied bool) string {
 
 // attemptCapable gates one provider+model candidate on the required
 // capability: the DRIVER must implement it (the integration code) AND
-// the model's own declaration in the models jsonb, when present, must
-// list it — so an embeddings-only model in a chat chain is skipped
-// before any wire call even though its driver can chat. Models with
-// no declaration (or unlisted models, e.g. a hint for something not
-// yet in the table) are judged by the driver alone (D-005).
-func attemptCapable(p provider.Provider, row ProviderRow, model string, want provider.Capability) bool {
+// the model's own catalog entry, when found, must support it — so an
+// embeddings-only model in a chat chain is skipped before any wire
+// call even though its driver can chat. A model absent from the
+// catalog (or when no catalog lookup is wired) is judged by the
+// driver alone (D-005) — same permissive fallback as before, now
+// sourced from the in-memory catalog cache instead of a stored models
+// jsonb column.
+func (s *Snapshot) attemptCapable(p provider.Provider, row ProviderRow, model string, want provider.Capability) bool {
 	if !hasCapability(p, want) {
 		return false
 	}
-	for _, m := range row.Models {
-		if m.ID != model {
-			continue
-		}
-		if len(m.Capabilities) == 0 {
-			return true // listed but silent on capabilities: driver decides
-		}
-		for _, c := range m.Capabilities {
-			if c == string(want) {
-				return true
-			}
-		}
-		return false
+	if want != provider.CapEmbeddings && want != provider.CapVision {
+		return true
 	}
-	return true
+	m, ok := s.catalogModel(row, model)
+	if !ok {
+		return true // no catalog match: driver decides
+	}
+	if want == provider.CapEmbeddings {
+		return m.Mode == "embedding"
+	}
+	return m.SupportsVision != nil && *m.SupportsVision
+}
+
+// CatalogModelsForRow returns every catalog model within row's
+// candidate litellm_provider(s) — the /v1/providers listing's live
+// model source (replaces the removed providers.models column) and the
+// admin Models-list/default_model-picker's data source. Empty when no
+// catalog lookup is wired.
+func (s *Snapshot) CatalogModelsForRow(row ProviderRow) []catalog.Model {
+	if s.cat == nil {
+		return nil
+	}
+	var opts map[string]string
+	if row.LitellmProvider != "" {
+		opts = map[string]string{"litellm_provider": row.LitellmProvider}
+	}
+	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts)
+	pool, err := s.cat.SearchProviders(context.Background(), "", candidates, 0)
+	if err != nil {
+		return nil
+	}
+	return pool
+}
+
+// catalogModel looks up model within row's candidate litellm_provider(s),
+// nil-safe when no catalog lookup is wired (e.g. a router built
+// without one, or a test snapshot).
+func (s *Snapshot) catalogModel(row ProviderRow, model string) (catalog.Model, bool) {
+	if s.cat == nil {
+		return catalog.Model{}, false
+	}
+	var opts map[string]string
+	if row.LitellmProvider != "" {
+		opts = map[string]string{"litellm_provider": row.LitellmProvider}
+	}
+	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts)
+	pool, err := s.cat.SearchProviders(context.Background(), "", candidates, 0)
+	if err != nil {
+		return catalog.Model{}, false
+	}
+	key := catalog.Match(model, pool)
+	if key == "" {
+		return catalog.Model{}, false
+	}
+	for _, m := range pool {
+		if m.ModelKey == key {
+			return m, true
+		}
+	}
+	return catalog.Model{}, false
 }
 
 func hasCapability(p provider.Provider, want provider.Capability) bool {
@@ -774,13 +828,12 @@ func hasCapability(p provider.Provider, want provider.Capability) bool {
 	return false
 }
 
-// findModel locates the first provider listing the exact model id.
+// findModel locates the first provider whose catalog entry has the
+// exact model id.
 func (s *Snapshot) findModel(model string) (ProviderRow, string, bool) {
 	for _, row := range s.byName {
-		for _, m := range row.Models {
-			if m.ID == model {
-				return row, model, true
-			}
+		if _, ok := s.catalogModel(row, model); ok {
+			return row, model, true
 		}
 	}
 	return ProviderRow{}, "", false
@@ -799,12 +852,24 @@ func (s *Snapshot) Prices(providerName, model string) *ModelPrices {
 	if !ok {
 		return nil
 	}
-	for _, m := range row.Models {
-		if m.ID == model {
-			return m.Prices
-		}
+	m, ok := s.catalogModel(row, model)
+	if !ok || (m.InputPerMTok == nil && m.OutputPerMTok == nil) {
+		return nil
 	}
-	return nil
+	p := &ModelPrices{}
+	if m.InputPerMTok != nil {
+		p.InputPerMTok = *m.InputPerMTok
+	}
+	if m.OutputPerMTok != nil {
+		p.OutputPerMTok = *m.OutputPerMTok
+	}
+	if m.CacheReadPerMTok != nil {
+		p.CacheReadPerMTok = *m.CacheReadPerMTok
+	}
+	if m.CacheWritePerMTok != nil {
+		p.CacheWritePerMTok = *m.CacheWritePerMTok
+	}
+	return p
 }
 
 // Providers returns every row sorted by name (deterministic listing

@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
@@ -141,18 +142,27 @@ func (p midStreamCutProvider) Stream(context.Context, provider.CompletionRequest
 	return ch, nil
 }
 
+// fakeCatalog is a minimal in-memory catalogLookup for router tests: it
+// returns its whole seeded pool regardless of q/litellmProviders, since
+// tests only care about catalog.Match's downstream lookup by id.
+type fakeCatalog struct{ models []catalog.Model }
+
+func (f fakeCatalog) SearchProviders(_ context.Context, _ string, _ []string, _ int) ([]catalog.Model, error) {
+	return f.models, nil
+}
+
+func f64(v float64) *float64 { return &v }
+func fbool(v bool) *bool     { return &v }
+
 // snapshotFor builds a two-provider snapshot with a coding route
 // chaining first→second and an embedding route on first.
 func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
 	t.Helper()
-	prices := &router.ModelPrices{InputPerMTok: 1, OutputPerMTok: 2}
 	rows := []router.ProviderRow{
 		{ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat", BaseURL: firstURL,
-			DefaultModel: "m1", Enabled: true,
-			Models: []router.ModelInfo{{ID: "m1", Prices: prices}}},
+			DefaultModel: "m1", Enabled: true},
 		{ID: "p2", Name: "two", Kind: "api", Driver: "openaicompat", BaseURL: secondURL,
-			DefaultModel: "m2", Enabled: true,
-			Models: []router.ModelInfo{{ID: "m2"}}},
+			DefaultModel: "m2", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "coding", Chain: []router.ChainEntry{
@@ -162,7 +172,7 @@ func snapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
 			{ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, nil)
 	return snap
 }
 
@@ -197,9 +207,34 @@ func sseEvents(t *testing.T, body string) []stream.StreamEvent {
 	return events
 }
 
+// pricedSnapshotFor is snapshotFor with a real catalog price seeded for
+// p1's model, isolated from snapshotFor's shared embedding-route fixture
+// so seeding a catalog entry for "m1" never gates its embeddings-capable
+// chain entry (mode-restricted catalog presence is stricter than the old
+// undeclared-capability permissive default).
+func pricedSnapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapshot {
+	t.Helper()
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat", BaseURL: firstURL,
+			DefaultModel: "m1", Enabled: true},
+		{ID: "p2", Name: "two", Kind: "api", Driver: "openaicompat", BaseURL: secondURL,
+			DefaultModel: "m2", Enabled: true},
+	}
+	routes := []router.RouteRow{
+		{Name: "coding", Chain: []router.ChainEntry{
+			{ProviderID: "p1", Model: "m1"}, {ProviderID: "p2", Model: "m2"},
+		}, Enabled: true},
+	}
+	cat := fakeCatalog{models: []catalog.Model{
+		{ID: "m1", ModelKey: "m1", Mode: "chat", InputPerMTok: f64(1), OutputPerMTok: f64(2)},
+	}}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, cat)
+	return snap
+}
+
 func TestStreamHappyPathWithLedger(t *testing.T) {
 	t.Parallel()
-	a, rec := newAPI(snapshotFor(t, oaiOK(t, "hello").URL, oaiFail(t).URL))
+	a, rec := newAPI(pricedSnapshotFor(t, oaiOK(t, "hello").URL, oaiFail(t).URL))
 
 	w := postJSON(t, a.handleStream, `{"route":"coding","session_id":"s1","messages":[{"role":"user","content":"hi"}]}`)
 
@@ -493,14 +528,16 @@ func TestStreamVisionRouteMissingFallsBackToDefault(t *testing.T) {
 	srv := oaiOK(t, "described")
 	rows := []router.ProviderRow{
 		{ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat", BaseURL: srv.URL,
-			DefaultModel: "m1", Enabled: true,
-			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat", "vision"}}}},
+			DefaultModel: "m1", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 		// no "vision" route row at all.
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	cat := fakeCatalog{models: []catalog.Model{
+		{ID: "m1", ModelKey: "m1", Mode: "chat", SupportsVision: fbool(true)},
+	}}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, cat)
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -536,14 +573,16 @@ func TestStreamVisionRouteDisabledFallsBackToDefault(t *testing.T) {
 	srv := oaiOK(t, "described")
 	rows := []router.ProviderRow{
 		{ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat", BaseURL: srv.URL,
-			DefaultModel: "m1", Enabled: true,
-			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat", "vision"}}}},
+			DefaultModel: "m1", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: false},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	cat := fakeCatalog{models: []catalog.Model{
+		{ID: "m1", ModelKey: "m1", Mode: "chat", SupportsVision: fbool(true)},
+	}}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, cat)
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -565,17 +604,19 @@ func TestStreamVisionRoutePresentNoFallback(t *testing.T) {
 	defaultSrv := oaiOK(t, "from-default-route")
 	rows := []router.ProviderRow{
 		{ID: "p1", Name: "vprov", Kind: "api", Driver: "openaicompat", BaseURL: visionSrv.URL,
-			DefaultModel: "vm", Enabled: true,
-			Models: []router.ModelInfo{{ID: "vm", Capabilities: []string{"chat", "vision"}}}},
+			DefaultModel: "vm", Enabled: true},
 		{ID: "p2", Name: "dprov", Kind: "api", Driver: "openaicompat", BaseURL: defaultSrv.URL,
-			DefaultModel: "dm", Enabled: true,
-			Models: []router.ModelInfo{{ID: "dm", Capabilities: []string{"chat", "vision"}}}},
+			DefaultModel: "dm", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "vm"}}, Enabled: true},
 		{Name: "default", Role: "default", Chain: []router.ChainEntry{{ProviderID: "p2", Model: "dm"}}, Enabled: true},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	cat := fakeCatalog{models: []catalog.Model{
+		{ID: "vm", ModelKey: "vm", Mode: "chat", SupportsVision: fbool(true)},
+		{ID: "dm", ModelKey: "dm", Mode: "chat", SupportsVision: fbool(true)},
+	}}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, cat)
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -608,13 +649,15 @@ func TestStreamVisionCapabilityExhaustedNoFallback(t *testing.T) {
 	t.Parallel()
 	rows := []router.ProviderRow{
 		{ID: "p1", Name: "textonly", Kind: "api", Driver: "openaicompat", BaseURL: oaiOK(t, "x").URL,
-			DefaultModel: "m1", Enabled: true,
-			Models: []router.ModelInfo{{ID: "m1", Capabilities: []string{"chat"}}}}, // no vision
+			DefaultModel: "m1", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "vision", Role: "vision", Capability: "vision", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	cat := fakeCatalog{models: []catalog.Model{
+		{ID: "m1", ModelKey: "m1", Mode: "chat"}, // no vision
+	}}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, cat)
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleStream, fmt.Sprintf(`{"route":"vision","messages":%s}`, visionMessages))
@@ -677,15 +720,14 @@ func TestEmbedSkipsIncapableDriverAtResolve(t *testing.T) {
 		{ID: "p0", Name: "no-embed", Kind: "api", Driver: "anthropic",
 			DefaultModel: "m0", Enabled: true},
 		{ID: "p1", Name: "can-embed", Kind: "api", Driver: "openaicompat",
-			BaseURL: capable.URL, DefaultModel: "m1", Enabled: true,
-			Models: []router.ModelInfo{{ID: "m1"}}},
+			BaseURL: capable.URL, DefaultModel: "m1", Enabled: true},
 	}
 	routes := []router.RouteRow{
 		{Name: "embedding", Capability: "embeddings", Role: "embedding", Chain: []router.ChainEntry{
 			{ProviderID: "p0", Model: "m0"}, {ProviderID: "p1", Model: "m1"},
 		}, Enabled: true},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" })
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, nil)
 	a, rec := newAPI(snap)
 
 	w := postJSON(t, a.handleEmbed, `{"texts":["a","b"]}`)
@@ -708,9 +750,8 @@ func TestProvidersListingNeverLeaksSecrets(t *testing.T) {
 		ID: "p1", Name: "one", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://x.example/v1", DefaultModel: "m1",
 		CredentialRef: "ONE_KEY", Enabled: true,
-		Models: []router.ModelInfo{{ID: "m1"}},
 	}}
-	snap, _ := router.BuildSnapshot(rows, nil, func(string) string { return secret })
+	snap, _ := router.BuildSnapshot(rows, nil, func(string) string { return secret }, nil)
 	a, _ := newAPI(snap)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/providers", nil)
@@ -748,7 +789,7 @@ func resolveSnapshot(t *testing.T) *router.Snapshot {
 			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" }, nil)
 	return snap
 }
 
@@ -842,7 +883,7 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" }, nil)
 	a, _ := newAPI(snap)
 
 	w := httptest.NewRecorder()
@@ -880,7 +921,7 @@ func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 			{ProviderID: "p2", Model: "m"},
 		}},
 	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" })
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "sk" }, nil)
 	a, _ := newAPI(snap)
 
 	w := httptest.NewRecorder()

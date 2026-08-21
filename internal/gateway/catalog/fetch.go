@@ -39,6 +39,7 @@ type rawEntry struct {
 	OutputCostPerToken          *float64 `json:"output_cost_per_token"`
 	CacheReadInputTokenCost     *float64 `json:"cache_read_input_token_cost"`
 	CacheCreationInputTokenCost *float64 `json:"cache_creation_input_token_cost"`
+	SupportsVision              *bool    `json:"supports_vision"`
 }
 
 // Entry is one parsed, converted catalog row. Price fields are per
@@ -54,6 +55,7 @@ type Entry struct {
 	OutputPerMTok     *float64
 	CacheReadPerMTok  *float64
 	CacheWritePerMTok *float64
+	SupportsVision    *bool
 }
 
 // FetchResult is one sync attempt's outcome. NotModified is true on a
@@ -138,6 +140,7 @@ func parse(body []byte) ([]Entry, error) {
 			OutputPerMTok:     perMTok(re.OutputCostPerToken),
 			CacheReadPerMTok:  perMTok(re.CacheReadInputTokenCost),
 			CacheWritePerMTok: perMTok(re.CacheCreationInputTokenCost),
+			SupportsVision:    re.SupportsVision,
 		})
 	}
 	return entries, nil

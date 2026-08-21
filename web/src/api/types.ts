@@ -410,17 +410,6 @@ export interface BudgetStatus {
 // Control-plane shapes (/v1/admin/*). credential_ref is a NAME the
 // secret is stored under (in whichever backend is default) — secret
 // values never travel.
-export interface AdminModel {
-  id: string
-  context_window?: number
-  capabilities?: string[]
-  prices?: {
-    input_per_mtok?: number
-    output_per_mtok?: number
-    cache_read_per_mtok?: number
-    cache_write_per_mtok?: number
-  }
-}
 
 // CatalogModel is one model_catalog row (GET /v1/admin/catalog/models)
 // — LiteLLM's synced pricing/context data. Prices are per MILLION
@@ -473,20 +462,6 @@ export interface CatalogSyncStatus {
   error: string
 }
 
-// CatalogSuggestion is one of a provider's declared models compared
-// against the catalog (GET /v1/admin/providers/:id/catalog-suggestions)
-// — suggest-only, applying a suggestion goes through the normal
-// patchProvider models update. match is the catalog model_key, absent
-// when unmatched.
-export interface CatalogSuggestion {
-  model_id: string
-  match?: string
-  current_context_window?: number
-  suggested_context_window?: number
-  current_prices?: AdminModel['prices']
-  suggested_prices?: AdminModel['prices']
-}
-
 export interface AdminProvider {
   id: string
   name: string
@@ -494,7 +469,6 @@ export interface AdminProvider {
   driver: string
   base_url: string
   default_model: string
-  models: AdminModel[]
   credential_ref: string
   headers: Record<string, string>
   enabled: boolean

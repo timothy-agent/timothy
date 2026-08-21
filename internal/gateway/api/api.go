@@ -490,10 +490,15 @@ func (a *API) handleProviders(w http.ResponseWriter, r *http.Request) {
 	rows, healthy := snap.Providers()
 	list := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		models := make([]map[string]any, 0, len(row.Models))
-		for _, m := range row.Models {
+		catalogModels := snap.CatalogModelsForRow(row)
+		models := make([]map[string]any, 0, len(catalogModels))
+		for _, m := range catalogModels {
+			var contextWindow int64
+			if m.MaxInputTokens != nil {
+				contextWindow = *m.MaxInputTokens
+			}
 			models = append(models, map[string]any{
-				"id": m.ID, "context_window": m.ContextWindow,
+				"id": m.ID, "context_window": contextWindow,
 			})
 		}
 		list = append(list, map[string]any{

@@ -1,12 +1,31 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
+
+// fakeCatalog is a minimal in-memory catalogLookup for tests: it
+// ignores q/litellmProviders/limit and always returns its whole seeded
+// pool, letting catalog.Match do the real id resolution downstream.
+type fakeCatalog struct {
+	pool []catalog.Model
+}
+
+func (f *fakeCatalog) SearchProviders(_ context.Context, _ string, _ []string, _ int) ([]catalog.Model, error) {
+	return f.pool, nil
+}
+
+func fp(v float64) *float64 { return &v }
+
+func catModel(id, mode string, input *float64) catalog.Model {
+	return catalog.Model{ID: id, ModelKey: id, Mode: mode, InputPerMTok: input}
+}
 
 func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
 	t.Helper()
@@ -14,16 +33,11 @@ func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
 		{
 			ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
 			DefaultModel: "sonnet", CredentialRef: "A_KEY", Enabled: true,
-			Models: []ModelInfo{
-				{ID: "opus", Prices: &ModelPrices{InputPerMTok: 15, OutputPerMTok: 75}},
-				{ID: "sonnet"},
-			},
 		},
 		{
 			ID: "p2", Name: "grok", Kind: "api", Driver: "openaicompat",
 			BaseURL: "https://api.x.example/v1", DefaultModel: "grok-4",
 			CredentialRef: "X_KEY", Enabled: true,
-			Models: []ModelInfo{{ID: "grok-4"}},
 		},
 		{
 			ID: "p3", Name: "disabled-one", Kind: "api", Driver: "anthropic",
@@ -49,7 +63,13 @@ func testSnapshot(t *testing.T, lookups map[string]string) *Snapshot {
 			{ProviderID: "p2", Model: "embed-b"},
 		}, Enabled: true},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string { return lookups[ref] })
+	// "opus" is priced (matches TestPrices' expectations); "sonnet" and
+	// "grok-4" stay out of the fake pool so catalogModel finds no match
+	// for them and every capability check falls through permissively to
+	// the driver alone, same as the old undeclared-model behavior.
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("opus", "chat", fp(15))}}
+	cat.pool[0].OutputPerMTok = fp(75)
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string { return lookups[ref] }, cat)
 	return snap
 }
 
@@ -184,40 +204,41 @@ func TestResolveCapabilityExhaustionNamesReason(t *testing.T) {
 	}
 }
 
+// TestResolveModelLevelCapabilities covers embeddings gating: routing
+// judges an embeddings chain entry by the model's own catalog mode,
+// falling back to the driver only for models absent from the catalog.
+// Chat capability is never catalog-gated (only CapEmbeddings/CapVision
+// are, per attemptCapable) — an embeddings-only catalog model is still
+// tried in a chat chain, since the driver alone decides chat.
 func TestResolveModelLevelCapabilities(t *testing.T) {
 	t.Parallel()
-	// One provider whose driver can chat AND embed, with per-model
-	// declarations that disagree: routing must judge each chain entry
-	// by the model's own list, falling back to the driver only for
-	// models that declare nothing.
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://x.example/v1", DefaultModel: "nova",
 		CredentialRef: "B_KEY", Enabled: true,
-		Models: []ModelInfo{
-			{ID: "nova", Capabilities: []string{"chat", "streaming", "tools"}},
-			{ID: "titan-embed", Capabilities: []string{"embeddings"}},
-			{ID: "undeclared"},
-		},
 	}}
 	routeRows := []RouteRow{
 		{Name: "coding", Chain: []ChainEntry{
-			{ProviderID: "p1", Model: "titan-embed"}, // embeddings-only: skip
+			{ProviderID: "p1", Model: "titan-embed"}, // embeddings-only: chat is driver-decided, kept
 			{ProviderID: "p1", Model: "nova"},
-			{ProviderID: "p1", Model: "undeclared"}, // driver decides: keep
+			{ProviderID: "p1", Model: "undeclared"}, // absent from catalog: driver decides, keep
 		}, Enabled: true},
 		{Name: "embedding", Capability: "embeddings", Chain: []ChainEntry{
 			{ProviderID: "p1", Model: "nova"}, // chat-only model: skip
 			{ProviderID: "p1", Model: "titan-embed"},
 		}, Enabled: true},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	cat := &fakeCatalog{pool: []catalog.Model{
+		catModel("nova", "chat", nil),
+		catModel("titan-embed", "embedding", nil),
+	}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	attempts, err := snap.Resolve("coding", "", Sticky{})
 	if err != nil {
 		t.Fatalf("Resolve coding: %v", err)
 	}
-	if got := attemptNames(attempts); got != "bedrock/nova,bedrock/undeclared" {
+	if got := attemptNames(attempts); got != "bedrock/titan-embed,bedrock/nova,bedrock/undeclared" {
 		t.Fatalf("coding attempts = %s", got)
 	}
 
@@ -230,70 +251,74 @@ func TestResolveModelLevelCapabilities(t *testing.T) {
 	}
 }
 
+// TestResolveModelCapabilityExhaustionNamesModel covers the embedding
+// axis's exhaustion wording (naming the model, not just the provider)
+// when the sole chain entry is a chat-only catalog model.
 func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "openaicompat",
-		BaseURL: "https://x.example/v1", DefaultModel: "titan-embed",
+		BaseURL: "https://x.example/v1", DefaultModel: "chat-only",
 		CredentialRef: "B_KEY", Enabled: true,
-		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
-	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
-		{ProviderID: "p1", Model: "titan-embed"},
+	routeRows := []RouteRow{{Name: "embedding", Capability: "embeddings", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "chat-only"},
 	}, Enabled: true}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("chat-only", "chat", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
-	_, err := snap.Resolve("coding", "", Sticky{})
-	if err == nil || !strings.Contains(err.Error(), "bedrock/titan-embed (lacks chat capability") {
+	_, err := snap.Resolve("embedding", "", Sticky{})
+	if err == nil || !strings.Contains(err.Error(), "bedrock/chat-only (lacks embeddings capability") {
 		t.Fatalf("err = %v, want model-naming capability reason", err)
 	}
 }
 
-// TestResolveVisionRejectsModelDeclaringOnlyChat confirms a model row
-// that lists capabilities WITHOUT "vision" is skipped when the caller
-// asks for CapVision as an extra requirement (D-045) — the model's own
-// declaration wins over the driver's Capabilities() honesty.
+// TestResolveVisionRejectsModelDeclaringOnlyChat confirms a catalog
+// model that does NOT declare SupportsVision is skipped when the
+// caller asks for CapVision as an extra requirement (D-045) — the
+// model's own declaration wins over the driver's Capabilities()
+// honesty.
 func TestResolveVisionRejectsModelDeclaringOnlyChat(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
 		DefaultModel: "haiku", CredentialRef: "A_KEY", Enabled: true,
-		Models: []ModelInfo{
-			{ID: "haiku", Capabilities: []string{"chat", "streaming", "tools"}}, // no vision
-			{ID: "sonnet"}, // undeclared: driver decides
-		},
 	}}
 	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "haiku"},
 		{ProviderID: "p1", Model: "sonnet"},
 	}, Enabled: true}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	cat := &fakeCatalog{pool: []catalog.Model{
+		catModel("haiku", "chat", nil), // no vision declared
+		// "sonnet" absent from catalog: driver decides.
+	}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	// haiku's explicit capability list omits vision: skipped. sonnet is
-	// undeclared, so the anthropic driver's own CapVision decides: kept.
+	// haiku's catalog entry omits vision: skipped. sonnet is absent from
+	// the catalog, so the anthropic driver's own CapVision decides: kept.
 	if got := attemptNames(attempts); got != "anthropic/sonnet" {
 		t.Fatalf("attempts = %s, want anthropic/sonnet only", got)
 	}
 }
 
 // TestResolveVisionFallsToDriverWhenModelUndeclared confirms a model
-// with NO capability list at all is judged by the driver alone, same
+// with NO catalog entry at all is judged by the driver alone, same
 // rule attemptCapable already applies to every other capability.
 func TestResolveVisionFallsToDriverWhenModelUndeclared(t *testing.T) {
 	t.Parallel()
-	snap := testSnapshot(t, allKeys()) // "sonnet" and "grok-4" both undeclared
+	snap := testSnapshot(t, allKeys()) // "sonnet" and "grok-4" both absent from the fake catalog
 
 	attempts, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	// Both the anthropic and openaicompat drivers declare CapVision;
-	// neither model row restricts it, so both survive same as Resolve
-	// without the extra requirement.
+	// neither model has a catalog entry restricting it, so both survive
+	// same as Resolve without the extra requirement.
 	if got := attemptNames(attempts); got != "anthropic/sonnet,grok/grok-4" {
 		t.Fatalf("attempts = %s", got)
 	}
@@ -308,12 +333,12 @@ func TestResolveVisionExhaustionMentionsVision(t *testing.T) {
 	provRows := []ProviderRow{{
 		ID: "p1", Name: "local", Kind: "api", Driver: "anthropic",
 		DefaultModel: "haiku", CredentialRef: "A_KEY", Enabled: true,
-		Models: []ModelInfo{{ID: "haiku", Capabilities: []string{"chat", "streaming"}}}, // no vision
 	}}
 	routeRows := []RouteRow{{Name: "coding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "haiku"},
 	}, Enabled: true}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("haiku", "chat", nil)}} // no vision
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	_, err := snap.Resolve("coding", "", Sticky{}, provider.CapVision)
 	if err == nil || !strings.Contains(err.Error(), "lacks vision capability") {
@@ -407,17 +432,15 @@ func TestBuildSnapshotOneInvalidProviderAmongTwo(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "bad", Kind: "api", Driver: "openaicompat", // no BaseURL: Build errors
-			DefaultModel: "m", CredentialRef: "K", Enabled: true,
-			Models: []ModelInfo{{ID: "m"}}},
+			DefaultModel: "m", CredentialRef: "K", Enabled: true},
 		{ID: "p2", Name: "good", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://good.example/v1", DefaultModel: "m", CredentialRef: "K", Enabled: true,
-			Models: []ModelInfo{{ID: "m"}}},
+			BaseURL: "https://good.example/v1", DefaultModel: "m", CredentialRef: "K", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "m"},
 		{ProviderID: "p2", Model: "m"},
 	}}}
-	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 	if len(warnings) != 1 || warnings[0].Provider != "bad" || !strings.Contains(warnings[0].Err.Error(), "requires base_url") {
 		t.Fatalf("warnings = %+v, want one warning naming bad's base_url requirement", warnings)
 	}
@@ -446,15 +469,15 @@ func TestBuildSnapshotAllProvidersInvalidStillBuilds(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "bad1", Kind: "api", Driver: "openaicompat", // no BaseURL
-			DefaultModel: "m", CredentialRef: "K", Enabled: true, Models: []ModelInfo{{ID: "m"}}},
+			DefaultModel: "m", CredentialRef: "K", Enabled: true},
 		{ID: "p2", Name: "bad2", Kind: "api", Driver: "openaicompat", // no BaseURL
-			DefaultModel: "m", CredentialRef: "K", Enabled: true, Models: []ModelInfo{{ID: "m"}}},
+			DefaultModel: "m", CredentialRef: "K", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "m"},
 		{ProviderID: "p2", Model: "m"},
 	}}}
-	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 	if len(warnings) != 2 {
 		t.Fatalf("warnings = %+v, want two", warnings)
 	}
@@ -478,12 +501,12 @@ func TestBedrockUnresolvedCredentialRefDegradesNotFails(t *testing.T) {
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
 		DefaultModel:  "us.amazon.nova-pro-v1:0",
 		CredentialRef: "missing-secret", Enabled: true,
-		Models: []ModelInfo{{ID: "titan-embed", Capabilities: []string{"embeddings"}}},
 	}}
 	routeRows := []RouteRow{{Name: "embedding", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "titan-embed"},
 	}, Enabled: true}}
-	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "" })
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("titan-embed", "embedding", nil)}}
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "" }, cat)
 	if len(warnings) != 1 || warnings[0].Provider != "bedrock" ||
 		!strings.Contains(warnings[0].Err.Error(), "bedrock requires static keys in the secret store") {
 		t.Fatalf("warnings = %+v, want one bedrock static-keys-required warning", warnings)
@@ -505,7 +528,6 @@ func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
 		DefaultModel:  "us.amazon.nova-pro-v1:0",
 		CredentialRef: "bedrock-static", Enabled: true,
-		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
 	}}
 	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
@@ -515,7 +537,7 @@ func TestBedrockResolvingCredentialRefPassesStaticCredentialsThrough(t *testing.
 			return secretJSON
 		}
 		return ""
-	})
+	}, nil)
 
 	attempts, err := snap.Resolve("chat", "", Sticky{})
 	if err != nil {
@@ -545,7 +567,6 @@ func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
 		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
 		DefaultModel:  "us.amazon.nova-pro-v1:0",
 		CredentialRef: "bedrock-static", Enabled: true, Region: "ap-southeast-2",
-		Models: []ModelInfo{{ID: "us.amazon.nova-pro-v1:0"}},
 	}}
 	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
@@ -555,7 +576,7 @@ func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
 			return secretJSON
 		}
 		return ""
-	})
+	}, nil)
 
 	attempts, err := snap.Resolve("chat", "", Sticky{})
 	if err != nil {
@@ -571,17 +592,20 @@ func TestBedrockOptionsRegionThreadsToProvider(t *testing.T) {
 func TestScoredStrategyReordersChain(t *testing.T) {
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "pricey", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true,
-			Models: []ModelInfo{{ID: "big", Prices: &ModelPrices{OutputPerMTok: 25}}}},
+			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true},
 		{ID: "p2", Name: "cheap", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true,
-			Models: []ModelInfo{{ID: "small", Prices: &ModelPrices{OutputPerMTok: 1}}}},
+			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "big"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	big := catModel("big", "chat", nil)
+	big.OutputPerMTok = fp(25)
+	small := catModel("small", "chat", nil)
+	small.OutputPerMTok = fp(1)
+	cat := &fakeCatalog{pool: []catalog.Model{big, small}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	attempts, err := snap.Resolve("r", "", Sticky{})
 	if err != nil {
@@ -673,17 +697,20 @@ func TestResolveDetailOrdered(t *testing.T) {
 func TestResolveDetailScoredMatchesResolve(t *testing.T) {
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "pricey", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true,
-			Models: []ModelInfo{{ID: "big", Prices: &ModelPrices{OutputPerMTok: 25}}}},
+			BaseURL: "https://a.example/v1", DefaultModel: "big", CredentialRef: "K1", Enabled: true},
 		{ID: "p2", Name: "cheap", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true,
-			Models: []ModelInfo{{ID: "small", Prices: &ModelPrices{OutputPerMTok: 1}}}},
+			BaseURL: "https://b.example/v1", DefaultModel: "small", CredentialRef: "K2", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "big"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	big := catModel("big", "chat", nil)
+	big.OutputPerMTok = fp(25)
+	small := catModel("small", "chat", nil)
+	small.OutputPerMTok = fp(1)
+	cat := &fakeCatalog{pool: []catalog.Model{big, small}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	detail := snap.ResolveDetail("r")
 	attempts, err := snap.Resolve("r", "", Sticky{})
@@ -719,17 +746,15 @@ func TestResolveDetailScoredMatchesResolve(t *testing.T) {
 func TestResolveDetailNeutralAndFloor(t *testing.T) {
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "quiet", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://a.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true,
-			Models: []ModelInfo{{ID: "m1"}}},
+			BaseURL: "https://a.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true},
 		{ID: "p2", Name: "flaky", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://b.example/v1", DefaultModel: "m2", CredentialRef: "K", Enabled: true,
-			Models: []ModelInfo{{ID: "m2"}}},
+			BaseURL: "https://b.example/v1", DefaultModel: "m2", CredentialRef: "K", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Strategy: "auto", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "m1"},
 		{ProviderID: "p2", Model: "m2"},
 	}}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 	snap.SetStats(map[string]ModelStats{
 		"flaky/m2": {Uptime: 0.01, LatencyMS: 100, TokensPerS: 10},
 	})
@@ -790,13 +815,15 @@ func TestResolveDetailUsability(t *testing.T) {
 func TestResolveDetailSingleEntryScored(t *testing.T) {
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "solo", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://a.example/v1", DefaultModel: "m", CredentialRef: "K", Enabled: true,
-			Models: []ModelInfo{{ID: "m", Prices: &ModelPrices{OutputPerMTok: 2}}}},
+			BaseURL: "https://a.example/v1", DefaultModel: "m", CredentialRef: "K", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: "m"},
 	}}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	m := catModel("m", "chat", nil)
+	m.OutputPerMTok = fp(2)
+	cat := &fakeCatalog{pool: []catalog.Model{m}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	d := snap.ResolveDetail("r")
 	if len(d) != 1 || !d[0].Scored {
@@ -817,13 +844,15 @@ func TestResolveDetailEmptyModelUsesDefaultModelForPricesAndStats(t *testing.T) 
 	t.Parallel()
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "defaulted", Kind: "api", Driver: "openaicompat",
-			BaseURL: "https://a.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true,
-			Models: []ModelInfo{{ID: "m1", Prices: &ModelPrices{OutputPerMTok: 5}}}},
+			BaseURL: "https://a.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "r", Strategy: "price", Enabled: true, Chain: []ChainEntry{
 		{ProviderID: "p1", Model: ""},
 	}}}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	m1 := catModel("m1", "chat", nil)
+	m1.OutputPerMTok = fp(5)
+	cat := &fakeCatalog{pool: []catalog.Model{m1}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 	snap.SetStats(map[string]ModelStats{
 		"defaulted/m1": {Uptime: 0.9, LatencyMS: 500, TokensPerS: 20},
 	})
@@ -884,7 +913,7 @@ func harnessSnapshot(t *testing.T) *Snapshot {
 			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 	return snap
 }
 
@@ -959,7 +988,7 @@ func TestKindCliHealthyMeansCredentialResolves(t *testing.T) {
 		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
 			CredentialRef: "subscription", Enabled: true},
 	}
-	unresolved, _ := BuildSnapshot(provRows, nil, func(string) string { return "" })
+	unresolved, _ := BuildSnapshot(provRows, nil, func(string) string { return "" }, nil)
 	_, healthy = unresolved.Providers()
 	if healthy["claude-sub"] {
 		t.Fatal("kind='cli' row with an unresolved credential_ref reported healthy")
@@ -977,7 +1006,7 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 			{ProviderID: "p2", Model: "claude-sonnet-4"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
 	if !ok || len(entries) != 1 {
@@ -1012,7 +1041,7 @@ func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 			{ProviderID: "p2", Model: "m"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
 	if !ok || len(entries) != 1 {
@@ -1038,7 +1067,7 @@ func TestResolveRouteCLIKindInherentlyWireCompatible(t *testing.T) {
 			{ProviderID: "p2", Model: "m"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
 	if !ok || len(entries) != 1 {
@@ -1069,7 +1098,7 @@ func TestResolveRouteCLIKindServesOnlyItsOwnHarness(t *testing.T) {
 			{ProviderID: "p2", Model: "m"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	entries, ok := snap.ResolveRoute("coding-exec", "pi")
 	if !ok || len(entries) != 1 {
@@ -1121,7 +1150,7 @@ func TestResolveRoutePiWireVariants(t *testing.T) {
 			{ProviderID: "p3", Model: "glm-4.7"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	// pi axis: anthropic usable+anthropic wire, openaicompat usable+
 	// openai wire (pi's whole point), and the override row usable with
@@ -1195,12 +1224,7 @@ func TestResolveRouteCarriesPrices(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "glm", Kind: "api", Driver: "openaicompat",
-			CredentialRef: "G_KEY", Enabled: true, AnthropicBaseURL: "http://glm.example",
-			Models: []ModelInfo{
-				{ID: "glm-4.7", Prices: &ModelPrices{InputPerMTok: 1, OutputPerMTok: 2}},
-				{ID: "glm-unpriced"},
-			},
-		},
+			CredentialRef: "G_KEY", Enabled: true, AnthropicBaseURL: "http://glm.example"},
 	}
 	routeRows := []RouteRow{
 		{Name: "coding", Enabled: true, Chain: []ChainEntry{
@@ -1208,7 +1232,10 @@ func TestResolveRouteCarriesPrices(t *testing.T) {
 			{ProviderID: "p1", Model: "glm-unpriced"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	glm47 := catModel("glm-4.7", "chat", fp(1))
+	glm47.OutputPerMTok = fp(2)
+	cat := &fakeCatalog{pool: []catalog.Model{glm47, catModel("glm-unpriced", "chat", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
 	entries, ok := snap.ResolveRoute("coding", "claude-cli")
 	if !ok || len(entries) != 2 {
@@ -1280,7 +1307,7 @@ func TestResolveRouteOpenAIResponsesGate(t *testing.T) {
 			{ProviderID: "p1", Model: "glm-4.7"},
 		}},
 	}
-	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" })
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
 	entries, ok := snap.ResolveRoute("coding-exec", "codex-cli")
 	if !ok || len(entries) != 1 {

@@ -3,6 +3,8 @@ package router
 import (
 	"math"
 	"sort"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 )
 
 // SystemRoles are the roles Timothy requires to work at all — chat
@@ -31,14 +33,18 @@ var SystemRoles = []struct{ Role, Capability string }{
 // Rule (D-033 follow-up): an empty chain is seeded with the provider's
 // cheapest capable model; a non-empty chain gets that model appended
 // as the LAST entry — existing priority order is never reordered or
-// removed, so hand-tuned chains only ever gain a fallback.
-func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry) map[string][]ChainEntry {
+// removed, so hand-tuned chains only ever gain a fallback. candidates
+// is the caller's catalog search restricted to p's candidate
+// litellm_provider(s) (catalog.CandidateProvidersForRow) — kept as a
+// plain slice rather than a *catalog.Store dependency so this stays
+// pure and unit-testable with plain fixtures.
+func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry, candidates []catalog.Model) map[string][]ChainEntry {
 	if p.ExcludeFromBootstrap {
 		return nil
 	}
 	out := map[string][]ChainEntry{}
 	for _, sr := range SystemRoles {
-		model, ok := cheapestCapable(p.Models, sr.Capability)
+		model, ok := CheapestCapable(candidates, sr.Capability)
 		if !ok {
 			continue
 		}
@@ -54,25 +60,24 @@ func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry) map[string]
 	return out
 }
 
-// cheapestCapable returns the id of the cheapest model declaring cap,
-// by input price per million tokens. Models without a declared price
-// sort last (unknown cost is never assumed cheapest). Ties break on
-// model id for a deterministic result.
-func cheapestCapable(models []ModelInfo, cap string) (string, bool) {
-	var candidates []ModelInfo
+// CheapestCapable returns the id of the cheapest catalog model
+// declaring cap ("chat", "embeddings", or "vision"), by input price
+// per million tokens. Models without a declared price sort last
+// (unknown cost is never assumed cheapest). Ties break on model id
+// for a deterministic result. Shared by BootstrapChain and admin's
+// default_model auto-seed at provider creation.
+func CheapestCapable(models []catalog.Model, cap string) (string, bool) {
+	var candidates []catalog.Model
 	for _, m := range models {
-		for _, c := range m.Capabilities {
-			if c == cap {
-				candidates = append(candidates, m)
-				break
-			}
+		if modelHasCapability(m, cap) {
+			candidates = append(candidates, m)
 		}
 	}
 	if len(candidates) == 0 {
 		return "", false
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		pi, pj := price(candidates[i]), price(candidates[j])
+		pi, pj := catalogPrice(candidates[i]), catalogPrice(candidates[j])
 		if pi != pj {
 			return pi < pj
 		}
@@ -81,13 +86,28 @@ func cheapestCapable(models []ModelInfo, cap string) (string, bool) {
 	return candidates[0].ID, true
 }
 
-// price returns a model's input cost, or +Inf when undeclared so it
-// never outranks a model with a known price.
-func price(m ModelInfo) float64 {
-	if m.Prices == nil {
+// modelHasCapability derives a catalog model's capability from its
+// Mode ("embedding" -> embeddings) and SupportsVision field (vision);
+// any other mode (typically "chat") counts as chat-capable, and also
+// as vision-capable when SupportsVision is true.
+func modelHasCapability(m catalog.Model, cap string) bool {
+	switch cap {
+	case "embeddings":
+		return m.Mode == "embedding"
+	case "vision":
+		return m.SupportsVision != nil && *m.SupportsVision
+	default: // "chat"
+		return m.Mode != "embedding"
+	}
+}
+
+// catalogPrice returns a catalog model's input cost, or +Inf when
+// undeclared so it never outranks a model with a known price.
+func catalogPrice(m catalog.Model) float64 {
+	if m.InputPerMTok == nil {
 		return math.Inf(1)
 	}
-	return m.Prices.InputPerMTok
+	return *m.InputPerMTok
 }
 
 // alreadyChained reports whether the chain already carries this

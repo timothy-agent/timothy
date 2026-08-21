@@ -45,7 +45,6 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("GET /internal/admin/catalog/status", http.HandlerFunc(h.catalogStatus))
 	srv.Handle("GET /internal/admin/catalog/models", http.HandlerFunc(h.catalogModels))
 	srv.Handle("POST /internal/admin/catalog/prices", http.HandlerFunc(h.catalogPrices))
-	srv.Handle("GET /internal/admin/providers/{id}/catalog-suggestions", http.HandlerFunc(h.catalogSuggestions))
 	srv.Handle("GET /internal/admin/providers/{id}/catalog-models", http.HandlerFunc(h.catalogModelsForProvider))
 }
 
@@ -436,15 +435,6 @@ func (h *adminAPI) catalogModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"models": models})
-}
-
-func (h *adminAPI) catalogSuggestions(w http.ResponseWriter, r *http.Request) {
-	suggestions, err := h.adm.CatalogSuggestions(r.Context(), r.PathValue("id"))
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, map[string]any{"suggestions": suggestions})
 }
 
 func (h *adminAPI) catalogModelsForProvider(w http.ResponseWriter, r *http.Request) {

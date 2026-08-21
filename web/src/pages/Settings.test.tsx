@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChatError } from '../api/client'
 import type { AdminProvider } from '../api/types'
 import { Settings } from './Settings'
 
@@ -51,7 +50,6 @@ import {
   listProviders,
   listRoutes,
   listSecretBackends,
-  patchProvider,
   patchSettingValues,
   providersHealth,
   searchCatalog,
@@ -69,7 +67,6 @@ const openaiProvider: AdminProvider = {
   driver: 'openaicompat',
   base_url: 'https://api.openai.com/v1',
   default_model: 'gpt-4o',
-  models: [{ id: 'gpt-4o' }, { id: 'gpt-4o-mini', context_window: 128000 }],
   credential_ref: 'OPENAI_API_KEY',
   headers: {},
   enabled: true,
@@ -267,7 +264,6 @@ describe('Providers tab', () => {
       expect.objectContaining({
         enabled: true,
         default_model: 'glm-4.7-flash',
-        models: [{ id: 'glm-4.7-flash', prices: { input_per_mtok: 0, output_per_mtok: 0 } }],
       }),
     )
   })
@@ -340,64 +336,5 @@ describe('Provider manage page', () => {
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
     expect(await screen.findByRole('heading', { name: 'OpenAI' })).toBeTruthy()
-  })
-
-  it('adds a model by id and patches the row', async () => {
-    vi.mocked(availableModels).mockResolvedValue([{ id: 'gpt-4o' }, { id: 'o3-mini' }])
-    vi.mocked(patchProvider).mockResolvedValue()
-
-    renderPage('/settings/providers/p1')
-    fireEvent.change(await screen.findByPlaceholderText('model id'), { target: { value: 'o3-mini' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p1', {
-        models: [{ id: 'gpt-4o' }, { id: 'gpt-4o-mini', context_window: 128000 }, { id: 'o3-mini' }],
-        default_model: 'gpt-4o',
-      }),
-    )
-  })
-
-  it('offers ids from the provider listing as suggestions, minus already-declared ones', async () => {
-    vi.mocked(availableModels).mockResolvedValue([{ id: 'gpt-4o' }, { id: 'o3-mini' }])
-
-    renderPage('/settings/providers/p1')
-    fireEvent.focus(await screen.findByPlaceholderText('model id'))
-    expect(await screen.findByRole('option', { name: /o3-mini/ })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: /^gpt-4o$/ })).toBeNull()
-  })
-
-  it('still allows manual entry when the driver cannot list models', async () => {
-    vi.mocked(availableModels).mockRejectedValue(
-      new ChatError(422, 'driver bedrock cannot list models', 'unsupported'),
-    )
-    vi.mocked(patchProvider).mockResolvedValue()
-
-    renderPage('/settings/providers/p1')
-    fireEvent.change(await screen.findByPlaceholderText('model id'), { target: { value: 'my-model' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith(
-        'p1',
-        expect.objectContaining({
-          models: expect.arrayContaining([{ id: 'my-model' }]),
-        }),
-      ),
-    )
-  })
-
-  it('removes a model and moves the default to the first survivor', async () => {
-    vi.mocked(patchProvider).mockResolvedValue()
-
-    renderPage('/settings/providers/p1')
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove gpt-4o' }))
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p1', {
-        models: [{ id: 'gpt-4o-mini', context_window: 128000 }],
-        default_model: 'gpt-4o-mini',
-      }),
-    )
   })
 })

@@ -16,12 +16,12 @@ import { catalogModelsForProvider, listProviders, listRoutes, patchRoute } from 
 const providers: AdminProvider[] = [
   {
     id: 'p1', name: 'anthropic', kind: 'api', driver: 'anthropic', base_url: '',
-    default_model: 'sonnet', models: [{ id: 'sonnet' }], credential_ref: 'A_KEY',
+    default_model: 'sonnet', credential_ref: 'A_KEY',
     headers: {}, enabled: true,
   },
   {
     id: 'p2', name: 'grok', kind: 'api', driver: 'openaicompat', base_url: 'https://x.example/v1',
-    default_model: 'grok-4', models: [{ id: 'grok-4' }], credential_ref: 'X_KEY',
+    default_model: 'grok-4', credential_ref: 'X_KEY',
     headers: {}, enabled: true,
   },
 ]
@@ -207,7 +207,7 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
     expect(screen.getByRole('option', { name: /grok/ })).toBeInTheDocument()
   })
 
-  it('lists declared models first, then catalog models with prices', async () => {
+  it('lists catalog models with prices', async () => {
     vi.mocked(catalogModelsForProvider).mockResolvedValue([
       { id: 'sonnet', model_key: 'sonnet', litellm_provider: 'anthropic', mode: 'chat' },
       {
