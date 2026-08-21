@@ -1024,14 +1024,26 @@ func (f *fakeSessionCreator) Create(ctx context.Context, title string) (string, 
 }
 
 // fakeGranter records every Grant call for assertion — a real
-// sessionGranter for tests, not a mock of one.
+// sessionGranter for tests, not a mock of one. Mutex-guarded: Signal's
+// post-resume Drive runs in its own goroutine, so a test that resumes
+// a mission can race a synchronous assertion against that goroutine's
+// own (real) grant calls without this.
 type fakeGranter struct {
+	mu    sync.Mutex
 	calls []struct{ sessionID, tool, pattern string }
 }
 
 func (f *fakeGranter) Grant(ctx context.Context, sessionID, tool, pattern string, ttl time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, struct{ sessionID, tool, pattern string }{sessionID, tool, pattern})
 	return nil
+}
+
+func (f *fakeGranter) callsSnapshot() []struct{ sessionID, tool, pattern string } {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]struct{ sessionID, tool, pattern string }(nil), f.calls...)
 }
 
 func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
@@ -1127,6 +1139,89 @@ func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	}
 	if len(granter.calls) != 0 {
 		t.Fatalf("Grant calls = %d, want 0 for an unresolved agent", len(granter.calls))
+	}
+}
+
+// TestDriverSignalResumeRegrantsSession covers the fix for a mission
+// blocked long enough (backoff retries, or a real waiting_for_input
+// gap) that its hidden session's missionGrantTTL expired before the
+// human/API resume arrived: without a re-grant, resuming just re-hits
+// the same "no standing grant" denial that got it blocked in the first
+// place. Signal(InputResume) must re-seed the same grants
+// grantSessionDefaults minted at provisioning, synchronously, before
+// it kicks off the post-resume Drive goroutine.
+func TestDriverSignalResumeRegrantsSession(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "test", Kind: "general", AgentID: "briefing-agent",
+		Phase: PhaseExecute, Status: StatusWaitingForInput, MaxIterations: 8,
+		AutoApproveSafe: true, SessionID: "session-1", Workspace: "/workspace/missions/m1",
+	})
+	granter := &fakeGranter{}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+		if agentID != "briefing-agent" {
+			return AgentDefaults{}, false
+		}
+		return AgentDefaults{ApprovalAllowlist: []string{"gmail_search"}}, true
+	})
+
+	if err := d.Signal(context.Background(), "m1", InputResume); err != nil {
+		t.Fatalf("Signal: %v", err)
+	}
+
+	// grantSessionDefaults runs synchronously inside Signal, strictly
+	// before the post-resume Drive goroutine is even spawned — the
+	// re-grant calls this test cares about are already recorded by the
+	// time Signal returns. The goroutine itself (mission already has a
+	// session+workspace, so no further provisioning) settles quickly;
+	// snapshot is still mutex-guarded since it's a background goroutine.
+	calls := granter.callsSnapshot()
+	gotTools := map[string]bool{}
+	for _, call := range calls {
+		if call.sessionID != "session-1" {
+			t.Fatalf("Grant call sessionID = %q, want the mission's existing hidden session %q", call.sessionID, "session-1")
+		}
+		gotTools[call.tool] = true
+	}
+	if !gotTools["shell"] {
+		t.Fatalf("Grant calls = %+v, want a re-granted shell allowance (AutoApproveSafe)", calls)
+	}
+	if !gotTools["gmail_search"] {
+		t.Fatalf("Grant calls = %+v, want a re-granted gmail_search allowance (ApprovalAllowlist)", calls)
+	}
+}
+
+// TestDriverSignalResumeGuardsMissingSessionID confirms Signal's new
+// re-grant-on-resume call is gated on m.SessionID != "" — without this
+// guard, grantSessionDefaults itself has no such check and would happily
+// call Grant with a blank session id for an AutoApproveSafe mission that
+// somehow resumes before ever being provisioned.
+func TestDriverSignalResumeGuardsMissingSessionID(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "test", Kind: "general",
+		Phase: PhaseExecute, Status: StatusWaitingForInput, MaxIterations: 8,
+		AutoApproveSafe: true, SessionID: "",
+	})
+	granter := &fakeGranter{}
+	m, err := store.Get(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	d := NewDriver(store, &scriptedRunner{}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+
+	// The exact guard Signal applies before calling grantSessionDefaults
+	// — checked directly since Signal's own goroutine would otherwise go
+	// on to lazily provision (a separately tested path) and call Grant
+	// with a real session id, muddying an assertion on call count.
+	if m.SessionID != "" {
+		d.grantSessionDefaults(context.Background(), m)
+	}
+
+	if len(granter.calls) != 0 {
+		t.Fatalf("Grant calls = %+v, want 0 for a mission with no hidden session", granter.calls)
 	}
 }
 

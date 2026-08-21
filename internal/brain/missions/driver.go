@@ -839,6 +839,16 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		}
 	}
 	if input == InputResume {
+		// A mission blocked long enough (backoff retries, or genuinely
+		// waiting_for_input) can outlive its hidden session's
+		// missionGrantTTL — resuming with an expired grant just re-hits
+		// the same "no standing grant" denial that got it blocked in the
+		// first place (D-039 degrade with no way back). Re-seeding here,
+		// on the human/API resume signal, is the self-heal: same
+		// best-effort grants grantSessionDefaults minted at provisioning.
+		if m.SessionID != "" {
+			d.grantSessionDefaults(ctx, m)
+		}
 		go func() { //nolint:gosec // G118: deliberate — the mission must outlive the HTTP request that resumed it, driveTimeBound is Drive's own cap
 			if err := d.Drive(context.Background(), id); err != nil {
 				d.log.Error("driver: post-resume drive failed", "mission_id", id, "error", err)
