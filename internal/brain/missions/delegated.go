@@ -377,7 +377,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return WorkerVerdict{}, "", err
 	}
 	rdir := runDir(m.Workspace, runID)
-	system, user := packet.Render()
+	system, user := packet.RenderForDelegated()
 	system += delegatedSystemAppend
 
 	spec := executor.InvocationSpec{

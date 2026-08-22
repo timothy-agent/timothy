@@ -37,6 +37,30 @@ func TestWorkPacketRender(t *testing.T) {
 	}
 }
 
+// TestWorkPacketRenderForDelegatedOmitsNativePreamble guards the fix
+// for a real observed failure: a delegated executor (codex-cli) was
+// sent both Render's mission_status/write_file preamble AND
+// delegated.go's own correction appended after it, and reported itself
+// BLOCKED over tools it was never offered. RenderForDelegated must
+// never mention either tool name, while still including the same
+// goal/plan body Render produces.
+func TestWorkPacketRenderForDelegatedOmitsNativePreamble(t *testing.T) {
+	p := WorkPacket{
+		Goal: "Merge dependabot PRs",
+		Spec: Spec{Units: []PlanUnit{{Title: "Assess PRs"}}},
+	}
+	system, user := p.RenderForDelegated()
+	if strings.Contains(system, "mission_status") || strings.Contains(system, "write_file") {
+		t.Fatalf("RenderForDelegated system prompt mentions native-only tools: %q", system)
+	}
+	if !strings.Contains(user, "Merge dependabot PRs") {
+		t.Fatal("RenderForDelegated did not include the goal")
+	}
+	if !strings.Contains(user, "Assess PRs") {
+		t.Fatal("RenderForDelegated did not include the plan")
+	}
+}
+
 func TestWorkPacketRenderNeutralizesInjectedContent(t *testing.T) {
 	p := WorkPacket{
 		Goal:     "Do the thing",
