@@ -59,6 +59,22 @@ export function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString()
 }
 
+// relativeTimeUntil renders a future ISO timestamp as "in 5m" / "in
+// 3h" / "in 2d" — relativeTime's ms is negative for a future
+// timestamp, so it always falls into its "just now" branch regardless
+// of how far out the time actually is.
+export function relativeTimeUntil(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now()
+  if (ms < 60_000) return 'due now'
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 60) return `in ${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `in ${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `in ${days}d`
+  return new Date(iso).toLocaleDateString()
+}
+
 // money renders an amount in its billing currency's own symbol rather
 // than assuming "$"/USD — the ledger itself never converts (D-013):
 // this always renders the amount exactly as recorded. Precision keeps

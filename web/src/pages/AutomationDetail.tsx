@@ -6,7 +6,7 @@ import { MissionCard } from '../components/missions/MissionCard'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { describeCron } from '../lib/schedules'
-import { relativeTime } from '../lib/format'
+import { relativeTime, relativeTimeUntil } from '../lib/format'
 
 // AutomationDetail shows one schedule's summary plus the missions it
 // has fired — no GET-by-id for schedules, same as EditSchedule, so the
@@ -73,7 +73,7 @@ export function AutomationDetail() {
           <p className="line-clamp-1 text-sm text-muted-foreground">{schedule.mission_template.goal}</p>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
             <span>{describeCron(schedule.cron)}</span>
-            {schedule.next_run && <span>next {relativeTime(schedule.next_run)}</span>}
+            {schedule.next_run && <span>next {relativeTimeUntil(schedule.next_run)}</span>}
             {schedule.last_run && <span>last {relativeTime(schedule.last_run)}</span>}
             <span>{schedule.enabled ? 'enabled' : 'disabled'}</span>
           </div>

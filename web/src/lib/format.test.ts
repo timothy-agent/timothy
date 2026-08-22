@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { compact, formatDuration, humanBytes, missionDisplayName, money, relativeTime } from './format'
+import {
+  compact,
+  formatDuration,
+  humanBytes,
+  missionDisplayName,
+  money,
+  relativeTime,
+  relativeTimeUntil,
+} from './format'
 
 describe('compact', () => {
   it('leaves small numbers as-is', () => {
@@ -114,5 +122,31 @@ describe('relativeTime', () => {
   it('falls back to a locale date past a week', () => {
     const old = new Date(Date.now() - 10 * 86_400_000)
     expect(relativeTime(old.toISOString())).toBe(old.toLocaleDateString())
+  })
+})
+
+describe('relativeTimeUntil', () => {
+  it('renders under a minute as "due now"', () => {
+    expect(relativeTimeUntil(new Date(Date.now() + 10_000).toISOString())).toBe('due now')
+  })
+
+  it('renders minutes and hours from now', () => {
+    expect(relativeTimeUntil(new Date(Date.now() + 5 * 60_000).toISOString())).toBe('in 5m')
+    expect(relativeTimeUntil(new Date(Date.now() + 3 * 3_600_000).toISOString())).toBe('in 3h')
+  })
+
+  it('renders days from now within a week', () => {
+    expect(relativeTimeUntil(new Date(Date.now() + 2 * 86_400_000).toISOString())).toBe('in 2d')
+  })
+
+  it('falls back to a locale date past a week', () => {
+    const future = new Date(Date.now() + 10 * 86_400_000)
+    expect(relativeTimeUntil(future.toISOString())).toBe(future.toLocaleDateString())
+  })
+
+  it('never returns "just now" for a future timestamp (the fixed bug)', () => {
+    const iso = new Date(Date.now() + 6 * 3_600_000).toISOString()
+    expect(relativeTimeUntil(iso)).not.toBe('just now')
+    expect(relativeTimeUntil(iso)).toMatch(/^in [56]h$/)
   })
 })

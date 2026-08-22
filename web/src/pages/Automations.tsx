@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { deleteSchedule, listDestinations, patchSchedule, listSchedules } from '../api/client'
 import type { Destination, Schedule } from '../api/types'
 import { describeCron } from '../lib/schedules'
-import { relativeTime } from '../lib/format'
+import { relativeTime, relativeTimeUntil } from '../lib/format'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import {
@@ -88,7 +88,7 @@ export function Automations() {
               </p>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                 <span>{describeCron(sc.cron)}</span>
-                {sc.next_run && <span>next {relativeTime(sc.next_run)}</span>}
+                {sc.next_run && <span>next {relativeTimeUntil(sc.next_run)}</span>}
                 {sc.last_run && <span>last {relativeTime(sc.last_run)}</span>}
               </div>
               {sc.mission_template.destination_ids && sc.mission_template.destination_ids.length > 0 && (
