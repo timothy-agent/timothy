@@ -73,6 +73,25 @@ type ProviderRow struct {
 	// row's models match against (catalog.CandidateProvidersForRow),
 	// beating the driver/host heuristic when set.
 	LitellmProvider string
+	// ReasoningEffortByModel comes from options.reasoning_effort_by_model
+	// — per-model overrides that win over ReasoningEffort (which applies
+	// to every model this row serves). Some models reject tool calls on
+	// /chat/completions unless reasoning_effort is an exact value (e.g.
+	// OpenAI's gpt-5.6-luna requires "none"), while sibling models on the
+	// same provider row have no such restriction — a single scalar
+	// override can't express that.
+	ReasoningEffortByModel map[string]string
+}
+
+// reasoningEffortFor resolves model's effective reasoning_effort
+// override: ReasoningEffortByModel[model] wins when present, falling
+// back to the row-wide ReasoningEffort (empty means no override
+// either way).
+func (r ProviderRow) reasoningEffortFor(model string) string {
+	if v, ok := r.ReasoningEffortByModel[model]; ok {
+		return v
+	}
+	return r.ReasoningEffort
 }
 
 // ChainEntry is one step of a route chain. Harness selection moved to
@@ -177,6 +196,13 @@ type Attempt struct {
 	Provider     provider.Provider
 	ProviderName string
 	Model        string
+	// ReasoningEffort is this model's resolved reasoning_effort override
+	// (ProviderRow.ReasoningEffortByModel[Model], falling back to
+	// ProviderRow.ReasoningEffort) — carried alongside Provider/Model so
+	// api.go's completion build can set
+	// provider.CompletionRequest.ReasoningEffortOverride without
+	// re-deriving it from the row.
+	ReasoningEffort string
 }
 
 // NoRouteError reports that resolution produced zero usable attempts.
@@ -359,7 +385,7 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 		key := row.Name + "/" + model
 		if !seen[key] {
 			seen[key] = true
-			attempts = append(attempts, Attempt{Provider: p, ProviderName: row.Name, Model: model})
+			attempts = append(attempts, Attempt{Provider: p, ProviderName: row.Name, Model: model, ReasoningEffort: row.reasoningEffortFor(model)})
 		}
 	}
 

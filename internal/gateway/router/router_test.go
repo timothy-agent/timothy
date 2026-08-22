@@ -112,6 +112,49 @@ func TestResolveHintProviderNameFirst(t *testing.T) {
 	}
 }
 
+// TestReasoningEffortForModelOverrideBeatsRowWide guards the fix for a
+// real observed bug: gpt-5.6-luna rejects tool calls on
+// /chat/completions unless reasoning_effort is exactly "none", but a
+// row-wide ReasoningEffort would force that onto every other model the
+// same OpenAI provider row serves. ReasoningEffortByModel must win for
+// the listed model; every other model falls back to the row-wide value.
+func TestReasoningEffortForModelOverrideBeatsRowWide(t *testing.T) {
+	t.Parallel()
+	row := ProviderRow{
+		ReasoningEffort:        "low",
+		ReasoningEffortByModel: map[string]string{"gpt-5.6-luna": "none"},
+	}
+	if got := row.reasoningEffortFor("gpt-5.6-luna"); got != "none" {
+		t.Fatalf("reasoningEffortFor(gpt-5.6-luna) = %q, want the per-model override", got)
+	}
+	if got := row.reasoningEffortFor("gpt-5-mini"); got != "low" {
+		t.Fatalf("reasoningEffortFor(gpt-5-mini) = %q, want the row-wide fallback", got)
+	}
+}
+
+func TestResolveThreadsReasoningEffortIntoAttempt(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{
+			ID: "p1", Name: "oai", Kind: "api", Driver: "openaicompat",
+			BaseURL:      "https://api.openai.example/v1",
+			DefaultModel: "gpt-5.6-luna", CredentialRef: "O_KEY", Enabled: true,
+			ReasoningEffortByModel: map[string]string{"gpt-5.6-luna": "none"},
+		},
+	}
+	routeRows := []RouteRow{
+		{Name: "digests", Chain: []ChainEntry{{ProviderID: "p1", Model: "gpt-5.6-luna"}}, Enabled: true},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string { return "key" }, &fakeCatalog{})
+	attempts, err := snap.Resolve("digests", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(attempts) != 1 || attempts[0].ReasoningEffort != "none" {
+		t.Fatalf("attempts = %+v, want one attempt with ReasoningEffort=none", attempts)
+	}
+}
+
 func TestResolveHintExactModel(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())

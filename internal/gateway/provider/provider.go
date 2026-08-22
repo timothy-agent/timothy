@@ -107,6 +107,16 @@ type CompletionRequest struct {
 	// then surface — the chain is the retry, and re-hammering a
 	// rate-limited provider only delays failover.
 	FinalAttempt bool
+	// ReasoningEffortOverride forces a specific model's reasoning_effort
+	// value regardless of Effort or the provider's own config-level
+	// override — a per-CHAIN-ENTRY setting (router.ChainEntry), not
+	// per-provider: some models on an otherwise-fine provider reject
+	// tool calls on /chat/completions unless reasoning_effort is an
+	// exact value (e.g. OpenAI's gpt-5.6-luna requires "none" for
+	// tool-calling; other models on the same OpenAI provider row have
+	// no such restriction). Empty means no override; wins over both
+	// Effort and the provider's own ReasoningEffort config when set.
+	ReasoningEffortOverride string
 }
 
 // Provider is one configured LLM provider. Stream returns quickly; all

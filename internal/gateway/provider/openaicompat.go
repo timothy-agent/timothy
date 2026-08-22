@@ -388,6 +388,14 @@ func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 	if o.cfg.ReasoningEffort != "" {
 		out.ReasoningEffort = o.cfg.ReasoningEffort
 	}
+	// A chain-entry (per-model) override wins over both: some models on
+	// an otherwise-fine provider reject tool calls on /chat/completions
+	// unless reasoning_effort is an exact value, while other models on
+	// the same provider row have no such restriction — the provider-
+	// level dial above can't express that.
+	if req.ReasoningEffortOverride != "" {
+		out.ReasoningEffort = req.ReasoningEffortOverride
+	}
 	if req.System != "" {
 		out.Messages = append(out.Messages, oaiMessage{Role: "system", Content: req.System})
 	}

@@ -52,6 +52,20 @@ func TestApplyProviderOptionsReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestApplyProviderOptionsReasoningEffortByModel(t *testing.T) {
+	t.Parallel()
+	var row ProviderRow
+	if err := applyProviderOptions(&row, []byte(`{"reasoning_effort": "low", "reasoning_effort_by_model": {"gpt-5.6-luna": "none"}}`)); err != nil {
+		t.Fatalf("applyProviderOptions: %v", err)
+	}
+	if row.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want low", row.ReasoningEffort)
+	}
+	if row.ReasoningEffortByModel["gpt-5.6-luna"] != "none" {
+		t.Fatalf("ReasoningEffortByModel[gpt-5.6-luna] = %q, want none", row.ReasoningEffortByModel["gpt-5.6-luna"])
+	}
+}
+
 // TestApplyProviderOptionsOpenAIResponses covers the tri-state
 // openai_responses flag (D-051 follow-up): absent must leave
 // OpenAIResponses nil (unknown, never guessed), "true"/"false" set a

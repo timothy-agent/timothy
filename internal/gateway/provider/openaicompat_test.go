@@ -551,3 +551,46 @@ func TestOpenAICompatNoEffortNeverSendsReasoningEffort(t *testing.T) {
 		t.Fatalf("reasoning_effort = %q, want empty when Effort unset", gotEffort)
 	}
 }
+
+// TestOpenAICompatReasoningEffortOverrideBeatsProviderConfig guards the
+// per-chain-entry fix: some models on an otherwise-fine provider (e.g.
+// OpenAI's gpt-5.6-luna) reject tool calls on /chat/completions unless
+// reasoning_effort is an exact value, while sibling models on the same
+// provider row have no such restriction — router.Attempt.ReasoningEffort
+// (from options.reasoning_effort_by_model) must win over both the
+// per-request Effort hint and the provider-wide ReasoningEffort config.
+func TestOpenAICompatReasoningEffortOverrideBeatsProviderConfig(t *testing.T) {
+	t.Parallel()
+	var gotEffort string
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotEffort = readReasoningEffort(t, r)
+		oaiWrite(w, `{"choices":[{"delta":{"content":"ok"}}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+	p.cfg.ReasoningEffort = "medium"
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m", Effort: "low", ReasoningEffortOverride: "none"})
+	collect(t, ch)
+
+	if gotEffort != "none" {
+		t.Fatalf("reasoning_effort = %q, want the chain-entry override (\"none\") to beat both Effort and provider config", gotEffort)
+	}
+}
+
+func TestOpenAICompatReasoningEffortOverrideEmptyLeavesOtherDialsInPlace(t *testing.T) {
+	t.Parallel()
+	var gotEffort string
+	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotEffort = readReasoningEffort(t, r)
+		oaiWrite(w, `{"choices":[{"delta":{"content":"ok"}}]}`)
+		oaiWrite(w, "[DONE]")
+	})
+	p.cfg.ReasoningEffort = "medium"
+
+	ch, _ := p.Stream(t.Context(), CompletionRequest{Model: "m"})
+	collect(t, ch)
+
+	if gotEffort != "medium" {
+		t.Fatalf("reasoning_effort = %q, want the provider config to still apply when no override is set", gotEffort)
+	}
+}
