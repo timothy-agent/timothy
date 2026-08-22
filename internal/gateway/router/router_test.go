@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -398,6 +399,54 @@ func TestProvidersSortedByName(t *testing.T) {
 		if rows[i-1].Name > rows[i].Name {
 			t.Fatalf("providers not sorted: %s > %s", rows[i-1].Name, rows[i].Name)
 		}
+	}
+}
+
+// truncatingCatalog mimics catalog.Store's real search-limit behavior
+// (fakeCatalog ignores q/limit entirely) — q filters by substring on
+// ModelKey, and the result is capped at limit (defaulting like the
+// real store when limit<=0), so a large pool can silently drop a
+// target model past the cap when queried with q="".
+type truncatingCatalog struct {
+	pool  []catalog.Model
+	limit int
+}
+
+func (t *truncatingCatalog) SearchProviders(_ context.Context, q string, _ []string, limit int) ([]catalog.Model, error) {
+	if limit <= 0 {
+		limit = t.limit
+	}
+	var out []catalog.Model
+	for _, m := range t.pool {
+		if q == "" || strings.Contains(m.ModelKey, q) {
+			out = append(out, m)
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// TestPricesFindsModelPastDefaultSearchCap guards a real bug: Prices
+// called SearchProviders with q="" and limit=0, so a provider with more
+// catalog entries than the default cap silently lost models sorted
+// past it — cost_ledger.cost stayed nil for every affected call.
+func TestPricesFindsModelPastDefaultSearchCap(t *testing.T) {
+	t.Parallel()
+	pool := make([]catalog.Model, 0, 60)
+	for i := 0; i < 60; i++ {
+		pool = append(pool, catModel(fmt.Sprintf("aaa-filler-%02d", i), "chat", fp(1)))
+	}
+	pool = append(pool, catModel("zzz-target-model", "chat", fp(9)))
+
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "oai", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.example/v1", DefaultModel: "zzz-target-model", CredentialRef: "K", Enabled: true},
+	}
+	snap, _ := BuildSnapshot(provRows, nil, func(string) string { return "key" }, &truncatingCatalog{pool: pool, limit: 50})
+
+	if p := snap.Prices("oai", "zzz-target-model"); p == nil || p.InputPerMTok != 9 {
+		t.Fatalf("Prices(oai, zzz-target-model) = %+v, want InputPerMTok=9 (model past the 50-item cap must still resolve)", p)
 	}
 }
 

@@ -829,7 +829,9 @@ func (s *Snapshot) catalogModel(row ProviderRow, model string) (catalog.Model, b
 		opts = map[string]string{"litellm_provider": row.LitellmProvider}
 	}
 	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts)
-	pool, err := s.cat.SearchProviders(context.Background(), "", candidates, 0)
+	// model as the query, not "", to avoid the default result cap
+	// dropping real matches for large litellm_provider buckets.
+	pool, err := s.cat.SearchProviders(context.Background(), model, candidates, 0)
 	if err != nil {
 		return catalog.Model{}, false
 	}
