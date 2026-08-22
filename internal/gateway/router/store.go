@@ -180,21 +180,30 @@ func (s *Store) Load(ctx context.Context) error {
 // ("true"/"false"/absent); absent leaves row.OpenAIResponses nil
 // (unknown), anything else fails the load — Admin.Test/Patch are the
 // only writers and only ever write those two literals.
+// reasoning_effort_by_model's own VALUE is a JSON-encoded object string
+// (e.g. `"{\"gpt-5.6-luna\":\"none\"}"`), not a nested object — options
+// stays map[string]string end to end through the admin write path
+// (ProviderPatch), so a per-model override rides inside a flat string
+// value instead of widening that type.
 func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	var opts struct {
-		ReasoningEffort        string            `json:"reasoning_effort"`
-		ReasoningEffortByModel map[string]string `json:"reasoning_effort_by_model"`
-		RequestTimeout         string            `json:"request_timeout"`
-		Region                 string            `json:"region"`
-		AnthropicBaseURL       string            `json:"anthropic_base_url"`
-		OpenAIResponses        string            `json:"openai_responses"`
-		LitellmProvider        string            `json:"litellm_provider"`
+		ReasoningEffort        string `json:"reasoning_effort"`
+		ReasoningEffortByModel string `json:"reasoning_effort_by_model"`
+		RequestTimeout         string `json:"request_timeout"`
+		Region                 string `json:"region"`
+		AnthropicBaseURL       string `json:"anthropic_base_url"`
+		OpenAIResponses        string `json:"openai_responses"`
+		LitellmProvider        string `json:"litellm_provider"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
 	}
 	row.ReasoningEffort = opts.ReasoningEffort
-	row.ReasoningEffortByModel = opts.ReasoningEffortByModel
+	if opts.ReasoningEffortByModel != "" {
+		if err := json.Unmarshal([]byte(opts.ReasoningEffortByModel), &row.ReasoningEffortByModel); err != nil {
+			return fmt.Errorf("reasoning_effort_by_model: %w", err)
+		}
+	}
 	row.Region = opts.Region
 	row.AnthropicBaseURL = opts.AnthropicBaseURL
 	row.LitellmProvider = opts.LitellmProvider
