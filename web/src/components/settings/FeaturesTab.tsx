@@ -332,11 +332,12 @@ function GitCommitStyleCard({
 
 const SENSITIVE_ROUTE_OFF = '__off__'
 
-// SensitiveRouteCard picks the route sensitive-tool turns (e.g. reading
-// email content) and their memory extraction/compaction side-calls pin
-// to. Fetches the route list on mount like AgentAdd/AgentEdit; if that
-// fetch fails (or the admin proxy is nil-gated), falls back to a plain
-// text input so the setting stays editable without the picker.
+// SensitiveRouteCard picks the route a turn using a connector marked
+// "sensitive" (e.g. gmail) and its memory extraction/compaction
+// side-calls pin to. Fetches the route list on mount like
+// AgentAdd/AgentEdit; if that fetch fails (or the admin proxy is
+// nil-gated), falls back to a plain text input so the setting stays
+// editable without the picker.
 function SensitiveRouteCard({
   values,
   onError,
@@ -404,8 +405,9 @@ function SensitiveRouteCard({
         {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Turns that read email content switch to this route, and their memory extraction and
-        compaction follow. Chain it to a local provider for a privacy floor.
+        Turns that use a connector marked "sensitive" (toggle it on that connector's own settings)
+        switch to this route, and their memory extraction and compaction follow. Chain it to a
+        local provider for a privacy floor.
       </p>
     </div>
   )

@@ -53,13 +53,6 @@ import (
 // driven budgets arrive when model rows carry context windows.
 const defaultTokenBudget = 60_000
 
-// sensitiveToolSuffixes is the single source of truth for which tools'
-// output must never leave the sensitive route floor once called: the
-// in-turn pin (loop.Agent.SetForceRoute) and the side-call route
-// (session.SensitiveTools, chat/memoryd/compactor) both key off this
-// same list, so a tool added here is covered everywhere at once.
-var sensitiveToolSuffixes = []string{"gmail_read", "gmail_read_attachment"}
-
 // builtinToolSet guards the compiled-in tool slice buildAgent
 // returns: the connector reload goroutine reads it (via
 // conns.SetOnReload's closure) on its own timer, concurrently with
@@ -375,15 +368,15 @@ func main() {
 	}
 
 	// Single source of truth for "this turn/session executed a sensitive
-	// tool": the loop's in-turn SetForceRoute pin above and this
-	// SensitiveTools value share sensitiveToolSuffixes and the same
-	// sensitiveRoute resolver, so side-calls (extraction, compaction
+	// tool": a connector's own "sensitive" flag (set from the connectors
+	// settings UI) and the same sensitiveRoute resolver drive both the
+	// loop's in-turn SetForceRouteByConnector pin below and this
+	// SensitiveTools value, so side-calls (extraction, compaction
 	// summarize) honor the same route floor the tool loop already
 	// pinned the turn to. Wired unconditionally — sensitiveRoute
 	// resolving to "" at call time means the feature is currently off,
 	// same as before, but now editable at runtime from the settings UI.
 	sensitiveTools := &session.SensitiveTools{
-		Suffixes:       func(context.Context) []string { return sensitiveToolSuffixes },
 		ConnectorNames: sensitiveConnectorNames,
 		Route:          sensitiveRoute,
 	}
@@ -1271,17 +1264,10 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	// Shell dumps grow fast; offload them sooner than the default so a
 	// long command output never bloats the context (D-019).
 	agent.SetOffloadThreshold("shell", 4<<10)
-	// Reading real email content is sensitive: once a Gmail read tool
-	// fires, pin the rest of the turn to a trusted route (e.g. one
-	// chained only to a local Ollama provider) instead of whatever
-	// route the turn started on — optional, since not everyone runs a
-	// local model. sensitiveRoute resolving to "" at flip time means
-	// the feature is currently off; wired unconditionally since the
-	// route is now runtime-configurable from the settings UI, not just
-	// boot-time env.
-	for _, suffix := range sensitiveToolSuffixes {
-		agent.SetForceRoute(suffix, sensitiveRoute)
-	}
+	// Connector-level sensitivity's in-turn pin (a connector marked
+	// sensitive in the connectors settings UI, e.g. gmail) is wired
+	// later via agent.SetForceRouteByConnector, once conns exists —
+	// buildAgent runs before that, so there is nothing to wire here.
 	return agent, broker, outputs, set, perms, nil
 }
 

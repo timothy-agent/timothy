@@ -232,9 +232,9 @@ func (m *Manager) Names() []string {
 }
 
 // SensitiveNames returns the names of every enabled connector marked
-// sensitive — the connector-level input to session.SensitiveTools'
-// suffix set (D-036): a connector named "gmail" being sensitive means
-// "gmail" joins the set, and Matches' namespace-prefix check catches
+// sensitive — the sole input to session.SensitiveTools.ConnectorNames
+// (D-036): a connector named "gmail" being sensitive means "gmail"
+// joins the set, and Matches' namespace-prefix check catches
 // gmail_search/gmail_read/etc. at once. Reads rows fresh each call (no
 // restart needed for a settings toggle to take effect), same reasoning
 // as sensitiveRoute.

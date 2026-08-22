@@ -46,10 +46,10 @@ const (
 	// timothy/timothy@localhost identity.
 	ValueGitAuthorName  = "git_author_name"
 	ValueGitAuthorEmail = "git_author_email"
-	// ValueSensitiveToolRoute names the route that sensitive-tool turns
-	// (e.g. gmail_read) and their side-calls (memory extraction,
-	// compaction) pin to; empty means the feature is off. Set from the
-	// web settings panel.
+	// ValueSensitiveToolRoute names the route that turns using a
+	// connector marked sensitive (e.g. gmail) and their side-calls
+	// (memory extraction, compaction) pin to; empty means the feature is
+	// off. Set from the web settings panel.
 	ValueSensitiveToolRoute = "sensitive_tool_route"
 	// ValueDefaultCurrency is the ISO 4217 code new budgets/missions
 	// default to when the caller doesn't specify one; empty defers to

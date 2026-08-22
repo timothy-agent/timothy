@@ -264,7 +264,7 @@ func TestChatImageMessageOnSensitivePinnedSessionKeepsPinnedRoute(t *testing.T) 
 	seedSensitiveSession(t, log, "s1")
 	gw := &fakeGW{events: okEvents("described")}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 	fa := newFakeAttachments()
 	fa.seed("img1", "image/png", []byte("bytes"))
 	svc.SetAttachments(fa)

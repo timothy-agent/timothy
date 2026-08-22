@@ -2157,7 +2157,7 @@ func TestMemoryExtractUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
 		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
 	}}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	got := make(chan string, 1)
 	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
@@ -2193,7 +2193,7 @@ func TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T)
 		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod"}},
 	}}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	got := make(chan string, 1)
 	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
@@ -2404,7 +2404,7 @@ func TestDistillUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
 		return nil
 	}
 	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize my inbox"})
 	if err != nil {
@@ -2440,7 +2440,7 @@ func TestDistillUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T) {
 		return nil
 	}
 	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "run a shell command"})
 	if err != nil {
@@ -2486,7 +2486,7 @@ func TestChatPinsSessionSensitiveRouteOnNextTurn(t *testing.T) {
 	seedSensitiveSession(t, log, "s1")
 	gw := &fakeGW{events: okEvents("the answer")}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "another question", Route: "mini", ModelHint: "big-model"})
 	if err != nil {
@@ -2513,7 +2513,7 @@ func TestChatSessionPinNoopWhenSensitiveRouteUnset(t *testing.T) {
 	seedSensitiveSession(t, log, "s1")
 	gw := &fakeGW{events: okEvents("the answer")}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "another question", Route: "mini", ModelHint: "big-model"})
 	if err != nil {
@@ -2538,7 +2538,7 @@ func TestChatFreshSessionRoutesNormally(t *testing.T) {
 	log := newFakeLog()
 	gw := &fakeGW{events: okEvents("the answer")}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "a question", Route: "mini", ModelHint: "big-model"})
 	if err != nil {
@@ -2570,7 +2570,7 @@ func TestRetryPinsSessionSensitiveRoute(t *testing.T) {
 	}
 	gw := &fakeGW{events: okEvents("the answer")}
 	svc := newService(gw, log)
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Retry(t.Context(), "s1")
 	if err != nil {
@@ -2608,7 +2608,7 @@ func TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive(t *testing.T) {
 		return nil
 	}
 	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
-	svc.SetSensitiveTools(&session.SensitiveTools{Suffixes: func(context.Context) []string { return []string{"gmail_read"} }, Route: func(context.Context) string { return "local" }})
+	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	extractRoute := make(chan string, 1)
 	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
