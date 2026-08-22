@@ -50,17 +50,25 @@ First run: `cp deploy/env.example deploy/.env` and set
 
 ## Layout
 
-- `cmd/{brain,gateway,memoryd,skills-validate}`: binaries; all wiring
-  in each `main.go` (nil-able deps, env-gated features).
+- `cmd/{brain,gateway,memoryd,sandboxd,skills-validate}`: binaries; all
+  wiring in each `main.go` (nil-able deps, env-gated features).
 - `internal/brain/`: `api` (HTTP handlers, nil-gated `register*`
   pattern), `loop` (THE tool loop, lives here only), `tools` +
   `tools/builtin` (registry, permission chain, builtin tools), `chat`,
   `session`, `agents`, `missions` (agent harness), `connectors`
-  (Google/MCP), `gwclient`, `memclient`, `settings`, `skills`.
+  (Google/MCP), `destinations` (mission result delivery: email/webhook/
+  telegram), `kb` (knowledge-base collections/documents), `attachments`,
+  `gwclient`, `memclient`, `sandboxclient`, `settings`, `skills`.
 - `internal/gateway/`: `provider` (wire adapters only), `router`,
-  `ledger`, `stream`, `admin`, `api`.
+  `catalog` (LiteLLM-synced model/pricing catalog), `ledger`, `stream`,
+  `admin`, `api`.
+- `internal/memory/` (memoryd's implementation): `api`, `store`
+  (pgvector), `chunk`, `extract`, `retrieval` (hybrid vector+text+entity,
+  RRF-fused).
 - `internal/platform/`: shared: `migrate`, `pgpool`, `sse`,
-  `httpserver`, `metrics`, `logging`, `config`, `service`.
+  `httpserver`, `metrics`, `logging`, `config`, `service`, `netguard`
+  (SSRF-guarded outbound dialer), `markitdown`, `whisper` (sidecar
+  clients).
 - `migrations/`: numbered idempotent SQL, embedded via `embed.go`;
   never edit an applied migration.
 - `skills/`: skill packs baked into the brain image.
@@ -109,7 +117,7 @@ First run: `cp deploy/env.example deploy/.env` and set
 - Secrets by `credential_ref` name only; raw values never in DB, API,
   logs, or frontend. Never read `.env*`, `~/.ssh`, credentials.
 - Providers are wire adapters; routing/model choice is data
-  (`providers`/`task_routes` rows), not code.
+  (`providers`/`routes` rows), not code.
 - Cost honesty: unknown price recorded as NULL, never guessed.
 - No speculative abstractions: no interface with one implementation, no
   config nothing reads.
