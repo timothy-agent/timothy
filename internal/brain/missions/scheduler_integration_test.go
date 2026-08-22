@@ -4,6 +4,7 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -98,6 +99,58 @@ func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 	}
 	if name != marker+"named-schedule" {
 		t.Fatalf("fired mission name = %q, want the schedule's own name %q", name, marker+"named-schedule")
+	}
+}
+
+// TestSchedulerFireUsesTemplateNameOverSlug guards the fix for a real
+// UI gap: schedule names are strict lowercase slugs (shared validation
+// with connectors/destinations/agents), so a scheduled mission's
+// display title showed the raw slug (e.g. "inbox-digest-8h") instead
+// of something presentable. mission_template.name, when set, must win
+// over the schedule's own slug.
+func TestSchedulerFireUsesTemplateNameOverSlug(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	db, err := store.db.Get()
+	if err != nil {
+		t.Fatalf("Get pool: %v", err)
+	}
+	tmplJSON, err := json.Marshal(map[string]string{
+		"goal": marker + "scheduled run",
+		"kind": "general",
+		"name": "Today's Meetings",
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `INSERT INTO schedules (name, cron, mission_template)
+		VALUES ($1, $2, $3) RETURNING id`, marker+"titled-schedule", "* * * * *", tmplJSON).Scan(&id)
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = db.Exec(cctx, "DELETE FROM schedules WHERE id = $1", id)
+	})
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRow(ctx, `SELECT name FROM missions WHERE schedule_id = $1`, id).Scan(&name); err != nil {
+		t.Fatalf("query fired mission's name: %v", err)
+	}
+	if name != "Today's Meetings" {
+		t.Fatalf("fired mission name = %q, want the template's display name %q", name, "Today's Meetings")
 	}
 }
 

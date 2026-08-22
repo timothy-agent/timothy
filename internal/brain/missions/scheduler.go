@@ -53,7 +53,14 @@ type Schedule struct {
 // MissionTemplate is applied verbatim as a new mission's initial
 // columns each time its schedule fires.
 type MissionTemplate struct {
-	Goal        string `json:"goal"`
+	Goal string `json:"goal"`
+	// Name, when set, becomes the created mission's display name
+	// (Mission.Name — the UI/destination-delivery title) instead of the
+	// schedule's own slug identifier. The schedule name stays a strict
+	// lowercase slug for consistency with connectors/destinations/agents;
+	// this lets a schedule read "Today's Meetings" in Telegram without
+	// relaxing that.
+	Name        string `json:"name,omitempty"`
 	Kind        string `json:"kind"`
 	AgentID     string `json:"agent_id"`
 	Route       string `json:"route"`
@@ -429,10 +436,14 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	if err != nil {
 		return fmt.Errorf("marshal knowledge: %w", err)
 	}
+	name := t.Name
+	if name == "" {
+		name = sc.Name
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO missions
 			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment, destination_ids)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-		t.Goal, sc.Name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
+		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 8), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
 		promptOverlay, knowledgeJSON, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment, destinationIDs)
 	return err
 }
