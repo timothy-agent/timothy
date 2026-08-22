@@ -1003,6 +1003,41 @@ export async function reingestKbDocument(id: string): Promise<void> {
   await request<void>(`/v1/admin/kb/documents/${id}/reingest`, { method: 'POST' })
 }
 
+// uploadKbDocumentAuto posts one file with no collection chosen: brain
+// classifies it against existing collections (or creates a new one) and
+// files it there. Same multipart shape as uploadKbDocument.
+export async function uploadKbDocumentAuto(file: File): Promise<KbDocument> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/v1/admin/kb/documents', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { message?: string }
+      message = parsed.message ?? body
+    } catch {
+      // Non-JSON error body: keep the raw text.
+    }
+    failChat(res.status, message || `upload failed (${res.status})`)
+  }
+  return (await res.json()) as KbDocument
+}
+
+// addKbDocumentFromUrlAuto is addKbDocumentFromUrl with no collection
+// chosen: brain classifies the fetched document the same way
+// uploadKbDocumentAuto does.
+export async function addKbDocumentFromUrlAuto(url: string): Promise<KbDocument> {
+  return request<KbDocument>('/v1/admin/kb/documents/url', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  })
+}
+
 // --- connectors (integrations) ---
 
 export async function listConnectors(): Promise<AdminConnector[]> {

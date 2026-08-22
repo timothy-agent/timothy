@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/netguard"
@@ -37,14 +38,20 @@ type kbIngester interface {
 	IngestDocument(ctx context.Context, documentID, title, markdown string) (int, error)
 }
 
+// kbClassifier picks (or proposes) a collection for a document at
+// auto-ingest time — chat.ClassifyCollectionOverGateway in production,
+// faked in tests. Never errors (same best-effort contract as the
+// classifier itself): a document must always resolve to some choice.
+type kbClassifier func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice
+
 // registerKB mounts the knowledge-base admin surface (D-060). Nil
 // store leaves it unmounted, same nil-gate pattern as agents/skills.
-func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.Store, ingest kbIngester, markitdownURL string) {
+func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.Store, ingest kbIngester, markitdownURL string, classify kbClassifier) {
 	if store == nil {
 		return
 	}
 	h := &kbAPI{
-		store: store, ingest: ingest, markitdownURL: markitdownURL,
+		store: store, ingest: ingest, markitdownURL: markitdownURL, classify: classify,
 		markitdownHTTP: &http.Client{},
 		fetchHTTP:      &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
 		log:            a.log,
@@ -56,6 +63,8 @@ func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.
 	handle("GET /v1/admin/kb/collections/{id}/documents", a.auth(http.HandlerFunc(h.listDocuments)))
 	handle("POST /v1/admin/kb/collections/{id}/documents", a.auth(http.HandlerFunc(h.uploadDocument)))
 	handle("POST /v1/admin/kb/collections/{id}/documents/url", a.auth(http.HandlerFunc(h.addDocumentFromURL)))
+	handle("POST /v1/admin/kb/documents", a.auth(http.HandlerFunc(h.uploadDocumentAuto)))
+	handle("POST /v1/admin/kb/documents/url", a.auth(http.HandlerFunc(h.addDocumentFromURLAuto)))
 	handle("DELETE /v1/admin/kb/documents/{id}", a.auth(http.HandlerFunc(h.deleteDocument)))
 	handle("POST /v1/admin/kb/documents/{id}/reingest", a.auth(http.HandlerFunc(h.reingestDocument)))
 }
@@ -63,6 +72,7 @@ func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.
 type kbAPI struct {
 	store          *kb.Store
 	ingest         kbIngester
+	classify       kbClassifier
 	markitdownURL  string
 	markitdownHTTP *http.Client
 	// fetchHTTP fetches user-supplied URLs; production wires it through
@@ -70,6 +80,32 @@ type kbAPI struct {
 	// substitute an unguarded client.
 	fetchHTTP *http.Client
 	log       *slog.Logger
+}
+
+// resolveCollection runs the auto-classify path shared by
+// uploadDocumentAuto/addDocumentFromURLAuto: lists existing collections,
+// classifies the document against them, and creates a new collection
+// when the classifier proposes one. Never fails outright — a
+// CreateCollection error just logs and falls through to "Unsorted" via
+// a second attempt, since ingest must not block on this step.
+func (h *kbAPI) resolveCollection(ctx context.Context, title, markdownText string) (string, error) {
+	collections, err := h.store.ListCollections(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list collections: %w", err)
+	}
+	choice := h.classify(ctx, title, markdownText, collections)
+	if choice.ExistingID != "" {
+		return choice.ExistingID, nil
+	}
+	name := choice.NewName
+	if name == "" {
+		name = "Unsorted"
+	}
+	id, err := h.store.CreateCollection(ctx, name, choice.NewDesc)
+	if err != nil {
+		return "", fmt.Errorf("create collection %q: %w", name, err)
+	}
+	return id, nil
 }
 
 func failKB(w http.ResponseWriter, err error) {
@@ -152,39 +188,40 @@ func (h *kbAPI) listDocuments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"documents": out})
 }
 
-// uploadDocument accepts a single multipart file field "file", caps
-// its size at maxKBUploadBytes, converts it to markdown via markitdown
-// (skipped for .md/.txt, already markdown/plain text), creates a
-// pending document row, then fires the background ingest goroutine.
-func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
-	collectionID := r.PathValue("id")
-	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
-		failKB(w, err)
-		return
-	}
+// decodedUpload is one multipart file field, parsed and converted to
+// markdown — shared by uploadDocument (collection given) and
+// uploadDocumentAuto (collection classified after this step).
+type decodedUpload struct {
+	title, filename, markdown string
+	rawBytes                  int64
+}
 
+// decodeUpload parses the multipart "file" field, caps it at
+// maxKBUploadBytes, and converts it to markdown via markitdown (skipped
+// for .md/.txt, already markdown/plain text).
+func (h *kbAPI) decodeUpload(w http.ResponseWriter, r *http.Request) (decodedUpload, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxKBUploadBytes)
 	if err := r.ParseMultipartForm(maxKBUploadBytes); err != nil { //nolint:gosec // G120: r.Body is already MaxBytesReader-capped above at the same limit
 		jsonError(w, http.StatusBadRequest, "too_large", "file exceeds the 32MiB limit")
-		return
+		return decodedUpload{}, false
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", "multipart field \"file\" is required")
-		return
+		return decodedUpload{}, false
 	}
 	defer func() { _ = file.Close() }()
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if !kbAllowedExt[ext] {
 		jsonError(w, http.StatusBadRequest, "unsupported_type", "file must be .pdf, .md, .txt, .docx, or .html")
-		return
+		return decodedUpload{}, false
 	}
 
 	raw, err := io.ReadAll(file)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", "failed to read upload: "+err.Error())
-		return
+		return decodedUpload{}, false
 	}
 
 	var markdownText string
@@ -193,12 +230,12 @@ func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
 	} else {
 		if h.markitdownURL == "" {
 			jsonError(w, http.StatusBadRequest, "bad_request", "document conversion requires the markitdown sidecar (MARKITDOWN_URL)")
-			return
+			return decodedUpload{}, false
 		}
 		md, err := markitdown.Convert(r.Context(), h.markitdownHTTP, h.markitdownURL, header.Filename, "", raw)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, "conversion_failed", err.Error())
-			return
+			return decodedUpload{}, false
 		}
 		markdownText = markitdown.TruncateMarkdown(md)
 	}
@@ -207,8 +244,19 @@ func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
 	// real PDFs); Postgres text columns reject both (SQLSTATE 22021).
 	markdownText = strings.ToValidUTF8(strings.ReplaceAll(markdownText, "\x00", ""), "�")
 
-	title := strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename))
-	docID, err := h.store.CreateDocument(r.Context(), collectionID, title, "file", header.Filename, markdownText, int64(len(raw)))
+	return decodedUpload{
+		title:    strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)),
+		filename: header.Filename,
+		markdown: markdownText,
+		rawBytes: int64(len(raw)),
+	}, true
+}
+
+// finishIngest creates the pending document row, fires the background
+// ingest goroutine, and writes the created document back — the shared
+// tail of every ingest entry point (scoped and auto alike).
+func (h *kbAPI) finishIngest(w http.ResponseWriter, r *http.Request, collectionID, title, sourceType, sourceRef, markdownText string, size int64) {
+	docID, err := h.store.CreateDocument(r.Context(), collectionID, title, sourceType, sourceRef, markdownText, size)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 		return
@@ -221,6 +269,38 @@ func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, sanitizeDocument(doc))
+}
+
+// uploadDocument accepts a single multipart file field "file" into a
+// caller-chosen collection.
+func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("id")
+	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+		failKB(w, err)
+		return
+	}
+	up, ok := h.decodeUpload(w, r)
+	if !ok {
+		return
+	}
+	h.finishIngest(w, r, collectionID, up.title, "file", up.filename, up.markdown, up.rawBytes)
+}
+
+// uploadDocumentAuto accepts the same multipart upload as
+// uploadDocument but with no collection chosen: the document is
+// classified against existing collections (or files into a newly
+// proposed one) before ingest.
+func (h *kbAPI) uploadDocumentAuto(w http.ResponseWriter, r *http.Request) {
+	up, ok := h.decodeUpload(w, r)
+	if !ok {
+		return
+	}
+	collectionID, err := h.resolveCollection(r.Context(), up.title, up.markdown)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
+		return
+	}
+	h.finishIngest(w, r, collectionID, up.title, "file", up.filename, up.markdown, up.rawBytes)
 }
 
 // kbURLFetchTimeout bounds one whole URL fetch (dial through read).
@@ -236,27 +316,23 @@ type kbURLRequest struct {
 	Title string `json:"title"`
 }
 
-// addDocumentFromURL fetches a user-supplied URL (public addresses
-// only — the client dials through netguard), converts the response to
-// markdown the same way upload does (HTML/PDF via markitdown, plain
-// text and markdown taken as-is), creates a pending document row with
-// the URL as source_ref, then fires the same background ingest.
-func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
-	collectionID := r.PathValue("id")
-	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
-		failKB(w, err)
-		return
-	}
+// decodedURL is one fetched-and-converted URL — shared by
+// addDocumentFromURL (collection given) and addDocumentFromURLAuto
+// (collection classified after this step).
+type decodedURL struct {
+	title, url, markdown string
+	rawBytes             int64
+}
 
-	var req kbURLRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
+// decodeURL parses req.URL, fetches it (public addresses only — the
+// client dials through netguard), and converts the response to
+// markdown the same way upload does (HTML/PDF via markitdown, plain
+// text and markdown taken as-is).
+func (h *kbAPI) decodeURL(w http.ResponseWriter, r *http.Request, req kbURLRequest) (decodedURL, bool) {
 	u, err := url.Parse(strings.TrimSpace(req.URL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		jsonError(w, http.StatusBadRequest, "bad_request", "url must be a full http:// or https:// URL")
-		return
+		return decodedURL{}, false
 	}
 	// Never forward embedded credentials (and never leak them on a
 	// redirect to another host).
@@ -265,39 +341,68 @@ func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
 	body, contentType, err := h.fetchURL(r.Context(), u)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, "fetch_failed", err.Error())
-		return
+		return decodedURL{}, false
 	}
 
 	markdownText, err := h.convertFetched(r.Context(), u, body, contentType)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "conversion_failed", err.Error())
-		return
+		return decodedURL{}, false
 	}
 	// Same sanitation as upload: converted output can carry NUL bytes
 	// or invalid UTF-8, which Postgres text columns reject (22021).
 	markdownText = strings.ToValidUTF8(strings.ReplaceAll(markdownText, "\x00", ""), "�")
 	if strings.TrimSpace(markdownText) == "" {
 		jsonError(w, http.StatusBadRequest, "conversion_failed", "page had no extractable text")
-		return
+		return decodedURL{}, false
 	}
 
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = titleFromURL(u)
 	}
-	docID, err := h.store.CreateDocument(r.Context(), collectionID, title, "url", u.String(), markdownText, int64(len(body)))
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
-		return
-	}
-	h.startIngest(docID, title)
+	return decodedURL{title: title, url: u.String(), markdown: markdownText, rawBytes: int64(len(body))}, true
+}
 
-	doc, err := h.store.GetDocument(r.Context(), docID)
+// addDocumentFromURL fetches a user-supplied URL into a caller-chosen
+// collection.
+func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("id")
+	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+		failKB(w, err)
+		return
+	}
+	var req kbURLRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	d, ok := h.decodeURL(w, r, req)
+	if !ok {
+		return
+	}
+	h.finishIngest(w, r, collectionID, d.title, "url", d.url, d.markdown, d.rawBytes)
+}
+
+// addDocumentFromURLAuto fetches a user-supplied URL with no collection
+// chosen: the document is classified against existing collections (or
+// files into a newly proposed one) before ingest.
+func (h *kbAPI) addDocumentFromURLAuto(w http.ResponseWriter, r *http.Request) {
+	var req kbURLRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	d, ok := h.decodeURL(w, r, req)
+	if !ok {
+		return
+	}
+	collectionID, err := h.resolveCollection(r.Context(), d.title, d.markdown)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, sanitizeDocument(doc))
+	h.finishIngest(w, r, collectionID, d.title, "url", d.url, d.markdown, d.rawBytes)
 }
 
 // fetchURL GETs u, capping the body at maxKBUploadBytes, and returns

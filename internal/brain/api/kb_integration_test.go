@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -106,11 +107,18 @@ func (f *fakeIngester) callCount() int {
 	return f.calls
 }
 
+// fixedClassifier always proposes the same new collection — these
+// integration tests exercise brain's own CRUD/upload surface, not the
+// classify prompt itself (covered in internal/brain/chat).
+func fixedClassifier(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
+	return chat.CollectionChoice{NewName: "itest-auto", NewDesc: "auto-classified in a test"}
+}
+
 func TestKBCollectionsCRUD(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "")
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
 
 	create := httptest.NewRequest("POST", "/v1/admin/kb/collections", strings.NewReader(`{"name":"itest-docs","description":"test collection"}`))
 	create.Header.Set("Authorization", "Bearer tok")
@@ -169,7 +177,7 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "")
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-upload", "")
 	if err != nil {
@@ -233,7 +241,7 @@ func TestKBDocumentUploadStripsNULAndInvalidUTF8(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "")
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-nul", "")
 	if err != nil {
@@ -271,7 +279,7 @@ func TestKBDocumentUploadRejectsUnsupportedType(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "")
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-upload-bad", "")
 	if err != nil {
@@ -307,7 +315,7 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "")
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url", "")
 	if err != nil {
@@ -357,6 +365,92 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 	}
 	if got := ingester.callCount(); got != 1 {
 		t.Fatalf("ingester calls = %d, want 1", got)
+	}
+}
+
+// TestKBDocumentUploadAutoCreatesNewCollection exercises the unscoped
+// upload route: no collection is chosen up front, so the classifier's
+// proposed new collection (fixedClassifier) must be created and the
+// document filed into it.
+func TestKBDocumentUploadAutoCreatesNewCollection(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
+
+	body, contentType := multipartFile(t, "file", "notes.md", []byte("# Title\nsome content"))
+	req := httptest.NewRequest("POST", "/v1/admin/kb/documents", body)
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", contentType)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body %s", w.Code, w.Body)
+	}
+
+	var doc struct {
+		ID           string `json:"id"`
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	coll, err := store.GetCollection(context.Background(), doc.CollectionID)
+	if err != nil {
+		t.Fatalf("GetCollection: %v", err)
+	}
+	if coll.Name != "itest-auto" {
+		t.Fatalf("collection name = %q, want the classifier's proposed itest-auto", coll.Name)
+	}
+}
+
+// TestKBDocumentFromURLAutoUsesExistingCollection exercises the
+// unscoped URL route with a classifier that matches an existing
+// collection instead of proposing a new one.
+func TestKBDocumentFromURLAutoUsesExistingCollection(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte("# Fetched\nbody from the web"))
+	}))
+	defer page.Close()
+
+	saved := kbFetchTransport
+	kbFetchTransport = http.DefaultTransport
+	defer func() { kbFetchTransport = saved }()
+
+	existingID, err := store.CreateCollection(context.Background(), "itest-existing", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	matchExisting := func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
+		return chat.CollectionChoice{ExistingID: existingID}
+	}
+
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", matchExisting)
+
+	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/url",
+		strings.NewReader(`{"url":"`+page.URL+`/notes.md","title":""}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d body %s", w.Code, w.Body)
+	}
+
+	var doc struct {
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.CollectionID != existingID {
+		t.Fatalf("collection_id = %q, want the classifier's matched %q", doc.CollectionID, existingID)
 	}
 }
 
@@ -425,7 +519,7 @@ func TestKBDocumentFromURLRejectsBadURL(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "")
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url-bad", "")
 	if err != nil {
@@ -449,7 +543,7 @@ func TestKBDocumentFromURLBlocksLocalAddresses(t *testing.T) {
 	m := mux(a)
 	// Real guarded transport: the loopback httptest server must be
 	// refused at dial time.
-	a.registerKB(m.Handle, store, &fakeIngester{}, "")
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
 
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("secret internal page"))
@@ -476,7 +570,7 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	ingester := &fakeIngester{err: errors.New("memoryd unreachable")}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "")
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-reingest", "")
 	if err != nil {

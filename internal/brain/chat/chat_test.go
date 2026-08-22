@@ -17,6 +17,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
@@ -1982,6 +1983,64 @@ func TestTitleOverGatewayEmptyOnGatewayError(t *testing.T) {
 	name := TitleOverGateway(gw, discard())(context.Background(), "a goal")
 	if name != "" {
 		t.Fatalf("name = %q, want empty on gateway error", name)
+	}
+}
+
+// TestClassifyCollectionOverGatewayMatchesExistingID confirms a reply
+// that is exactly one listed collection's id resolves to ExistingID.
+func TestClassifyCollectionOverGatewayMatchesExistingID(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("col-2")}
+	choice := ClassifyCollectionOverGateway(gw, discard())(context.Background(), "Q3 Invoice", "some invoice text",
+		[]kb.Collection{{ID: "col-1", Name: "Recipes"}, {ID: "col-2", Name: "Finance"}})
+	if choice.ExistingID != "col-2" || choice.NewName != "" {
+		t.Fatalf("choice = %+v, want ExistingID=col-2", choice)
+	}
+
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if gw.requests[0].Route != "summarize" {
+		t.Fatalf("route = %q, want summarize", gw.requests[0].Route)
+	}
+	if gw.requests[0].Purpose != "kb_classify" {
+		t.Fatalf("purpose = %q, want kb_classify", gw.requests[0].Purpose)
+	}
+}
+
+// TestClassifyCollectionOverGatewayProposesNewCollection confirms a
+// "NEW: name | description" reply parses into NewName/NewDesc.
+func TestClassifyCollectionOverGatewayProposesNewCollection(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("NEW: Home Repairs | Notes about fixing things around the house")}
+	choice := ClassifyCollectionOverGateway(gw, discard())(context.Background(), "Fixing the sink", "plumbing notes",
+		[]kb.Collection{{ID: "col-1", Name: "Recipes"}})
+	if choice.ExistingID != "" || choice.NewName != "Home Repairs" || choice.NewDesc != "Notes about fixing things around the house" {
+		t.Fatalf("choice = %+v, want new collection Home Repairs", choice)
+	}
+}
+
+// TestClassifyCollectionOverGatewayFallsBackToUnsortedOnGatewayError
+// confirms the best-effort contract: any Stream error resolves to the
+// Unsorted fallback rather than propagating.
+func TestClassifyCollectionOverGatewayFallsBackToUnsortedOnGatewayError(t *testing.T) {
+	t.Parallel()
+	gw := &erroringGW{}
+	choice := ClassifyCollectionOverGateway(gw, discard())(context.Background(), "title", "text", nil)
+	if choice.NewName != unsortedCollectionName || choice.ExistingID != "" {
+		t.Fatalf("choice = %+v, want Unsorted fallback", choice)
+	}
+}
+
+// TestClassifyCollectionOverGatewayFallsBackOnMalformedReply confirms a
+// reply that neither matches a known id nor starts with "NEW:" falls
+// back to Unsorted instead of being trusted as a collection id.
+func TestClassifyCollectionOverGatewayFallsBackOnMalformedReply(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("not-a-real-id")}
+	choice := ClassifyCollectionOverGateway(gw, discard())(context.Background(), "title", "text",
+		[]kb.Collection{{ID: "col-1", Name: "Recipes"}})
+	if choice.NewName != unsortedCollectionName || choice.ExistingID != "" {
+		t.Fatalf("choice = %+v, want Unsorted fallback", choice)
 	}
 }
 

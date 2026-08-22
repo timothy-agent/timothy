@@ -1,4 +1,4 @@
-import { Add01Icon, LibraryIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { Add01Icon, CloudUploadIcon, LibraryIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -32,10 +32,16 @@ export function KnowledgeCollectionsList() {
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Collections · {collections.length}
         </h2>
-        <Button onClick={() => navigate('/knowledge/new')}>
-          <HugeiconsIcon icon={Add01Icon} />
-          New collection
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => navigate('/knowledge/add')}>
+            <HugeiconsIcon icon={CloudUploadIcon} />
+            Add to Knowledgebase
+          </Button>
+          <Button onClick={() => navigate('/knowledge/new')}>
+            <HugeiconsIcon icon={Add01Icon} />
+            New collection
+          </Button>
+        </div>
       </div>
 
       {collections.length === 0 ? (

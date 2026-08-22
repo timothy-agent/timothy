@@ -23,6 +23,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -569,6 +570,120 @@ func TitleOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, in
 			}
 		}
 		return ""
+	}
+}
+
+// collectionClassifyDocRunes caps how much document text rides into the
+// classify prompt — the model only needs the gist to pick a topic, not
+// the full document (which can run to markitdown.TruncateMarkdown's own
+// 128KB cap).
+const collectionClassifyDocRunes = 4000
+
+// CollectionChoice is ClassifyCollectionOverGateway's result: either an
+// existing collection to file into (ExistingID) or a new one to create
+// first (NewName/NewDesc). Exactly one of the two is ever set.
+type CollectionChoice struct {
+	ExistingID string
+	NewName    string
+	NewDesc    string
+}
+
+// unsortedCollectionName is the fallback CollectionChoice when
+// classification can't be trusted (gateway error, empty/malformed
+// reply) — a document must land somewhere, so it lands in a generic
+// catch-all rather than blocking ingest on a model failure.
+const unsortedCollectionName = "Unsorted"
+
+// ClassifyCollectionOverGateway mirrors TitleOverGateway's mechanism
+// (same route resolution, same Stream-and-drain, same never-errors
+// contract) for a different one-shot job: given a document's title/text
+// and the existing knowledge-base collections, pick the best matching
+// collection or propose a new one. Free-text protocol, not JSON — this
+// codebase has no precedent for parsing prose-as-JSON from a model
+// reply (every json.Unmarshal on model output elsewhere unmarshals
+// provider-structured tool-call arguments, never free text), so the
+// model is asked for exactly one line: either a bare collection ID from
+// the list, or "NEW: <name> | <description>". Any reply that doesn't
+// parse cleanly (gateway error, empty stream, malformed line) falls
+// back to unsortedCollectionName — the one guaranteed outcome, since
+// auto-classify ingest has no path to ask the user instead.
+func ClassifyCollectionOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, docTitle, docText string, collections []kb.Collection) CollectionChoice {
+	return func(ctx context.Context, docTitle, docText string, collections []kb.Collection) CollectionChoice {
+		ctx, cancel := context.WithTimeout(ctx, titleTimeout)
+		defer cancel()
+
+		fallback := CollectionChoice{NewName: unsortedCollectionName}
+
+		var list strings.Builder
+		if len(collections) == 0 {
+			list.WriteString("No collections exist yet.")
+		} else {
+			for _, c := range collections {
+				fmt.Fprintf(&list, "%s: %s — %s\n", c.ID, c.Name, c.Description)
+			}
+		}
+
+		const classifySystem = `You file documents into a knowledge base. Given a document and a list of existing collections, reply with exactly one line: either the bare id of the best-matching existing collection, or "NEW: <name> | <description>" to propose a new collection when nothing fits. No other text.`
+		route, ok, err := gw.RouteForRole(ctx, "summarize")
+		if err != nil || !ok {
+			route, ok, err = gw.RouteForRole(ctx, "default")
+			if err != nil {
+				log.Warn("classify collection: route lookup failed", "error", err)
+				return fallback
+			}
+			if !ok {
+				log.Warn("classify collection: no route bound for summarize or default")
+				return fallback
+			}
+		}
+
+		docText = truncateRunes(docText, collectionClassifyDocRunes)
+		user := fmt.Sprintf("Existing collections:\n%s\nDocument title: %s\n\n%s", list.String(), docTitle, docText)
+
+		events, err := gw.Stream(ctx, gwclient.StreamRequest{
+			Route:     route,
+			Purpose:   "kb_classify",
+			System:    classifySystem,
+			Messages:  []provider.Message{{Role: "user", Content: user}},
+			MaxTokens: 1000,
+		})
+		if err != nil {
+			log.Warn("classify collection: stream failed", "error", err)
+			return fallback
+		}
+		var b strings.Builder
+		var streamErr *stream.StreamError
+		for ev := range events {
+			switch ev.Type {
+			case stream.EventChunk:
+				b.WriteString(ev.Text)
+			case stream.EventError:
+				streamErr = ev.Err
+			}
+		}
+		reply, _, _ := strings.Cut(strings.TrimSpace(b.String()), "\n")
+		reply = strings.TrimSpace(reply)
+		if reply == "" {
+			if streamErr != nil {
+				log.Warn("classify collection: stream error event", "code", streamErr.Code, "message", streamErr.Message)
+			}
+			return fallback
+		}
+		for _, c := range collections {
+			if reply == c.ID {
+				return CollectionChoice{ExistingID: c.ID}
+			}
+		}
+		if rest, ok := strings.CutPrefix(reply, "NEW:"); ok {
+			name, desc, _ := strings.Cut(rest, "|")
+			name = strings.TrimSpace(name)
+			desc = strings.TrimSpace(desc)
+			if name != "" {
+				return CollectionChoice{NewName: truncateRunes(name, 80), NewDesc: truncateRunes(desc, 300)}
+			}
+		}
+		log.Warn("classify collection: reply matched neither an existing id nor NEW:", "reply", truncateRunes(reply, 80))
+		return fallback
 	}
 }
 
