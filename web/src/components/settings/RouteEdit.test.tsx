@@ -106,7 +106,7 @@ describe('RouteEdit ordered pipeline', () => {
     renderRoute('default')
     const cards = await screen.findAllByTestId('pipeline-card')
     expect(cards[0]).toHaveTextContent('812 ms')
-    expect(cards[0]).toHaveTextContent('$15/MTok')
+    expect(cards[0]).toHaveTextContent('out $15')
     expect(cards[0]).toHaveTextContent('98%')
     expect(cards[1]).toHaveTextContent('unpriced')
   })

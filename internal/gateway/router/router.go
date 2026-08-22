@@ -470,8 +470,8 @@ var strategyWeights = map[string]struct{ price, latency, tps float64 }{
 // with the usability gate Resolve applies and the factors the scored
 // strategies use. Sentinels: Uptime and the Norm* fields are -1 when
 // the ledger has no data (scoring treats the factor as neutral); raw
-// LatencyMS, TokensPerS, and OutputPerMTok are 0 when unknown — an
-// absent price stays absent, never guessed.
+// LatencyMS, TokensPerS, InputPerMTok, and OutputPerMTok are 0 when
+// unknown — an absent price stays absent, never guessed.
 type ResolvedEntry struct {
 	Entry         ChainEntry
 	ProviderName  string // empty when the provider id is unknown
@@ -487,6 +487,7 @@ type ResolvedEntry struct {
 	Uptime        float64 // raw weighted success rate, 0..1
 	LatencyMS     float64 // raw weighted mean latency
 	TokensPerS    float64 // raw weighted output tokens per second
+	InputPerMTok  float64 // declared input price; display only, not used for scoring
 	OutputPerMTok float64 // declared output price used for scoring
 }
 
@@ -524,10 +525,15 @@ func (s *Snapshot) ResolveDetail(route string) []ResolvedEntry {
 		// defaulted above) — an entry with no model of its own serves
 		// row.DefaultModel, and that's what the ledger and price rows
 		// are keyed by.
-		if p := s.Prices(row.Name, d.Model); p != nil && p.OutputPerMTok > 0 {
-			d.OutputPerMTok = p.OutputPerMTok
-			if minPrice == 0 || d.OutputPerMTok < minPrice {
-				minPrice = d.OutputPerMTok
+		if p := s.Prices(row.Name, d.Model); p != nil {
+			if p.InputPerMTok > 0 {
+				d.InputPerMTok = p.InputPerMTok
+			}
+			if p.OutputPerMTok > 0 {
+				d.OutputPerMTok = p.OutputPerMTok
+				if minPrice == 0 || d.OutputPerMTok < minPrice {
+					minPrice = d.OutputPerMTok
+				}
 			}
 		}
 		if st, ok := s.stats[row.Name+"/"+d.Model]; ok {

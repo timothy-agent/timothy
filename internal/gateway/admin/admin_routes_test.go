@@ -35,8 +35,8 @@ func routesSnapshot(t *testing.T, strategy string) *router.Snapshot {
 		{ProviderID: "p2", Model: "small"},
 	}}}
 	cat := fakeCatalog{models: []catalog.Model{
-		{ID: "big", ModelKey: "big", Mode: "chat", OutputPerMTok: f64(25)},
-		{ID: "small", ModelKey: "small", Mode: "chat", OutputPerMTok: f64(1)},
+		{ID: "big", ModelKey: "big", Mode: "chat", InputPerMTok: f64(10), OutputPerMTok: f64(25)},
+		{ID: "small", ModelKey: "small", Mode: "chat", InputPerMTok: f64(0.5), OutputPerMTok: f64(1)},
 	}}
 	snap, _ := router.BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 	return snap
@@ -65,6 +65,9 @@ func TestResolvedForRouteOrdered(t *testing.T) {
 	}
 	if *first.OutputPerMTok != 25 {
 		t.Fatalf("price not mapped: %+v", first)
+	}
+	if first.InputPerMTok == nil || *first.InputPerMTok != 10 {
+		t.Fatalf("input price not mapped: %+v", first)
 	}
 	if resolved[1].Usable || resolved[1].SkipReason != "disabled" {
 		t.Fatalf("disabled entry = %+v", resolved[1])

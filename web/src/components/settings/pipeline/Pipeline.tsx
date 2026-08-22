@@ -1,6 +1,3 @@
-import { ArrowRight02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Fragment } from 'react'
 import type { AdminProvider, ChainEntry, RouteEntryStatus } from '../../../api/types'
 import { PipelineCard } from './PipelineCard'
 import { reorder, useReorderDrag } from './useReorderDrag'
@@ -49,7 +46,7 @@ export function Pipeline({
   }
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto pb-2" data-testid="pipeline">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4" data-testid="pipeline">
       {display.map((e, i) => {
         const original = entries.indexOf(e)
         const provider = providerOf(e.entry.provider_id)
@@ -59,31 +56,26 @@ export function Pipeline({
           serving.provider_id === e.entry.provider_id &&
           serving.model === e.entry.model
         return (
-          <Fragment key={`${e.entry.provider_id}-${e.entry.model}-${original}`}>
-            {i > 0 && (
-              <HugeiconsIcon
-                icon={ArrowRight02Icon}
-                className="size-4 shrink-0 text-muted-foreground/60"
-                aria-hidden="true"
-              />
-            )}
-            <div ref={setItemRef(i)} {...handleProps(original)}>
-              <PipelineCard
-                provider={provider}
-                name={e.status?.provider_name ?? provider?.name ?? e.entry.provider_id.slice(0, 8)}
-                model={e.status?.model ?? e.entry.model}
-                status={e.status}
-                serving={isServing}
-                scored={scored}
-                maxScore={maxScore}
-                index={original}
-                count={entries.length}
-                onMove={onReorder}
-                onRemove={() => onRemove(original)}
-                dragging={dragIndex === original}
-              />
-            </div>
-          </Fragment>
+          <div
+            key={`${e.entry.provider_id}-${e.entry.model}-${original}`}
+            ref={setItemRef(i)}
+            {...handleProps(original)}
+          >
+            <PipelineCard
+              provider={provider}
+              name={e.status?.provider_name ?? provider?.name ?? e.entry.provider_id.slice(0, 8)}
+              model={e.status?.model ?? e.entry.model}
+              status={e.status}
+              serving={isServing}
+              scored={scored}
+              maxScore={maxScore}
+              index={original}
+              count={entries.length}
+              onMove={onReorder}
+              onRemove={() => onRemove(original)}
+              dragging={dragIndex === original}
+            />
+          </div>
         )
       })}
     </div>

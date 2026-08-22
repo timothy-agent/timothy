@@ -797,9 +797,9 @@ func TestResolveDetailScoredMatchesResolve(t *testing.T) {
 		{ProviderID: "p1", Model: "big"},
 		{ProviderID: "p2", Model: "small"},
 	}}}
-	big := catModel("big", "chat", nil)
+	big := catModel("big", "chat", fp(10))
 	big.OutputPerMTok = fp(25)
-	small := catModel("small", "chat", nil)
+	small := catModel("small", "chat", fp(0.5))
 	small.OutputPerMTok = fp(1)
 	cat := &fakeCatalog{pool: []catalog.Model{big, small}}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
@@ -830,6 +830,9 @@ func TestResolveDetailScoredMatchesResolve(t *testing.T) {
 	}
 	if !almostEqual(pricey.Score, 0.9/25+0.02) {
 		t.Fatalf("pricey score = %v", pricey.Score)
+	}
+	if cheap.InputPerMTok != 0.5 || pricey.InputPerMTok != 10 {
+		t.Fatalf("input prices wrong: cheap=%v pricey=%v", cheap.InputPerMTok, pricey.InputPerMTok)
 	}
 }
 

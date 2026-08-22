@@ -10,7 +10,14 @@ import { ProviderLogo } from '../ProviderLogo'
 import { ScoreBar } from './ScoreBar'
 
 const fmtLatency = (v?: number) => (v === undefined ? 'N/A' : `${Math.round(v)} ms`)
-const fmtPrice = (v?: number) => (v === undefined ? 'unpriced' : `$${v}/MTok`)
+// Trims binary-float noise (e.g. 0.39999999999999997) before display.
+const fmtMTok = (v: number) => `$${+v.toFixed(2)}`
+const fmtPrice = (input?: number, output?: number) => {
+  if (input === undefined && output === undefined) return 'unpriced'
+  if (input === undefined) return `out ${fmtMTok(output as number)}`
+  if (output === undefined) return `in ${fmtMTok(input)}`
+  return `${fmtMTok(input)} / ${fmtMTok(output)}`
+}
 const fmtUptime = (v?: number) => (v === undefined ? 'N/A' : `${Math.round(v * 100)}%`)
 
 export function PipelineCard({
@@ -41,14 +48,19 @@ export function PipelineCard({
   dragging?: boolean
 }) {
   const usable = status ? status.usable : true
+  const priceTitle =
+    status?.input_per_mtok !== undefined || status?.output_per_mtok !== undefined
+      ? `in $${status?.input_per_mtok ?? '?'} / out $${status?.output_per_mtok ?? '?'} per MTok`
+      : undefined
   return (
     <div
       data-testid="pipeline-card"
-      className={`w-56 shrink-0 select-none space-y-2.5 rounded-xl border border-border bg-card p-4 shadow-sm transition ${
+      className={`w-full select-none space-y-2.5 rounded-xl border border-border bg-card p-4 shadow-sm transition ${
         dragging ? 'opacity-60 ring-2 ring-brand' : ''
       } ${scored ? '' : 'cursor-grab'}`}
     >
       <div className="flex items-center gap-2.5">
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">#{index + 1}</span>
         {provider && <ProviderLogo preset={matchPreset(provider)} className="size-7" />}
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{name}</span>
         <span
@@ -65,9 +77,11 @@ export function PipelineCard({
           <dt>latency</dt>
           <dd className="font-mono text-foreground">{fmtLatency(status?.latency_ms)}</dd>
         </div>
-        <div>
-          <dt>price</dt>
-          <dd className="font-mono text-foreground">{fmtPrice(status?.output_per_mtok)}</dd>
+        <div className="min-w-0">
+          <dt>price /MTok</dt>
+          <dd className="truncate font-mono text-foreground" title={priceTitle}>
+            {fmtPrice(status?.input_per_mtok, status?.output_per_mtok)}
+          </dd>
         </div>
         <div>
           <dt>uptime</dt>

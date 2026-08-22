@@ -506,6 +506,7 @@ export interface RouteEntryStatus {
   uptime?: number
   latency_ms?: number
   tokens_per_s?: number
+  input_per_mtok?: number
   output_per_mtok?: number
 }
 

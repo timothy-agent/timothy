@@ -859,6 +859,7 @@ type RouteEntryStatus struct {
 	Uptime        *float64 `json:"uptime,omitempty"`
 	LatencyMS     *float64 `json:"latency_ms,omitempty"`
 	TokensPerS    *float64 `json:"tokens_per_s,omitempty"`
+	InputPerMTok  *float64 `json:"input_per_mtok,omitempty"`
 	OutputPerMTok *float64 `json:"output_per_mtok,omitempty"`
 }
 
@@ -888,6 +889,7 @@ func resolvedForRoute(snap *router.Snapshot, name string) ([]RouteEntryStatus, *
 			Uptime:        opt(d.Uptime, -1),
 			LatencyMS:     opt(d.LatencyMS, 0),
 			TokensPerS:    opt(d.TokensPerS, 0),
+			InputPerMTok:  opt(d.InputPerMTok, 0),
 			OutputPerMTok: opt(d.OutputPerMTok, 0),
 		}
 		if d.Scored {
