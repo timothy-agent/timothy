@@ -75,6 +75,8 @@ type anthropicRequest struct {
 	System    []anthropicTextBlock `json:"system,omitempty"`
 	Messages  []anthropicMessage   `json:"messages"`
 	Tools     []anthropicTool      `json:"tools,omitempty"`
+	// ToolChoice forces a specific tool call (D-063: CompletionRequest.ForceTool).
+	ToolChoice any `json:"tool_choice,omitempty"`
 }
 
 // anthropicMessage carries either a plain string or content blocks
@@ -249,6 +251,9 @@ func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
 	}
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, anthropicTool(t))
+	}
+	if req.ForceTool != "" && len(out.Tools) > 0 {
+		out.ToolChoice = map[string]any{"type": "tool", "name": req.ForceTool}
 	}
 	return out
 }

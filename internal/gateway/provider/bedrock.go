@@ -318,7 +318,20 @@ func buildConverseStreamInput(req CompletionRequest) *bedrockruntime.ConverseStr
 			"inferenceConfig": map[string]any{"topK": 1},
 		})
 	}
+	if req.ForceTool != "" && input.ToolConfig != nil && converseSupportsToolChoice(req.Model) {
+		input.ToolConfig.ToolChoice = &types.ToolChoiceMemberTool{
+			Value: types.SpecificToolChoice{Name: aws.String(req.ForceTool)},
+		}
+	}
 	return input
+}
+
+// converseSupportsToolChoice reports whether Converse's ToolChoice
+// field is honored for this model (D-063): Anthropic and Mistral
+// Large support forced tool choice; Amazon Nova does not, so
+// CompletionRequest.ForceTool is ignored there (graceful degrade).
+func converseSupportsToolChoice(model string) bool {
+	return strings.Contains(model, "anthropic.") || strings.Contains(model, "mistral-large")
 }
 
 // converseMessages maps normalized messages onto Bedrock Converse

@@ -433,6 +433,41 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 	}
 }
 
+// TestPlanSessionForcesPlanTool pins D-063: when submit_plan is the
+// planning turn's sole tool, the request forces it.
+func TestPlanSessionForcesPlanTool(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if got := agent.requests[0].ForceTool; got != planToolName {
+		t.Fatalf("planner ForceTool = %q, want %s", got, planToolName)
+	}
+}
+
+// TestPlanSessionNoForceToolWithKB pins the D-063 carve-out: a
+// KB-attached mission also offers kb_search/kb_read on the planning
+// turn, so forcing submit_plan would make consulting them impossible.
+func TestPlanSessionNoForceToolWithKB(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	r.kbSearch = func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		return nil, nil
+	}
+	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", Knowledge: []string{"docs"}}
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if got := agent.requests[0].ForceTool; got != "" {
+		t.Fatalf("planner ForceTool = %q, want empty with KB tools offered", got)
+	}
+}
+
 // TestPlanSessionUsesPlanRoute confirms a mission's plan phase runs on
 // PlanRoute when set, instead of Route.
 func TestPlanSessionUsesPlanRoute(t *testing.T) {

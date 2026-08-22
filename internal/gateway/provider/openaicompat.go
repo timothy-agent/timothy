@@ -185,6 +185,8 @@ type oaiRequest struct {
 	// that don't recognize it. Stream retries once without it on that
 	// exact failure (see retryOn400).
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ToolChoice forces a specific tool call (D-063: CompletionRequest.ForceTool).
+	ToolChoice any `json:"tool_choice,omitempty"`
 }
 
 // wire types (stream chunks; only the fields we read)
@@ -436,6 +438,9 @@ func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 		ot.Function.Description = t.Description
 		ot.Function.Parameters = t.InputSchema
 		out.Tools = append(out.Tools, ot)
+	}
+	if req.ForceTool != "" && len(out.Tools) > 0 {
+		out.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": req.ForceTool}}
 	}
 	return out
 }

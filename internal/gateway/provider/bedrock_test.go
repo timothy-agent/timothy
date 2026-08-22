@@ -274,6 +274,46 @@ func TestBuildConverseStreamInput(t *testing.T) {
 	}
 }
 
+// TestBuildConverseStreamInputForceTool pins D-063: Converse's
+// ToolChoice is set only for model families that support forced tool
+// choice (Anthropic, Mistral Large); Nova ignores ForceTool entirely
+// (graceful degrade) since it rejects the field.
+func TestBuildConverseStreamInputForceTool(t *testing.T) {
+	t.Parallel()
+	tools := []ToolDef{{Name: "submit_plan", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+
+	cases := []struct {
+		name    string
+		model   string
+		wantSet bool
+	}{
+		{"nova ignores ForceTool", "us.amazon.nova-pro-v1:0", false},
+		{"anthropic honors ForceTool", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", true},
+		{"mistral large honors ForceTool", "mistral.mistral-large-2407-v1:0", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := buildConverseStreamInput(CompletionRequest{
+				Model: tc.model, Tools: tools, ForceTool: "submit_plan",
+			})
+			if !tc.wantSet {
+				if input.ToolConfig.ToolChoice != nil {
+					t.Fatalf("ToolChoice = %#v, want nil", input.ToolConfig.ToolChoice)
+				}
+				return
+			}
+			choice, ok := input.ToolConfig.ToolChoice.(*types.ToolChoiceMemberTool)
+			if !ok {
+				t.Fatalf("ToolChoice = %#v, want *types.ToolChoiceMemberTool", input.ToolConfig.ToolChoice)
+			}
+			if choice.Value.Name == nil || *choice.Value.Name != "submit_plan" {
+				t.Fatalf("ToolChoice name = %#v, want submit_plan", choice.Value.Name)
+			}
+		})
+	}
+}
+
 func TestDocumentFromJSON(t *testing.T) {
 	t.Parallel()
 	if documentFromJSON(nil) != nil {

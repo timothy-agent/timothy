@@ -283,6 +283,11 @@ type Request struct {
 	// missions): a permission ask resolves as immediate denial instead
 	// of parking on a human prompt for the full timeout (D-039).
 	Unattended bool
+
+	// ForceTool names the single offered tool the model must call this
+	// step (D-063). Only set by callers whose turn ends on that tool
+	// (mission sentinel turns). Empty means auto, today's behavior.
+	ForceTool string
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -362,6 +367,13 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	for _, d := range defs {
 		toolNames[d.Name] = true
 	}
+	// ForceTool is wire-invalid against a tool the turn doesn't actually
+	// offer (D-063) — defensive only, callers are expected to name a
+	// tool already in their own ToolAllow.
+	forceTool := req.ForceTool
+	if forceTool != "" && !toolNames[forceTool] {
+		forceTool = ""
+	}
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
 	var lastMeta *stream.Meta
@@ -398,6 +410,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			Effort:    effort,
 			SessionID: req.SessionID,
 			MissionID: req.MissionID,
+			ForceTool: forceTool,
 		}
 		switch directive {
 		case tools.StepWarnFinalize:
@@ -405,7 +418,10 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			msgs = sreq.Messages
 		case tools.StepForceSynthesis:
 			// Drop the schemas: the model must answer with what it has.
+			// ForceTool goes with them — forcing a call with no tools
+			// offered is a wire error.
 			sreq.Tools = nil
+			sreq.ForceTool = ""
 		}
 
 		// Inner attempt loop: a stream that dies before anything

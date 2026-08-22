@@ -74,6 +74,9 @@ type streamRequest struct {
 	Effort    string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
 	SessionID string             `json:"session_id,omitempty"`
 	MissionID string             `json:"mission_id,omitempty"`
+	// ForceTool names the single offered tool the model must call this
+	// step (D-063). Empty means auto, today's behavior.
+	ForceTool string `json:"force_tool,omitempty"`
 }
 
 // requiredVisionCapability derives whether this request needs a
@@ -193,6 +196,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		Tools:     req.Tools,
 		MaxTokens: req.MaxTokens,
 		Effort:    req.Effort,
+		ForceTool: req.ForceTool,
 	}
 
 	var codes []string
@@ -256,6 +260,9 @@ type attemptResult struct {
 // bad, so the next provider would reject it identically. Everything
 // else — 5xx, timeouts, connection errors, 401/403 (bad key for THIS
 // provider), 429 — advances the chain.
+// empty_output (D-063) is deliberately absent: a zero-output terminal
+// is exactly the case a different provider might fix, so it must
+// advance the chain rather than be reported as final.
 var noFailoverCodes = map[string]bool{
 	"invalid_request": true,
 	"http_400":        true,
@@ -315,6 +322,18 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			send(ev)
 		case stream.EventIncomplete:
 			sawTerminal = true
+			// A provider-relayed incomplete with nothing ever streamed is
+			// a failed attempt eligible for chain failover (D-063): hold
+			// it back instead of forwarding, the same as EventError above.
+			if !res.streamed {
+				res.failed = true
+				res.reason = "provider produced no output"
+				if ev.Text != "" {
+					res.reason = ev.Text
+				}
+				res.entry.ErrorCode = "empty_output"
+				continue // drain quietly; the client saw nothing
+			}
 			if res.entry.Status == "" {
 				res.entry.Status = "incomplete"
 			}
@@ -325,11 +344,17 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 		case stream.EventDone:
 			sawTerminal = true
 			// A stream that closes clean but produced no content (e.g.
-			// [DONE] with zero deltas) is not a success (D-044): tell the
-			// client before the terminal done, the same incomplete-then-
-			// done shape a cut-off stream already uses (see httpx.go).
+			// [DONE] with zero deltas, or a suppressed EventIncomplete
+			// above) is a failed attempt eligible for chain failover
+			// (D-063) rather than a success (D-044) — hold the done back
+			// too, so no terminal reaches the client for this attempt.
 			if !res.streamed {
-				send(stream.StreamEvent{Type: stream.EventIncomplete, Text: "provider produced no output"})
+				if !res.failed {
+					res.failed = true
+					res.reason = "provider produced no output"
+					res.entry.ErrorCode = "empty_output"
+				}
+				continue
 			}
 			// Attribute the serving provider on the terminal event so
 			// callers need no second lookup. Cost/Currency ride along when
@@ -387,6 +412,12 @@ func finalStatus(res attemptResult) string {
 	switch {
 	case res.entry.Status != "": // incomplete already decided
 		return res.entry.Status
+	// empty_output books "incomplete", not "error" (D-063): it's a
+	// failed attempt for chain-failover purposes, but the ledger keeps
+	// treating a zero-output terminal the same as any other incomplete
+	// so it doesn't poison LastSuccess stickiness differently than before.
+	case res.entry.ErrorCode == "empty_output":
+		return "incomplete"
 	case res.failed, res.entry.ErrorCode != "":
 		return "error"
 	// A drained stream that produced no content is not a success (D-044):

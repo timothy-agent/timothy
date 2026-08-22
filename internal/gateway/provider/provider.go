@@ -117,6 +117,11 @@ type CompletionRequest struct {
 	// no such restriction). Empty means no override; wins over both
 	// Effort and the provider's own ReasoningEffort config when set.
 	ReasoningEffortOverride string
+	// ForceTool names the single offered tool the model must call this
+	// step (forced tool_choice), instead of choosing freely among Tools
+	// (D-063). Empty means auto, today's behavior. Drivers that cannot
+	// express a forced choice on the wire ignore it.
+	ForceTool string
 }
 
 // Provider is one configured LLM provider. Stream returns quickly; all

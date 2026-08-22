@@ -1667,6 +1667,81 @@ func TestAgentToolAllowExcludedToolRejected(t *testing.T) {
 	}
 }
 
+// TestAgentForceToolCopiedToStreamRequest pins D-063: Request.ForceTool
+// rides onto every outgoing gwclient.StreamRequest unchanged when the
+// named tool is offered.
+func TestAgentForceToolCopiedToStreamRequest(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{finalStep("done")}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", ForceTool: "echo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 1 || gw.requests[0].ForceTool != "echo" {
+		t.Fatalf("requests = %+v, want ForceTool=echo on the single request", gw.requests)
+	}
+}
+
+// TestAgentForceToolClearedUnderForceSynthesis pins D-063: once the
+// loop forces synthesis (tools.StepForceSynthesis drops Tools, no
+// schemas offered), ForceTool must clear alongside — forcing a call
+// with no tools offered is a wire error. Three identical echo calls in
+// a row trip RepeatGuard's "stuck" path, which forces synthesis on the
+// very next step without needing to hit the real step ceiling.
+func TestAgentForceToolClearedUnderForceSynthesis(t *testing.T) {
+	t.Parallel()
+	repeat := toolCallStep([2]string{"echo", `{"text":"x"}`})
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		repeat, repeat, repeat, finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", ForceTool: "echo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 4 {
+		t.Fatalf("requests = %d, want 4 (3 repeats + forced synthesis)", len(gw.requests))
+	}
+	last := gw.requests[3]
+	if last.ForceTool != "" {
+		t.Fatalf("last request ForceTool = %q, want cleared under forced synthesis", last.ForceTool)
+	}
+	if len(last.Tools) != 0 {
+		t.Fatalf("last request Tools = %+v, want none under forced synthesis", last.Tools)
+	}
+}
+
+// TestAgentForceToolClearedWhenNotOffered pins D-063's defensive
+// clause: forcing a tool absent from the turn's own filtered surface
+// (ToolAllow excludes it here) is a wire error, so the loop drops it
+// rather than send an invalid tool_choice.
+func TestAgentForceToolClearedWhenNotOffered(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{finalStep("done")}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID: "s1", Route: "coding",
+		ToolAllow: []string{"echo"},
+		ForceTool: "not_offered",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 1 || gw.requests[0].ForceTool != "" {
+		t.Fatalf("requests = %+v, want ForceTool cleared for an unoffered tool", gw.requests)
+	}
+}
+
 // TestAgentUnattendedAskDeniesImmediately is D-039's second failure
 // mode: an unattended (schedule-fired) turn hitting DecisionAsk must
 // deny immediately with feedback naming the rationale, never call

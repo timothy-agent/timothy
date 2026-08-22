@@ -71,6 +71,30 @@ func TestAnthropicMessagesEmptyToolInput(t *testing.T) {
 	}
 }
 
+// TestAnthropicForceTool pins D-063: ForceTool wires onto the wire's
+// tool_choice as a forced tool selection, and is absent when ForceTool
+// is empty.
+func TestAnthropicForceTool(t *testing.T) {
+	t.Parallel()
+	a := NewAnthropic(AnthropicConfig{APIKey: "k"})
+	tools := []ToolDef{{Name: "submit_plan", Description: "d", InputSchema: json.RawMessage(`{}`)}}
+
+	forced := a.buildRequest(CompletionRequest{Model: "m", Tools: tools, ForceTool: "submit_plan"})
+	data, err := json.Marshal(forced)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_choice":{"name":"submit_plan","type":"tool"}`) {
+		t.Fatalf("wire = %s, want a forced tool_choice", data)
+	}
+
+	unforced := a.buildRequest(CompletionRequest{Model: "m", Tools: tools})
+	data, _ = json.Marshal(unforced)
+	if strings.Contains(string(data), "tool_choice") {
+		t.Fatalf("wire = %s, want no tool_choice when ForceTool is empty", data)
+	}
+}
+
 func TestOpenAICompatToolRoundTrip(t *testing.T) {
 	t.Parallel()
 	o := NewOpenAICompat(OpenAICompatConfig{BaseURL: "http://x", APIKey: "k"})
@@ -117,6 +141,30 @@ func TestOpenAICompatEffortDial(t *testing.T) {
 	data, _ := json.Marshal(normal)
 	if strings.Contains(string(data), "reasoning_effort") {
 		t.Fatal("normal effort must omit the field entirely")
+	}
+}
+
+// TestOpenAICompatForceTool pins D-063: ForceTool wires onto the
+// wire's tool_choice as a forced function call, and is absent when
+// ForceTool is empty.
+func TestOpenAICompatForceTool(t *testing.T) {
+	t.Parallel()
+	o := NewOpenAICompat(OpenAICompatConfig{BaseURL: "http://x", APIKey: "k"})
+	tools := []ToolDef{{Name: "submit_plan", Description: "d", InputSchema: json.RawMessage(`{}`)}}
+
+	forced := o.buildRequest(CompletionRequest{Model: "m", Tools: tools, ForceTool: "submit_plan"})
+	data, err := json.Marshal(forced)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_choice":{"function":{"name":"submit_plan"},"type":"function"}`) {
+		t.Fatalf("wire = %s, want a forced tool_choice", data)
+	}
+
+	unforced := o.buildRequest(CompletionRequest{Model: "m", Tools: tools})
+	data, _ = json.Marshal(unforced)
+	if strings.Contains(string(data), "tool_choice") {
+		t.Fatalf("wire = %s, want no tool_choice when ForceTool is empty", data)
 	}
 }
 

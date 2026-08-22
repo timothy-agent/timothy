@@ -45,6 +45,9 @@ type StreamRequest struct {
 	Effort     string             `json:"effort,omitempty"` // D-020: "low" | "" (normal)
 	SessionID  string             `json:"session_id,omitempty"`
 	MissionID  string             `json:"mission_id,omitempty"` // ledger tag: the mission this turn serves
+	// ForceTool names the single offered tool the model must call this
+	// step (D-063). Empty means auto, today's behavior.
+	ForceTool string `json:"force_tool,omitempty"`
 }
 
 // windowsTTL matches the gateway's own config poll cadence: a fresher

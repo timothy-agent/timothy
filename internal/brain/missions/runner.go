@@ -964,6 +964,12 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
 	}
+	// Force submit_plan only when it is the turn's sole tool (D-063):
+	// a KB-attached mission also offers kb_search/kb_read here, and a
+	// forced choice would make consulting them impossible.
+	if len(extra) == 1 {
+		req.ForceTool = planToolName
+	}
 	text, args, _, err := r.runTurn(ctx, req, planToolName)
 	if err != nil {
 		return Spec{}, err

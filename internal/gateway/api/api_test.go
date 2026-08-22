@@ -97,8 +97,8 @@ func oaiFail(t *testing.T) *httptest.Server {
 }
 
 // oaiEmptyDone streams usage then [DONE] with zero content deltas — a
-// provider stream that terminates cleanly but produced no output
-// (D-044).
+// provider stream that terminates cleanly but produced no output, a
+// failed attempt eligible for chain failover (D-063).
 func oaiEmptyDone(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +232,29 @@ func pricedSnapshotFor(t *testing.T, firstURL, secondURL string) *router.Snapsho
 	return snap
 }
 
+// TestStreamForceToolReachesProvider pins D-063: streamRequest's
+// force_tool field threads into provider.CompletionRequest.ForceTool
+// and onto the wire as a forced tool_choice.
+func TestStreamForceToolReachesProvider(t *testing.T) {
+	t.Parallel()
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	a, _ := newAPI(snapshotFor(t, srv.URL, oaiFail(t).URL))
+
+	w := postJSON(t, a.handleStream, `{"route":"coding","force_tool":"submit_plan","tools":[{"name":"submit_plan","description":"d","input_schema":{}}],"messages":[{"role":"user","content":"hi"}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(string(body), `"tool_choice":{"function":{"name":"submit_plan"},"type":"function"}`) {
+		t.Fatalf("wire body = %s, want a forced tool_choice", body)
+	}
+}
+
 func TestStreamHappyPathWithLedger(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(pricedSnapshotFor(t, oaiOK(t, "hello").URL, oaiFail(t).URL))
@@ -287,43 +310,101 @@ func TestStreamHappyPathWithLedger(t *testing.T) {
 	}
 }
 
-// TestStreamEmptyOutputBookedIncomplete pins D-044: a provider stream
-// that terminates cleanly with zero content deltas ([DONE] only) must
-// not be booked as a success. res.streamed is set only by content
-// events (chunk/reasoning/tool) — never by EventUsage — so the ledger
-// status flips to "incomplete" even though usage/cost are still known
-// (a real, reported zero, not the unknown-so-NULL case D-013 covers).
-// The client sees an EventIncomplete before the terminal done, the same
-// shape a cut-off stream already uses.
-func TestStreamEmptyOutputBookedIncomplete(t *testing.T) {
+// TestStreamEmptyOutputFailsOver pins D-063: a provider stream that
+// terminates cleanly with zero content deltas ([DONE] only) is a failed
+// attempt, not a success — the client never sees its incomplete/done,
+// and the chain fails over to the next entry instead. The client sees a
+// failover event, then the second provider's real content and terminal
+// done. Two ledger entries: the empty one booked "incomplete" with
+// ErrorCode "empty_output" (still not "error" — D-044's stickiness
+// concern), the second "ok".
+func TestStreamEmptyOutputFailsOver(t *testing.T) {
 	t.Parallel()
-	a, rec := newAPI(snapshotFor(t, oaiEmptyDone(t).URL, oaiFail(t).URL))
+	a, rec := newAPI(snapshotFor(t, oaiEmptyDone(t).URL, oaiOK(t, "backup").URL))
 
 	w := postJSON(t, a.handleStream, `{"route":"coding","session_id":"s1","messages":[{"role":"user","content":"hi"}]}`)
 
 	events := sseEvents(t, w.Body.String())
-	if len(events) < 2 {
-		t.Fatalf("events = %+v, want at least incomplete+done", events)
+	var failover *stream.StreamEvent
+	var text string
+	for i, ev := range events {
+		switch ev.Type {
+		case stream.EventFailover:
+			failover = &events[i]
+		case stream.EventIncomplete, stream.EventError:
+			t.Fatalf("empty attempt's terminal leaked to client: %+v", ev)
+		case stream.EventChunk:
+			text += ev.Text
+		}
+	}
+	if failover == nil {
+		t.Fatalf("events = %+v, want a failover event", events)
+	}
+	if failover.Failover.Code != "empty_output" {
+		t.Fatalf("failover code = %q, want empty_output", failover.Failover.Code)
+	}
+	if text != "backup" {
+		t.Fatalf("chunks = %q, want backup", text)
 	}
 	last := events[len(events)-1]
 	if last.Type != stream.EventDone {
 		t.Fatalf("last event = %v, want done", last.Type)
 	}
-	prev := events[len(events)-2]
-	if prev.Type != stream.EventIncomplete {
-		t.Fatalf("event before done = %v, want incomplete", prev.Type)
+
+	entries := rec.all()
+	if len(entries) != 2 {
+		t.Fatalf("ledger entries = %d, want 2", len(entries))
+	}
+	if entries[0].Status != "incomplete" || entries[0].ErrorCode != "empty_output" {
+		t.Fatalf("first entry = %+v, want incomplete/empty_output", entries[0])
+	}
+	if entries[0].Usage == nil || entries[0].Usage.OutputTokens != 0 {
+		t.Fatalf("first entry usage = %+v, want reported zero output tokens", entries[0].Usage)
+	}
+	if entries[1].Status != "ok" {
+		t.Fatalf("second entry = %+v, want ok", entries[1])
+	}
+}
+
+// TestStreamEmptyOutputChainExhausted covers every chain entry
+// producing zero output: the chain fails over on each, and once
+// exhausted the client gets the existing chain_exhausted terminal
+// error — every entry booked incomplete/empty_output, none "ok".
+func TestStreamEmptyOutputChainExhausted(t *testing.T) {
+	t.Parallel()
+	a, rec := newAPI(snapshotFor(t, oaiEmptyDone(t).URL, oaiEmptyDone(t).URL))
+
+	w := postJSON(t, a.handleStream, `{"route":"coding","messages":[{"role":"user","content":"hi"}]}`)
+
+	events := sseEvents(t, w.Body.String())
+	var sawFailover bool
+	last := events[len(events)-1]
+	for _, ev := range events[:len(events)-1] {
+		switch ev.Type {
+		case stream.EventFailover:
+			sawFailover = true
+		case stream.EventIncomplete, stream.EventChunk:
+			t.Fatalf("empty attempt's terminal or content leaked to client: %+v", ev)
+		}
+	}
+	if !sawFailover {
+		t.Fatalf("events = %+v, want a failover event", events)
+	}
+	if last.Type != stream.EventError || last.Err.Code != "chain_exhausted" {
+		t.Fatalf("last event = %+v, want chain_exhausted error", last)
+	}
+	if !strings.Contains(last.Err.Message, "empty_output") {
+		t.Fatalf("exhaustion message missing empty_output: %s", last.Err.Message)
 	}
 
 	entries := rec.all()
-	if len(entries) != 1 {
-		t.Fatalf("ledger entries = %d, want 1", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("ledger entries = %d, want 2", len(entries))
 	}
-	e := entries[0]
-	if e.Status != "incomplete" {
-		t.Fatalf("status = %q, want incomplete", e.Status)
-	}
-	if e.Usage == nil || e.Usage.OutputTokens != 0 {
-		t.Fatalf("usage = %+v, want reported zero output tokens", e.Usage)
+	for _, e := range entries {
+		if e.Status != "incomplete" || e.ErrorCode != "empty_output" {
+			t.Fatalf("entry = %+v, want incomplete/empty_output", e)
+		}
 	}
 }
 
