@@ -208,7 +208,7 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 		route = e.routeForRole(ctx, "default")
 	}
 	return e.spawner.Create(ctx, missions.Mission{
-		Goal: goal, Kind: step.Kind, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
+		Goal: goal, Kind: step.Kind, Light: step.Light, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
 		OnComplete: step.OnComplete, DestinationIDs: step.DestinationIDs,
 		ParentMissionID: parentMissionID, ParentContext: outcome,
 		WorkflowRunID: runID, WorkflowStep: stepName,

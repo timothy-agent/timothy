@@ -36,6 +36,7 @@ type Definition struct {
 type Step struct {
 	Goal           string   `json:"goal"`
 	Kind           string   `json:"kind"` // coding | general
+	Light          bool     `json:"light,omitempty"` // D-069 light mission; general only
 	Route          string   `json:"route,omitempty"`
 	PlanRoute      string   `json:"plan_route,omitempty"`
 	AgentID        string   `json:"agent_id,omitempty"`
@@ -87,6 +88,9 @@ func (d *Definition) Validate() error {
 		case "", "push", "push_pr":
 		default:
 			return fmt.Errorf("step %q: on_complete must be \"\", \"push\", or \"push_pr\"", name)
+		}
+		if d.Steps[name].Light && d.Steps[name].Kind != "general" {
+			return fmt.Errorf("step %q: light is only valid for kind=general", name)
 		}
 	}
 	for i := range d.Edges {

@@ -154,3 +154,19 @@ func TestParseDefinitionRejectsInvalidDefinition(t *testing.T) {
 		t.Fatal("ParseDefinition() = nil, want error for invalid definition")
 	}
 }
+
+func TestValidateRejectsLightOnCoding(t *testing.T) {
+	d := validDefinition()
+	d.Steps["coder"] = Step{Goal: "write code", Kind: "coding", Light: true}
+	if err := d.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for light on kind=coding")
+	}
+}
+
+func TestValidateAllowsLightOnGeneral(t *testing.T) {
+	d := validDefinition()
+	d.Steps["coder"] = Step{Goal: "summarize", Kind: "general", Light: true}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for light on kind=general", err)
+	}
+}
