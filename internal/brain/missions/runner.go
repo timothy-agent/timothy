@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os/exec"
 	"regexp"
 	"slices"
 	"sort"
@@ -930,7 +931,7 @@ func renderReviewContent(p ReviewPacket) string {
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
-	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. artifacts lists the workspace-relative file(s) the unit must produce — the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote()
+	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. Every unit must list at least one artifact — the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote()
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if exploreNotes != "" {
 		user += "\n\nExploration findings:\n" + NeutralizeSlot(exploreNotes)
@@ -1064,6 +1065,46 @@ func parseSpec(raw string) (Spec, error) {
 	for _, u := range spec.Units {
 		if strings.Contains(u.VerifyCmd, "$(") || strings.Contains(u.VerifyCmd, "`") {
 			return Spec{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks) — write the direct command instead")
+		}
+	}
+	// D-068: every unit must declare at least one artifact so the
+	// harness's CheckArtifacts has something to verify.
+	for _, u := range spec.Units {
+		if len(u.Artifacts) == 0 {
+			return Spec{}, fmt.Errorf("mission runner: unit %q must list at least one workspace-relative artifact file the harness can check (for a report-style goal, the report file itself is the artifact)", u.Title)
+		}
+	}
+	// D-068: reject verify_cmds that succeed regardless of outcome.
+	// Deny-set on the first shell word only, deliberately not a shell
+	// parser; a no-op buried after && is out of scope.
+	for _, u := range spec.Units {
+		cmd := strings.TrimSpace(u.VerifyCmd)
+		if cmd == "" {
+			return Spec{}, fmt.Errorf("mission runner: unit %q must have a verify_cmd that checks the CONTENT of its artifacts (e.g. grep) — a bare echo, true, :, or printf proves nothing", u.Title)
+		}
+		firstWord := cmd
+		if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+			firstWord = cmd[:i]
+		}
+		switch firstWord {
+		case "echo", "true", ":", "printf":
+			return Spec{}, fmt.Errorf("mission runner: unit %q verify_cmd must check the CONTENT of its artifacts (e.g. grep) — a bare echo, true, :, or printf proves nothing", u.Title)
+		}
+	}
+	// D-068: verify_cmd must parse as POSIX shell (-n never executes).
+	// Skip silently if /bin/sh is missing so tests stay hermetic.
+	if shPath, err := exec.LookPath("/bin/sh"); err == nil {
+		for _, u := range spec.Units {
+			shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			out, err := exec.CommandContext(shCtx, shPath, "-n", "-c", u.VerifyCmd).CombinedOutput()
+			cancel()
+			if err != nil {
+				stderr := strings.TrimSpace(string(out))
+				if len(stderr) > 200 {
+					stderr = stderr[:200]
+				}
+				return Spec{}, fmt.Errorf("mission runner: unit %q verify_cmd does not parse as POSIX shell: %s", u.Title, stderr)
+			}
 		}
 	}
 	// Passes is harness-only evidence (RunVerify); a plan is never born

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -410,7 +412,7 @@ func TestRunReviewFallsBackToTokenJSONTextSentinel(t *testing.T) {
 
 func TestPlanSessionParsesSpec(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -437,7 +439,7 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 // planning turn's sole tool, the request forces it.
 func TestPlanSessionForcesPlanTool(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
@@ -453,7 +455,7 @@ func TestPlanSessionForcesPlanTool(t *testing.T) {
 // turn, so forcing submit_plan would make consulting them impossible.
 func TestPlanSessionNoForceToolWithKB(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	r.kbSearch = func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
@@ -472,7 +474,7 @@ func TestPlanSessionNoForceToolWithKB(t *testing.T) {
 // PlanRoute when set, instead of Route.
 func TestPlanSessionUsesPlanRoute(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "mini", PlanRoute: "strong", Goal: "fix bug"}
@@ -488,7 +490,7 @@ func TestPlanSessionUsesPlanRoute(t *testing.T) {
 // prior outcome digest reaches the planner's user prompt.
 func TestPlanSessionIncludesParentContext(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", ParentContext: "prior mission fixed the signup bug"}
@@ -506,7 +508,7 @@ func TestPlanSessionIncludesParentContext(t *testing.T) {
 // attachment's markdown reaches the planner's user prompt.
 func TestPlanSessionIncludesAttachments(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", Attachments: []MissionAttachment{
@@ -543,8 +545,8 @@ func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 // submission, with feedback the planner can act on immediately.
 func TestPlanSessionRejectsCommandSubstitution(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
@@ -560,8 +562,8 @@ func TestPlanSessionRejectsCommandSubstitution(t *testing.T) {
 // other opaque-form spelling of command substitution.
 func TestPlanSessionRejectsBackticks(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, "{\"units\":[{\"title\":\"Check output\",\"verify_cmd\":\"test `cat out.md` = ok\"}]}")},
-		{toolEndEvent(planToolName, "{\"units\":[{\"title\":\"Check output\",\"verify_cmd\":\"test `cat out.md` = ok\"}]}")},
+		{toolEndEvent(planToolName, "{\"units\":[{\"title\":\"Check output\",\"artifacts\":[\"out.md\"],\"verify_cmd\":\"test `cat out.md` = ok\"}]}")},
+		{toolEndEvent(planToolName, "{\"units\":[{\"title\":\"Check output\",\"artifacts\":[\"out.md\"],\"verify_cmd\":\"test `cat out.md` = ok\"}]}")},
 	}}
 	r := newTestRunner(agent)
 	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
@@ -579,8 +581,8 @@ func TestPlanSessionRejectsBackticks(t *testing.T) {
 // what was wrong and a corrected plan on the next turn is accepted.
 func TestPlanSessionRecoversFromCommandSubstitutionFeedback(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","verify_cmd":"grep -qi ok out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -604,8 +606,8 @@ func TestPlanSessionRecoversFromCommandSubstitutionFeedback(t *testing.T) {
 func TestPlanSessionAcceptsLegitimateVerifyCmd(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[`+
-			`{"title":"Check content","verify_cmd":"grep -qi 'foo' out.md"},`+
-			`{"title":"Check line count","verify_cmd":"test -f x && wc -l < x"}`+
+			`{"title":"Check content","artifacts":["out.md"],"verify_cmd":"grep -qi 'foo' out.md"},`+
+			`{"title":"Check line count","artifacts":["x"],"verify_cmd":"test -f x && wc -l < x"}`+
 			`]}`)},
 	}}
 	r := newTestRunner(agent)
@@ -618,6 +620,143 @@ func TestPlanSessionAcceptsLegitimateVerifyCmd(t *testing.T) {
 	}
 	if spec.Units[0].VerifyCmd != "grep -qi 'foo' out.md" || spec.Units[1].VerifyCmd != "test -f x && wc -l < x" {
 		t.Fatalf("PlanSession spec units = %+v", spec.Units)
+	}
+	if agent.call != 1 {
+		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
+	}
+}
+
+// TestPlanSessionRejectsUnitWithNoArtifacts guards D-068: a unit that
+// declares zero artifacts leaves the harness nothing to check, which
+// is exactly what let amazon.nova-2-lite's empty-contract unit
+// "succeed" on a verify_cmd that always exits 0. Recovery with an
+// artifact added must succeed.
+func TestPlanSessionRejectsUnitWithNoArtifacts(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Integrate Gmail API","verify_cmd":"grep -qi ok out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Integrate Gmail API","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 1 || len(spec.Units[0].Artifacts) != 1 {
+		t.Fatalf("PlanSession spec = %+v", spec)
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+	recoverReq := agent.requests[1]
+	last := recoverReq.Messages[len(recoverReq.Messages)-1]
+	if !strings.Contains(last.Content, "Integrate Gmail API") || !strings.Contains(last.Content, "artifact") {
+		t.Fatalf("recovery message = %q, want it to name the unit and mention artifacts", last.Content)
+	}
+}
+
+// TestPlanSessionRejectsNoOpVerifyCmd guards D-068's deny-set on the
+// verify_cmd's first shell word: echo/true/:/printf always exit 0
+// regardless of content, which is exactly the shape of the real
+// amazon.nova-2-lite incident (verify_cmd `echo 'Gmail API integration
+// required for actual execution'`, always passing, proving nothing).
+// A command that merely CONTAINS one of those words — as an argument,
+// or after && — must still be accepted; the deny-set only looks at
+// the first token, by design (see the scoping comment in parseSpec).
+func TestPlanSessionRejectsNoOpVerifyCmd(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+	}{
+		{"echo", `echo 'Gmail API integration required for actual execution'`},
+		{"true", `true`},
+		{"colon", `:`},
+		{"printf", `printf 'done\n'`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["out.md"],"verify_cmd":%q}]}`, tc.cmd)
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+				{toolEndEvent(planToolName, plan)},
+				{toolEndEvent(planToolName, plan)},
+			}}
+			r := newTestRunner(agent)
+			_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+			if err == nil {
+				t.Fatalf("PlanSession accepted a no-op verify_cmd %q", tc.cmd)
+			}
+			if !strings.Contains(err.Error(), "CONTENT") {
+				t.Fatalf("PlanSession error = %q, want it to demand a content check", err.Error())
+			}
+		})
+	}
+}
+
+// TestPlanSessionAcceptsVerifyCmdContainingEchoWord confirms the
+// no-op deny-set only inspects the verify_cmd's FIRST shell word — a
+// real content check that happens to contain the word "echo" as an
+// argument, or a command containing "echo" later after &&, must pass.
+func TestPlanSessionAcceptsVerifyCmdContainingEchoWord(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[`+
+			`{"title":"Check literal word","artifacts":["file.md"],"verify_cmd":"grep -q echo file.md"},`+
+			`{"title":"Check then echo","artifacts":["report.md"],"verify_cmd":"test -s report.md && grep -q x report.md"}`+
+			`]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 2 {
+		t.Fatalf("PlanSession spec = %+v", spec)
+	}
+	if agent.call != 1 {
+		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
+	}
+}
+
+// TestPlanSessionRejectsUnterminatedQuote guards D-068's POSIX shell
+// syntax gate: verify_cmd is run through the REAL /bin/sh -n (per this
+// repo's real-shell-tests convention — a fake shell would forgive
+// exactly the quoting bugs this check exists to catch). This mirrors
+// the real amazon.nova-lite incident, whose unterminated quote burned
+// execute iterations before failing at verify time, well after the
+// plan was accepted.
+func TestPlanSessionRejectsUnterminatedQuote(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh on this machine")
+	}
+	bad := `grep -q "unterminated report.md`
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["report.md"],"verify_cmd":%q}]}`, bad))},
+		{toolEndEvent(planToolName, fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["report.md"],"verify_cmd":%q}]}`, bad))},
+	}}
+	r := newTestRunner(agent)
+	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err == nil {
+		t.Fatal("PlanSession accepted a verify_cmd with an unterminated quote")
+	}
+	if !strings.Contains(err.Error(), "does not parse as POSIX shell") {
+		t.Fatalf("PlanSession error = %q, want it to name the shell parse failure", err.Error())
+	}
+}
+
+// TestPlanSessionAcceptsValidQuoting confirms the /bin/sh -n gate
+// doesn't false-positive on real, properly quoted verify_cmds.
+func TestPlanSessionAcceptsValidQuoting(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh on this machine")
+	}
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Ship it","artifacts":["report.md"],"verify_cmd":"grep -qi 'retry-after' report.md"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 1 {
+		t.Fatalf("PlanSession spec = %+v", spec)
 	}
 	if agent.call != 1 {
 		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
@@ -646,7 +785,7 @@ func TestPlanSessionRejectsMalformedJSON(t *testing.T) {
 func TestPlanSessionRecoversWithFeedback(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("here's my plan in prose, no tool call")},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Fix it","verify_cmd":"true"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Fix it","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -1471,7 +1610,7 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 	}
 
 	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"do it","verify_cmd":"true"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"do it","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r = newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
