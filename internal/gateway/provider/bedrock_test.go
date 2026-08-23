@@ -21,7 +21,7 @@ func TestConverseMessages(t *testing.T) {
 		{Role: "tool"},      // no result payload: must be dropped
 	}
 
-	out := converseMessages(msgs)
+	out := converseMessages(msgs, true)
 	if len(out) != 3 {
 		t.Fatalf("len = %d, want 3", len(out))
 	}
@@ -62,7 +62,7 @@ func TestConverseMessagesMergesParallelToolResults(t *testing.T) {
 		{Role: "tool", ToolResult: &ToolResult{ID: "t2", Content: "9"}},
 	}
 
-	out := converseMessages(msgs)
+	out := converseMessages(msgs, true)
 	if len(out) != 2 {
 		t.Fatalf("len = %d, want 2 (one assistant turn, one merged user turn)", len(out))
 	}
@@ -93,7 +93,7 @@ func TestConverseMessagesDoesNotMergeIntoRealUserText(t *testing.T) {
 		{Role: "user", Content: "thanks, one more question"},
 	}
 
-	out := converseMessages(msgs)
+	out := converseMessages(msgs, true)
 	if len(out) != 3 {
 		t.Fatalf("len = %d, want 3 (assistant, tool result, plain user text kept separate)", len(out))
 	}
@@ -103,6 +103,100 @@ func TestConverseMessagesDoesNotMergeIntoRealUserText(t *testing.T) {
 	txt, ok := out[2].Content[0].(*types.ContentBlockMemberText)
 	if !ok || txt.Value != "thanks, one more question" {
 		t.Fatalf("msg 2 = %#v", out[2].Content[0])
+	}
+}
+
+// TestConverseMessagesFlattensToolHistoryWithoutTools reproduces the
+// live Bedrock ConverseStream 400: "ValidationException: The
+// toolConfig field must be defined when using toolUse and toolResult
+// content blocks." The brain loop's force-synthesis step nils Tools
+// but keeps the turn's tool call/result history in messages; with no
+// ToolConfig, toolUse/toolResult blocks must not appear at all.
+func TestConverseMessagesFlattensToolHistoryWithoutTools(t *testing.T) {
+	t.Parallel()
+	msgs := []Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "calling", ToolCalls: []ToolCall{
+			{ID: "t1", Name: "calc", Input: json.RawMessage(`{"a":1}`)},
+		}},
+		{Role: "tool", ToolResult: &ToolResult{ID: "t1", Content: "2"}},
+	}
+
+	out := converseMessages(msgs, false)
+	if len(out) != 3 {
+		t.Fatalf("len = %d, want 3", len(out))
+	}
+
+	// No toolUse or toolResult blocks anywhere.
+	for i, msg := range out {
+		for _, c := range msg.Content {
+			if _, ok := c.(*types.ContentBlockMemberToolUse); ok {
+				t.Fatalf("msg %d: found toolUse block, want none", i)
+			}
+			if _, ok := c.(*types.ContentBlockMemberToolResult); ok {
+				t.Fatalf("msg %d: found toolResult block, want none", i)
+			}
+		}
+	}
+
+	// Assistant message keeps its text plus a flattened tool-call block;
+	// it must never end up with zero content blocks.
+	if out[1].Role != types.ConversationRoleAssistant || len(out[1].Content) != 2 {
+		t.Fatalf("msg 1: role %v, %d blocks", out[1].Role, len(out[1].Content))
+	}
+	txt0, ok := out[1].Content[0].(*types.ContentBlockMemberText)
+	if !ok || txt0.Value != "calling" {
+		t.Fatalf("msg 1 block 0 = %#v", out[1].Content[0])
+	}
+	txt1, ok := out[1].Content[1].(*types.ContentBlockMemberText)
+	if !ok || !strings.Contains(txt1.Value, "calc") || !strings.Contains(txt1.Value, `"a":1`) {
+		t.Fatalf("msg 1 block 1 = %#v, want flattened tool call text", out[1].Content[1])
+	}
+
+	// Tool result flattens to plain user-role text.
+	if out[2].Role != types.ConversationRoleUser {
+		t.Fatalf("msg 2 role = %v, want user", out[2].Role)
+	}
+	if len(out[2].Content) != 1 {
+		t.Fatalf("msg 2 blocks = %d, want 1", len(out[2].Content))
+	}
+	rtxt, ok := out[2].Content[0].(*types.ContentBlockMemberText)
+	if !ok || !strings.Contains(rtxt.Value, "t1") || !strings.Contains(rtxt.Value, "2") {
+		t.Fatalf("msg 2 block 0 = %#v, want flattened tool result text", out[2].Content[0])
+	}
+}
+
+// TestConverseMessagesKeepsToolBlocksWhenToolsOffered proves the
+// hasTools=true path is byte-identical to pre-fix behavior: the same
+// history that gets flattened above must still produce real
+// toolUse/toolResult blocks when the request offers tools.
+func TestConverseMessagesKeepsToolBlocksWhenToolsOffered(t *testing.T) {
+	t.Parallel()
+	msgs := []Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "calling", ToolCalls: []ToolCall{
+			{ID: "t1", Name: "calc", Input: json.RawMessage(`{"a":1}`)},
+		}},
+		{Role: "tool", ToolResult: &ToolResult{ID: "t1", Content: "2"}},
+	}
+
+	out := converseMessages(msgs, true)
+	if len(out) != 3 {
+		t.Fatalf("len = %d, want 3", len(out))
+	}
+	if len(out[1].Content) != 2 {
+		t.Fatalf("msg 1 blocks = %d, want 2", len(out[1].Content))
+	}
+	tu, ok := out[1].Content[1].(*types.ContentBlockMemberToolUse)
+	if !ok || *tu.Value.ToolUseId != "t1" || *tu.Value.Name != "calc" {
+		t.Fatalf("msg 1 block 1 = %#v, want toolUse block", out[1].Content[1])
+	}
+	if out[2].Role != types.ConversationRoleUser {
+		t.Fatalf("msg 2 role = %v", out[2].Role)
+	}
+	tr, ok := out[2].Content[0].(*types.ContentBlockMemberToolResult)
+	if !ok || *tr.Value.ToolUseId != "t1" {
+		t.Fatalf("msg 2 block 0 = %#v, want toolResult block", out[2].Content[0])
 	}
 }
 

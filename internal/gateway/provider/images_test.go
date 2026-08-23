@@ -148,7 +148,7 @@ func TestAnthropicMessagesTextOnlyUnchangedWireShape(t *testing.T) {
 
 func TestConverseMessagesImageBlock(t *testing.T) {
 	t.Parallel()
-	out := converseMessages([]Message{imageMsg("what is this?", "image/webp", "Q0M=")}) // base64("CC")
+	out := converseMessages([]Message{imageMsg("what is this?", "image/webp", "Q0M=")}, true) // base64("CC")
 
 	if len(out) != 1 || out[0].Role != types.ConversationRoleUser {
 		t.Fatalf("messages = %+v, want 1 user message", out)
@@ -180,7 +180,7 @@ func TestConverseMessagesImageBlock(t *testing.T) {
 // block appended, when Images is empty.
 func TestConverseMessagesTextOnlyUnchangedWireShape(t *testing.T) {
 	t.Parallel()
-	out := converseMessages([]Message{{Role: "user", Content: "hello"}})
+	out := converseMessages([]Message{{Role: "user", Content: "hello"}}, true)
 
 	if len(out) != 1 || len(out[0].Content) != 1 {
 		t.Fatalf("messages = %+v, want 1 message with exactly 1 content block", out)

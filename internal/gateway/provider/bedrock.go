@@ -298,10 +298,19 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 // from AdditionalModelRequestFields instead. Titan has no such
 // failure mode and no topK field, so the workaround is gated to Nova.
 func buildConverseStreamInput(req CompletionRequest) *bedrockruntime.ConverseStreamInput {
+	toolConfig := converseTools(req.Tools)
 	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:    aws.String(req.Model),
-		Messages:   converseMessages(req.Messages),
-		ToolConfig: converseTools(req.Tools),
+		ModelId: aws.String(req.Model),
+		// hasTools gates whether tool call/result content blocks are
+		// legal to emit at all: Bedrock's ValidationException
+		// "The toolConfig field must be defined when using toolUse and
+		// toolResult content blocks" fires whenever such blocks appear
+		// on a request with no ToolConfig — e.g. the brain loop's
+		// force-synthesis turn nils Tools but keeps prior tool-call/
+		// tool-result history in messages. When no tools are offered,
+		// converseMessages flattens that history to plain text instead.
+		Messages:   converseMessages(req.Messages, toolConfig != nil),
+		ToolConfig: toolConfig,
 		System:     converseSystem(req.System, req.Model),
 	}
 	if req.MaxTokens > 0 {
@@ -338,7 +347,15 @@ func converseSupportsToolChoice(model string) bool {
 // messages. Tool results ride as user-role toolResult blocks;
 // assistant messages that carry neither text nor tool calls are
 // dropped — Converse rejects empty content blocks.
-func converseMessages(msgs []Message) []types.Message {
+//
+// hasTools reports whether the request's ToolConfig will be non-nil.
+// Bedrock rejects toolUse/toolResult content blocks outright when no
+// ToolConfig is sent ("The toolConfig field must be defined when using
+// toolUse and toolResult content blocks"), so when hasTools is false
+// any tool call / tool result in the history is flattened to plain
+// text instead of emitted as a toolUse/toolResult block. When hasTools
+// is true, behavior is unchanged.
+func converseMessages(msgs []Message, hasTools bool) []types.Message {
 	out := make([]types.Message, 0, len(msgs))
 	for _, m := range msgs {
 		switch m.Role {
@@ -368,6 +385,14 @@ func converseMessages(msgs []Message) []types.Message {
 				blocks = append(blocks, &types.ContentBlockMemberText{Value: m.Content})
 			}
 			for _, tc := range m.ToolCalls {
+				if !hasTools {
+					// No ToolConfig on this request: fold the call into
+					// text instead of a toolUse block Bedrock would reject.
+					blocks = append(blocks, &types.ContentBlockMemberText{
+						Value: flattenToolCallText(tc),
+					})
+					continue
+				}
 				blocks = append(blocks, &types.ContentBlockMemberToolUse{
 					Value: types.ToolUseBlock{
 						ToolUseId: aws.String(tc.ID),
@@ -385,6 +410,17 @@ func converseMessages(msgs []Message) []types.Message {
 			})
 		case "tool":
 			if m.ToolResult == nil {
+				continue
+			}
+			if !hasTools {
+				// No ToolConfig on this request: a toolResult block is
+				// rejected outright, so flatten to plain user text.
+				out = append(out, types.Message{
+					Role: types.ConversationRoleUser,
+					Content: []types.ContentBlock{&types.ContentBlockMemberText{
+						Value: flattenToolResultText(*m.ToolResult),
+					}},
+				})
 				continue
 			}
 			resultBlock := types.ContentBlock(&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
@@ -429,6 +465,23 @@ func bedrockImageFormat(mime string) types.ImageFormat {
 	default:
 		return types.ImageFormatPng
 	}
+}
+
+// flattenToolCallText renders an assistant tool call as plain text for
+// requests with no ToolConfig, where a toolUse block would be rejected.
+func flattenToolCallText(tc ToolCall) string {
+	input := tc.Input
+	if len(input) == 0 {
+		input = json.RawMessage("{}")
+	}
+	return fmt.Sprintf("[tool call: %s(%s)]", tc.Name, string(input))
+}
+
+// flattenToolResultText renders a tool result as plain user text for
+// requests with no ToolConfig, where a toolResult block would be
+// rejected.
+func flattenToolResultText(tr ToolResult) string {
+	return fmt.Sprintf("[tool result for %s: %s]", tr.ID, tr.Content)
 }
 
 func toolResultStatus(isError bool) types.ToolResultStatus {
