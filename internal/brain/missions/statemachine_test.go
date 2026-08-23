@@ -142,6 +142,16 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, ConsecutiveFailures: 1, Iteration: 1},
 		},
 		{
+			// Ceiling is a hard stop checked before backoff: reaching
+			// MaxIterations and BackoffFailures on the same failure must
+			// fail terminally, never pause for backoff.
+			name:  "worker_failed hitting both ceiling and backoff threshold hard-fails, not pauses",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 3, Iteration: 2, ConsecutiveFailures: 2},
+			input: StepInput{Input: InputWorkerFailed},
+			cfg:   Config{BackoffFailures: 3, StallRounds: 10},
+			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 3, Iteration: 3, ConsecutiveFailures: 3},
+		},
+		{
 			name:  "worker_retry costs an iteration and resets consecutive failures",
 			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
 			input: StepInput{Input: InputWorkerRetry},

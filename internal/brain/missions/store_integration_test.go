@@ -112,8 +112,8 @@ func TestMissionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.Phase != PhaseExplore || m.Status != StatusIdle || m.MaxIterations != 8 {
-		t.Fatalf("Get = %+v, want default explore/idle/8", m)
+	if m.Phase != PhaseExplore || m.Status != StatusIdle || m.MaxIterations != 3 {
+		t.Fatalf("Get = %+v, want default explore/idle/3", m)
 	}
 
 	list, err := s.List(ctx, ListFilter{})

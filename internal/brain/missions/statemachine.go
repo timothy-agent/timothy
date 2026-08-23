@@ -303,19 +303,24 @@ func stepPhaseComplete(s StepState) Transition {
 // stepWorkerFailed counts consecutive failures toward the backoff
 // brake; a fresh success (any non-failed input) resets the counter
 // elsewhere (the driver clears ConsecutiveFailures on progress).
+//
+// The MaxIterations ceiling is checked before the backoff pause: it is
+// a hard stop, and a backoff pause must only ever happen below the
+// ceiling. Checking backoff first would let a mission repeatedly
+// resumed after backoff pauses exceed its iteration ceiling forever.
 func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 	s.ConsecutiveFailures++
 	s.Iteration++
-	if s.ConsecutiveFailures >= cfg.BackoffFailures {
-		return Transition{
-			Next:   withPause(s, PauseBackoff),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff), "detail": in.Reason}}},
-		}
-	}
 	if s.Iteration >= s.MaxIterations {
 		return Transition{
 			Next:   withPhaseFailed(s),
 			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
+		}
+	}
+	if s.ConsecutiveFailures >= cfg.BackoffFailures {
+		return Transition{
+			Next:   withPause(s, PauseBackoff),
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff), "detail": in.Reason}}},
 		}
 	}
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: map[string]any{"cause": "worker_failed", "reason": in.Reason}}}}
