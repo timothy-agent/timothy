@@ -207,6 +207,52 @@ func TestStartRunRefusesDisabledWorkflow(t *testing.T) {
 	}
 }
 
+// TestStartRunPausesOnSpawnValidationError covers D-071: a step whose
+// spawned mission Driver.Create rejects (here, missions.ErrInvalidMission
+// from an on_complete a workflow step can never satisfy, since Step
+// carries no repo_url/connector_id) must pause the run with the
+// validation error as the reason, not silently create an invalid
+// mission or crash the engine.
+func TestStartRunPausesOnSpawnValidationError(t *testing.T) {
+	def := Definition{
+		Entry: "coder",
+		Steps: map[string]Step{
+			"coder": {Goal: "write the code", Kind: "coding", OnComplete: "push"},
+		},
+	}
+	if err := def.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (on_complete shape is valid at the definition level)", err)
+	}
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", def, true)
+	spawner := &fakeSpawner{createErr: fmt.Errorf("driver: create: %w: on_complete requires repo_url and connector_id on a kind=coding mission", missions.ErrInvalidMission)}
+	e := testEngine(store, spawner)
+
+	runID, err := e.StartRun(context.Background(), "wf1", nil)
+	if err == nil {
+		t.Fatal("StartRun() = nil error, want the spawn validation error surfaced")
+	}
+	if spawner.count() != 0 {
+		t.Fatalf("spawned missions = %d, want 0 (Create rejected it)", spawner.count())
+	}
+	run, getErr := store.GetRun(context.Background(), runID)
+	if getErr != nil {
+		t.Fatalf("GetRun: %v", getErr)
+	}
+	if run.Status != "paused" {
+		t.Fatalf("run status = %s, want paused", run.Status)
+	}
+	found := false
+	for _, k := range store.eventKinds(runID) {
+		if k == "run.paused" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("events = %v, want run.paused", store.eventKinds(runID))
+	}
+}
+
 func TestOnMissionTerminalAdvancesToNextStep(t *testing.T) {
 	store := newFakeEngineStore()
 	store.putWorkflow("wf1", coderQADefinition(), true)

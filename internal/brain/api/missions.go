@@ -217,6 +217,8 @@ func failMission(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "already_finished", err.Error())
 	case errors.Is(err, missions.ErrNotTerminal):
 		jsonError(w, http.StatusConflict, "not_terminal", err.Error())
+	case errors.Is(err, missions.ErrInvalidMission):
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}
@@ -427,43 +429,21 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
 		return
 	}
-	switch req.Kind {
-	case "":
+	if req.Kind == "" {
 		req.Kind = classifyKind(r.Context(), h.classify, req.Goal)
-	case "coding", "general":
-	default:
-		jsonError(w, http.StatusBadRequest, "bad_request", `kind must be "coding" or "general"`)
-		return
-	}
-	if req.Light && req.Kind != "general" {
-		jsonError(w, http.StatusBadRequest, "bad_request", "light is only valid for kind=general missions")
-		return
 	}
 	if req.Harness == "native" {
 		req.Harness = ""
 	}
-	switch {
-	case req.Kind != "coding" && req.Harness != "":
-		jsonError(w, http.StatusBadRequest, "bad_request", "harness is only valid for kind=coding missions")
-		return
-	case req.Kind == "coding" && req.Harness == "":
-		if h.codingExecutorDefault != nil {
-			req.Harness = h.codingExecutorDefault(r.Context())
-		}
-	case req.Harness != "":
-		if _, ok := executor.Lookup(req.Harness); !ok {
-			jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown harness %q", req.Harness))
-			return
-		}
+	// codingExecutorDefault/environment auto-detect are HTTP-request-time
+	// resolution seams (settings lookup, goal-keyword heuristic) with no
+	// place in ValidateCreate's pure struct-shape rules; the resulting
+	// values still pass through ValidateCreate's kind/harness/environment
+	// checks below via Driver.Create.
+	if req.Kind == "coding" && req.Harness == "" && h.codingExecutorDefault != nil {
+		req.Harness = h.codingExecutorDefault(r.Context())
 	}
-	switch {
-	case req.Kind != "coding" && req.Environment != "":
-		jsonError(w, http.StatusBadRequest, "bad_request", "environment is only valid for kind=coding missions")
-		return
-	case !missions.ValidEnvironment(req.Environment):
-		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown environment %q", req.Environment))
-		return
-	case req.Kind == "coding" && req.Environment == "":
+	if req.Kind == "coding" && req.Environment == "" {
 		// Auto-detect (D-05x), resolved server-side at create time so
 		// the environment is fixed before the sandbox container is ever
 		// created: no worktree exists yet (it's provisioned after this
@@ -473,17 +453,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		// explicit request; "" stays "" (base) when nothing matches.
 		req.Environment, _ = missions.DetectEnvironment("", req.Goal)
 	}
-	switch {
-	case req.RepoURL != "" && req.Kind != "coding":
-		jsonError(w, http.StatusBadRequest, "bad_request", "repo_url is only valid for kind=coding missions")
-		return
-	case req.RepoURL != "" && req.ConnectorID == "":
-		jsonError(w, http.StatusBadRequest, "bad_request", "connector_id is required with repo_url")
-		return
-	case req.RepoURL == "" && req.ConnectorID != "":
-		jsonError(w, http.StatusBadRequest, "bad_request", "connector_id is only valid alongside repo_url")
-		return
-	case req.RepoURL != "":
+	// connector_id existence + kind check is a store lookup ValidateCreate
+	// can't perform (it takes no connectors dependency); repo_url's other
+	// shape rules (coding-only, requires connector_id) are ValidateCreate's.
+	if req.RepoURL != "" {
 		if h.conns == nil {
 			jsonError(w, http.StatusBadRequest, "bad_request", "connectors are not enabled")
 			return
@@ -497,31 +470,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "connector_id must name a github-kind connector")
 			return
 		}
-	}
-	switch req.OnComplete {
-	case "":
-	case "push", "push_pr":
-		if req.Kind != "coding" || req.RepoURL == "" || req.ConnectorID == "" {
-			jsonError(w, http.StatusBadRequest, "bad_request", "on_complete requires repo_url and connector_id on a kind=coding mission")
-			return
-		}
-	default:
-		jsonError(w, http.StatusBadRequest, "bad_request", `on_complete must be "", "push", or "push_pr"`)
-		return
-	}
-	if req.BranchPattern != "" {
-		if err := missions.ValidateBranchPattern(req.BranchPattern); err != nil {
-			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-	}
-	if err := missions.ValidateCommitStyle(req.CommitStyle); err != nil {
-		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-	if err := h.validateDestinationIDs(r.Context(), req.DestinationIDs); err != nil {
-		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
 	}
 	var parentMissionID, parentContext string
 	if req.ParentMissionID != "" {

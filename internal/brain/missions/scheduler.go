@@ -420,6 +420,13 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // has no session, no workspace, no grants yet — so it is provisioned
 // lazily the first time Advance/Drive touches it (see driver.go's
 // ensureProvisioned).
+// D-071: this inserts directly via SQL rather than Driver.Create, so
+// ValidateCreate never runs against a schedule-fired mission — left as
+// is for this slice. resolveTemplateDefaults (route/harness/environment)
+// and filterDestinationIDs (destination_ids existence) already cover
+// this insert's subset of ValidateCreate's checks; a schedule's own
+// create/patch validation (schedules.go) covers the rest at schedule
+// creation time.
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
 	t, promptOverlay, knowledge := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
 	// destination_ids is NOT NULL; a nil slice binds as a NULL array

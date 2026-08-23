@@ -286,6 +286,24 @@ func main() {
 	if missionScheduler != nil && destinationStore != nil {
 		missionScheduler.SetDestinationEnabled(destinationStore.EnabledByID)
 	}
+	if missionDriver != nil {
+		// D-071: close the unvalidated Driver.Create path (the workflows
+		// engine's spawnStep is now a second caller besides the HTTP create
+		// handler). routeExists reuses the exact same gwc.ResolveRoute
+		// check buildMissions wires for the scheduler; destinationStore may
+		// still be nil (destinations disabled), which just skips that one
+		// check (see ValidateDeps' nil-gating).
+		deps := missions.ValidateDeps{
+			RouteExists: func(ctx context.Context, name string) bool {
+				_, err := gwc.ResolveRoute(ctx, name, "")
+				return err == nil
+			},
+		}
+		if destinationStore != nil {
+			deps.DestinationEnabled = destinationStore.EnabledByID
+		}
+		missionDriver.SetValidateDeps(deps)
+	}
 	// WORKFLOWS_ENABLED gates the orchestration-above-missions layer
 	// (D-070, slice 1): requires missions to already be enabled
 	// (WORKSPACES set), since a workflow step is just a follow-up
@@ -295,6 +313,7 @@ func main() {
 	if missionDriver != nil && os.Getenv("WORKFLOWS_ENABLED") != "" {
 		workflowStore = workflows.NewStore(app.DB, app.Log)
 		workflowEngine = workflows.NewEngine(workflowStore, missionDriver, missionStore, app.Log)
+		workflowEngine.SetRouteForRole(routeForRole)
 		missionDriver.SetOnTerminal(workflowEngine.OnMissionTerminal)
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured

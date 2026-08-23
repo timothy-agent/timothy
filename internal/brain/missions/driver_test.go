@@ -3,6 +3,7 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1157,7 +1158,7 @@ func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true})
+	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1179,7 +1180,7 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}); err != nil {
+	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if len(granter.calls) != 0 {
@@ -1203,7 +1204,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 	})
 
 	id, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "general", AgentID: "briefing-agent",
+		Goal: "test", Kind: "general", Route: "route-x", AgentID: "briefing-agent",
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false,
 	})
 	if err != nil {
@@ -1238,13 +1239,54 @@ func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	})
 
 	if _, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "general", AutoApproveSafe: false,
+		Goal: "test", Kind: "general", Route: "route-x", AutoApproveSafe: false,
 		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if len(granter.calls) != 0 {
 		t.Fatalf("Grant calls = %d, want 0 for an unresolved agent", len(granter.calls))
+	}
+}
+
+// TestDriverCreateRejectsInvalidMissionWhenValidateDepsWired confirms
+// Create runs ValidateCreate (D-071) once SetValidateDeps has been
+// called — closing the gap where only the HTTP create handler used to
+// validate anything, leaving a direct Driver.Create caller (the
+// workflows engine) free to insert a mission the API would 400.
+func TestDriverCreateRejectsInvalidMissionWhenValidateDepsWired(t *testing.T) {
+	store := newFakeStore()
+	d := testDriver(store, &scriptedRunner{})
+	d.SetValidateDeps(ValidateDeps{})
+
+	_, err := d.Create(context.Background(), Mission{
+		Goal: "test", Kind: "coding", Route: "route-x", Light: true, // light is general-only
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	})
+	if err == nil {
+		t.Fatal("Create with light+coding = nil error, want ErrInvalidMission")
+	}
+	if !errors.Is(err, ErrInvalidMission) {
+		t.Fatalf("Create error = %v, want it to wrap ErrInvalidMission", err)
+	}
+	if len(store.missions) != 0 {
+		t.Fatalf("store.missions = %d, want 0: an invalid mission must never reach the store", len(store.missions))
+	}
+}
+
+// TestDriverCreateSkipsValidationWhenDepsUnset confirms a Driver that
+// never calls SetValidateDeps behaves exactly as it did before D-071 —
+// every pre-existing driver_test.go fixture that builds a bare
+// Mission{} (no route) must keep working unvalidated.
+func TestDriverCreateSkipsValidationWhenDepsUnset(t *testing.T) {
+	store := newFakeStore()
+	d := testDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}})
+
+	if _, err := d.Create(context.Background(), Mission{
+		Goal: "test", Kind: "coding", Light: true, // would be rejected if validated
+		Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+	}); err != nil {
+		t.Fatalf("Create with no ValidateDeps wired: %v, want nil (validation skipped)", err)
 	}
 }
 

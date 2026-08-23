@@ -215,6 +215,15 @@ type Driver struct {
 	// missions.Mission, so missions can't import workflows back.
 	onTerminal OnTerminal
 
+	// validateDeps backs ValidateCreate's store-backed checks (D-071) —
+	// a *ValidateDeps, not a value, so "unset" is distinguishable from
+	// "set to the zero value": nil skips ValidateCreate's call entirely
+	// (existing callers/tests that predate D-071 keep working
+	// unvalidated), while a non-nil ValidateDeps{} runs every
+	// struct-shape check but skips only the dep-backed ones (nil fields
+	// within it). See SetValidateDeps.
+	validateDeps *ValidateDeps
+
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
 	// rework. Process-local by design: lost on restart is acceptable —
@@ -438,6 +447,16 @@ func (d *Driver) SetOnTerminal(fn OnTerminal) {
 	d.onTerminal = fn
 }
 
+// SetValidateDeps wires the store-backed checks ValidateCreate needs
+// (D-071) — a setter for the same reason SetAgentResolver is: cmd/brain/
+// main.go builds the gateway route resolver and destination store after
+// the Driver. Unset (the default, and every driver_test.go fixture
+// predating D-071) skips Create's ValidateCreate call entirely, so
+// existing tests that build a bare Mission{} keep passing.
+func (d *Driver) SetValidateDeps(deps ValidateDeps) {
+	d.validateDeps = &deps
+}
+
 // fireOnTerminal fires the workflows engine hook for any mission
 // reaching a terminal phase (done or failed) that names a
 // workflow_run_id — an ordinary mission (workflow_run_id empty) never
@@ -515,6 +534,11 @@ func (d *Driver) removeSandbox(id string) {
 // create handler) get the new id back immediately without waiting on
 // the mission to actually run.
 func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {
+	if d.validateDeps != nil {
+		if err := ValidateCreate(ctx, m, *d.validateDeps); err != nil {
+			return "", fmt.Errorf("driver: create: %w", err)
+		}
+	}
 	id, err := d.store.Create(ctx, m)
 	if err != nil {
 		return "", fmt.Errorf("driver: create: %w", err)

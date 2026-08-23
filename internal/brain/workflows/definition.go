@@ -83,6 +83,11 @@ func (d *Definition) Validate() error {
 		default:
 			return fmt.Errorf("step %q: kind must be \"coding\" or \"general\"", name)
 		}
+		switch d.Steps[name].OnComplete {
+		case "", "push", "push_pr":
+		default:
+			return fmt.Errorf("step %q: on_complete must be \"\", \"push\", or \"push_pr\"", name)
+		}
 	}
 	for i := range d.Edges {
 		e := &d.Edges[i]

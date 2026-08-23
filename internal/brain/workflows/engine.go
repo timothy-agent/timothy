@@ -46,10 +46,27 @@ type Engine struct {
 	spawner missionSpawner
 	events  missionEvents
 	log     *slog.Logger
+
+	// routeForRole resolves a step's default route when it omits one
+	// (see SetRouteForRole / spawnStep) — the same seam missions'
+	// scheduler and api/missions.go's create handler resolve "default"
+	// through, so a workflow step behaves like any other mission create
+	// that doesn't name a route. nil-gated: unset leaves an empty
+	// step.Route empty, which Driver.Create's ValidateCreate (D-071)
+	// then rejects.
+	routeForRole func(ctx context.Context, role string) string
 }
 
 func NewEngine(store engineStore, spawner missionSpawner, events missionEvents, log *slog.Logger) *Engine {
 	return &Engine{store: store, spawner: spawner, events: events, log: log}
+}
+
+// SetRouteForRole wires the default-route resolver spawnStep uses for a
+// step that omits its own route — a setter for the same reason
+// missions.Driver's other optional deps are: cmd/brain/main.go builds
+// the gateway route resolver alongside the Engine itself.
+func (e *Engine) SetRouteForRole(fn func(ctx context.Context, role string) string) {
+	e.routeForRole = fn
 }
 
 // StartRun creates a new run for workflowID and spawns the entry step's
@@ -186,8 +203,12 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 			e.log.Warn("workflows: spawn step: record unknown placeholder warning failed", "run_id", runID, "key", key, "error", err)
 		}
 	}
+	route := step.Route
+	if route == "" && e.routeForRole != nil {
+		route = e.routeForRole(ctx, "default")
+	}
 	return e.spawner.Create(ctx, missions.Mission{
-		Goal: goal, Kind: step.Kind, Route: step.Route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
+		Goal: goal, Kind: step.Kind, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
 		OnComplete: step.OnComplete, DestinationIDs: step.DestinationIDs,
 		ParentMissionID: parentMissionID, ParentContext: outcome,
 		WorkflowRunID: runID, WorkflowStep: stepName,

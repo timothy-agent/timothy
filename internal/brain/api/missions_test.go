@@ -330,6 +330,7 @@ func TestMissionsCreateValidatesGitStrategy(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
 
 	post := func(body string) (int, string) {
 		m := mux(a)
@@ -848,6 +849,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
 
