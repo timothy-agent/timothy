@@ -27,7 +27,6 @@ import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Sched
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
-import { ProgressSection } from '../components/missions/ProgressSection'
 import { ExploreSection } from '../components/missions/ExploreSection'
 import { GoalSection } from '../components/missions/GoalSection'
 import { ResultSection } from '../components/missions/ResultSection'
@@ -636,13 +635,13 @@ export function MissionDetail() {
                     <Button
                       variant="outline"
                       size="icon"
-                      aria-label="Follow up"
+                      aria-label="Fork"
                       onClick={() => navigate(`/missions/new?parent=${mission.id}`)}
                     >
                       <HugeiconsIcon icon={GitBranchIcon} />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Start a follow-up mission</TooltipContent>
+                  <TooltipContent>Fork this mission</TooltipContent>
                 </Tooltip>
               )}
               {terminalPhases.has(mission.phase) && (
@@ -805,41 +804,29 @@ export function MissionDetail() {
         </section>
       )}
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
-        <PlanSection units={mission.spec?.units ?? []} />
-      </section>
-
-      {mission.workspace && (
+      {(mission.spec?.units?.length ?? 0) > 0 && (
         <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
-          <ArtifactsSection missionId={id} phase={mission.phase} workspace={mission.workspace} />
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
+          <PlanSection units={mission.spec?.units ?? []} />
         </section>
       )}
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold tracking-tight">Progress</h2>
-        <ProgressSection notes={mission.progress} />
-      </section>
+      {terminalPhases.has(mission.phase) &&
+        (mission.light ? mission.final_output : mission.last_evidence) && (
+          <section>
+            <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
+            <ResultSection
+              evidence={(mission.light ? mission.final_output : mission.last_evidence) ?? ''}
+            />
+          </section>
+        )}
+
+      <ArtifactsSection missionId={id} phase={mission.phase} workspace={mission.workspace} />
 
       <section>
         <h2 className="mb-2 text-sm font-semibold tracking-tight">Timeline</h2>
         <TimelineSection events={events} />
       </section>
-
-      {terminalPhases.has(mission.phase) && mission.light && mission.final_output && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
-          <ResultSection evidence={mission.final_output} />
-        </section>
-      )}
-
-      {terminalPhases.has(mission.phase) && !mission.light && mission.last_evidence && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
-          <ResultSection evidence={mission.last_evidence} />
-        </section>
-      )}
     </div>
   )
 }

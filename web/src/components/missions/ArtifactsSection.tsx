@@ -40,7 +40,11 @@ export function ArtifactsSection({
 
   const tree = useMemo(() => buildFileTree(files), [files])
 
+  // No workspace, or a workspace with nothing in it (and no fetch error
+  // worth surfacing): the whole section disappears rather than showing
+  // an empty shell.
   if (!workspace) return null
+  if (files.length === 0 && !error) return null
 
   const downloadAll = () => {
     downloadMissionArchive(missionId).catch((err: unknown) =>
@@ -97,10 +101,16 @@ export function ArtifactsSection({
     </div>
   )
 
-  if (!fullscreen) return panel
   return (
-    <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
-      {panel}
-    </FullscreenDialog>
+    <section>
+      <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
+      {fullscreen ? (
+        <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
+          {panel}
+        </FullscreenDialog>
+      ) : (
+        panel
+      )}
+    </section>
   )
 }
