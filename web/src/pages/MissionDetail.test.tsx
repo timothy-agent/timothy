@@ -442,6 +442,16 @@ describe('MissionDetail on_complete badge', () => {
   })
 })
 
+describe('MissionDetail created timestamp', () => {
+  it('shows the relative created time with an absolute tooltip', async () => {
+    const createdAt = new Date(Date.now() - 3 * 3_600_000).toISOString()
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, created_at: createdAt })
+    renderPage()
+    const el = await screen.findByText('created 3h ago')
+    expect(el).toHaveAttribute('title', new Date(createdAt).toLocaleString())
+  })
+})
+
 describe('MissionDetail', () => {
   it('renders mission header, plan, and progress', async () => {
     renderPage()

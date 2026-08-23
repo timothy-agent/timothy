@@ -53,7 +53,7 @@ import { errText } from '../components/settings/util'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
-import { compact, formatDuration, missionDisplayName, money } from '../lib/format'
+import { compact, formatDuration, missionDisplayName, money, relativeTime } from '../lib/format'
 
 // unbilledTooltipLine formats the billed cost pill's tooltip line, in
 // that pill's OWN currency only — prefers the currency-converted
@@ -480,6 +480,9 @@ export function MissionDetail() {
               <span className="capitalize">{mission.kind}</span>
               <span>{mission.phase}</span>
               <span>{mission.status.replace(/_/g, ' ')}</span>
+              <span title={new Date(mission.created_at).toLocaleString()}>
+                created {relativeTime(mission.created_at)}
+              </span>
               {executorActivity && (
                 <span>
                   harness: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}

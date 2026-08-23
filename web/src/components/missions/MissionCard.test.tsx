@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Mission } from '../../api/types'
 import { MissionCard } from './MissionCard'
 
@@ -101,6 +101,18 @@ describe('MissionCard harness and model', () => {
   it('omits model text when top_model is absent', () => {
     renderCard({ ...baseMission })
     expect(screen.queryByText('claude-sonnet-5')).not.toBeInTheDocument()
+  })
+})
+
+describe('MissionCard created timestamp', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('shows the relative created time with an absolute tooltip', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T03:00:00Z'))
+    renderCard({ ...baseMission, created_at: '2026-01-01T00:00:00Z' })
+    const el = screen.getByText('3h ago')
+    expect(el).toHaveAttribute('title', new Date('2026-01-01T00:00:00Z').toLocaleString())
   })
 })
 

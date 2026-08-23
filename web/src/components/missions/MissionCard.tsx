@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import type { Mission } from '../../api/types'
-import { missionDisplayName } from '../../lib/format'
+import { missionDisplayName, relativeTime } from '../../lib/format'
 import { BrandMark } from '../BrandMark'
 import { ClaudeCodeIcon } from '../icons/ClaudeCodeIcon'
 import { OpenAIIcon } from '../icons/OpenAIIcon'
@@ -83,6 +83,9 @@ export function MissionCard({ mission }: { mission: Mission }) {
           {harnessLabel(mission.harness)}
         </span>
         {mission.top_model && <span className="max-w-32 truncate">{mission.top_model}</span>}
+        <span title={new Date(mission.created_at).toLocaleString()}>
+          {relativeTime(mission.created_at)}
+        </span>
       </div>
       {mission.pause_message && (
         <p className="line-clamp-2 text-xs text-amber-700 dark:text-amber-400">{mission.pause_message}</p>
