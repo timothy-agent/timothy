@@ -86,14 +86,14 @@ func PlanTool() *tools.Tool {
 							"artifacts": {
 								"type": "array",
 								"items": {"type": "string"},
-								"description": "Workspace-relative file path(s) this unit must produce. Files only — the harness rejects directories."
+								"description": "Workspace-relative file path(s) this unit must produce. Required: at least one. Files only — the harness rejects directories."
 							},
 							"verify_cmd": {
 								"type": "string",
 								"description": "A real POSIX shell command, run as /bin/sh -c \"<verify_cmd>\" in the mission's workspace, that checks the CONTENT of the artifacts."
 							}
 						},
-						"required": ["title", "verify_cmd"]
+						"required": ["title", "artifacts", "verify_cmd"]
 					}
 				}
 			},
