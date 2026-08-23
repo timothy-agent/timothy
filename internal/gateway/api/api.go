@@ -215,6 +215,13 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		}, prices, send)
 
 		if res.failedOver() {
+			// The client only ever sees error codes (see chain-exhausted
+			// note below); the raw reason is server-side log only, or
+			// the actual provider error is lost to debugging entirely.
+			a.log.Warn("stream attempt failed",
+				"provider", att.ProviderName, "model", att.Model,
+				"route", req.Route, "code", res.entry.ErrorCode,
+				"reason", res.reason)
 			codes = append(codes, res.entry.ErrorCode)
 			a.recordAttempt(r.Context(), res.entry)
 			if next := i + 1; next < len(attempts) {
