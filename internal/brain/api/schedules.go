@@ -67,7 +67,7 @@ func (h *scheduleAPI) validateDestinationIDs(ctx context.Context, ids []string) 
 // kind=coding — light (D-069) only makes sense for a kind=general
 // mission, same rule create() enforces for a one-off mission.
 func validateLightTemplate(t missions.MissionTemplate) error {
-	if t.Light && t.Kind != "general" {
+	if t.Light && t.Kind != missions.KindGeneral {
 		return fmt.Errorf("mission_template.light is only valid for kind=general")
 	}
 	return nil

@@ -53,14 +53,14 @@ type ValidateDeps struct {
 // or have individual fields nil (that check skipped) — never required.
 func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	switch m.Kind {
-	case "coding", "general":
+	case KindCoding, KindGeneral:
 	default:
 		return fmt.Errorf(`%w: kind must be "coding" or "general"`, ErrInvalidMission)
 	}
-	if m.Light && m.Kind != "general" {
+	if m.Light && m.Kind != KindGeneral {
 		return fmt.Errorf("%w: light is only valid for kind=general missions", ErrInvalidMission)
 	}
-	if m.Kind != "coding" {
+	if !missionPolicyFor(m).canDelegate {
 		switch {
 		case m.Harness != "":
 			return fmt.Errorf("%w: harness is only valid for kind=coding missions", ErrInvalidMission)

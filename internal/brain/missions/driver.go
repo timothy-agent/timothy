@@ -621,7 +621,7 @@ func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, err
 			return m, err
 		}
 		m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
-		if m.ParentMissionID != "" && m.Kind == "coding" {
+		if m.ParentMissionID != "" && missionPolicyFor(m).needsWorktree {
 			ref := baseUsed
 			if ref == "" {
 				ref = "the repo's default branch (parent branch unreachable)"
@@ -1277,7 +1277,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 // existence checks can't see. Units with no declared artifacts always
 // review too — there is no harness evidence to stand on.
 func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string) (StepInput, bool) {
-	if m.Kind == "coding" {
+	if missionPolicyFor(m).alwaysReview {
 		return StepInput{}, false
 	}
 	unit, idx := currentUnit(m.Spec)
@@ -1524,7 +1524,7 @@ func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission, seenURLs []st
 			}
 			return &verifyFailure{unit: i, excerpt: excerpt}
 		}
-		if m.Kind == "general" {
+		if missionPolicyFor(m).checksCitations {
 			if problems := CheckCitations(workRoot, u.Artifacts, seenURLs); len(problems) > 0 {
 				excerpt := "citation check failed:\n" + strings.Join(problems, "\n")
 				if err := d.store.AppendEvent(ctx, m.ID, "mission.unit_verified", map[string]any{
@@ -1578,7 +1578,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext, Attachments: m.Attachments,
-		Light: m.Light,
+		Light: missionPolicyFor(m).skipsPlanning,
 	}, nil
 }
 

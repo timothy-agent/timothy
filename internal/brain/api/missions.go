@@ -410,10 +410,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	// place in ValidateCreate's pure struct-shape rules; the resulting
 	// values still pass through ValidateCreate's kind/harness/environment
 	// checks below via Driver.Create.
-	if req.Kind == "coding" && req.Harness == "" && h.codingExecutorDefault != nil {
+	if req.Kind == missions.KindCoding && req.Harness == "" && h.codingExecutorDefault != nil {
 		req.Harness = h.codingExecutorDefault(r.Context())
 	}
-	if req.Kind == "coding" && req.Environment == "" {
+	if req.Kind == missions.KindCoding && req.Environment == "" {
 		// Auto-detect (D-05x), resolved server-side at create time so
 		// the environment is fixed before the sandbox container is ever
 		// created: no worktree exists yet (it's provisioned after this
@@ -501,7 +501,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		defaultRoute = h.routeForRole(r.Context(), "default")
 	}
 	if req.Route == "" {
-		if req.Kind == "coding" {
+		if req.Kind == missions.KindCoding {
 			req.Route = missions.DefaultCodingRoute(r.Context(), h.routeExists, defaultRoute)
 		} else {
 			req.Route = defaultRoute
@@ -710,7 +710,7 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := classifyKind(r.Context(), h.classify, req.Goal)
-	light := kind == "general" && classifyLight(r.Context(), h.classify, req.Goal)
+	light := kind == missions.KindGeneral && classifyLight(r.Context(), h.classify, req.Goal)
 	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light})
 }
 

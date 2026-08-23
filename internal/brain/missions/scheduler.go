@@ -451,10 +451,7 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	if name == "" {
 		name = sc.Name
 	}
-	phase := PhaseExplore
-	if t.Light {
-		phase = PhaseExecute
-	}
+	phase := initialPhase(t.Kind, t.Light)
 	_, err = tx.Exec(ctx, `INSERT INTO missions
 			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment, destination_ids, light, phase)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
@@ -523,12 +520,13 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			knowledge = defaults.Knowledge
 		}
 	}
+	policy := policyFor(t.Kind, t.Light)
 	defaultRoute := ""
 	if routeForRole != nil {
 		defaultRoute = routeForRole(ctx, "default")
 	}
 	if t.Route == "" {
-		if t.Kind == "coding" {
+		if t.Kind == KindCoding {
 			t.Route = DefaultCodingRoute(ctx, routeExists, defaultRoute)
 		} else {
 			t.Route = defaultRoute
@@ -543,14 +541,14 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			t.ReviewRoute = defaultRoute
 		}
 	}
-	if t.Kind == "coding" && t.Harness == "" && codingExecutorDefault != nil {
+	if policy.canDelegate && t.Harness == "" && codingExecutorDefault != nil {
 		t.Harness = codingExecutorDefault(ctx)
 	}
 	// Environment (D-05x): no settings default (unlike Harness above) —
 	// an omitted template auto-detects from the goal at fire time. No
 	// worktree exists yet, so only the goal-keyword heuristic can fire;
 	// repo-marker detection has nothing to check.
-	if t.Kind == "coding" && t.Environment == "" {
+	if policy.needsWorktree && t.Environment == "" {
 		t.Environment, _ = DetectEnvironment("", t.Goal)
 	}
 	return t, promptOverlay, knowledge

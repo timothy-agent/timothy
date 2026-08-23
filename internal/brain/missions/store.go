@@ -250,10 +250,7 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if destinationIDs == nil {
 		destinationIDs = []string{}
 	}
-	phase := PhaseExplore
-	if m.Light {
-		phase = PhaseExecute
-	}
+	phase := initialPhase(m.Kind, m.Light)
 	err = db.QueryRow(ctx, `INSERT INTO missions
 			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15, '')::uuid, $16, $17, $18, $19, $20, $21, $22, $23, NULLIF($24, '')::uuid, $25, $26, $27, $28, $29, NULLIF($30, '')::uuid, $31) RETURNING id`,

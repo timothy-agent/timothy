@@ -186,6 +186,15 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 	if m.Harness == "" {
 		return r.native.RunWorker(ctx, m, packet)
 	}
+	if !missionPolicyFor(m).canDelegate {
+		// D-072: enforces the documented coding-only harness rule
+		// in-package — ValidateCreate already rejects a non-coding
+		// mission with harness set, so this only fires for a row that
+		// predates that check or was inserted around it.
+		r.log.Warn("delegated runner: harness not allowed for kind; falling back to native", "mission_id", m.ID, "kind", m.Kind, "harness", m.Harness)
+		r.recordSkipped(ctx, m.ID, m.Harness, "harness not allowed for kind", nil)
+		return r.native.RunWorker(ctx, m, packet)
+	}
 	adapter, ok := executor.Lookup(m.Harness)
 	if !ok {
 		r.log.Warn("delegated runner: unknown harness; falling back to native", "mission_id", m.ID, "harness", m.Harness)

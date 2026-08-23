@@ -90,7 +90,7 @@ func NewCompleter(workspace *Workspace, store eventAppender, resolveToken PushTo
 // diverge on what counts as pushable.
 func NotPushable(m Mission) string {
 	switch {
-	case m.Kind != "coding":
+	case !missionPolicyFor(m).canPush:
 		return "only coding missions can be pushed"
 	case m.Branch == "":
 		return "mission has no branch"

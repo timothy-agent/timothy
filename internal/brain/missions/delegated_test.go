@@ -1281,6 +1281,47 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.
 	}
 }
 
+// D-072: a general mission with Harness set (a row predating
+// ValidateCreate's coding-only rule, or inserted around it) must fall
+// back to native and record why — enforces the coding-only harness
+// rule in-package instead of trusting the caller already checked it.
+func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testing.T) {
+	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
+	resolveCalled := false
+	resolve := func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
+		resolveCalled = true
+		return nil, nil
+	}
+	sandbox := newFakeSandbox()
+	events := &fakeEventSink{}
+
+	r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.Kind = "general"
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if native.callCount() != 1 {
+		t.Fatalf("native call count = %d, want 1", native.callCount())
+	}
+	if resolveCalled {
+		t.Fatal("resolveRoute called for a harness-not-allowed mission; want it skipped entirely")
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "harness not allowed for kind" {
+		t.Fatalf("executor.skipped reason = %v, want %q", skippedPayload["reason"], "harness not allowed for kind")
+	}
+	if skippedPayload["harness"] != m.Harness {
+		t.Fatalf("executor.skipped harness = %v, want %q", skippedPayload["harness"], m.Harness)
+	}
+}
+
 func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
