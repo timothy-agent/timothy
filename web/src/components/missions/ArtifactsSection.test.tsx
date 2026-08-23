@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MissionFile } from '../../api/types'
 import { ArtifactsSection } from './ArtifactsSection'
@@ -59,20 +59,19 @@ describe('ArtifactsSection', () => {
     expect(screen.getByText('512 B')).toBeTruthy()
   })
 
-  it('shows the empty state when there are no files', async () => {
-    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
-    expect(await screen.findByText('No files yet.')).toBeTruthy()
+  it('renders nothing while the workspace has no files', async () => {
+    const { container } = render(
+      <ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />,
+    )
+    await waitFor(() => expect(vi.mocked(listMissionFiles)).toHaveBeenCalled())
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('disables Download all at zero files and enables it once files exist', async () => {
-    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
-    await screen.findByText('No files yet.')
-    expect(screen.getByRole('button', { name: /Download all/ })).toBeDisabled()
-
-    cleanup()
+  it('shows the section with Download all enabled once files exist', async () => {
     vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
     await screen.findByText('big.bin')
+    expect(screen.getByText('Artifacts')).toBeTruthy()
     expect(screen.getByRole('button', { name: /Download all/ })).not.toBeDisabled()
   })
 

@@ -453,11 +453,13 @@ describe('MissionDetail created timestamp', () => {
 })
 
 describe('MissionDetail', () => {
-  it('renders mission header, plan, and progress', async () => {
+  it('renders mission header and plan, with no standalone progress section', async () => {
     renderPage()
     expect(await screen.findByText('Fix the login bug')).toBeTruthy()
     expect(screen.getByText('Add validation')).toBeTruthy()
-    expect(screen.getByText('found the root cause')).toBeTruthy()
+    // Progress notes live in the Timeline now — the markdown-card
+    // section that duplicated them is gone.
+    expect(screen.queryByText('found the root cause')).toBeNull()
   })
 
   it('does not show a permission banner when none is pending', async () => {
@@ -790,13 +792,13 @@ describe('MissionDetail', () => {
     expect(screen.queryByRole('button', { name: 'Delete mission' })).toBeNull()
   })
 
-  it('hides Follow up for a non-terminal mission', async () => {
+  it('hides Fork for a non-terminal mission', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.queryByRole('button', { name: 'Follow up' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Fork' })).toBeNull()
   })
 
-  it('shows Follow up for a done mission and navigates to a prefilled create form', async () => {
+  it('shows Fork for a done mission and navigates to a prefilled create form', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     render(
       <MemoryRouter initialEntries={['/missions/m1']}>
@@ -807,7 +809,7 @@ describe('MissionDetail', () => {
       </MemoryRouter>,
     )
     await screen.findByText('Fix the login bug')
-    fireEvent.click(screen.getByRole('button', { name: 'Follow up' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Fork' }))
     await screen.findByText('New mission page')
   })
 
