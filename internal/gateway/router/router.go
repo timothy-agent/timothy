@@ -863,9 +863,22 @@ func hasCapability(p provider.Provider, want provider.Capability) bool {
 }
 
 // findModel locates the first provider whose catalog entry has the
-// exact model id.
+// exact model id — in provider-name order, since map iteration would
+// make hint resolution nondeterministic when several providers serve
+// the same model id. Disabled rows are skipped here rather than left
+// for Resolve's entryGate: a disabled provider matching first would
+// consume the hint and silently drop it at the gate.
 func (s *Snapshot) findModel(model string) (ProviderRow, string, bool) {
-	for _, row := range s.byName {
+	names := make([]string, 0, len(s.byName))
+	for name := range s.byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		row := s.byName[name]
+		if !row.Enabled {
+			continue
+		}
 		if _, ok := s.catalogModel(row, model); ok {
 			return row, model, true
 		}
