@@ -455,6 +455,10 @@ type turnResult struct {
 func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string) (turnResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
+	// D-075: the sentinel call's successful execution ends the turn —
+	// every mission phase (worker/explore/plan/review) goes through
+	// this one call site.
+	req.EndTurnTools = []string{sentinelTool}
 	events, err := r.agent.Start(ctx, req)
 	if err != nil {
 		return turnResult{}, err
