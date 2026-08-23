@@ -136,6 +136,12 @@ func TestRunWorkerSentinelPresent(t *testing.T) {
 	if agent.call != 1 {
 		t.Fatalf("expected exactly one turn when the sentinel is present, got %d", agent.call)
 	}
+	// D-075: the worker turn must tell loop.Agent its sentinel ends the
+	// turn, so a clean mission_status call never triggers a pointless
+	// continuation call.
+	if len(agent.requests) != 1 || len(agent.requests[0].EndTurnTools) != 1 || agent.requests[0].EndTurnTools[0] != missionStatusToolName {
+		t.Fatalf("EndTurnTools = %+v, want [%q]", agent.requests[0].EndTurnTools, missionStatusToolName)
+	}
 }
 
 // TestRunWorkerFinalMessageExcludesPriorToolRoundNarration guards D-069's

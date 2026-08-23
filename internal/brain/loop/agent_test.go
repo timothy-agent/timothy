@@ -2147,3 +2147,89 @@ func TestWaitToolsReadyTimeoutStillProceeds(t *testing.T) {
 	}
 }
 
+// TestAgentEndTurnToolsEndsAfterSentinel pins D-075: a tool named in
+// EndTurnTools that executes cleanly ends the turn right there — no
+// second model call to react to a result nobody asked for. Only one
+// gateway request must fire, and the assistant+tool-result messages
+// still land in the round-trip (session persistence must see them
+// exactly as if the turn had continued).
+func TestAgentEndTurnToolsEndsAfterSentinel(t *testing.T) {
+	t.Parallel()
+	sentinel := &tools.Tool{
+		Name:        "mission_status",
+		Description: "reports mission status",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"outcome":{"type":"string"}},"required":["outcome"],"additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			return "recorded", nil
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"mission_status", `{"outcome":"done"}`}),
+	}}
+	a, _, events, _ := testAgent(t, gw, sentinel)
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID:    "s1",
+		Route:        "coding",
+		Messages:     []provider.Message{{Role: "user", Content: "go"}},
+		EndTurnTools: []string{"mission_status"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if len(gw.requests) != 1 {
+		t.Fatalf("gateway requests = %d, want exactly 1 (no continuation call)", len(gw.requests))
+	}
+	if got := ofType(evs, stream.EventDone); len(got) != 1 {
+		t.Fatalf("done events = %d, want exactly 1", len(got))
+	}
+	usage := ofType(evs, stream.EventUsage)
+	if len(usage) != 1 || usage[0].Usage.InputTokens != 10 || usage[0].Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want the sentinel step's own usage (10/5)", usage)
+	}
+	if len(events.kinds) != 1 || events.kinds[0] != "tool_execution" {
+		t.Fatalf("session events = %v, want the sentinel's tool_execution persisted", events.kinds)
+	}
+}
+
+// TestAgentEndTurnToolsErrorContinues pins the D-075 carve-out: an
+// EndTurnTools call that comes back as an error/denial does NOT end
+// the turn — the model must see the failure and get a chance to
+// retry, exactly like today's behavior for every other tool.
+func TestAgentEndTurnToolsErrorContinues(t *testing.T) {
+	t.Parallel()
+	sentinel := &tools.Tool{
+		Name:        "mission_status",
+		Description: "reports mission status",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			panic("bad args")
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"mission_status", `{}`}),
+		finalStep("retried"),
+	}}
+	a, _, _, _ := testAgent(t, gw, sentinel)
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID:    "s1",
+		Route:        "coding",
+		Messages:     []provider.Message{{Role: "user", Content: "go"}},
+		EndTurnTools: []string{"mission_status"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if len(gw.requests) != 2 {
+		t.Fatalf("gateway requests = %d, want 2 (error result must still get a continuation)", len(gw.requests))
+	}
+	if got := ofType(evs, stream.EventDone); len(got) != 1 {
+		t.Fatalf("done events = %d, want exactly 1", len(got))
+	}
+}
+
