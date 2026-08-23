@@ -32,11 +32,12 @@ func nextPhase(p Phase) (Phase, bool) {
 	return "", false
 }
 
-// parsePhase never rejects: an unrecognized value degrades to a safe
-// fallback rather than the caller treating the row as unreadable —
-// corruption-safety over strictness (a future rollback that doesn't
-// recognize a newer phase must still load the mission as paused, not
-// fail to load it at all).
+// parsePhase reports whether raw is a recognized Phase; on an
+// unrecognized value it returns ("", false) and leaves degrading to
+// the caller (e.g. scanMission treats it as failed; ApplyTransition's
+// terminal re-check treats it as terminal) — corruption-safety over
+// strictness, each call site choosing the safe fallback for its own
+// context.
 func parsePhase(raw string) (Phase, bool) {
 	switch Phase(raw) {
 	case PhaseExplore, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed:
@@ -305,8 +306,8 @@ func stepPhaseComplete(s StepState) Transition {
 }
 
 // stepWorkerFailed counts consecutive failures toward the backoff
-// brake; a fresh success (any non-failed input) resets the counter
-// elsewhere (the driver clears ConsecutiveFailures on progress).
+// brake; progress resets the counter elsewhere in this file
+// (stepPhaseComplete, stepWorkerRetry, stepReviewApprove all zero it).
 //
 // The MaxIterations ceiling is checked before the backoff pause: it is
 // a hard stop, and a backoff pause must only ever happen below the
@@ -395,7 +396,10 @@ func stepReviewApprove(s StepState) Transition {
 	if s.LastUnit {
 		s.Phase = PhaseDone
 		s.Status = StatusDone
-		return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done"}}}
+		// verified: false for light missions, which reach done with zero
+		// harness verification (no spec units, no CheckArtifacts/RunVerify) —
+		// distinguishes that in the event log from a harness-verified done.
+		return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": !s.Light}}}}
 	}
 	s.Phase = PhaseExecute
 	s.Status = StatusIdle

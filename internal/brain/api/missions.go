@@ -692,11 +692,58 @@ func classifyLight(ctx context.Context, classify agents.Classify, goal string) b
 	return strings.Contains(reply, "yes") && !strings.Contains(reply, "no")
 }
 
+// classifyKindAndLight answers both classifyKind and classifyLight's
+// questions in one model call — used only by the preview endpoint
+// (classifyGoal), which needs both on every debounced keystroke and
+// would otherwise pay for two full LLM turns per preview. create()'s
+// fallback path keeps using classifyKind/classifyLight separately,
+// since it only ever needs light after kind is already known to be
+// general. Parsing is defensive: any reply shape other than exactly
+// "coding"/"general" followed by "light"/"full" (case-insensitive,
+// separated by whitespace) falls back to kind=coding, light=false —
+// the same safe-side bias classifyKind/classifyLight each apply alone.
+func classifyKindAndLight(ctx context.Context, classify agents.Classify, goal string) (kind string, light bool) {
+	if classify == nil {
+		return "coding", false
+	}
+	prompt := "Classify this mission goal along two independent axes.\n" +
+		"Axis 1 — coding or general: coding means creating or modifying code, scripts, or configuration in a project/repository; general means everything else (documents, analysis, data gathering, operations).\n" +
+		"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
+		"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
+		"Goal: " + goal
+	reply, err := classify(ctx, prompt)
+	if err != nil {
+		return "coding", false
+	}
+	fields := strings.Fields(strings.ToLower(reply))
+	if len(fields) != 2 {
+		return "coding", false
+	}
+	switch fields[0] {
+	case "general":
+		kind = "general"
+	case "coding":
+		kind = "coding"
+	default:
+		return "coding", false
+	}
+	switch fields[1] {
+	case "light":
+		light = true
+	case "full":
+		light = false
+	default:
+		return "coding", false
+	}
+	return kind, kind == "general" && light
+}
+
 // classifyGoal serves POST /v1/missions/classify: the same
 // classification create() falls back to when kind is omitted, exposed
 // standalone so the web UI's chip preview can show a mission's inferred
 // kind (and, for a general goal, a light suggestion) before submit
-// without actually creating anything.
+// without actually creating anything. Uses classifyKindAndLight's
+// single-call form since every debounced keystroke hits this endpoint.
 func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Goal string `json:"goal"`
@@ -709,8 +756,7 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
 		return
 	}
-	kind := classifyKind(r.Context(), h.classify, req.Goal)
-	light := kind == missions.KindGeneral && classifyLight(r.Context(), h.classify, req.Goal)
+	kind, light := classifyKindAndLight(r.Context(), h.classify, req.Goal)
 	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light})
 }
 

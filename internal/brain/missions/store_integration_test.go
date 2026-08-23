@@ -792,6 +792,46 @@ func TestApplyTransitionRejectsWriteOnTerminalMission(t *testing.T) {
 	}
 }
 
+// TestApplyTransitionRejectsWriteOnUnrecognizedPhase reproduces a
+// corrupted row: a phase value no running binary recognizes (e.g. a
+// column mangled out of band, or a future phase an older binary
+// doesn't know). ApplyTransition must treat that as terminal and
+// refuse the write, freezing the mission rather than letting stale
+// code overwrite an unreadable row.
+func TestApplyTransitionRejectsWriteOnUnrecognizedPhase(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "unknown-phase-guard", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET phase = 'quantum' WHERE id = $1`, id); err != nil {
+		t.Fatalf("corrupt phase: %v", err)
+	}
+
+	err = s.ApplyTransition(ctx, id, Transition{
+		Next:   StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "execute"}}},
+	})
+	if !errors.Is(err, ErrTerminal) {
+		t.Fatalf("ApplyTransition (unrecognized phase) err = %v, want ErrTerminal", err)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("Events = %+v, want none appended on rejected write", events)
+	}
+}
+
 // TestApplyTransitionCancelThenDoubleCancel exercises the two ends of
 // the cancel path around the new guard: a cancel applied to a live
 // mission still writes normally, and a second cancel on the

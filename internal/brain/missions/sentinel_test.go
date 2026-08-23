@@ -6,6 +6,33 @@ import (
 	"testing"
 )
 
+// TestSentinelDiscriminatorKeysHaveAttrs guards the convention the
+// package init() enforces at load time: every tool named in
+// sentinelDiscriminator must also appear in sentinelAttrs, since
+// extractTextSentinel silently returns ok=false for a tool missing
+// from sentinelAttrs (knownAttrs would be empty). This test exercises
+// the same check standalone so a future map edit that broke the
+// invariant fails a normal `go test` run, not just a process boot.
+func TestSentinelDiscriminatorKeysHaveAttrs(t *testing.T) {
+	for tool := range sentinelDiscriminator {
+		if _, ok := sentinelAttrs[tool]; !ok {
+			t.Errorf("tool %q is in sentinelDiscriminator but missing from sentinelAttrs", tool)
+		}
+	}
+}
+
+// TestSentinelDiscriminatorValuesOmitsExploreNotes documents the one
+// deliberate exception to "all three maps stay in sync": explore_notes
+// has a free-text discriminator (findings), not an enum, so it must
+// NOT appear in sentinelDiscriminatorValues. If this ever starts
+// failing because explore_notes gained an entry, the accompanying doc
+// comment on sentinelDiscriminatorValues needs updating too.
+func TestSentinelDiscriminatorValuesOmitsExploreNotes(t *testing.T) {
+	if _, ok := sentinelDiscriminatorValues[exploreNotesToolName]; ok {
+		t.Fatalf("sentinelDiscriminatorValues unexpectedly has an entry for %q, want it absent (free-text discriminator)", exploreNotesToolName)
+	}
+}
+
 func TestDetectBail(t *testing.T) {
 	positive := []string{
 		"I've made the changes. This is ready for review.",

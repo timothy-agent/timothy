@@ -602,6 +602,86 @@ func TestClassifyLight(t *testing.T) {
 	}
 }
 
+// TestClassifyKindAndLight exercises the merged single-call classifier
+// classifyGoal uses: happy paths for both axes, and every ambiguous or
+// malformed reply shape falling back to kind=coding light=false, the
+// same safe-side bias classifyKind/classifyLight apply separately.
+func TestClassifyKindAndLight(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		classify  func(ctx context.Context, prompt string) (string, error)
+		wantKind  string
+		wantLight bool
+	}{
+		{"nil classify defaults to coding/full", nil, "coding", false},
+		{
+			"general + light", func(context.Context, string) (string, error) {
+				return "general light", nil
+			}, "general", true,
+		},
+		{
+			"general + full", func(context.Context, string) (string, error) {
+				return "general full", nil
+			}, "general", false,
+		},
+		{
+			"coding + light is never light (light only applies to general)", func(context.Context, string) (string, error) {
+				return "coding light", nil
+			}, "coding", false,
+		},
+		{
+			"coding + full", func(context.Context, string) (string, error) {
+				return "Coding Full", nil
+			}, "coding", false,
+		},
+		{
+			"extra whitespace still parses", func(context.Context, string) (string, error) {
+				return "  general   light  ", nil
+			}, "general", true,
+		},
+		{
+			"single word reply falls back", func(context.Context, string) (string, error) {
+				return "general", nil
+			}, "coding", false,
+		},
+		{
+			"three word reply falls back", func(context.Context, string) (string, error) {
+				return "general light extra", nil
+			}, "coding", false,
+		},
+		{
+			"garbage first word falls back", func(context.Context, string) (string, error) {
+				return "banana light", nil
+			}, "coding", false,
+		},
+		{
+			"garbage second word falls back", func(context.Context, string) (string, error) {
+				return "general banana", nil
+			}, "coding", false,
+		},
+		{
+			"empty reply falls back", func(context.Context, string) (string, error) {
+				return "", nil
+			}, "coding", false,
+		},
+		{
+			"classify error falls back", func(context.Context, string) (string, error) {
+				return "", errors.New("gateway down")
+			}, "coding", false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotKind, gotLight := classifyKindAndLight(context.Background(), tc.classify, "some goal")
+			if gotKind != tc.wantKind || gotLight != tc.wantLight {
+				t.Fatalf("classifyKindAndLight() = (%q, %v), want (%q, %v)", gotKind, gotLight, tc.wantKind, tc.wantLight)
+			}
+		})
+	}
+}
+
 // TestMissionsClassifyEndpoint covers POST /v1/missions/classify: the
 // happy path returning the classifier's verdict (kind and light), and
 // the empty-goal 400 — this endpoint has no store/driver dependency, so
@@ -610,10 +690,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	classify := func(ctx context.Context, prompt string) (string, error) {
-		if strings.Contains(prompt, "single-pass") {
-			return "yes", nil
-		}
-		return "general", nil
+		return "general light", nil
 	}
 	m := mux(a)
 	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "")

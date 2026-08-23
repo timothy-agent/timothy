@@ -746,6 +746,9 @@ export interface Mission {
   // kind=general only, born in phase=execute, one bare worker turn.
   // final_output is that worker's verbatim final message — the
   // deliverable itself, absent/empty until the mission reaches done.
+  // Invariant: final_output is only ever populated when light is true;
+  // a non-light mission's Result comes from last_evidence instead (see
+  // MissionDetail.tsx's mutually exclusive light/!light Result blocks).
   light?: boolean
   final_output?: string
   created_at: string

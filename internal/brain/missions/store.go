@@ -686,7 +686,11 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 		}
 		return fmt.Errorf("missions apply transition lock: %w", err)
 	}
-	if phase, ok := parsePhase(currentPhase); ok && phase.Terminal() {
+	// An unrecognized phase is treated as terminal, not writable: unlike
+	// scanMission's read path (which must always return something),
+	// corruption discovered here should freeze the mission and refuse
+	// the write rather than let stale code overwrite an unreadable row.
+	if phase, ok := parsePhase(currentPhase); !ok || phase.Terminal() {
 		return ErrTerminal
 	}
 

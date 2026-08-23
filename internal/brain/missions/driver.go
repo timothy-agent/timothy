@@ -1235,7 +1235,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			if err := d.store.SetFinalOutput(ctx, m.ID, finalOutput); err != nil {
 				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
 			}
-			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": "light"}); err != nil {
+			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": "light", "verified": false}); err != nil {
 				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 			}
 			return StepInput{Input: InputReviewApprove}, nil
@@ -1322,6 +1322,13 @@ func (d *Driver) checkRegressions(ctx context.Context, m Mission) (StepInput, bo
 		d.log.Warn("driver: regression check reload failed", "mission_id", m.ID, "error", err)
 		return StepInput{}, false
 	}
+	// Deliberately omits verifyCurrentUnit's CheckCitations step: that
+	// check validates URLs against seenURLs, which only ever holds the
+	// citations from the turn that just produced the current unit's
+	// output (runExecute's live evidence). A regression recheck has no
+	// such turn — it's re-verifying units OTHER than the one just
+	// worked — so seenURLs would be empty here and CheckCitations would
+	// false-fail every already-passed unit on every regression pass.
 	workRoot := fresh.WorkRoot()
 	for i, u := range fresh.Spec.Units {
 		if !u.Passes {

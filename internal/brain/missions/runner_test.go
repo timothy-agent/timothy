@@ -1517,12 +1517,12 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 		textEvent("partial work"),
 	}}}
 	r := newTestRunner(agent)
-	text, _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
 	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
 		t.Fatalf("err = %v, want no-terminal error", err)
 	}
-	if text != "partial work" {
-		t.Fatalf("text = %q, want the partial preserved", text)
+	if res.text != "partial work" {
+		t.Fatalf("text = %q, want the partial preserved", res.text)
 	}
 }
 
@@ -1535,7 +1535,7 @@ func TestRunTurnIncompleteIsError(t *testing.T) {
 		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
 	}}}
 	r := newTestRunner(agent)
-	if _, _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
 		t.Fatalf("err = %v, want incomplete-stream error", err)
 	}
 }
@@ -1548,7 +1548,7 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		{Type: stream.EventError},
 	}}}
 	r := newTestRunner(agent)
-	if _, _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
@@ -1583,7 +1583,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 	done := make(chan struct{})
 	var err error
 	go func() {
-		_, _, _, _, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
 		close(done)
 	}()
 	select {

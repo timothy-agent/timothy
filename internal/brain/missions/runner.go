@@ -428,6 +428,17 @@ func (r *nativeRunner) belowFloor(model string) bool {
 	return false
 }
 
+// turnResult is runTurn's outcome: the full assistant text, the
+// sentinel tool call's raw arguments (if any), URLs the turn's
+// web_search/web_fetch calls saw, and the final assistant segment
+// (see finalSeg's doc below, formerly a bare 5th return value).
+type turnResult struct {
+	text         string
+	sentinelArgs json.RawMessage
+	seenURLs     []string
+	finalSeg     string
+}
+
 // runTurn drives one loop.Agent session to completion, capturing the
 // text of the sentinel tool call named toolName (if any) alongside the
 // full assistant text. It does not itself decide what a missing
@@ -441,14 +452,16 @@ func (r *nativeRunner) belowFloor(model string) bool {
 // commentary included), while finalSeg is just what the model wrote
 // right before ending its turn. The sentinel call itself never resets
 // finalSeg (it carries no assistant text of its own to lose).
-func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string) (full string, sentinelArgs json.RawMessage, seenURLs []string, finalSeg string, err error) {
+func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string) (turnResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 	events, err := r.agent.Start(ctx, req)
 	if err != nil {
-		return "", nil, nil, "", err
+		return turnResult{}, err
 	}
 	var b, finalB strings.Builder
+	var sentinelArgs json.RawMessage
+	var seenURLs []string
 	// parked tracks in-flight parks by CallID, not a single flag — a
 	// turn can issue concurrent tool calls (executeAll runs up to
 	// maxParallelTools at once), so a sibling call finishing first must
@@ -524,7 +537,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if len(parked) > 0 && r.parker != nil {
 				r.parker.OnPermissionCleared(ctx, req.MissionID)
 			}
-			return b.String(), sentinelArgs, seenURLs, finalB.String(), fmt.Errorf("mission runner: incomplete stream: %s", ev.Text)
+			return turnResult{b.String(), sentinelArgs, seenURLs, finalB.String()}, fmt.Errorf("mission runner: incomplete stream: %s", ev.Text)
 		case stream.EventError:
 			if len(parked) > 0 && r.parker != nil {
 				r.parker.OnPermissionCleared(ctx, req.MissionID)
@@ -533,19 +546,19 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.Err != nil {
 				msg = ev.Err.Message
 			}
-			return b.String(), sentinelArgs, seenURLs, finalB.String(), fmt.Errorf("mission runner: %s", msg)
+			return turnResult{b.String(), sentinelArgs, seenURLs, finalB.String()}, fmt.Errorf("mission runner: %s", msg)
 		}
 	}
 	if !sawTerminal {
 		if len(parked) > 0 && r.parker != nil {
 			r.parker.OnPermissionCleared(ctx, req.MissionID)
 		}
-		return b.String(), sentinelArgs, seenURLs, finalB.String(), fmt.Errorf("mission runner: stream ended without a terminal event")
+		return turnResult{b.String(), sentinelArgs, seenURLs, finalB.String()}, fmt.Errorf("mission runner: stream ended without a terminal event")
 	}
 	if servedModel != "" && r.belowFloor(servedModel) {
-		return b.String(), sentinelArgs, seenURLs, finalB.String(), fmt.Errorf("%w: %s", ErrModelFloor, servedModel)
+		return turnResult{b.String(), sentinelArgs, seenURLs, finalB.String()}, fmt.Errorf("%w: %s", ErrModelFloor, servedModel)
 	}
-	return b.String(), sentinelArgs, seenURLs, finalB.String(), nil
+	return turnResult{b.String(), sentinelArgs, seenURLs, finalB.String()}, nil
 }
 
 // webFetchArgURL extracts the url arg from a web_fetch call's raw
@@ -657,13 +670,14 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		Unattended: m.ScheduleID != "",
 	}
 
-	text, args, seenURLs, finalSeg, err := r.runTurn(ctx, req, missionStatusToolName)
+	res, err := r.runTurn(ctx, req, missionStatusToolName)
+	text, seenURLs := res.text, res.seenURLs
 	if err != nil {
 		return WorkerVerdict{}, text, err
 	}
-	if v, ok := r.tryParseVerdict(args); ok {
+	if v, ok := r.tryParseVerdict(res.sentinelArgs); ok {
 		v.SeenURLs = append(seenURLs, kbSeen.all()...)
-		v.FinalMessage = finalSeg
+		v.FinalMessage = res.finalSeg
 		return v, text, nil
 	}
 
@@ -673,14 +687,15 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one mission_status tool call: done, retry, or blocked."},
 	)
-	recoverText, recoverArgs, recoverSeenURLs, recoverFinalSeg, err := r.runTurn(ctx, recoverReq, missionStatusToolName)
-	seenURLs = append(seenURLs, recoverSeenURLs...)
+	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName)
+	recoverText := recoverRes.text
+	seenURLs = append(seenURLs, recoverRes.seenURLs...)
 	if err != nil {
 		return WorkerVerdict{}, text + "\n" + recoverText, err
 	}
-	if v, ok := r.tryParseVerdict(recoverArgs); ok {
+	if v, ok := r.tryParseVerdict(recoverRes.sentinelArgs); ok {
 		v.SeenURLs = append(seenURLs, kbSeen.all()...)
-		v.FinalMessage = recoverFinalSeg
+		v.FinalMessage = recoverRes.finalSeg
 		return v, text + "\n" + recoverText, nil
 	}
 
@@ -698,7 +713,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		if v, ok := r.tryParseVerdict(raw); ok {
 			r.log.Warn("mission worker expressed mission_status as text, not a tool call", "mission_id", m.ID)
 			v.SeenURLs = append(seenURLs, kbSeen.all()...)
-			v.FinalMessage = recoverFinalSeg
+			v.FinalMessage = recoverRes.finalSeg
 			return v, combined, nil
 		}
 	}
@@ -769,11 +784,12 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		Unattended:   m.ScheduleID != "",
 	}
 
-	text, args, _, _, err := r.runTurn(ctx, req, exploreNotesToolName)
+	res, err := r.runTurn(ctx, req, exploreNotesToolName)
+	text := res.text
 	if err != nil {
 		return "", err
 	}
-	if notes, ok := tryParseFindings(args); ok {
+	if notes, ok := tryParseFindings(res.sentinelArgs); ok {
 		return notes, nil
 	}
 
@@ -783,11 +799,12 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one explore_notes tool call containing your findings."},
 	)
-	recoverText, recoverArgs, _, _, err := r.runTurn(ctx, recoverReq, exploreNotesToolName)
+	recoverRes, err := r.runTurn(ctx, recoverReq, exploreNotesToolName)
+	recoverText := recoverRes.text
 	if err != nil {
 		return "", err
 	}
-	if notes, ok := tryParseFindings(recoverArgs); ok {
+	if notes, ok := tryParseFindings(recoverRes.sentinelArgs); ok {
 		return notes, nil
 	}
 
@@ -847,7 +864,8 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
 	}
-	text, args, _, _, err := r.runTurn(ctx, req, reviewVerdictToolName)
+	res, err := r.runTurn(ctx, req, reviewVerdictToolName)
+	text, args := res.text, res.sentinelArgs
 	if err != nil {
 		return ReviewVerdict{}, nil, err
 	}
@@ -861,7 +879,8 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 			provider.Message{Role: "assistant", Content: text},
 			provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one review_verdict tool call: approve or rework."},
 		)
-		recoverText, recoverArgs, _, _, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName)
+		recoverRes, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName)
+		recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 		if err != nil {
 			return ReviewVerdict{}, nil, err
 		}
@@ -993,7 +1012,8 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	if len(extra) == 1 {
 		req.ForceTool = planToolName
 	}
-	text, args, _, _, err := r.runTurn(ctx, req, planToolName)
+	res, err := r.runTurn(ctx, req, planToolName)
+	text, args := res.text, res.sentinelArgs
 	if err != nil {
 		return Spec{}, err
 	}
@@ -1019,7 +1039,8 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] Your last turn did not produce a usable plan: " + recoverReason + ". You must end this turn with exactly one submit_plan tool call."},
 	)
-	recoverText, recoverArgs, _, _, err := r.runTurn(ctx, recoverReq, planToolName)
+	recoverRes, err := r.runTurn(ctx, recoverReq, planToolName)
+	recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 	if err != nil {
 		return Spec{}, err
 	}

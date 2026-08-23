@@ -217,6 +217,20 @@ var sentinelDiscriminatorValues = map[string]map[string]bool{
 	reviewVerdictToolName: {"approve": true, "rework": true},
 }
 
+// init guards the three maps' convention: every tool named in
+// sentinelDiscriminator must also have an entry in sentinelAttrs, or
+// extractTextSentinel bails silently for that tool with no signal a
+// tool was ever added incompletely. sentinelDiscriminatorValues is
+// deliberately NOT checked the same way — explore_notes has no enum
+// (see its doc comment above) and is expected to be absent from it.
+func init() {
+	for tool := range sentinelDiscriminator {
+		if _, ok := sentinelAttrs[tool]; !ok {
+			panic(fmt.Sprintf("sentinel.go: %q registered in sentinelDiscriminator but missing from sentinelAttrs", tool))
+		}
+	}
+}
+
 // xmlTagPattern matches an XML-ish sentinel tag: <toolName attr="val"
 // attr2='val2' ... /> or <toolName ...>, attribute values in either
 // quote style, attributes in any order. %s is the exact tool name —

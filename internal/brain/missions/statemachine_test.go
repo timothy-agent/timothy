@@ -361,7 +361,10 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 
 // TestStepLightApproveGoesDone confirms a light mission (born in
 // PhaseExecute, empty spec so LastUnit is always true) reaches done on
-// review_approve exactly like a coding/general mission's last unit.
+// review_approve exactly like a coding/general mission's last unit,
+// and that its mission.done event carries verified=false — a light
+// mission has no spec units, so it reaches done with zero harness
+// verification and the event log must say so.
 func TestStepLightApproveGoesDone(t *testing.T) {
 	got := Step(
 		StepState{Phase: PhaseExecute, Status: StatusWorking, Light: true, LastUnit: true},
@@ -370,6 +373,29 @@ func TestStepLightApproveGoesDone(t *testing.T) {
 	)
 	if got.Next.Phase != PhaseDone || got.Next.Status != StatusDone {
 		t.Fatalf("Step(light approve) = %+v, want phase=done status=done", got.Next)
+	}
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.done" {
+		t.Fatalf("Events = %+v, want exactly one mission.done event", got.Events)
+	}
+	if verified, ok := got.Events[0].Payload["verified"].(bool); !ok || verified {
+		t.Fatalf("light mission.done payload = %+v, want verified=false", got.Events[0].Payload)
+	}
+}
+
+// TestStepNonLightApproveDoneIsVerified confirms a mission that reaches
+// its last unit via harness/review checks (not light) gets
+// verified=true on mission.done.
+func TestStepNonLightApproveDoneIsVerified(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseReview, Status: StatusWorking, Light: false, LastUnit: true},
+		StepInput{Input: InputReviewApprove},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.done" {
+		t.Fatalf("Events = %+v, want exactly one mission.done event", got.Events)
+	}
+	if verified, ok := got.Events[0].Payload["verified"].(bool); !ok || !verified {
+		t.Fatalf("non-light mission.done payload = %+v, want verified=true", got.Events[0].Payload)
 	}
 }
 
