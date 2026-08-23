@@ -58,8 +58,10 @@ export function CredentialsTab() {
 
   // Migrate all: only offered once an external backend is the default
   // (moving everything back to "db" isn't this button's job) and at
-  // least one ref still lives elsewhere.
-  const elsewhereCount = refs.filter((r) => r.backend !== defaultBackend).length
+  // least one ref still lives elsewhere. System refs (a backend's own
+  // bootstrap credential) don't count — they can never migrate, so
+  // counting them left the banner nagging forever.
+  const elsewhereCount = refs.filter((r) => r.backend !== defaultBackend && !r.system).length
   const showMigrateAll = defaultBackend !== 'db' && elsewhereCount > 0
 
   const migrateAll = async () => {

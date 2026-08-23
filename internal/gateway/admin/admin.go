@@ -193,8 +193,19 @@ func (a *Admin) MigrateAllSecrets(ctx context.Context, targetBackend string) ([]
 	if err != nil {
 		return nil, err
 	}
+	bootstrap, err := a.secrets.BootstrapRefs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]SecretMigrationResult, 0, len(refs))
 	for _, r := range refs {
+		// A backend's own bootstrap credential can never migrate
+		// (Migrate refuses it) — skip it up front instead of reporting
+		// the refusal as a batch failure.
+		if bootstrap[r.RefName] != "" {
+			out = append(out, SecretMigrationResult{Name: r.RefName, Skipped: true})
+			continue
+		}
 		configured, backend, err := a.secrets.Status(ctx, r.RefName)
 		if err != nil {
 			out = append(out, SecretMigrationResult{Name: r.RefName, Error: err.Error()})
