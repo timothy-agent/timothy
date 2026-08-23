@@ -21,7 +21,7 @@ jobs:
   # Workflow-file changes always mark everything relevant: CI's own
   # logic must run its full suite against itself.
   changes:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # paths-filter needs this to list a PR's changed files via the API
     # when the local checkout doesn't have enough history for a git
     # diff — scoped to this job only, not the workflow-wide grant.
@@ -60,7 +60,7 @@ jobs:
   go-test:
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -89,7 +89,7 @@ jobs:
   go-integration:
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: pgvector/pgvector:0.8.4-pg18-trixie
@@ -120,7 +120,7 @@ jobs:
   lint:
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -133,7 +133,7 @@ jobs:
   web:
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       # HugeIcons Pro registry auth (web/.npmrc references it by name)
       HUGEICONS_TOKEN: ${{ secrets.HUGEICONS_TOKEN }}
@@ -183,7 +183,7 @@ jobs:
     # fork-triggered runs — the empty token fails npm auth (broke PR
     # #248). Same-repo pushes and PRs still build it, and the release
     # workflow builds it again at tag time, so nothing ships unbuilt.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         service: [brain, gateway, memoryd, sandboxd, web]
@@ -230,7 +230,7 @@ jobs:
   sandbox-image:
     needs: changes
     if: needs.changes.outputs.sandbox == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Build base image
@@ -260,7 +260,7 @@ jobs:
   # needs, the old blocklist missed it, and auto-merge fired on red
   # jobs — path-awareness must not reopen that hole.)
   ci-ok:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     needs: [changes, go-test, go-integration, lint, web, images, sandbox-image]
     if: always()
     steps:
