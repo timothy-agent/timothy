@@ -174,6 +174,12 @@ type Mission struct {
 	DestinationIDs []string  `json:"destination_ids,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	// WorkflowRunID/WorkflowStep name the workflow run and step
+	// (internal/brain/workflows) this mission was spawned as, if any —
+	// empty for an ordinary mission. Set only at create time; the
+	// workflow engine reads terminal missions, it never mutates them.
+	WorkflowRunID string `json:"workflow_run_id,omitempty"`
+	WorkflowStep  string `json:"workflow_step,omitempty"`
 }
 
 // MissionAttachment is one PDF document attached at mission create

@@ -180,7 +180,13 @@ CREATE TABLE IF NOT EXISTS missions (
     -- driver.go's terminal-transition hook). Never model-decided —
     -- api/missions.go's create validates every id against the
     -- operator-owned destinations table before it lands here.
-    destination_ids       uuid[] NOT NULL DEFAULT '{}'
+    destination_ids       uuid[] NOT NULL DEFAULT '{}',
+    -- workflow_run_id/workflow_step name the workflow run and step
+    -- (internal/brain/workflows) this mission was spawned as, if any.
+    -- NULL/'' for an ordinary mission. The workflow engine reads these
+    -- via mission terminal events; it never writes mission state.
+    workflow_run_id        uuid,
+    workflow_step          text NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

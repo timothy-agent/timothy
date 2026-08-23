@@ -208,6 +208,13 @@ type Driver struct {
 	// same as SetMemoryExtract does for memoryd.
 	deliverDestinations DestinationDeliver
 
+	// onTerminal wires the workflows engine's reaction to a mission
+	// reaching a terminal phase (see SetOnTerminal / fireOnTerminal) —
+	// nil-safe: unset skips it entirely, same as deliverDestinations. A
+	// func type for the same import-cycle reason: workflows needs
+	// missions.Mission, so missions can't import workflows back.
+	onTerminal OnTerminal
+
 	// gatekeepers holds each mission's in-progress reviewer session
 	// state, keyed by mission id, for the "delta recheck" resume on
 	// rework. Process-local by design: lost on restart is acceptable —
@@ -414,6 +421,43 @@ func (d *Driver) deliverToDestinations(ctx context.Context, id string, terminal 
 	}
 	rctx := context.Background()
 	go d.deliverDestinations(rctx, m, m.DestinationIDs) //nolint:gosec // G118: deliberate — the mission is already terminal, delivery must outlive whatever request/ctx observed that transition
+}
+
+// OnTerminal reacts to a mission reaching a terminal phase —
+// workflows.Engine.OnMissionTerminal satisfies this. Fire-and-forget by
+// contract, same as DestinationDeliver: it must never return an error,
+// block, or affect mission state (the engine only reads terminal
+// missions and creates new ones, never mutates the terminal mission).
+type OnTerminal func(ctx context.Context, m Mission)
+
+// SetOnTerminal wires the workflows engine's reaction hook (see
+// fireOnTerminal) — a setter for the same reason SetDestinationDeliver
+// is. Optional — nil skips it entirely, same as a mission with no
+// workflow_run_id.
+func (d *Driver) SetOnTerminal(fn OnTerminal) {
+	d.onTerminal = fn
+}
+
+// fireOnTerminal fires the workflows engine hook for any mission
+// reaching a terminal phase (done or failed) that names a
+// workflow_run_id — an ordinary mission (workflow_run_id empty) never
+// reaches the engine at all. Detached from ctx like deliverToDestinations:
+// the mission is already terminal, so this must outlive a request that
+// may be winding down.
+func (d *Driver) fireOnTerminal(ctx context.Context, id string) {
+	if d.onTerminal == nil {
+		return
+	}
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		d.log.Warn("driver: workflow terminal hook: reload mission failed", "mission_id", id, "error", err)
+		return
+	}
+	if m.WorkflowRunID == "" {
+		return
+	}
+	rctx := context.Background()
+	go d.onTerminal(rctx, m) //nolint:gosec // G118: deliberate — the mission is already terminal, the hook must outlive whatever request/ctx observed that transition
 }
 
 // fireOnComplete runs a mission's recorded on_complete choice
@@ -767,6 +811,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
 		d.backfillMissionName(ctx, id)
 		d.deliverToDestinations(ctx, id, t.Next.Phase)
+		d.fireOnTerminal(ctx, id)
 	}
 	if t.Next.Phase == PhaseDone {
 		// m is the pre-transition snapshot (re-fetched above, before this
@@ -865,6 +910,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
 		d.backfillMissionName(ctx, id)
 		d.deliverToDestinations(ctx, id, t.Next.Phase)
+		d.fireOnTerminal(ctx, id)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
