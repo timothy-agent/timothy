@@ -384,6 +384,11 @@ func replanTransition(s StepState, in StepInput) Transition {
 	s.StallCount = 0
 	s.LastGapFingerprint = ""
 	s.Iteration = 0
+	// A replan is a fresh start, same as any other stepPhaseComplete
+	// transition into a new phase — leaving ConsecutiveFailures set would
+	// arrive at planning already one failure from a backoff pause despite
+	// having made no failed attempt yet in the new phase.
+	s.ConsecutiveFailures = 0
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.replan", Payload: map[string]any{"reason": in.Reason}}}}
 }
 

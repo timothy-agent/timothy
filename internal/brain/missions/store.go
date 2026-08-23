@@ -1072,9 +1072,9 @@ func (s *Store) Spend(ctx context.Context, missionID string) (MissionSpend, erro
 	return out, rows.Err()
 }
 
-// BackoffPausedMission is BackoffPaused's row: just enough to drive the
-// auto-resume ladder (sweep.go's autoResumeBackoff) without the cost of
-// a full Mission scan.
+// BackoffPausedMission is PausedByReason's row: just enough to drive
+// the auto-resume ladders (sweep.go's autoResumeBackoff and
+// autoResumeInfra) without the cost of a full Mission scan.
 type BackoffPausedMission struct {
 	ID        string
 	UpdatedAt time.Time
@@ -1083,20 +1083,27 @@ type BackoffPausedMission struct {
 // BackoffPaused returns every mission currently paused with
 // pause_reason='backoff' — autoResumeBackoff's input.
 func (s *Store) BackoffPaused(ctx context.Context) ([]BackoffPausedMission, error) {
+	return s.PausedByReason(ctx, string(PauseBackoff))
+}
+
+// PausedByReason returns every mission currently paused with the given
+// pause_reason — shared by autoResumeBackoff (reason="backoff") and
+// autoResumeInfra (reason="infra").
+func (s *Store) PausedByReason(ctx context.Context, reason string) ([]BackoffPausedMission, error) {
 	db, err := s.db.Get()
 	if err != nil {
-		return nil, fmt.Errorf("missions backoff paused: %w", err)
+		return nil, fmt.Errorf("missions paused by reason: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT id, updated_at FROM missions WHERE status = 'paused' AND pause_reason = 'backoff'`)
+	rows, err := db.Query(ctx, `SELECT id, updated_at FROM missions WHERE status = 'paused' AND pause_reason = $1`, reason)
 	if err != nil {
-		return nil, fmt.Errorf("missions backoff paused: %w", err)
+		return nil, fmt.Errorf("missions paused by reason: %w", err)
 	}
 	defer rows.Close()
 	out := []BackoffPausedMission{}
 	for rows.Next() {
 		var m BackoffPausedMission
 		if err := rows.Scan(&m.ID, &m.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("missions backoff paused: %w", err)
+			return nil, fmt.Errorf("missions paused by reason: %w", err)
 		}
 		out = append(out, m)
 	}
@@ -1107,15 +1114,23 @@ func (s *Store) BackoffPaused(ctx context.Context) ([]BackoffPausedMission, erro
 // paused for backoff (mission.paused events with reason=backoff) —
 // autoResumeBackoff's input to the resume ladder.
 func (s *Store) CountBackoffPauses(ctx context.Context, missionID string) (int, error) {
+	return s.CountPausesByReason(ctx, missionID, string(PauseBackoff))
+}
+
+// CountPausesByReason counts how many times missionID has previously
+// paused for the given reason (mission.paused events with a matching
+// payload reason) — shared by autoResumeBackoff and autoResumeInfra's
+// resume ladders.
+func (s *Store) CountPausesByReason(ctx context.Context, missionID, reason string) (int, error) {
 	db, err := s.db.Get()
 	if err != nil {
-		return 0, fmt.Errorf("missions count backoff pauses: %w", err)
+		return 0, fmt.Errorf("missions count pauses by reason: %w", err)
 	}
 	var n int
 	err = db.QueryRow(ctx, `SELECT count(*) FROM mission_events
-		WHERE mission_id = $1 AND kind = 'mission.paused' AND payload->>'reason' = 'backoff'`, missionID).Scan(&n)
+		WHERE mission_id = $1 AND kind = 'mission.paused' AND payload->>'reason' = $2`, missionID, reason).Scan(&n)
 	if err != nil {
-		return 0, fmt.Errorf("missions count backoff pauses: %w", err)
+		return 0, fmt.Errorf("missions count pauses by reason: %w", err)
 	}
 	return n, nil
 }

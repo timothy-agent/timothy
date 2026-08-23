@@ -250,6 +250,19 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
 		},
 		{
+			// A mission can carry ConsecutiveFailures into a stall (e.g. one
+			// worker_failed round before the stall's own worker_retry
+			// rounds) — replanning must clear it same as any other fresh
+			// phase start (stepPhaseComplete), or the replanned mission
+			// arrives at planning one failure from a backoff pause despite
+			// having made no failed attempt yet in the new phase.
+			name:  "worker_retry stall replan clears ConsecutiveFailures",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0", ConsecutiveFailures: 2},
+			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Reason: "same failure again"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
+		},
+		{
 			name:  "review_infra_failure pauses with infra reason",
 			state: StepState{Phase: PhaseReview, Status: StatusWorking},
 			input: StepInput{Input: InputReviewInfraFailure},

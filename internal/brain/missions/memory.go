@@ -56,29 +56,22 @@ func alreadyExtracted(events []Event) bool {
 }
 
 // extractMissionMemory runs the mission's one terminal extraction pass:
-// called by Advance/Signal exactly when a transition's Next.Phase is
-// terminal (done or failed). Nil memory client, or a mission with no
+// called by onTerminal for every transition whose Next.Phase is
+// terminal (done or failed). m is onTerminal's single reload — this no
+// longer reloads itself. Nil memory client, or a mission with no
 // hidden session, skips silently — matching the nil-gated dependency
 // pattern the rest of the driver's optional hooks use (fireOnComplete,
 // notify). Extraction failures can never fail or block the mission
 // transition: MemoryExtract's own contract (see its doc comment) is
 // fire-and-forget, so nothing here can return an error to the caller
 // even in principle.
-func (d *Driver) extractMissionMemory(ctx context.Context, id string, terminal Phase, failureReason string) {
-	if d.memory == nil {
+func (d *Driver) extractMissionMemory(ctx context.Context, m Mission, terminal Phase, failureReason string) {
+	if d.memory == nil || m.SessionID == "" {
 		return
 	}
-	m, err := d.store.Get(ctx, id)
+	events, err := d.store.Events(ctx, m.ID)
 	if err != nil {
-		d.log.Warn("driver: memory extraction: reload mission failed", "mission_id", id, "error", err)
-		return
-	}
-	if m.SessionID == "" {
-		return
-	}
-	events, err := d.store.Events(ctx, id)
-	if err != nil {
-		d.log.Warn("driver: memory extraction: load events failed", "mission_id", id, "error", err)
+		d.log.Warn("driver: memory extraction: load events failed", "mission_id", m.ID, "error", err)
 		return
 	}
 	if alreadyExtracted(events) {
@@ -92,8 +85,8 @@ func (d *Driver) extractMissionMemory(ctx context.Context, id string, terminal P
 	// between dispatch and a not-yet-appended event would fire a second
 	// pass. Marking the attempt (not "succeeded") is the same commitment
 	// AppendEvent's other bookkeeping-only callers make.
-	if err := d.store.AppendEvent(ctx, id, memoryExtractedKind, map[string]any{"terminal": string(terminal)}); err != nil {
-		d.log.Warn("driver: memory extraction: record event failed", "mission_id", id, "error", err)
+	if err := d.store.AppendEvent(ctx, m.ID, memoryExtractedKind, map[string]any{"terminal": string(terminal)}); err != nil {
+		d.log.Warn("driver: memory extraction: record event failed", "mission_id", m.ID, "error", err)
 		return
 	}
 	go d.memory(context.Background(), m.SessionID, 0, digest, "") //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
@@ -102,27 +95,24 @@ func (d *Driver) extractMissionMemory(ctx context.Context, id string, terminal P
 // backfillMissionName regenerates a missing display name when a mission
 // reaches a terminal phase — the create-time naming call is best-effort
 // and a failure there would otherwise be permanent. Best-effort itself:
-// never blocks or fails the transition. SetNameIfEmpty's guard makes a
-// late create-time call racing this one harmless.
-func (d *Driver) backfillMissionName(ctx context.Context, id string) {
+// never fails the transition (any error is logged and swallowed). Runs
+// synchronously (D-073), unlike the rest of the terminal hooks: onTerminal
+// reloads the mission right after this returns, and that reload is what
+// destinations/workflow hooks see, so the name must already be persisted
+// by the time this call returns. SetNameIfEmpty's guard makes a late
+// create-time call racing this one harmless.
+func (d *Driver) backfillMissionName(ctx context.Context, id, goal string) {
 	if d.nameMission == nil {
 		return
 	}
-	m, err := d.store.Get(ctx, id)
-	if err != nil || m.Name != "" {
+	name := d.nameMission(ctx, goal)
+	if name == "" {
+		d.log.Warn("mission: name backfill returned empty", "mission_id", id)
 		return
 	}
-	goal := m.Goal
-	go func() { //nolint:gosec // G118: deliberate — the mission is already terminal, naming must outlive whatever request/ctx observed that transition
-		name := d.nameMission(context.Background(), goal)
-		if name == "" {
-			d.log.Warn("mission: name backfill returned empty", "mission_id", id)
-			return
-		}
-		if err := d.store.SetNameIfEmpty(context.Background(), id, name); err != nil {
-			d.log.Warn("mission: name backfill save failed", "mission_id", id, "error", err)
-		}
-	}()
+	if err := d.store.SetNameIfEmpty(ctx, id, name); err != nil {
+		d.log.Warn("mission: name backfill save failed", "mission_id", id, "error", err)
+	}
 }
 
 // OutcomeDigest assembles the curated extraction input: goal, title,

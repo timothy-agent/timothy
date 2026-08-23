@@ -16,6 +16,7 @@ type recordingDeliver struct {
 	calls []struct {
 		missionID string
 		destIDs   []string
+		mission   Mission
 	}
 }
 
@@ -26,7 +27,8 @@ func (r *recordingDeliver) fn() DestinationDeliver {
 		r.calls = append(r.calls, struct {
 			missionID string
 			destIDs   []string
-		}{m.ID, destinationIDs})
+			mission   Mission
+		}{m.ID, destinationIDs, m})
 	}
 }
 
@@ -109,6 +111,33 @@ func TestDriverSkipsDeliveryWhenNoDestinations(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.count(); got != 0 {
 		t.Fatalf("deliver calls for a mission with no destination_ids = %d, want 0", got)
+	}
+}
+
+// TestDriverBackfillsNameBeforeDestinationDelivery covers D-073's
+// ordering guarantee: runTerminalHooks backfills a missing name and
+// reloads the mission BEFORE handing it to the destinations hook, so a
+// mission that reached done with no name still delivers with the
+// backfilled one rather than empty.
+func TestDriverBackfillsNameBeforeDestinationDelivery(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, DestinationIDs: []string{"d1"}})
+	runner := &scriptedRunner{
+		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	d := testDriver(store, runner)
+	nameRec := &recordingNameMission{name: "Backfilled Name"}
+	d.SetNameMission(nameRec.fn())
+	deliverRec := &recordingDeliver{}
+	d.SetDestinationDeliver(deliverRec.fn())
+
+	driveN(t, d, "m1", 4) // explore -> plan -> execute -> review -> done
+
+	waitForDeliverCalls(t, deliverRec, 1)
+	if got := deliverRec.calls[0].mission.Name; got != "Backfilled Name" {
+		t.Fatalf("destination delivery saw mission name = %q, want %q (backfilled before delivery)", got, "Backfilled Name")
 	}
 }
 

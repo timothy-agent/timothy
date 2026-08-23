@@ -15,11 +15,13 @@ import (
 const workSlotSweepInterval = 30 * time.Second
 
 // staleWorkingAfter bounds how long a 'working' mission may go without a
-// turn before the periodic sweep re-Drives it — well above any observed
-// legit single-turn duration (the slowest logged this project: ~9.4min,
-// a remote-model turn), so this never fires on a mission genuinely
-// mid-turn, only one whose Drive loop has actually stopped.
-const staleWorkingAfter = 15 * time.Minute
+// turn before the periodic sweep re-Drives it. Invariant: staleWorkingAfter
+// > turnTimeout (runner.go) — otherwise this sweep can re-Drive a mission
+// still genuinely mid-turn (only claimDriving's no-op saves it from a
+// second concurrent Drive loop). Derived from turnTimeout plus margin
+// rather than a bare constant so that invariant can't silently drift out
+// of sync if turnTimeout ever changes.
+var staleWorkingAfter = turnTimeout + 5*time.Minute
 
 // recoverWorkingRetries and recoverWorkingRetryDelay bound the boot
 // recovery pass's tolerance for Postgres not yet accepting connections
@@ -64,6 +66,15 @@ type backoffStore interface {
 	CountBackoffPauses(ctx context.Context, missionID string) (int, error)
 }
 
+// pausedByReasonStore is the narrow slice of *Store autoResumeInfra
+// needs — the reason-parameterized counterpart of backoffStore, kept
+// separate rather than folded into it since autoResumeBackoff's own
+// existing tests fake backoffStore's fixed-reason shape.
+type pausedByReasonStore interface {
+	PausedByReason(ctx context.Context, reason string) ([]BackoffPausedMission, error)
+	CountPausesByReason(ctx context.Context, missionID, reason string) (int, error)
+}
+
 // signaler is the narrow slice of *Driver autoResumeBackoff needs to
 // resume a mission — an interface so the ladder logic is testable
 // against a fake capturing Signal calls without a real Store/Runner.
@@ -76,13 +87,35 @@ type signaler interface {
 // again, indexed by prior-backoff-pause count (1st, 2nd, 3rd). A
 // mission that has paused for backoff 4 or more times has a persistent
 // problem, not a transient outage, and needs a human — see
-// autoResumeBackoff.
+// autoResumeBackoff. This is the post-pause ladder: it paces resuming a
+// mission the sweep finds already stopped, minutes apart. Its
+// counterpart is driver.go's workerFailedRetryDelays, which paces
+// retries WITHIN a live Drive loop, seconds apart, before a pause ever
+// happens — see that ladder's own comment for the split's rationale.
 var autoResumeBackoffDelays = [...]time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute}
 
 // autoResumeExhaustedAfter is the prior-backoff-pause count at and
 // above which autoResumeBackoff stops resuming a mission and instead
 // notifies once and leaves it paused for a human.
 const autoResumeExhaustedAfter = 4
+
+// autoResumeInfraDelays ladders how long an infra-paused mission waits
+// before autoResumeInfra resumes it again, indexed by prior-infra-pause
+// count (1st, 2nd, 3rd) — its own, shorter ladder than
+// autoResumeBackoffDelays: infra failures (a gateway blip, a docker
+// hiccup) are usually transient and worth retrying sooner, while a
+// genuinely permanent one (a missing image) re-pauses immediately and
+// hits autoResumeInfraExhaustedAfter fast regardless of how short the
+// ladder is.
+var autoResumeInfraDelays = [...]time.Duration{2 * time.Minute, 10 * time.Minute, 30 * time.Minute}
+
+// autoResumeInfraExhaustedAfter is the prior-infra-pause count at and
+// above which autoResumeInfra stops resuming a mission and instead
+// notifies once and leaves it paused for a human — deliberately lower
+// than autoResumeExhaustedAfter's 4: a repeatedly failing infra
+// dependency needs a human sooner than a repeatedly failing model call
+// does.
+const autoResumeInfraExhaustedAfter = 3
 
 // admitWork reports whether the host can afford claiming another work
 // slot right now (D-056). A nil gate always admits (tests, and any
@@ -192,6 +225,7 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 			sweepOrphanSandboxes(ctx, store, sandbox, log)
 			reDriveStaleWorking(ctx, d, store, log)
 			autoResumeBackoff(ctx, d, store, notify, log)
+			autoResumeInfra(ctx, d, store, notify, log)
 			// D-056: skip the claim entirely this tick if the host can't
 			// afford another working mission — the mission stays idle,
 			// and this same sweep retries it in workSlotSweepInterval; that
@@ -289,6 +323,59 @@ func autoResumeBackoff(ctx context.Context, d signaler, store backoffStore, noti
 		log.Info("auto-resume backoff sweep: resuming a backoff-paused mission", "mission_id", m.ID, "prior_pauses", n)
 		if err := d.Signal(ctx, m.ID, InputResume); err != nil {
 			log.Error("auto-resume backoff sweep: signal failed", "mission_id", m.ID, "error", err)
+		}
+	}
+}
+
+// autoResumeInfra self-heals missions paused for infra failure
+// (PauseInfra: gateway blip, docker hiccup, harness/reviewer/driver
+// error) without a human hitting resume every time — same ladder shape
+// as autoResumeBackoff, but its own shorter delays
+// (autoResumeInfraDelays) and its own lower cap
+// (autoResumeInfraExhaustedAfter): infra failures are usually transient
+// and worth retrying sooner than a repeatedly-failing model call, while
+// a genuinely permanent infra failure (a missing image) re-pauses
+// immediately and hits the cap fast regardless.
+//
+// A resumed mission still hitting the same (or a different) pause
+// condition re-pauses with whatever reason applies (statemachine.go's
+// checks run before the input switch) — it naturally leaves
+// PausedByReason's result set on the very next tick if that reason
+// isn't 'infra', no special case needed here.
+func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore, notify messageNotifier, log *slog.Logger) {
+	missions, err := store.PausedByReason(ctx, string(PauseInfra))
+	if err != nil {
+		log.Error("auto-resume infra sweep: list failed", "error", err)
+		return
+	}
+	for _, m := range missions {
+		n, err := store.CountPausesByReason(ctx, m.ID, string(PauseInfra))
+		if err != nil {
+			log.Error("auto-resume infra sweep: count pauses failed", "mission_id", m.ID, "error", err)
+			continue
+		}
+		if n <= 0 {
+			continue // no recorded infra pause yet — nothing to ladder from
+		}
+		if n >= autoResumeInfraExhaustedAfter {
+			if notify != nil {
+				msg := fmt.Sprintf("this mission has paused for infra failure %d times and will not auto-resume again — it needs a human look", n)
+				if err := notify.NotifyMessage(ctx, m.ID, "auto_resume_exhausted", msg); err != nil {
+					log.Warn("auto-resume infra sweep: notify failed", "mission_id", m.ID, "error", err)
+				}
+			}
+			continue
+		}
+		idx := n - 1
+		if idx >= len(autoResumeInfraDelays) {
+			idx = len(autoResumeInfraDelays) - 1
+		}
+		if time.Since(m.UpdatedAt) < autoResumeInfraDelays[idx] {
+			continue // not due yet
+		}
+		log.Info("auto-resume infra sweep: resuming an infra-paused mission", "mission_id", m.ID, "prior_pauses", n)
+		if err := d.Signal(ctx, m.ID, InputResume); err != nil {
+			log.Error("auto-resume infra sweep: signal failed", "mission_id", m.ID, "error", err)
 		}
 	}
 }

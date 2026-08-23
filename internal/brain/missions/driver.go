@@ -262,6 +262,14 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify no
 // a failing model at ~1/sec until the backoff pause finally kicks in —
 // this ladder slows that down without changing when the pause itself
 // fires (stepWorkerFailed's cfg.BackoffFailures ceiling is unchanged).
+// This is the in-band ladder: it paces retries WITHIN a live Drive loop,
+// seconds apart, while the mission is still working. Its counterpart is
+// sweep.go's autoResumeBackoffDelays/autoResumeInfraDelays, which pace
+// resuming a mission that already paused — minutes apart, run from the
+// periodic sweep rather than inline in Advance. The split exists because
+// the two problems are different: this ladder slows a mission that is
+// still actively (if unsuccessfully) making attempts; the sweep's
+// ladders self-heal a mission that has already stopped and gone quiet.
 var workerFailedRetryDelays = [...]time.Duration{5 * time.Second, 15 * time.Second, 45 * time.Second}
 
 // retryDelay maps a post-transition ConsecutiveFailures count to a
@@ -412,20 +420,14 @@ func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 // deliverToDestinations fires the destinations delivery hook exactly
 // on a transition into phase=done (never phase=failed — v1 doesn't
 // deliver on failure, the notifier already covers failure alerts) and
-// only when the mission actually has destination_ids attached.
-// Detached from ctx like fireOnComplete: the mission is already
-// terminal, so delivery must outlive a request that may be winding
-// down.
-func (d *Driver) deliverToDestinations(ctx context.Context, id string, terminal Phase) {
-	if d.deliverDestinations == nil || terminal != PhaseDone {
-		return
-	}
-	m, err := d.store.Get(ctx, id)
-	if err != nil {
-		d.log.Warn("driver: destination delivery: reload mission failed", "mission_id", id, "error", err)
-		return
-	}
-	if len(m.DestinationIDs) == 0 {
+// only when the mission actually has destination_ids attached. m is
+// the terminal-transition's own reload (onTerminal's single Get,
+// after backfillMissionName) — this no longer reloads itself, so
+// delivery always sees the backfilled name. Detached from ctx like
+// fireOnComplete: the mission is already terminal, so delivery must
+// outlive a request that may be winding down.
+func (d *Driver) deliverToDestinations(m Mission, terminal Phase) {
+	if d.deliverDestinations == nil || terminal != PhaseDone || len(m.DestinationIDs) == 0 {
 		return
 	}
 	rctx := context.Background()
@@ -460,19 +462,11 @@ func (d *Driver) SetValidateDeps(deps ValidateDeps) {
 // fireOnTerminal fires the workflows engine hook for any mission
 // reaching a terminal phase (done or failed) that names a
 // workflow_run_id — an ordinary mission (workflow_run_id empty) never
-// reaches the engine at all. Detached from ctx like deliverToDestinations:
-// the mission is already terminal, so this must outlive a request that
-// may be winding down.
-func (d *Driver) fireOnTerminal(ctx context.Context, id string) {
-	if d.onTerminal == nil {
-		return
-	}
-	m, err := d.store.Get(ctx, id)
-	if err != nil {
-		d.log.Warn("driver: workflow terminal hook: reload mission failed", "mission_id", id, "error", err)
-		return
-	}
-	if m.WorkflowRunID == "" {
+// reaches the engine at all. m is onTerminal's single reload, same as
+// deliverToDestinations. Detached from ctx: the mission is already
+// terminal, so this must outlive a request that may be winding down.
+func (d *Driver) fireOnTerminal(m Mission) {
+	if d.onTerminal == nil || m.WorkflowRunID == "" {
 		return
 	}
 	rctx := context.Background()
@@ -502,6 +496,62 @@ func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) {
 		if d.notifyPushFailed != nil {
 			d.notifyPushFailed(rctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, m.OnComplete, err.Error()))
 		}
+	}
+}
+
+// D-073: runTerminalHooks is the single place Advance and Signal fire
+// every terminal-transition hook, replacing what used to be a verbatim block
+// duplicated in both (and had already drifted: Signal's copy omitted
+// fireOnComplete, benign only because Signal never produces a done
+// transition today — cancel always fails a mission, never completes
+// it).
+//
+// Fixed order:
+//  1. gatekeeper state drop (in-process only, no I/O)
+//  2. sandbox container removal (async, best-effort)
+//  3. name backfill (SYNCHRONOUS — see backfillMissionName)
+//  4. one mission reload, AFTER the backfill above, so every hook past
+//     this point sees a stable, already-backfilled name
+//  5. memory extraction, destinations delivery, workflow onTerminal —
+//     each handed the SAME reloaded Mission, no hook reloads on its own
+//  6. fireOnComplete, done transitions only
+//
+// Each hook may still dispatch its own goroutine (memory/destinations/
+// workflow all remain fire-and-forget past this function returning) —
+// the order guarantee above only covers the synchronous portion: it
+// guarantees WHAT each hook is handed, not when its own background work
+// finishes. notify.OnTransition is deliberately NOT one of these hooks:
+// it fires on every transition, not just terminal ones, so callers keep
+// invoking it separately.
+//
+// A hook failure is logged by the hook itself and never stops the rest
+// of the sequence — one hook's trouble (a dead memoryd, a bad
+// destination) must never suppress another's.
+func (d *Driver) runTerminalHooks(ctx context.Context, id string, terminal Phase, events []EventDraft) {
+	delete(d.gatekeepers, id)
+	d.removeSandbox(id)
+
+	reason := failedReason(events)
+	if d.nameMission != nil {
+		if pre, err := d.store.Get(ctx, id); err == nil && pre.Name == "" {
+			// Synchronous but bounded: the backfill is an LLM call, and
+			// a wedged provider must not stall the drive loop past this.
+			nctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			d.backfillMissionName(nctx, id, pre.Goal)
+			cancel()
+		}
+	}
+
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		d.log.Warn("driver: terminal hooks: reload mission failed", "mission_id", id, "error", err)
+		return
+	}
+	d.extractMissionMemory(ctx, m, terminal, reason)
+	d.deliverToDestinations(m, terminal)
+	d.fireOnTerminal(m)
+	if terminal == PhaseDone {
+		d.fireOnComplete(ctx, id, m)
 	}
 }
 
@@ -830,19 +880,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		return false, fmt.Errorf("driver advance: apply transition: %w", err)
 	}
 	if t.Next.Phase.Terminal() {
-		delete(d.gatekeepers, id)
-		d.removeSandbox(id)
-		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
-		d.backfillMissionName(ctx, id)
-		d.deliverToDestinations(ctx, id, t.Next.Phase)
-		d.fireOnTerminal(ctx, id)
-	}
-	if t.Next.Phase == PhaseDone {
-		// m is the pre-transition snapshot (re-fetched above, before this
-		// round's ApplyTransition) — RepoURL/ConnectorID/OnComplete/
-		// Branch/Worktree never change after create, so it's safe to
-		// reuse here rather than a third Get.
-		d.fireOnComplete(ctx, id, m)
+		d.runTerminalHooks(ctx, id, t.Next.Phase, t.Events)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
@@ -929,12 +967,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		return fmt.Errorf("driver: signal: apply transition: %w", err)
 	}
 	if t.Next.Phase.Terminal() {
-		delete(d.gatekeepers, id)
-		d.removeSandbox(id)
-		d.extractMissionMemory(ctx, id, t.Next.Phase, failedReason(t.Events))
-		d.backfillMissionName(ctx, id)
-		d.deliverToDestinations(ctx, id, t.Next.Phase)
-		d.fireOnTerminal(ctx, id)
+		d.runTerminalHooks(ctx, id, t.Next.Phase, t.Events)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
