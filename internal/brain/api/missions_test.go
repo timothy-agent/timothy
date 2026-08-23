@@ -23,7 +23,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -62,7 +62,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -110,7 +110,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -140,7 +140,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 
 	post := func(codingExecutorDefault func(context.Context) string, body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, nil, "")
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -201,7 +201,7 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 
 	post := func(classify func(context.Context, string) (string, error), body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "")
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -244,7 +244,7 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 
 	post := func(body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "")
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -270,7 +270,7 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 	// No conns wired at all: repo_url is rejected outright rather than
 	// panicking on a nil manager.
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1"}`))
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
@@ -295,7 +295,7 @@ func TestMissionsCreateValidatesOnComplete(t *testing.T) {
 
 	post := func(body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "")
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -334,7 +334,7 @@ func TestMissionsCreateValidatesGitStrategy(t *testing.T) {
 
 	post := func(body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -374,7 +374,7 @@ func TestMissionsCreateValidatesParentMission(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"general","parent_mission_id":"00000000-0000-0000-0000-000000000000"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -449,7 +449,7 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 		t.Helper()
 		a, _, _ := testAPI(t, "tok", nil)
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, atts, markitdownURL, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, atts, markitdownURL)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -616,7 +616,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 		return "general", nil
 	}
 	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "")
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
@@ -649,7 +649,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -672,7 +672,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
@@ -703,7 +703,7 @@ func TestMissionsNoteMalformedOrEmptyBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/note", body)
@@ -851,7 +851,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -888,7 +888,7 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "")
 
 	// Against a degraded pool, store.Get itself fails before the
 	// connector_id/repo_url gate is ever reached — this test only
