@@ -130,6 +130,26 @@ func (s *Store) CreateCollection(ctx context.Context, name, description string) 
 	return id, nil
 }
 
+// UpdateCollection renames a collection and/or replaces its
+// description. nil leaves a field unchanged, so a bare rename never
+// clobbers the description the classifier matches against.
+func (s *Store) UpdateCollection(ctx context.Context, id string, name, description *string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("kb collections update: %w", err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE kb_collections
+		SET name = COALESCE($2, name), description = COALESCE($3, description), updated_at = now()
+		WHERE id = $1`, id, name, description)
+	if err != nil {
+		return fmt.Errorf("kb collections update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("collection %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // DeleteCollection removes a collection; ON DELETE CASCADE takes its
 // documents and chunks with it.
 func (s *Store) DeleteCollection(ctx context.Context, id string) error {

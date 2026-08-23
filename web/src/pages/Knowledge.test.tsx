@@ -14,6 +14,7 @@ vi.mock('../api/client', () => ({
   getKbCollection: vi.fn(),
   createKbCollection: vi.fn(),
   deleteKbCollection: vi.fn(),
+  updateKbCollection: vi.fn(),
   listKbDocuments: vi.fn(),
   uploadKbDocument: vi.fn(),
   deleteKbDocument: vi.fn(),
@@ -29,6 +30,7 @@ import {
   listKbCollections,
   listKbDocuments,
   reingestKbDocument,
+  updateKbCollection,
   uploadKbDocument,
 } from '../api/client'
 
@@ -88,6 +90,26 @@ beforeEach(() => {
 })
 
 describe('Knowledge page', () => {
+  it('renames a collection from the detail header', async () => {
+    vi.mocked(getKbCollection).mockResolvedValue(productDocs)
+    vi.mocked(listKbDocuments).mockResolvedValue([readyDoc])
+    vi.mocked(updateKbCollection).mockResolvedValue({ ...productDocs, name: 'Scalability' })
+    renderPage('/knowledge/c1')
+
+    fireEvent.click(await screen.findByRole('button', { name: /Rename/ }))
+    const nameInput = await screen.findByLabelText('Collection name')
+    fireEvent.change(nameInput, { target: { value: 'Scalability' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(updateKbCollection).toHaveBeenCalledWith('c1', {
+        name: 'Scalability',
+        description: 'Product documentation for support agents.',
+      }),
+    )
+    expect(await screen.findByText('Scalability')).toBeInTheDocument()
+  })
+
   it('renders the page header and collections with doc and chunk counts', async () => {
     renderPage()
     expect(screen.getByRole('heading', { name: 'Knowledge' })).toBeTruthy()

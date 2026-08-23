@@ -59,6 +59,7 @@ func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.
 	handle("GET /v1/admin/kb/collections", a.auth(http.HandlerFunc(h.listCollections)))
 	handle("POST /v1/admin/kb/collections", a.auth(http.HandlerFunc(h.createCollection)))
 	handle("GET /v1/admin/kb/collections/{id}", a.auth(http.HandlerFunc(h.getCollection)))
+	handle("PATCH /v1/admin/kb/collections/{id}", a.auth(http.HandlerFunc(h.updateCollection)))
 	handle("DELETE /v1/admin/kb/collections/{id}", a.auth(http.HandlerFunc(h.deleteCollection)))
 	handle("GET /v1/admin/kb/collections/{id}/documents", a.auth(http.HandlerFunc(h.listDocuments)))
 	handle("POST /v1/admin/kb/collections/{id}/documents", a.auth(http.HandlerFunc(h.uploadDocument)))
@@ -159,6 +160,38 @@ func (h *kbAPI) createCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *kbAPI) getCollection(w http.ResponseWriter, r *http.Request) {
+	c, err := h.store.GetCollection(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failKB(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// updateCollection renames a collection and/or replaces its
+// description — absent fields stay untouched (pointer-decoded PATCH,
+// same shape the settings handlers use).
+func (h *kbAPI) updateCollection(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if req.Name == nil && req.Description == nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "nothing to update")
+		return
+	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "name must not be empty")
+		return
+	}
+	if err := h.store.UpdateCollection(r.Context(), r.PathValue("id"), req.Name, req.Description); err != nil {
+		failKB(w, err)
+		return
+	}
 	c, err := h.store.GetCollection(r.Context(), r.PathValue("id"))
 	if err != nil {
 		failKB(w, err)

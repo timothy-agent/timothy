@@ -2,6 +2,7 @@ import {
   ArrowLeft01Icon,
   CancelCircleIcon,
   Delete02Icon,
+  Edit01Icon,
   File02Icon,
   Loading03Icon,
   ReloadIcon,
@@ -18,6 +19,7 @@ import {
   getKbCollection,
   listKbDocuments,
   reingestKbDocument,
+  updateKbCollection,
   uploadKbDocument,
 } from '../../api/client'
 import type { KbCollection, KbDocument } from '../../api/types'
@@ -31,6 +33,7 @@ import {
   DialogTitle,
 } from '../ui/dialog'
 import { errText } from '../settings/util'
+import { Input } from '../ui/input'
 import { KbUploadForm } from './KbUploadForm'
 
 const statusStyle: Record<KbDocument['status'], string> = {
@@ -71,6 +74,9 @@ export function KnowledgeCollectionDetail() {
   const [collection, setCollection] = useState<KbCollection | null | undefined>(undefined)
   const [documents, setDocuments] = useState<KbDocument[]>([])
   const [confirmDeleteCollection, setConfirmDeleteCollection] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
   const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<KbDocument | null>(null)
 
   const refresh = useCallback(() => {
@@ -98,6 +104,18 @@ export function KnowledgeCollectionDetail() {
 
   if (collection === null) return <Navigate to="/knowledge" replace />
   if (collection === undefined || !id) return null
+
+  const saveEdit = async () => {
+    if (!id || editName.trim() === '') return
+    try {
+      const updated = await updateKbCollection(id, { name: editName.trim(), description: editDesc })
+      setCollection(updated)
+      setEditing(false)
+      toast.success('Collection updated')
+    } catch (err) {
+      toast.error('Could not update collection', { description: errText(err) })
+    }
+  }
 
   const removeCollection = async () => {
     try {
@@ -151,10 +169,23 @@ export function KnowledgeCollectionDetail() {
             <p className="text-sm text-muted-foreground">{collection.description}</p>
           )}
         </div>
-        <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
-          <HugeiconsIcon icon={Delete02Icon} />
-          Delete collection
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setEditName(collection.name)
+              setEditDesc(collection.description ?? '')
+              setEditing(true)
+            }}
+          >
+            <HugeiconsIcon icon={Edit01Icon} />
+            Rename
+          </Button>
+          <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
+            <HugeiconsIcon icon={Delete02Icon} />
+            Delete collection
+          </Button>
+        </div>
       </div>
 
       <KbUploadForm
@@ -223,6 +254,36 @@ export function KnowledgeCollectionDetail() {
           </table>
         </div>
       )}
+
+      <Dialog open={editing} onOpenChange={setEditing}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename collection</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="Collection name"
+              aria-label="Collection name"
+            />
+            <Input
+              value={editDesc}
+              onChange={(e) => setEditDesc(e.target.value)}
+              placeholder="Description"
+              aria-label="Collection description"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button disabled={editName.trim() === ''} onClick={() => void saveEdit()}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmDeleteCollection} onOpenChange={setConfirmDeleteCollection}>
         <DialogContent>

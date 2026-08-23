@@ -950,6 +950,16 @@ export async function createKbCollection(c: { name: string; description: string 
   return id
 }
 
+export async function updateKbCollection(
+  id: string,
+  patch: { name?: string; description?: string },
+): Promise<KbCollection> {
+  return request<KbCollection>(`/v1/admin/kb/collections/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
 export async function deleteKbCollection(id: string): Promise<void> {
   await request<void>(`/v1/admin/kb/collections/${id}`, { method: 'DELETE' })
 }

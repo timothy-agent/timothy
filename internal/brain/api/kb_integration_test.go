@@ -142,6 +142,32 @@ func TestKBCollectionsCRUD(t *testing.T) {
 		t.Fatalf("list status = %d body %s", w.Code, w.Body)
 	}
 
+	// PATCH renames without touching the description; empty-name and
+	// empty-body PATCHes are rejected.
+	patch := httptest.NewRequest("PATCH", "/v1/admin/kb/collections/"+created.ID, strings.NewReader(`{"name":"itest-docs-renamed"}`))
+	patch.Header.Set("Authorization", "Bearer tok")
+	w = httptest.NewRecorder()
+	m.ServeHTTP(w, patch)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch status = %d body %s", w.Code, w.Body)
+	}
+	renamed, err := store.GetCollection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCollection after rename: %v", err)
+	}
+	if renamed.Name != "itest-docs-renamed" || renamed.Description != "test collection" {
+		t.Fatalf("after rename: name=%q description=%q", renamed.Name, renamed.Description)
+	}
+	for _, body := range []string{`{}`, `{"name":"  "}`} {
+		bad := httptest.NewRequest("PATCH", "/v1/admin/kb/collections/"+created.ID, strings.NewReader(body))
+		bad.Header.Set("Authorization", "Bearer tok")
+		w = httptest.NewRecorder()
+		m.ServeHTTP(w, bad)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("patch %s status = %d, want 400", body, w.Code)
+		}
+	}
+
 	// A failed document counts toward failed_count but not the base
 	// doc/chunk story — GetCollection picks it up via collectionColumns.
 	docID, err := store.CreateDocument(context.Background(), created.ID, "Doc", "file", "doc.md", "content", 7)
