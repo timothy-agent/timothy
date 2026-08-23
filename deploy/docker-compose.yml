@@ -120,6 +120,9 @@ services:
       # alongside a slow provider's request_timeout so the two
       # deadlines never land at the same instant.
       TURN_TIMEOUT: ${TURN_TIMEOUT:-}
+      # Non-empty enables the agentic workflows layer (D-070):
+      # orchestration above missions. Off by default.
+      WORKFLOWS_ENABLED: ${WORKFLOWS_ENABLED:-}
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to
