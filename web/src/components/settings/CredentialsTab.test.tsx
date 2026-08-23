@@ -127,6 +127,15 @@ describe('CredentialsTab', () => {
     expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
   })
 
+  it('hides the migrate-all banner when only a system ref lives off the default backend', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([systemRef, { ...orphaned, backend: 'vault' }])
+    render(<CredentialsTab />)
+
+    await screen.findByText('VAULT_TOKEN')
+    expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
+  })
+
   it('shows migrate-all when the default backend is external and a ref lives elsewhere', async () => {
     vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
     vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])

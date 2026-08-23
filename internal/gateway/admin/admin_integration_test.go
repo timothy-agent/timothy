@@ -1208,6 +1208,8 @@ func TestMigrateAllSecretsBulkPartialFailure(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v1/auth/token/lookup-self":
 			w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "migrate-all-fail"):
+			w.WriteHeader(http.StatusInternalServerError)
 		case r.Method == http.MethodPost:
 			w.Write([]byte(`{}`))
 		default:
@@ -1239,8 +1241,17 @@ func TestMigrateAllSecretsBulkPartialFailure(t *testing.T) {
 		t.Fatalf("pre-migrate refSkip: %v", err)
 	}
 
+	// refFail: db-backed, but the fake vault 500s its write — the batch
+	// must record the error and keep going.
+	refFail := adminMarker + "migrate-all-fail"
+	if err := adm.SetSecret(ctx, refFail, "sk-c"); err != nil {
+		t.Fatalf("SetSecret refFail: %v", err)
+	}
+
 	// refBootstrap: the vault backend's own token_ref, db-backed. The
-	// bulk migrate must record it as an error, never abort the batch.
+	// bulk migrate must skip it up front (it can never migrate; reporting
+	// the refusal as a failure made the UI nag forever), never abort the
+	// batch.
 	refBootstrap := refOK + "_TOKEN"
 
 	results, err := adm.MigrateAllSecrets(ctx, "vault")
@@ -1258,11 +1269,11 @@ func TestMigrateAllSecretsBulkPartialFailure(t *testing.T) {
 		t.Fatalf("refSkip result = %+v, want skipped (already on vault)", byName[refSkip])
 	}
 	bootstrapResult := byName[refBootstrap]
-	if bootstrapResult.Migrated || bootstrapResult.Skipped || bootstrapResult.Error == "" {
-		t.Fatalf("refBootstrap result = %+v, want error only", bootstrapResult)
+	if !bootstrapResult.Skipped || bootstrapResult.Migrated || bootstrapResult.Error != "" {
+		t.Fatalf("refBootstrap result = %+v, want skipped only", bootstrapResult)
 	}
-	if !strings.Contains(bootstrapResult.Error, "bootstrap credential") {
-		t.Fatalf("refBootstrap error = %q, want it to mention bootstrap credential", bootstrapResult.Error)
+	if byName[refFail].Error == "" || byName[refFail].Migrated || byName[refFail].Skipped {
+		t.Fatalf("refFail result = %+v, want error only", byName[refFail])
 	}
 
 	// An unknown target backend fails validation before touching any ref.
