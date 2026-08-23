@@ -118,8 +118,8 @@ func oaiEmptyDone(t *testing.T) *httptest.Server {
 // its ctx is done), so the provider layer never surfaces why.
 type silentCutProvider struct{ name string }
 
-func (p silentCutProvider) Name() string                    { return p.name }
-func (p silentCutProvider) Kind() provider.Kind              { return provider.KindAPI }
+func (p silentCutProvider) Name() string                        { return p.name }
+func (p silentCutProvider) Kind() provider.Kind                 { return provider.KindAPI }
 func (p silentCutProvider) Capabilities() []provider.Capability { return nil }
 func (p silentCutProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
 	ch := make(chan stream.StreamEvent)
@@ -134,12 +134,32 @@ func (p silentCutProvider) Stream(context.Context, provider.CompletionRequest) (
 // client must instead get an explicit terminal error frame.
 type midStreamCutProvider struct{ name string }
 
-func (p midStreamCutProvider) Name() string                       { return p.name }
+func (p midStreamCutProvider) Name() string                        { return p.name }
 func (p midStreamCutProvider) Kind() provider.Kind                 { return provider.KindAPI }
 func (p midStreamCutProvider) Capabilities() []provider.Capability { return nil }
 func (p midStreamCutProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
 	ch := make(chan stream.StreamEvent, 1)
 	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: "hel"}
+	close(ch)
+	return ch, nil
+}
+
+// providerStateDoneProvider streams one chunk then a done event
+// carrying Meta.ProviderState — standing in for the openai-responses
+// driver's continuation state (D-067), to pin that streamAttempt/
+// handleStream preserve it rather than overwriting Meta wholesale.
+type providerStateDoneProvider struct {
+	name  string
+	state json.RawMessage
+}
+
+func (p providerStateDoneProvider) Name() string                        { return p.name }
+func (p providerStateDoneProvider) Kind() provider.Kind                 { return provider.KindAPI }
+func (p providerStateDoneProvider) Capabilities() []provider.Capability { return nil }
+func (p providerStateDoneProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent, 2)
+	ch <- stream.StreamEvent{Type: stream.EventChunk, Text: "hi"}
+	ch <- stream.StreamEvent{Type: stream.EventDone, Meta: &stream.Meta{ProviderState: p.state}}
 	close(ch)
 	return ch, nil
 }
@@ -633,6 +653,79 @@ func TestStreamAttemptMidStreamCutSendsErrorEvent(t *testing.T) {
 	}
 	if sent[1].Type != stream.EventError || sent[1].Err == nil || sent[1].Err.Code != "stream_cut" {
 		t.Fatalf("sent[1] = %+v, want an EventError with code stream_cut", sent[1])
+	}
+}
+
+// TestStreamAttemptPreservesProviderState pins D-067: a driver's own
+// Meta.ProviderState on the done event must survive streamAttempt's
+// Meta rebuild (which otherwise attributes provider/model/cost from
+// scratch, clobbering whatever the driver set).
+func TestStreamAttemptPreservesProviderState(t *testing.T) {
+	t.Parallel()
+	state := json.RawMessage(`{"driver":"openai-responses","previous_response_id":"resp_1"}`)
+	att := router.Attempt{Provider: providerStateDoneProvider{name: "one", state: state}, ProviderName: "one", Model: "m1"}
+	var sent []stream.StreamEvent
+	res := streamAttempt(t.Context(), att, provider.CompletionRequest{}, ledger.Entry{ID: "e1"}, nil, func(ev stream.StreamEvent) {
+		sent = append(sent, ev)
+	})
+	if res.failed {
+		t.Fatalf("res.failed = true, want a clean success: %+v", res)
+	}
+	if len(sent) != 2 || sent[1].Type != stream.EventDone {
+		t.Fatalf("sent = %+v, want [chunk, done]", sent)
+	}
+	if sent[1].Meta == nil || string(sent[1].Meta.ProviderState) != string(state) {
+		t.Fatalf("done Meta.ProviderState = %+v, want %s", sent[1].Meta, state)
+	}
+}
+
+// TestStreamProviderStatePassthrough pins D-067 end to end through
+// handleStream: streamRequest.provider_state reaches the openai-
+// responses driver's CompletionRequest.ProviderState (previous_response_id
+// on the wire), and the driver's own done Meta.ProviderState (the new
+// response id) rides back out on the SSE done event.
+func TestStreamProviderStatePassthrough(t *testing.T) {
+	t.Parallel()
+	incoming := `{"driver":"openai-responses","previous_response_id":"resp_old"}`
+
+	var gotPreviousID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var wire struct {
+			PreviousResponseID string `json:"previous_response_id"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &wire)
+		gotPreviousID = wire.PreviousResponseID
+		_, _ = fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"delta\":\"ok\"}\n\n")
+		_, _ = fmt.Fprint(w, "event: response.completed\ndata: {\"response\":{\"id\":\"resp_new\",\"status\":\"completed\"}}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "one", Kind: "api", Driver: "openai-responses", BaseURL: srv.URL,
+			DefaultModel: "m1", Enabled: true},
+	}
+	routes := []router.RouteRow{
+		{Name: "coding", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, nil)
+
+	a, _ := newAPI(snap)
+	body := fmt.Sprintf(`{"route":"coding","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"prior"}],"provider_state":%s}`, incoming)
+	w := postJSON(t, a.handleStream, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
+	}
+	if gotPreviousID != "resp_old" {
+		t.Fatalf("wire previous_response_id = %q, want resp_old", gotPreviousID)
+	}
+	events := sseEvents(t, w.Body.String())
+	done := events[len(events)-1]
+	if done.Type != stream.EventDone || done.Meta == nil || len(done.Meta.ProviderState) == 0 {
+		t.Fatalf("done event = %+v, want Meta.ProviderState set", done)
+	}
+	if !strings.Contains(string(done.Meta.ProviderState), "resp_new") {
+		t.Fatalf("done Meta.ProviderState = %s, want it to carry resp_new", done.Meta.ProviderState)
 	}
 }
 

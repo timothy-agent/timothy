@@ -243,7 +243,7 @@ func (a *Agent) SetWaitToolsReady(fn func(context.Context)) {
 type Request struct {
 	SessionID string
 	Route     string
-	Agent     string   // serving agent, for ledger attribution
+	Agent     string // serving agent, for ledger attribution
 	// ToolAllow filters the offered tool surface; empty means every
 	// base tool. Missions leave this nil for anything but the planner
 	// call (see runner.go). Chat's agent-authored allowlist (empty =
@@ -377,6 +377,14 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
 	var lastMeta *stream.Meta
+	// providerState is turn-local driver continuation state (D-067,
+	// e.g. openai-responses' previous_response_id): captured off each
+	// step's done Meta and echoed on the next step's request. It dies
+	// with the turn — nothing resets it mid-turn on purpose. On chain
+	// failover the serving driver can change mid-turn; the state names
+	// its origin driver, so a different driver ignores foreign state
+	// with no handling needed here.
+	var providerState json.RawMessage
 	effort := ""
 	toolCallCount := 0
 	coerced := false
@@ -400,17 +408,18 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			directive = tools.StepForceSynthesis
 		}
 		sreq := gwclient.StreamRequest{
-			Route:     route,
-			Agent:     req.Agent,
-			Purpose:   "chat",
-			ModelHint: hint,
-			System:    req.System,
-			Messages:  msgs,
-			Tools:     defs,
-			Effort:    effort,
-			SessionID: req.SessionID,
-			MissionID: req.MissionID,
-			ForceTool: forceTool,
+			Route:         route,
+			Agent:         req.Agent,
+			Purpose:       "chat",
+			ModelHint:     hint,
+			System:        req.System,
+			Messages:      msgs,
+			Tools:         defs,
+			Effort:        effort,
+			SessionID:     req.SessionID,
+			MissionID:     req.MissionID,
+			ForceTool:     forceTool,
+			ProviderState: providerState,
 		}
 		switch directive {
 		case tools.StepWarnFinalize:
@@ -492,6 +501,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 					terminal = ev
 					if ev.Meta != nil {
 						lastMeta = ev.Meta
+						providerState = ev.Meta.ProviderState
 					}
 				case stream.EventIncomplete:
 					terminal = ev

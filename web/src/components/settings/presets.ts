@@ -6,7 +6,7 @@ import type { AdminProvider } from '../../api/types'
 export interface ProviderPreset {
   id: string
   name: string
-  driver: 'openaicompat' | 'anthropic' | 'bedrock' | 'claude-cli'
+  driver: 'openaicompat' | 'openai-responses' | 'anthropic' | 'bedrock' | 'claude-cli'
   description: string
   // Sprite symbol in ProviderLogo; custom endpoints render a glyph.
   logo?: string
@@ -89,6 +89,21 @@ export const providerPresets: ProviderPreset[] = [
     name: 'OpenAI',
     driver: 'openaicompat',
     description: 'GPT and o-series models',
+    logo: 'openai',
+    brandColor: '#10A37F',
+    baseURL: 'https://api.openai.com/v1',
+    requiresKey: true,
+    defaultRef: 'OPENAI_API_KEY',
+    keyPlaceholder: 'sk-…',
+    keyHint: 'Create one at platform.openai.com/api-keys.',
+    keyURL: 'https://platform.openai.com/api-keys',
+    validateModel: 'gpt-4o-mini',
+  },
+  {
+    id: 'openai-responses',
+    name: 'OpenAI (Responses)',
+    driver: 'openai-responses',
+    description: 'GPT reasoning models via the Responses API',
     logo: 'openai',
     brandColor: '#10A37F',
     baseURL: 'https://api.openai.com/v1',
@@ -195,7 +210,7 @@ export function matchPreset(p: AdminProvider): ProviderPreset {
   if (p.kind === 'cli') {
     return providerPresets.find((x) => x.id === 'anthropic') ?? custom
   }
-  if (p.driver === 'anthropic' || p.driver === 'bedrock') {
+  if (p.driver === 'anthropic' || p.driver === 'bedrock' || p.driver === 'openai-responses') {
     return providerPresets.find((x) => x.driver === p.driver) ?? custom
   }
   // Ollama's fixed default port (11434) is a stronger signal than

@@ -124,6 +124,9 @@ type streamRequest struct {
 	// ForceTool names the single offered tool the model must call this
 	// step (D-063). Empty means auto, today's behavior.
 	ForceTool string `json:"force_tool,omitempty"`
+	// ProviderState is opaque driver continuation state (D-067), echoed
+	// back from the previous step's done Meta.ProviderState.
+	ProviderState json.RawMessage `json:"provider_state,omitempty"`
 }
 
 // requiredVisionCapability derives whether this request needs a
@@ -238,12 +241,13 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	completion := provider.CompletionRequest{
-		System:    req.System,
-		Messages:  req.Messages,
-		Tools:     req.Tools,
-		MaxTokens: req.MaxTokens,
-		Effort:    req.Effort,
-		ForceTool: req.ForceTool,
+		System:        req.System,
+		Messages:      req.Messages,
+		Tools:         req.Tools,
+		MaxTokens:     req.MaxTokens,
+		Effort:        req.Effort,
+		ForceTool:     req.ForceTool,
+		ProviderState: req.ProviderState,
 	}
 
 	var codes []string
@@ -423,12 +427,20 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			if currency == "" && res.entry.Cost != nil {
 				currency = "USD"
 			}
+			// Preserve the driver's own ProviderState (D-067) — e.g. the
+			// openai-responses driver's previous_response_id — the caller
+			// must echo it back on the turn's next step.
+			var providerState json.RawMessage
+			if ev.Meta != nil {
+				providerState = ev.Meta.ProviderState
+			}
 			ev.Meta = &stream.Meta{
-				Provider: att.ProviderName,
-				Model:    att.Model,
-				LedgerID: entry.ID,
-				Cost:     res.entry.Cost,
-				Currency: currency,
+				Provider:      att.ProviderName,
+				Model:         att.Model,
+				LedgerID:      entry.ID,
+				Cost:          res.entry.Cost,
+				Currency:      currency,
+				ProviderState: providerState,
 			}
 			send(ev)
 		default:

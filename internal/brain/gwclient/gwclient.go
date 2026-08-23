@@ -48,6 +48,9 @@ type StreamRequest struct {
 	// ForceTool names the single offered tool the model must call this
 	// step (D-063). Empty means auto, today's behavior.
 	ForceTool string `json:"force_tool,omitempty"`
+	// ProviderState is opaque driver continuation state (D-067), echoed
+	// back from the previous step's done Meta.ProviderState.
+	ProviderState json.RawMessage `json:"provider_state,omitempty"`
 }
 
 // windowsTTL matches the gateway's own config poll cadence: a fresher

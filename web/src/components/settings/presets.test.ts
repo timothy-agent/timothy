@@ -51,4 +51,9 @@ describe('matchPreset', () => {
     const p = provider({ kind: 'cli', driver: 'claude-cli', base_url: '' })
     expect(matchPreset(p).id).toBe('anthropic')
   })
+
+  it('matches the openai-responses preset by driver, not the openai preset sharing its host', () => {
+    const p = provider({ driver: 'openai-responses', base_url: 'https://api.openai.com/v1' })
+    expect(matchPreset(p).id).toBe('openai-responses')
+  })
 })

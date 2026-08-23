@@ -122,6 +122,10 @@ type CompletionRequest struct {
 	// (D-063). Empty means auto, today's behavior. Drivers that cannot
 	// express a forced choice on the wire ignore it.
 	ForceTool string
+	// ProviderState is opaque driver continuation state (D-067), echoed
+	// by the caller from the previous response's Meta.ProviderState.
+	// Drivers ignore state naming a different driver or absent entirely.
+	ProviderState json.RawMessage
 }
 
 // Provider is one configured LLM provider. Stream returns quickly; all

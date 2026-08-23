@@ -95,6 +95,11 @@ type Meta struct {
 	DurationMs int64    `json:"duration_ms,omitempty"`
 	Cost       *float64 `json:"cost,omitempty"`
 	Currency   string   `json:"currency,omitempty"`
+	// ProviderState is opaque driver continuation state (D-067) — e.g.
+	// the openai-responses driver's previous_response_id — echoed back
+	// by the caller on the next CompletionRequest.ProviderState so the
+	// driver can chain reasoning items across turn steps.
+	ProviderState json.RawMessage `json:"provider_state,omitempty"`
 }
 
 // ToolCallEvent identifies a tool call. Input carries the complete

@@ -262,6 +262,40 @@ func TestAgentToolCallThenAnswer(t *testing.T) {
 	}
 }
 
+// TestAgentProviderStateEchoedAcrossSteps pins D-067: a driver's
+// continuation state (e.g. the openai-responses driver's
+// previous_response_id) riding a step's done Meta.ProviderState must be
+// echoed back on the turn's NEXT step request, and a fresh turn must
+// start with no state at all.
+func TestAgentProviderStateEchoedAcrossSteps(t *testing.T) {
+	t.Parallel()
+	state := json.RawMessage(`{"driver":"openai-responses","previous_response_id":"resp_1"}`)
+	toolStep := toolCallStep([2]string{"echo", `{"text":"hi"}`})
+	toolStep[len(toolStep)-1].Meta = &stream.Meta{Provider: "fake", Model: "fake-1", ProviderState: state}
+
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolStep,
+		finalStep("the echo said hi"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(gw.requests))
+	}
+	if len(gw.requests[0].ProviderState) != 0 {
+		t.Fatalf("first step ProviderState = %s, want empty on a fresh turn", gw.requests[0].ProviderState)
+	}
+	if string(gw.requests[1].ProviderState) != string(state) {
+		t.Fatalf("second step ProviderState = %s, want %s echoed from step 1's done Meta", gw.requests[1].ProviderState, state)
+	}
+}
+
 // cancelThenCutGateway streams one chunk, waits until the caller's
 // context is canceled, then closes the channel bare — no terminal.
 // This is the exact shape of the turn deadline racing a provider cut.
