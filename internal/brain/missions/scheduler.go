@@ -77,6 +77,10 @@ type MissionTemplate struct {
 	// time via resolveTemplateDefaults, same precedence as create()'s
 	// own handling of an omitted request field.
 	Harness string `json:"harness,omitempty"`
+	// Light missions (D-069) skip explore/plan/review; only meaningful
+	// on a kind=general template (rejected at schedule create/update for
+	// kind=coding, api/schedules.go).
+	Light bool `json:"light,omitempty"`
 	// Environment selects the sandbox image key (D-05x) a coding
 	// mission's container runs; empty auto-detects at fire time via
 	// resolveTemplateDefaults (goal keyword only — no worktree exists
@@ -440,11 +444,15 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	if name == "" {
 		name = sc.Name
 	}
+	phase := PhaseExplore
+	if t.Light {
+		phase = PhaseExecute
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment, destination_ids)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, spec, schedule_id, harness, environment, destination_ids, light, phase)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, knowledgeJSON, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment, destinationIDs)
+		promptOverlay, knowledgeJSON, t.AutoApproveSafe, spec, sc.ID, t.Harness, t.Environment, destinationIDs, t.Light, phase)
 	return err
 }
 

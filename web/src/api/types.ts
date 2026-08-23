@@ -742,6 +742,12 @@ export interface Mission {
   // terminal done transition. Validated against the destinations table
   // at create time — never model-decided.
   destination_ids?: string[]
+  // light marks a mission that skips explore/plan/review (D-069):
+  // kind=general only, born in phase=execute, one bare worker turn.
+  // final_output is that worker's verbatim final message — the
+  // deliverable itself, absent/empty until the mission reaches done.
+  light?: boolean
+  final_output?: string
   created_at: string
   updated_at: string
 }
@@ -939,6 +945,10 @@ export interface MissionTemplate {
   // fire time — a destination deleted or disabled since the schedule
   // was created is dropped silently rather than failing the fire.
   destination_ids?: string[]
+  // light marks a mission that skips explore/plan/review (D-069);
+  // only valid for kind=general, rejected for kind=coding at schedule
+  // create/update.
+  light?: boolean
 }
 
 // Schedule is a recurring cron trigger that fires mission_template

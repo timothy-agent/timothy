@@ -186,6 +186,42 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateValidatesLight covers light's create() gate
+// (D-069): rejected outright on an explicit kind=coding, and rejected
+// when kind is omitted and classifies as coding — light never overrides
+// a coding classification. light+general passes validation (reaching
+// the degraded store, same 400-for-a-different-reason shape
+// TestMissionsCreateValidatesHarness documents).
+func TestMissionsCreateValidatesLight(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+
+	post := func(classify func(context.Context, string) (string, error), body string) int {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := post(nil, `{"goal":"g","kind":"coding","light":true}`); code != 400 {
+		t.Fatalf("light on explicit kind=coding = %d, want 400", code)
+	}
+	codingClassify := func(context.Context, string) (string, error) { return "coding", nil }
+	if code := post(codingClassify, `{"goal":"g","light":true}`); code != 400 {
+		t.Fatalf("light with omitted kind classified as coding = %d, want 400", code)
+	}
+	// light+general passes validation, reaching the degraded store.
+	if code := post(nil, `{"goal":"g","kind":"general","light":true}`); code != 400 {
+		t.Fatalf("light+general = %d, want 400 (passed validation, reached degraded store)", code)
+	}
+}
+
 // TestMissionsCreateValidatesRepoURL covers repo_url/connector_id's
 // create() gate: repo_url is coding-only, requires connector_id,
 // connector_id is only valid alongside repo_url, and an unknown
@@ -515,14 +551,69 @@ func TestClassifyKind(t *testing.T) {
 	}
 }
 
+// TestClassifyLight covers classifyLight's bias-false-on-ambiguity
+// shape, same reasoning as TestClassifyKind's bias-toward-coding: a
+// wrong "light" suggestion (the web UI's toggle default, never
+// create()'s own gate) is worse when it defaults a multi-step goal's
+// toggle to on than when it under-suggests.
+func TestClassifyLight(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		classify func(ctx context.Context, prompt string) (string, error)
+		want     bool
+	}{
+		{"nil classify defaults to false", nil, false},
+		{
+			"unambiguous yes reply", func(context.Context, string) (string, error) {
+				return "Yes", nil
+			}, true,
+		},
+		{
+			"unambiguous no reply", func(context.Context, string) (string, error) {
+				return "no", nil
+			}, false,
+		},
+		{
+			"reply mentioning both words defaults to false", func(context.Context, string) (string, error) {
+				return "yes, but also no", nil
+			}, false,
+		},
+		{
+			"garbage reply defaults to false", func(context.Context, string) (string, error) {
+				return "banana", nil
+			}, false,
+		},
+		{
+			"classify error defaults to false", func(context.Context, string) (string, error) {
+				return "", errors.New("gateway down")
+			}, false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyLight(context.Background(), tc.classify, "some goal")
+			if got != tc.want {
+				t.Fatalf("classifyLight() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMissionsClassifyEndpoint covers POST /v1/missions/classify: the
-// happy path returning the classifier's verdict, and the empty-goal
-// 400 — this endpoint has no store/driver dependency, so it can be
-// tested end to end without Postgres.
+// happy path returning the classifier's verdict (kind and light), and
+// the empty-goal 400 — this endpoint has no store/driver dependency, so
+// it can be tested end to end without Postgres.
 func TestMissionsClassifyEndpoint(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
-	classify := func(context.Context, string) (string, error) { return "general", nil }
+	classify := func(ctx context.Context, prompt string) (string, error) {
+		if strings.Contains(prompt, "single-pass") {
+			return "yes", nil
+		}
+		return "general", nil
+	}
 	m := mux(a)
 	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil)
 
@@ -536,8 +627,8 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 
 	if code, body := call(`{"goal":"write a report on Q3 sales"}`); code != http.StatusOK {
 		t.Fatalf("classify with a goal = %d %s, want 200", code, body)
-	} else if !strings.Contains(body, `"kind":"general"`) {
-		t.Fatalf("classify body = %s, want kind general", body)
+	} else if !strings.Contains(body, `"kind":"general"`) || !strings.Contains(body, `"light":true`) {
+		t.Fatalf("classify body = %s, want kind general and light true", body)
 	}
 
 	if code, _ := call(`{"goal":""}`); code != http.StatusBadRequest {

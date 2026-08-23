@@ -131,7 +131,7 @@ beforeEach(() => {
   vi.mocked(listAgents).mockResolvedValue([])
   vi.mocked(listRoutes).mockResolvedValue(routes)
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
-  vi.mocked(classifyMission).mockResolvedValue({ kind: 'general' })
+  vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false })
   vi.mocked(getMissionExecutorOptions).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([])
 })
@@ -416,7 +416,7 @@ describe('MissionForm — kind chip', () => {
   })
 
   it('shows a detecting state then the classified kind after the debounce', async () => {
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding' })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug in the repo' } })
@@ -444,7 +444,7 @@ describe('MissionForm — kind chip', () => {
   })
 
   it('submits the mission with the classified kind', async () => {
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding' })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false })
     vi.mocked(createMission).mockResolvedValue({ id: 'm3' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -559,6 +559,82 @@ describe('MissionForm — environment select', () => {
 
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ environment: undefined })),
+    )
+  })
+})
+
+describe('MissionForm — light mission toggle', () => {
+  it('shows the light toggle for a general mission', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Light mission/)).toBeInTheDocument()
+  })
+
+  it('hides the light toggle for a coding mission', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    expect(await screen.findByText('Coding · branches from repo')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Light mission/)).toBeNull()
+  })
+
+  it('defaults the toggle from the classify preview when untouched', async () => {
+    vi.useFakeTimers()
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByLabelText(/Light mission/)).toBeChecked()
+  })
+
+  it('an operator-touched toggle is never overridden by a later classify preview', async () => {
+    vi.useFakeTimers()
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
+    // Explicitly check it, then immediately uncheck it — the operator's
+    // deliberate final choice is false, which must survive the classify
+    // preview resolving to light: true.
+    fireEvent.click(screen.getByLabelText(/Light mission/))
+    fireEvent.click(screen.getByLabelText(/Light mission/))
+    expect(screen.getByLabelText(/Light mission/)).not.toBeChecked()
+
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByLabelText(/Light mission/)).not.toBeChecked()
+  })
+
+  it('submits light=true for a general mission when checked', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm8' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByLabelText(/Light mission/))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ light: true })),
+    )
+  })
+
+  it('omits light from the create payload for a coding mission', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ light: undefined })),
     )
   })
 })
@@ -907,7 +983,7 @@ describe('MissionForm — create mode, repeat on schedule', () => {
 
   it('forces kind to general and locks it when repeat turns on with coding selected', async () => {
     vi.useFakeTimers()
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding' })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false })
     vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 

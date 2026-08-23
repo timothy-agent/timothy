@@ -359,6 +359,56 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 	}
 }
 
+// TestStepLightApproveGoesDone confirms a light mission (born in
+// PhaseExecute, empty spec so LastUnit is always true) reaches done on
+// review_approve exactly like a coding/general mission's last unit.
+func TestStepLightApproveGoesDone(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseExecute, Status: StatusWorking, Light: true, LastUnit: true},
+		StepInput{Input: InputReviewApprove},
+		DefaultConfig,
+	)
+	if got.Next.Phase != PhaseDone || got.Next.Status != StatusDone {
+		t.Fatalf("Step(light approve) = %+v, want phase=done status=done", got.Next)
+	}
+}
+
+// TestStepLightStallNeverReplans confirms a light mission's stall
+// brake (D-069) skips replanTransition — which would otherwise send it
+// to PhasePlan, a phase a light mission never visits — and instead
+// keeps retrying until max_iterations fails it, the same ceiling
+// stepWorkerFailed's backoff path respects.
+func TestStepLightStallNeverReplans(t *testing.T) {
+	// A stall that would trigger replanTransition for an ordinary
+	// mission (StallCount already at the threshold, ReplanUsed false)
+	// must instead fall through to the plain retry path for a light one.
+	got := Step(
+		StepState{Phase: PhaseExecute, Status: StatusWorking, Light: true, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
+		DefaultConfig,
+	)
+	if got.Next.Phase == PhasePlan {
+		t.Fatalf("Step(light stall) = %+v, must never route to PhasePlan", got.Next)
+	}
+	if got.Next.Status == StatusPaused {
+		t.Fatalf("Step(light stall) = %+v, must not pause no_progress either — retry to max_iterations instead", got.Next)
+	}
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.retry" {
+		t.Fatalf("Events = %+v, want exactly one mission.retry event", got.Events)
+	}
+
+	// Repeated identical-fingerprint stalls still respect the hard
+	// max_iterations ceiling, exactly like worker_failed.
+	final := Step(
+		StepState{Phase: PhaseExecute, Status: StatusWorking, Light: true, MaxIterations: 1, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
+		DefaultConfig,
+	)
+	if final.Next.Phase != PhaseFailed {
+		t.Fatalf("Step(light stall at max_iterations) = %+v, want phase=failed", final.Next)
+	}
+}
+
 func TestParsePhase(t *testing.T) {
 	valid := []Phase{PhaseExplore, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed}
 	for _, p := range valid {

@@ -63,6 +63,16 @@ func (h *scheduleAPI) validateDestinationIDs(ctx context.Context, ids []string) 
 	return nil
 }
 
+// validateLightTemplate rejects a template that pairs light with
+// kind=coding — light (D-069) only makes sense for a kind=general
+// mission, same rule create() enforces for a one-off mission.
+func validateLightTemplate(t missions.MissionTemplate) error {
+	if t.Light && t.Kind != "general" {
+		return fmt.Errorf("mission_template.light is only valid for kind=general")
+	}
+	return nil
+}
+
 func failSchedule(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, missions.ErrNotFound):
@@ -133,6 +143,10 @@ func (h *scheduleAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := validateLightTemplate(req.MissionTemplate); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -169,6 +183,10 @@ func (h *scheduleAPI) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MissionTemplate != nil {
 		if err := h.validateDestinationIDs(r.Context(), req.MissionTemplate.DestinationIDs); err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		if err := validateLightTemplate(*req.MissionTemplate); err != nil {
 			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}

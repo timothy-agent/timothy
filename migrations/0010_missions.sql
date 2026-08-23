@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS missions (
     -- settings at dispatch. "" is native; "claude-cli" (etc) names a
     -- registered delegated executor (internal/brain/missions/executor).
     harness               text NOT NULL DEFAULT '',
+    -- Light missions (D-069, general kind only) skip explore/plan/
+    -- review: born in phase=execute, one bare worker turn, the final
+    -- worker message is the deliverable.
+    light                 boolean NOT NULL DEFAULT false,
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
     -- a real session_id uuid FK -- a mission has no chat session of its
@@ -130,6 +134,10 @@ CREATE TABLE IF NOT EXISTS missions (
     -- Sticky once detected (store.SetEnvironment) so a mission never
     -- re-detects mid-run. General missions never set this.
     environment           text NOT NULL DEFAULT '',
+    -- FinalOutput is a light mission's verbatim final worker message
+    -- (D-069) — the deliverable itself, since destinations delivery has
+    -- no other body content for a mission with no review/artifacts.
+    final_output          text NOT NULL DEFAULT '',
     -- Short display name, generated once (store.SetNameIfEmpty) the
     -- same way a chat session's title is (chat.go's autoTitle) — a
     -- one-shot best-effort gateway call after creation, never blocking

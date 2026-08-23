@@ -80,6 +80,21 @@ func TestWorkPacketRenderEmptyPacket(t *testing.T) {
 	}
 }
 
+// TestWorkPacketRenderLightUsesLightPreamble confirms a light packet
+// (D-069) gets lightSystemPreamble instead of the artifact-check
+// contract nativeSystemPreamble promises — a light mission has no plan
+// or artifacts for the harness to verify.
+func TestWorkPacketRenderLightUsesLightPreamble(t *testing.T) {
+	p := WorkPacket{Goal: "Summarize the doc", Light: true}
+	system, _ := p.Render()
+	if strings.Contains(system, "declared artifacts exist on disk") {
+		t.Fatalf("light system prompt still promises the artifact-check contract: %q", system)
+	}
+	if !strings.Contains(system, "delivered to the user as the result") {
+		t.Fatalf("light system prompt missing the deliverable framing: %q", system)
+	}
+}
+
 func TestWorkPacketRenderIncludesPromptOverlay(t *testing.T) {
 	p := WorkPacket{Goal: "Fix the login bug", PromptOverlay: "You are a careful senior engineer."}
 	system, _ := p.Render()

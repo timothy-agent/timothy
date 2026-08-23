@@ -886,6 +886,34 @@ describe('MissionDetail', () => {
     expect(screen.queryByText('Result')).toBeNull()
   })
 
+  it('renders a light mission Result section from final_output, not last_evidence', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'done',
+      status: 'done',
+      light: true,
+      last_evidence: 'worker evidence text',
+      final_output: 'the complete deliverable',
+    })
+    renderPage()
+    expect(await screen.findByText('Result')).toBeTruthy()
+    expect(screen.getByText('the complete deliverable')).toBeTruthy()
+    expect(screen.queryByText('worker evidence text')).toBeNull()
+  })
+
+  it('omits the Result section for a light mission with no final_output', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'done',
+      status: 'done',
+      light: true,
+      last_evidence: 'worker evidence text',
+    })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('Result')).toBeNull()
+  })
+
   it('shows a recurring schedule strip when the mission fired from a schedule', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, schedule_id: 'sc1' })
     vi.mocked(listSchedules).mockResolvedValue([

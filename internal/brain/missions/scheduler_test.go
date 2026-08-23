@@ -280,6 +280,18 @@ func TestResolveTemplateDefaults(t *testing.T) {
 	}
 }
 
+// TestResolveTemplateDefaultsPassesLightThrough confirms light (D-069)
+// is untouched by fire-time resolution — it has no agent-level default
+// and no coding-only precedence the way harness/environment do.
+func TestResolveTemplateDefaultsPassesLightThrough(t *testing.T) {
+	t.Parallel()
+	routeForRole := func(context.Context, string) string { return "default" }
+	got, _, _ := resolveTemplateDefaults(context.Background(), MissionTemplate{Goal: "g", Kind: "general", Light: true}, nil, routeForRole, nil, nil)
+	if !got.Light {
+		t.Fatal("Light = false, want true (passed through unchanged)")
+	}
+}
+
 func TestTickSkipsAllWorkWhenDisabled(t *testing.T) {
 	t.Parallel()
 	called := false

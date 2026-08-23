@@ -154,6 +154,15 @@ func (f *fakeStore) SetLastEvidence(ctx context.Context, id, evidence string) er
 	return nil
 }
 
+func (f *fakeStore) SetFinalOutput(ctx context.Context, id, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.FinalOutput = text
+	f.missions[id] = m
+	return nil
+}
+
 func (f *fakeStore) SetExploreNotes(ctx context.Context, id, notes string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -613,6 +622,101 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 	}
 	if m.Progress[0].Note != "raw turn text" {
 		t.Fatalf("progress note = %q, want the raw turn text", m.Progress[0].Note)
+	}
+}
+
+// TestDriverLightDoneSetsFinalOutputAndSkipsToDone confirms a light
+// mission's done branch (D-069) short-circuits trySkipReview: it sets
+// FinalOutput to the worker's FinalMessage (the text since its last
+// non-sentinel tool call, NOT the whole multi-turn transcript — see
+// TestRunWorkerFinalMessageExcludesPriorToolRoundNarration for the
+// runner-level guarantee this relies on), records a mission.review_skipped
+// event with reason "light", and reaches PhaseDone in the same Advance
+// call without ever routing through review — Spec is empty, so LastUnit
+// is trivially true.
+func TestDriverLightDoneSetsFinalOutputAndSkipsToDone(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Light: true, Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "here is the complete deliverable"}},
+		workerText:     "draft1 tool-retry-narration here is the complete deliverable",
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone || m.Status != StatusDone {
+		t.Fatalf("light mission after done = %+v, want phase=done status=done", m)
+	}
+	if m.FinalOutput != "here is the complete deliverable" {
+		t.Fatalf("FinalOutput = %q, want the worker's FinalMessage, not the full multi-turn text", m.FinalOutput)
+	}
+	events, _ := store.Events(context.Background(), "m1")
+	found := false
+	for _, e := range events {
+		if e.Kind != "mission.review_skipped" {
+			continue
+		}
+		found = true
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload.Reason != "light" {
+			t.Fatalf("mission.review_skipped payload = %s, want reason=light", e.Payload)
+		}
+	}
+	if !found {
+		t.Fatal("no mission.review_skipped event recorded for a light mission's done transition")
+	}
+}
+
+// TestDriverLightDoneFallsBackToFullTextWhenFinalMessageEmpty confirms
+// the defensive fallback: a worker verdict with no FinalMessage (e.g.
+// the delegated path, or a native worker whose last action was a tool
+// call immediately followed by mission_status with nothing written
+// after) still records something rather than an empty FinalOutput.
+func TestDriverLightDoneFallsBackToFullTextWhenFinalMessageEmpty(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Light: true, Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing"}}, // FinalMessage left empty
+		workerText:     "the only text the runner produced",
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.FinalOutput != "the only text the runner produced" {
+		t.Fatalf("FinalOutput = %q, want fallback to the full turn text when FinalMessage is empty", m.FinalOutput)
+	}
+}
+
+// TestDriverNonLightDoneStillGoesThroughReview confirms the light
+// short-circuit is gated on m.Light: an ordinary general mission with a
+// unit that has no declared artifacts still falls through to
+// InputPhaseComplete (review), unchanged from before this feature.
+func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8,
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseReview {
+		t.Fatalf("non-light mission after done with no declared artifacts = %+v, want phase=review", m)
+	}
+	if m.FinalOutput != "" {
+		t.Fatalf("FinalOutput = %q, want empty for a non-light mission", m.FinalOutput)
 	}
 }
 

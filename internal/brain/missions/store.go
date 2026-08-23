@@ -50,7 +50,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
-	branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, created_at, updated_at`
+	branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, light, final_output, created_at, updated_at`
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
 // column: the mission's latest mission.failed event's payload.reason
@@ -74,7 +74,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
-		&m.DestinationIDs,
+		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&failureReason); err != nil {
 		return Mission{}, err
@@ -150,7 +150,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
-		&m.DestinationIDs,
+		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Mission{}, err
 	}
@@ -239,10 +239,14 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if destinationIDs == nil {
 		destinationIDs = []string{}
 	}
+	phase := PhaseExplore
+	if m.Light {
+		phase = PhaseExecute
+	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15, '')::uuid, $16, $17, $18, $19, $20, $21, $22, $23, NULLIF($24, '')::uuid, $25, $26, $27) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, attachmentsJSON, destinationIDs,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, light, phase)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15, '')::uuid, $16, $17, $18, $19, $20, $21, $22, $23, NULLIF($24, '')::uuid, $25, $26, $27, $28, $29) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, attachmentsJSON, destinationIDs, m.Light, phase,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -470,6 +474,20 @@ func (s *Store) SetLastEvidence(ctx context.Context, id, evidence string) error 
 	if _, err := db.Exec(ctx, `UPDATE missions SET last_evidence = $2, updated_at = now() WHERE id = $1`,
 		id, evidence); err != nil {
 		return fmt.Errorf("missions set last evidence: %w", err)
+	}
+	return nil
+}
+
+// SetFinalOutput stores a light mission's verbatim final worker
+// message (D-069) — mission state, not an event.
+func (s *Store) SetFinalOutput(ctx context.Context, id, text string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set final output: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET final_output = $2, updated_at = now() WHERE id = $1`,
+		id, text); err != nil {
+		return fmt.Errorf("missions set final output: %w", err)
 	}
 	return nil
 }

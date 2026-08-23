@@ -15,6 +15,23 @@ import (
 // non-transition bookkeeping).
 const memoryExtractedKind = "mission.memory_extracted"
 
+// finalOutputDigestCap bounds how much of a light mission's
+// FinalOutput OutcomeDigest carries — the digest feeds memory
+// extraction and a follow-up mission's parent_context, not the whole
+// deliverable verbatim.
+const finalOutputDigestCap = 2000
+
+// truncateRunes is truncate's rune-safe counterpart: FinalOutput is
+// user-authored model output that can contain multi-byte UTF-8, where
+// byte-slicing risks cutting mid-character.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 // MemoryExtract posts one mission's curated digest to memoryd for
 // long-term memory extraction — the same signature and fire-and-forget
 // contract as chat.MemoryExtract (see chat.go), so cmd/brain/main.go
@@ -137,6 +154,11 @@ func OutcomeDigest(m Mission, events []Event, terminal Phase, failureReason stri
 			}
 			fmt.Fprintf(&b, "- %s: %s\n", u.Title, status)
 		}
+	}
+	if m.Light && m.FinalOutput != "" {
+		b.WriteString("\nfinal output:\n")
+		b.WriteString(truncateRunes(m.FinalOutput, finalOutputDigestCap))
+		b.WriteString("\n")
 	}
 	if decision, findings, ok := lastReviewVerdict(events); ok {
 		fmt.Fprintf(&b, "\nreview verdict: %s\n", decision)

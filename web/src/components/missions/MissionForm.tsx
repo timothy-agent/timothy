@@ -252,6 +252,10 @@ export function MissionForm({
   // seeded kind counts as an explicit choice too.
   const [kindLocked, setKindLocked] = useState(!!initial?.kind)
   const [classifying, setClassifying] = useState(false)
+  // light (D-069): defaults from the debounced classify preview below
+  // unless the operator has touched the toggle directly (lightTouched).
+  const [light, setLight] = useState(initial?.light ?? false)
+  const [lightTouched, setLightTouched] = useState(!!initial?.light)
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
   // Destinations multi-select — visible, not advanced; default is
   // empty (deliver nowhere). Offered for a one-off create, a new
@@ -404,6 +408,8 @@ export function MissionForm({
     setKind(schedule.mission_template.kind)
     setKindLocked(true)
     setAgentID(schedule.mission_template.agent_id ?? '')
+    setLight(schedule.mission_template.light ?? false)
+    setLightTouched(true)
     setAutoApproveSafe(schedule.mission_template.auto_approve_safe ?? true)
     setShowAdvanced(hasNonDefaults(schedule.mission_template))
     setRoute(schedule.mission_template.route ?? '')
@@ -441,7 +447,13 @@ export function MissionForm({
     setClassifying(true)
     const t = setTimeout(() => {
       classifyMission(goal.trim())
-        .then((r) => setKind(r.kind))
+        .then((r) => {
+          setKind(r.kind)
+          // light only ever defaults the toggle, never overrides an
+          // operator's own choice (lightTouched) — and only makes sense
+          // once the goal actually classified as general.
+          if (!lightTouched) setLight(r.kind === 'general' && r.light)
+        })
         .catch(() => {
           // Best-effort preview: a failed classify leaves whatever kind
           // was already showing rather than blocking the form.
@@ -452,7 +464,7 @@ export function MissionForm({
       clearTimeout(t)
       setClassifying(false)
     }
-  }, [goal, kindLocked])
+  }, [goal, kindLocked, lightTouched])
 
   const onGoalChange = (v: string) => {
     setGoal(v)
@@ -547,6 +559,7 @@ export function MissionForm({
       attachments:
         attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
       destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
+      light: kind === 'general' ? light : undefined,
     })
     toast.success('Mission created')
     onDone({ kind: 'mission', id })
@@ -572,6 +585,7 @@ export function MissionForm({
         branch_pattern: kind === 'coding' ? branchPattern.trim() || undefined : undefined,
         commit_style: kind === 'coding' ? commitStyle || undefined : undefined,
         destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
+        light: kind === 'general' ? light : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
     })
@@ -605,6 +619,7 @@ export function MissionForm({
         commit_style:
           schedule.mission_template.kind === 'coding' ? commitStyle || undefined : undefined,
         destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
+        light: schedule.mission_template.kind === 'general' ? light : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
     })
@@ -672,6 +687,27 @@ export function MissionForm({
             Coding missions aren't supported on a recurring schedule yet: each fire has no
             repository to work in.
           </p>
+        )}
+        {kind === 'general' && (
+          <label htmlFor="mission-light" className="flex items-start gap-2 text-sm">
+            <input
+              id="mission-light"
+              type="checkbox"
+              checked={light}
+              onChange={(e) => {
+                setLight(e.target.checked)
+                setLightTouched(true)
+              }}
+              className="mt-0.5"
+            />
+            <span>
+              Light mission
+              <span className="block text-xs text-muted-foreground">
+                Skips explore/plan/review for a single-pass task — the worker's final message
+                is delivered as the result.
+              </span>
+            </span>
+          </label>
         )}
         {mode === 'create' && !repeat && (
           <MissionAttachments attachments={attachments} onChange={setAttachments} />

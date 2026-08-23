@@ -384,6 +384,59 @@ func TestMissionHarnessRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionLightAndFinalOutputRoundTrip covers light (D-069, born
+// phase=execute) and SetFinalOutput — same shape as
+// TestMissionHarnessRoundTrips above, plus the setter mission state
+// (not an event) is written and read back correctly.
+func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "light", Kind: "general", Route: "default", Light: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !m.Light {
+		t.Fatal("Light = false, want true")
+	}
+	if m.Phase != PhaseExecute {
+		t.Fatalf("Phase = %q, want execute for a light mission at create", m.Phase)
+	}
+	if m.FinalOutput != "" {
+		t.Fatalf("FinalOutput = %q, want empty before SetFinalOutput", m.FinalOutput)
+	}
+
+	if err := s.SetFinalOutput(ctx, id, "the complete deliverable"); err != nil {
+		t.Fatalf("SetFinalOutput: %v", err)
+	}
+	m, err = s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after SetFinalOutput: %v", err)
+	}
+	if m.FinalOutput != "the complete deliverable" {
+		t.Fatalf("FinalOutput = %q, want %q", m.FinalOutput, "the complete deliverable")
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "not-light", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.Light {
+		t.Fatal("Light = true, want false when not set")
+	}
+	if m2.Phase != PhaseExplore {
+		t.Fatalf("Phase = %q, want explore for a non-light mission at create", m2.Phase)
+	}
+}
+
 // TestMissionOnCompleteRoundTrips covers on_complete: a first-class
 // column snapshotted at create time, same shape as Harness above — ""
 // (do nothing) is the default when a mission omits it.

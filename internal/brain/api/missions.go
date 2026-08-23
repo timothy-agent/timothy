@@ -398,6 +398,11 @@ type createMissionRequest struct {
 	// enabled at create time (see create() below); the model never
 	// supplies or addresses a destination (D-061).
 	DestinationIDs []string `json:"destination_ids"`
+	// Light requests a mission that skips explore/plan/review (D-069):
+	// kind=general only, rejected outright on kind=coding (explicit or
+	// classified). Always the operator's explicit choice — the classify
+	// preview only suggests a value, never sets it.
+	Light bool `json:"light"`
 }
 
 // missionAttachmentInput names one already-uploaded attachment to
@@ -428,6 +433,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	case "coding", "general":
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", `kind must be "coding" or "general"`)
+		return
+	}
+	if req.Light && req.Kind != "general" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "light is only valid for kind=general missions")
 		return
 	}
 	if req.Harness == "native" {
@@ -609,7 +618,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext,
-		Attachments: missionAtts, DestinationIDs: req.DestinationIDs,
+		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, Light: req.Light,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
@@ -744,10 +753,32 @@ func classifyKind(ctx context.Context, classify agents.Classify, goal string) st
 	return "coding"
 }
 
+// classifyLight decides whether a general-kind goal is single-pass
+// (deliverable in one worker turn, no plan or artifacts needed) — only
+// ever a suggestion for the web UI's toggle default; create() still
+// requires the operator's explicit light flag. Biased false on any
+// ambiguity or classify failure: a light suggestion is only useful when
+// confident, and defaulting the toggle on for a multi-step goal would
+// silently drop review/artifact checks the operator likely wants.
+func classifyLight(ctx context.Context, classify agents.Classify, goal string) bool {
+	if classify == nil {
+		return false
+	}
+	prompt := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts? Answer with exactly one word, yes or no.\n\n" +
+		"Goal: " + goal
+	reply, err := classify(ctx, prompt)
+	if err != nil {
+		return false
+	}
+	reply = strings.ToLower(reply)
+	return strings.Contains(reply, "yes") && !strings.Contains(reply, "no")
+}
+
 // classifyGoal serves POST /v1/missions/classify: the same
 // classification create() falls back to when kind is omitted, exposed
 // standalone so the web UI's chip preview can show a mission's inferred
-// kind before submit without actually creating anything.
+// kind (and, for a general goal, a light suggestion) before submit
+// without actually creating anything.
 func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Goal string `json:"goal"`
@@ -760,7 +791,9 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"kind": classifyKind(r.Context(), h.classify, req.Goal)})
+	kind := classifyKind(r.Context(), h.classify, req.Goal)
+	light := kind == "general" && classifyLight(r.Context(), h.classify, req.Goal)
+	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light})
 }
 
 // executorOption is one registered harness's live pairing preview for

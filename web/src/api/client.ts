@@ -1263,6 +1263,10 @@ export interface CreateMissionInput {
   // mission's outcome digest to on the terminal done transition; omit
   // (or empty) delivers nowhere.
   destination_ids?: string[]
+  // light requests a mission that skips explore/plan/review (D-069):
+  // single worker turn, final message delivered as the result. Only
+  // valid when kind === 'general'.
+  light?: boolean
 }
 
 // ExecutorOption is one registered harness's usability on a given
@@ -1309,11 +1313,16 @@ export async function createMission(input: CreateMissionInput): Promise<Mission>
   })
 }
 
-// classifyMission previews the kind create() would infer for goal —
-// the same classifyKind logic the server falls back to when kind is
-// omitted, exposed standalone for the create form's live chip.
-export async function classifyMission(goal: string): Promise<{ kind: 'coding' | 'general' }> {
-  return request<{ kind: 'coding' | 'general' }>('/v1/missions/classify', {
+// classifyMission previews the kind create() would infer for goal, and
+// (for a general goal) whether it looks like a single-pass light
+// mission — the same classifyKind/classifyLight logic the server falls
+// back to/suggests, exposed standalone for the create form's live chip
+// and light toggle default. light is only ever a suggestion; create()
+// still requires the operator's explicit flag.
+export async function classifyMission(
+  goal: string,
+): Promise<{ kind: 'coding' | 'general'; light: boolean }> {
+  return request<{ kind: 'coding' | 'general'; light: boolean }>('/v1/missions/classify', {
     method: 'POST',
     body: JSON.stringify({ goal }),
   })

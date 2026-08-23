@@ -136,6 +136,34 @@ func TestRunWorkerSentinelPresent(t *testing.T) {
 	}
 }
 
+// TestRunWorkerFinalMessageExcludesPriorToolRoundNarration guards D-069's
+// light-mission delivery: a worker session with several internal
+// tool-calling rounds within ONE loop.Agent turn (draft narration, a
+// shell call, more narration, then the sentinel) must expose only the
+// text written since the last non-sentinel tool call as FinalMessage —
+// the deliverable, not the whole session's chatter. The full text
+// return (RunWorker's second value) stays unchanged: everything, in
+// order, for progress-note/log purposes.
+func TestRunWorkerFinalMessageExcludesPriorToolRoundNarration(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		textEvent("draft1"),
+		toolEndEvent("shell", `{"command":"ls"}`),
+		textEvent("final answer"),
+		toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"tests pass"}`),
+	}}}
+	r := newTestRunner(agent)
+	v, text, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if v.FinalMessage != "final answer" {
+		t.Fatalf("FinalMessage = %q, want only the text written after the last non-sentinel tool call", v.FinalMessage)
+	}
+	if text != "draft1final answer" {
+		t.Fatalf("text = %q, want the full unchanged multi-round transcript", text)
+	}
+}
+
 func TestRunWorkerRecoversWhenSentinelMissingThenPresent(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("I made some progress")}, // no sentinel
@@ -1350,7 +1378,7 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 		textEvent("partial work"),
 	}}}
 	r := newTestRunner(agent)
-	text, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+	text, _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
 	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
 		t.Fatalf("err = %v, want no-terminal error", err)
 	}
@@ -1368,7 +1396,7 @@ func TestRunTurnIncompleteIsError(t *testing.T) {
 		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
 	}}}
 	r := newTestRunner(agent)
-	if _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+	if _, _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
 		t.Fatalf("err = %v, want incomplete-stream error", err)
 	}
 }
@@ -1381,7 +1409,7 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		{Type: stream.EventError},
 	}}}
 	r := newTestRunner(agent)
-	if _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+	if _, _, _, _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
@@ -1416,7 +1444,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 	done := make(chan struct{})
 	var err error
 	go func() {
-		_, _, _, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+		_, _, _, _, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
 		close(done)
 	}()
 	select {

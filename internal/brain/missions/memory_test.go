@@ -70,6 +70,22 @@ func TestOutcomeDigest(t *testing.T) {
 			terminal:     PhaseDone,
 			wantExcludes: []string{"mission.turn", "\"ok\":true", "phase_complete"},
 		},
+		{
+			name: "light mission includes final output",
+			mission: Mission{
+				Goal: "summarize the doc", Kind: "general", Light: true,
+				FinalOutput: "the doc says X, Y, and Z",
+			},
+			events:       []Event{{Kind: "mission.review_skipped", Payload: json.RawMessage(`{"reason":"light"}`)}},
+			terminal:     PhaseDone,
+			wantContains: []string{"final output:", "the doc says X, Y, and Z"},
+		},
+		{
+			name:         "non-light mission never includes final output even if set",
+			mission:      Mission{Goal: "coded task", Kind: "coding", FinalOutput: "should never appear"},
+			terminal:     PhaseDone,
+			wantExcludes: []string{"final output:", "should never appear"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,6 +101,30 @@ func TestOutcomeDigest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestOutcomeDigestTruncatesLightFinalOutput confirms a light mission's
+// FinalOutput is capped at finalOutputDigestCap runes (D-069) — the
+// digest feeds memory extraction and parent_context, not the whole
+// deliverable verbatim.
+func TestOutcomeDigestTruncatesLightFinalOutput(t *testing.T) {
+	long := strings.Repeat("é", finalOutputDigestCap+500) // multi-byte rune, proves rune- not byte-counting
+	m := Mission{Goal: "g", Kind: "general", Light: true, FinalOutput: long}
+	digest := OutcomeDigest(m, nil, PhaseDone, "")
+	i := strings.Index(digest, "final output:\n")
+	if i < 0 {
+		t.Fatal("digest missing final output section")
+	}
+	rendered := digest[i+len("final output:\n"):]
+	rendered, _, ok := strings.Cut(rendered, "\n\nterminal state:")
+	if !ok {
+		t.Fatalf("could not isolate the final output section from the rest of the digest:\n%s", digest)
+	}
+	got := []rune(rendered)
+	// truncateRunes appends one "…" rune after the cap.
+	if len(got) != finalOutputDigestCap+1 {
+		t.Fatalf("rendered final output = %d runes, want %d (cap + ellipsis)", len(got), finalOutputDigestCap+1)
 	}
 }
 

@@ -827,7 +827,14 @@ export function MissionDetail() {
         <TimelineSection events={events} />
       </section>
 
-      {terminalPhases.has(mission.phase) && mission.last_evidence && (
+      {terminalPhases.has(mission.phase) && mission.light && mission.final_output && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
+          <ResultSection evidence={mission.final_output} />
+        </section>
+      )}
+
+      {terminalPhases.has(mission.phase) && !mission.light && mission.last_evidence && (
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
           <ResultSection evidence={mission.last_evidence} />

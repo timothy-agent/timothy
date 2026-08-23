@@ -167,6 +167,14 @@ type WorkerVerdict struct {
 	// which has no stream to observe; citations verification is native-
 	// runner-only for now.
 	SeenURLs []string
+	// FinalMessage is the assistant text written since the last
+	// non-sentinel tool call (nativeRunner's runTurn) — the deliverable
+	// for a light mission (D-069), as opposed to the full turn text
+	// (RunWorker's second return), which includes every intermediate
+	// tool-retry narration across the whole session. Never populated by
+	// the mission_status tool call's own JSON args; set by RunWorker
+	// after parsing. Empty for the delegated (CLI harness) path.
+	FinalMessage string `json:"-"`
 }
 
 // parseWorkerVerdict decodes a mission_status tool call's arguments.

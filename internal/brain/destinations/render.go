@@ -64,11 +64,18 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event) Payl
 		links = append(links, url)
 	}
 	files, texts, oversize := resolveArtifactFiles(m)
+	body := "Mission complete: " + name
+	if m.Light && m.FinalOutput != "" {
+		// D-069: a light mission has no plan/artifacts, only its final
+		// worker message — that IS the result recipients want, not a
+		// completion line pointing them elsewhere.
+		body = m.FinalOutput
+	}
 	return Payload{
 		MissionID:     m.ID,
 		Name:          name,
 		Goal:          m.Goal,
-		Body:          "Mission complete: " + name,
+		Body:          body,
 		CompletedAt:   m.UpdatedAt.UTC(),
 		Links:         links,
 		Files:         files,

@@ -74,6 +74,7 @@ type driverStore interface {
 	SetSession(ctx context.Context, id, sessionID string) error
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
+	SetFinalOutput(ctx context.Context, id, text string) error
 	SetExploreNotes(ctx context.Context, id, notes string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	AppendProgress(ctx context.Context, id, note string) error
@@ -913,7 +914,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
-		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed,
+		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed, Light: m.Light,
 	}
 }
 
@@ -978,7 +979,10 @@ func isLastUnit(spec Spec) bool {
 // runPhase runs the phase-appropriate session and returns the StepInput
 // its outcome maps to. It does not itself decide pass/fail semantics
 // beyond what each phase's contract already defines (worker sentinel,
-// review verdict, planner output).
+// review verdict, planner output). Light missions (D-069) are born in
+// PhaseExecute and short-circuit out of runExecute's done branch
+// straight to InputReviewApprove, so they never reach the explore/plan/
+// review cases below by construction.
 func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	switch m.Phase {
 	case PhaseExplore:
@@ -1144,6 +1148,27 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		}
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
 			d.log.Warn("driver: record evidence failed", "mission_id", m.ID, "error", err)
+		}
+		if m.Light {
+			// D-069: a light mission has no plan/artifacts for
+			// trySkipReview to check (it would bail into review for want
+			// of them) — the worker's final message IS the deliverable,
+			// so approve directly instead. FinalMessage is the text
+			// written since the worker's last non-sentinel tool call, not
+			// the whole multi-turn transcript (text) — fall back to text
+			// only when a worker never wrote anything after its last tool
+			// call (e.g. it called a tool, then immediately mission_status).
+			finalOutput := verdict.FinalMessage
+			if finalOutput == "" {
+				finalOutput = text
+			}
+			if err := d.store.SetFinalOutput(ctx, m.ID, finalOutput); err != nil {
+				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
+			}
+			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": "light"}); err != nil {
+				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
+			}
+			return StepInput{Input: InputReviewApprove}, nil
 		}
 		if in, ok := d.trySkipReview(ctx, m, verdict.SeenURLs); ok {
 			return in, nil
@@ -1483,6 +1508,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext, Attachments: m.Attachments,
+		Light: m.Light,
 	}, nil
 }
 

@@ -112,6 +112,14 @@ type Mission struct {
 	// (internal/brain/missions/executor). Coding-only; a general mission
 	// always runs native.
 	Harness string `json:"harness,omitempty"`
+	// Light missions (D-069, general kind only) skip explore/plan/
+	// review entirely: born in phase=execute, one bare worker turn, the
+	// final worker message is the deliverable.
+	Light bool `json:"light"`
+	// FinalOutput is a light mission's verbatim final worker message,
+	// set on the done transition (driver.go's runExecute) — the
+	// deliverable for destinations delivery and memory extraction.
+	FinalOutput string `json:"final_output,omitempty"`
 	// Environment selects the per-language sandbox image (D-05x) a
 	// coding mission's container runs: "" is the base image. Unlike
 	// Harness, there is no settings default — precedence is explicit

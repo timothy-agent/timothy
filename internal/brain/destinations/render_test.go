@@ -115,6 +115,25 @@ func TestRender(t *testing.T) {
 		}
 	})
 
+	t.Run("light mission body is the final output, not a completion line", func(t *testing.T) {
+		light := m
+		light.Light = true
+		light.FinalOutput = "here is the complete deliverable"
+		p := Render(light, "", nil)
+		if p.Body != "here is the complete deliverable" {
+			t.Fatalf("Body = %q, want the light mission's final output", p.Body)
+		}
+	})
+
+	t.Run("light mission with no final output falls back to the completion line", func(t *testing.T) {
+		light := m
+		light.Light = true
+		p := Render(light, "", nil)
+		if p.Body != "Mission complete: Ship it" {
+			t.Fatalf("Body = %q, want the completion-line fallback", p.Body)
+		}
+	})
+
 	t.Run("CompletedAt carries the mission's UpdatedAt in UTC", func(t *testing.T) {
 		withTime := m
 		parsed, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00+02:00")

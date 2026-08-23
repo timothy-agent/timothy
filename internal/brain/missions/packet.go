@@ -46,6 +46,10 @@ type WorkPacket struct {
 	// every worker turn via Render, including a delegated executor's
 	// turn (executor packets also go through Render).
 	Attachments []MissionAttachment
+	// Light marks a mission that skips explore/plan/review (D-069) —
+	// Render uses lightSystemPreamble instead of nativeSystemPreamble,
+	// and Spec is always empty so the Plan block never renders.
+	Light bool
 }
 
 // nativeSystemPreamble is the mission_status/write_file contract a
@@ -54,12 +58,20 @@ type WorkPacket struct {
 // delegatedSystemPreamble instead).
 const nativeSystemPreamble = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you; artifact tracking depends on write_file being the only way files get created. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff, the plan, and the git log."
 
+// lightSystemPreamble is nativeSystemPreamble's counterpart for a light
+// mission (D-069): single pass, no plan, no artifact check — the
+// worker's final message is delivered to the user verbatim.
+const lightSystemPreamble = "You are completing this goal in a single pass. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Your final message on done is delivered to the user as the result — make it the complete deliverable, not a summary of work done. Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you. Use shell for reading and checking, not writing. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff and the git log."
+
 // Render turns the packet into the system/user message a native
 // worker session's first turn receives. Progress notes and git log
 // content can contain prior model-produced text (a worker's own
 // commit messages, an earlier note); both pass through NeutralizeSlot
 // before insertion — self-injection hardening.
 func (p WorkPacket) Render() (system, user string) {
+	if p.Light {
+		return p.render(lightSystemPreamble)
+	}
 	return p.render(nativeSystemPreamble)
 }
 

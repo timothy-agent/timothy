@@ -138,6 +138,10 @@ type StepState struct {
 	// stepReviewRework) — a second stall pauses for a human same as
 	// before this feature existed.
 	ReplanUsed bool
+	// Light marks a mission that skips explore/plan/review (D-069) —
+	// a stall can never replan into PhasePlan for one, since it never
+	// visits that phase.
+	Light bool
 }
 
 // StepInput bundles the triggering Input with whatever data it
@@ -345,7 +349,11 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 			s.StallCount = 1
 		}
 		s.LastGapFingerprint = in.GapFingerprint
-		if s.StallCount >= cfg.StallRounds {
+		// D-069: light missions never visit PhasePlan, so a stall skips
+		// the replan/no-progress-pause brake entirely and falls straight
+		// through to the plain retry/max_iterations path below, same as
+		// stepWorkerFailed's backoff ceiling.
+		if s.StallCount >= cfg.StallRounds && !s.Light {
 			if !s.ReplanUsed {
 				return replanTransition(s, in)
 			}
