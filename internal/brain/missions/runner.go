@@ -455,6 +455,10 @@ type turnResult struct {
 func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string) (turnResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
+	// D-075: the sentinel call's successful execution ends the turn —
+	// every mission phase (worker/explore/plan/review) goes through
+	// this one call site.
+	req.EndTurnTools = []string{sentinelTool}
 	events, err := r.agent.Start(ctx, req)
 	if err != nil {
 		return turnResult{}, err
@@ -725,7 +729,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	} else {
 		r.log.Warn("mission worker ended without a sentinel call", "mission_id", m.ID)
 	}
-	return WorkerVerdict{Outcome: "retry", Analysis: "the worker did not report a status; treated as a failed attempt", Forced: true}, combined, nil
+	return forcedRetryVerdict("the worker did not report a status; treated as a failed attempt"), combined, nil
 }
 
 func (r *nativeRunner) tryParseVerdict(args json.RawMessage) (WorkerVerdict, bool) {
@@ -745,6 +749,19 @@ func tryParseWorkerVerdict(args json.RawMessage) (WorkerVerdict, bool) {
 		return WorkerVerdict{}, false
 	}
 	return v, true
+}
+
+// D-074: forcedRetryVerdict builds the fabricated "retry" verdict every
+// last rung of the worker/executor verdict ladders falls back to when
+// NEITHER a tool call/schema result NOR a text-form sentinel could be
+// read — shared by nativeRunner's sentinel ladder (RunWorker, above)
+// and delegatedRunner's result ladder (delegated.go's attemptResume,
+// pollToVerdict's idle-kill, finish, finishNoResult), which previously
+// each spelled out WorkerVerdict{Outcome: "retry", Forced: true, ...}
+// with their own Analysis string. reason is that Analysis: what the
+// ladder observed (or failed to observe) that forced this fallback.
+func forcedRetryVerdict(reason string) WorkerVerdict {
+	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}
 }
 
 // ExploreSession runs the mission's explore turn: explore the goal

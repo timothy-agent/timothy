@@ -455,7 +455,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 	code, perr := r.sandboxExec(ctx, m.ID, m.Environment, workRoot, probeCmd, nil, launchTimeout, &probe)
 	if perr != nil || code != 0 {
 		r.recordDied(ctx, m.ID, "lost_run", nil, "run directory or pid missing after restart")
-		return true, WorkerVerdict{Outcome: "retry", Forced: true, Analysis: "the executor's run was lost across a restart"}, "", nil
+		return true, forcedRetryVerdict("the executor's run was lost across a restart"), "", nil
 	}
 
 	v, t, rerr := r.pollToVerdict(ctx, m, workRoot, state.RunDir, state.RunID, entry, adapter, state.AuthMode, state.ByteOffset)
@@ -609,7 +609,7 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 			r.killRun(ctx, m.ID, m.Environment, workRoot, rdir)
 			r.recordEvent(ctx, m.ID, st, "executor.idle_killed", map[string]any{"idle_s": int(r.idleTimeout.Seconds())})
 			r.coolDown(m.Harness, entry)
-			return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: "the executor produced no output for the idle timeout and was killed"}, st.textBuf.String(), nil
+			return forcedRetryVerdict("the executor produced no output for the idle timeout and was killed"), st.textBuf.String(), nil
 		}
 	}
 }
@@ -742,7 +742,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 		}
 		if !ok {
 			parseKind = "none"
-			verdict = WorkerVerdict{Outcome: "retry", Forced: true, Analysis: "executor finished without a status report"}
+			verdict = forcedRetryVerdict("executor finished without a status report")
 		}
 	}
 
@@ -797,7 +797,7 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry g
 	r.recordDied(ctx, m.ID, "transport_death", &exitCode, stderrTail)
 	r.recordLedger(ctx, m, entry, authMode, nil, start, false, "")
 	r.coolDown(m.Harness, entry)
-	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}, st.textBuf.String(), nil
+	return forcedRetryVerdict(reason), st.textBuf.String(), nil
 }
 
 // readStderrTail fetches the last ~2KB of stderr.log — a single extra

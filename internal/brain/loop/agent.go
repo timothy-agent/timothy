@@ -288,6 +288,14 @@ type Request struct {
 	// step (D-063). Only set by callers whose turn ends on that tool
 	// (mission sentinel turns). Empty means auto, today's behavior.
 	ForceTool string
+
+	// EndTurnTools names offered tools whose successful EXECUTION ends
+	// the turn immediately — no further model call to react to the
+	// result. Set by mission sentinel turns (mission_status/
+	// explore_notes/submit_plan/review_verdict), whose call already
+	// answers everything the turn needed; empty means today's behavior
+	// (always continue).
+	EndTurnTools []string
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -373,6 +381,10 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	forceTool := req.ForceTool
 	if forceTool != "" && !toolNames[forceTool] {
 		forceTool = ""
+	}
+	endTurnTools := make(map[string]bool, len(req.EndTurnTools))
+	for _, name := range req.EndTurnTools {
+		endTurnTools[name] = true
 	}
 	msgs := append([]provider.Message(nil), req.Messages...)
 	total := stream.Usage{}
@@ -598,6 +610,28 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		for i := range results {
 			msgs = append(msgs, provider.Message{Role: "tool", ToolResult: &results[i]})
 		}
+
+		// D-075: a sentinel call's successful execution already answers
+		// everything the turn needed (mission_status/explore_notes/
+		// submit_plan/review_verdict) — sending its result back for
+		// another completion just burns a model call, and on reasoning
+		// models over openai-responses that pointless continuation
+		// returns empty output and fails the whole turn (D-063). An
+		// errored/denied sentinel result still needs the model to see
+		// it and retry, so only a clean result ends the turn here.
+		endTurn := false
+		for i, c := range calls {
+			if endTurnTools[c.Name] && !results[i].IsError {
+				endTurn = true
+				break
+			}
+		}
+		if endTurn {
+			emitFinal(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+			emitFinal(stream.StreamEvent{Type: stream.EventDone, Meta: lastMeta})
+			return
+		}
+
 		effort = EffortFor(results)
 	}
 }

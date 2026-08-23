@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
-	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 // driveTimeBound bounds one Drive call: long enough for a real
@@ -120,52 +118,35 @@ type Driver struct {
 	sandboxExec   sandboxExec
 	sandboxRemove sandboxRemover
 
-	// resolveAgent resolves a mission's agent_id to its
-	// ApprovalAllowlist at provisioning time (see SetAgentResolver) —
-	// nil-safe: unset means no allowlist grants, same as before this
-	// existed.
-	resolveAgent AgentResolver
+	// provision holds the mission-provisioning slice split out into its
+	// own type (D-074): ensureProvisioned, grantSessionDefaults,
+	// followUpBaseRef and their resolver deps. Driver's Set* setters
+	// delegate straight into it.
+	provision provisioner
 
-	// fxRates backs the budget brake's cross-currency conversion (see
-	// SetFXRates / toStepState) — nil-safe: unset means the brake never
-	// converts, degrading to the original mixed-currency-always-pauses
-	// behavior.
-	fxRates fxRateSource
+	// budget holds the budget/FX projection slice split out into its own
+	// type (D-074): convertOtherCurrencySpend and the budget-projection
+	// half of toStepState. SetFXRates delegates straight into it.
+	// nil-safe: an unset fxRates means the brake never converts,
+	// degrading to the original mixed-currency-always-pauses behavior.
+	budget budgetProjector
+
+	// verify holds the harness-evidence slice split out into its own
+	// type (D-074): verifyCurrentUnit, markUnitPassed, checkRegressions,
+	// regressed — the only code allowed to flip a PlanUnit's Passes
+	// flag.
+	verify verifier
 
 	// capacity backs the D-056 admission gate (see SetCapacityGate /
 	// Advance) — nil-safe: unset means every idle->working transition is
 	// admitted, same as before this existed.
 	capacity capacityChecker
 
-	// resolveCloneToken resolves a github-kind connector_id to the PAT
-	// that authenticates ensureProvisioned's clone (see SetCloneTokenResolver)
-	// — nil-safe: unset means a mission with repo_url set fails
-	// provisioning (surfaced as an infra pause, same as any other
-	// provisioning error), since there would be no way to authenticate
-	// the clone.
-	resolveCloneToken CloneTokenResolver
-
 	// retryDelayFn paces a worker_failed retry (see retryDelay) —
 	// defaults to retryDelay in NewDriver, overridden to a zero-delay
 	// stub by tests that drive multiple worker_failed rounds and can't
 	// afford to actually sleep.
 	retryDelayFn func(consecutiveFailures int) time.Duration
-
-	// resolveCloneIdentity resolves a github-kind connector_id to the
-	// commit identity (name, email) ensureProvisioned sets as the
-	// clone's local git config (see SetCloneIdentityResolver) — nil-safe:
-	// unset, or a resolve error, just leaves the clone with no local
-	// identity override (commits fall back to the operator's fixed
-	// identity), never fails provisioning.
-	resolveCloneIdentity CloneIdentityResolver
-
-	// gitBranchPattern resolves the settings-configured default branch
-	// pattern (see SetGitBranchPattern) — consulted by ensureProvisioned
-	// only when the mission's own BranchPattern is empty (mission
-	// override > settings > worktree.go's DefaultBranchPattern). nil-safe:
-	// unset falls straight through to Provision's own DefaultBranchPattern
-	// fallback, same as before this setting existed.
-	gitBranchPattern func(ctx context.Context) string
 
 	// gitCommitStyle resolves the settings-configured default commit
 	// style (see SetGitCommitStyle) — consulted by runExecute only when
@@ -250,6 +231,9 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify no
 	return &Driver{
 		store: store, runner: runner, workspace: workspace, notify: notify, sessions: sessions, perms: perms, log: log,
 		sandboxExec: sandboxExec, sandboxRemove: sandboxRemove,
+		provision:    provisioner{store: store, workspace: workspace, sessions: sessions, perms: perms, log: log},
+		budget:       budgetProjector{log: log},
+		verify:       verifier{store: store, sandboxExec: sandboxExec, log: log},
 		cfg:          DefaultConfig,
 		gatekeepers:  map[string]*GatekeeperState{},
 		driving:      map[string]bool{},
@@ -293,7 +277,7 @@ func retryDelay(consecutiveFailures int) time.Duration {
 // builds the Driver before it builds the agents.Store the resolver
 // closes over.
 func (d *Driver) SetAgentResolver(resolve AgentResolver) {
-	d.resolveAgent = resolve
+	d.provision.resolveAgent = resolve
 }
 
 // SetFXRates wires the stored USD-base rate table the budget brake
@@ -302,7 +286,7 @@ func (d *Driver) SetAgentResolver(resolve AgentResolver) {
 // keeps the constructor's parameter list from growing for every
 // optional cross-cutting dependency.
 func (d *Driver) SetFXRates(store fxRateSource) {
-	d.fxRates = store
+	d.budget.fxRates = store
 }
 
 // SetCapacityGate wires the D-056 admission gate Advance consults before
@@ -324,7 +308,7 @@ type CloneTokenResolver func(ctx context.Context, connectorID string) (string, e
 // authenticate a repo_url mission's clone — a setter (not a NewDriver
 // parameter) for the same reason SetAgentResolver is.
 func (d *Driver) SetCloneTokenResolver(resolve CloneTokenResolver) {
-	d.resolveCloneToken = resolve
+	d.provision.resolveCloneToken = resolve
 }
 
 // ResolvedIdentity is what CloneIdentityResolver resolves for a
@@ -352,14 +336,14 @@ type CloneIdentityResolver func(ctx context.Context, connectorID string) (Resolv
 // set a repo_url mission's clone local git identity — a setter (not a
 // NewDriver parameter) for the same reason SetAgentResolver is.
 func (d *Driver) SetCloneIdentityResolver(resolve CloneIdentityResolver) {
-	d.resolveCloneIdentity = resolve
+	d.provision.resolveCloneIdentity = resolve
 }
 
 // SetGitBranchPattern wires the live settings getter ensureProvisioned
 // falls back to when a mission's own BranchPattern is empty — a setter
 // (not a NewDriver parameter) for the same reason SetAgentResolver is.
 func (d *Driver) SetGitBranchPattern(get func(ctx context.Context) string) {
-	d.gitBranchPattern = get
+	d.provision.gitBranchPattern = get
 }
 
 // SetGitCommitStyle wires the live settings getter runExecute falls
@@ -606,159 +590,20 @@ func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {
 }
 
 // ensureProvisioned gives a mission everything Create used to set up
-// inline — a hidden session, its standing grants, and a workspace —
-// but callable a second time for a mission that reached the store some
-// OTHER way (scheduler.go's createFromTemplate inserts a bare row
-// directly, bypassing Create entirely: no session, no workspace, no
-// grants). Advance calls this at the top of every turn so a
-// scheduler-born mission gets provisioned the first time anything
-// actually drives it, not at fire time. Idempotent: a mission that
-// already has both a session and a workspace/worktree is a no-op,
-// and SetSession's own WHERE session_id IS NULL guard makes a second
-// concurrent attempt safe even without that check.
-//
-// Grants happen in BOTH the session-creation and the workspace-
-// provisioning halves below — same shape as Create always had, plus
-// the new ApprovalAllowlist grants (via resolveAgent) once a session
-// exists, whichever half of ensureProvisioned actually created it.
+// inline — a hidden session, its standing grants, and a workspace — see
+// provisioner.ensureProvisioned (provision.go, D-074) for the full
+// contract. Kept as a Driver method so every call site below reads the
+// same as before the split.
 func (d *Driver) ensureProvisioned(ctx context.Context, m Mission) (Mission, error) {
-	if m.SessionID == "" && d.sessions != nil {
-		sessionID, err := d.sessions.Create(ctx, "")
-		if err != nil {
-			return m, fmt.Errorf("session: %w", err)
-		}
-		if err := d.store.SetSession(ctx, m.ID, sessionID); err != nil {
-			return m, fmt.Errorf("set session: %w", err)
-		}
-		m.SessionID = sessionID
-		d.grantSessionDefaults(ctx, m)
-	}
-	if d.workspace != nil && m.Workspace == "" && m.Worktree == "" {
-		var token string
-		var connIdentity *GitIdentity
-		if m.RepoURL != "" {
-			if d.resolveCloneToken == nil {
-				return m, fmt.Errorf("provision: mission has repo_url but no clone token resolver is configured")
-			}
-			t, err := d.resolveCloneToken(ctx, m.ConnectorID)
-			if err != nil {
-				return m, fmt.Errorf("provision: resolve clone token: %w", err)
-			}
-			token = t
-			// Identity resolve failure never fails provisioning: it just
-			// leaves the clone with no local identity override, falling
-			// back to the fixed commitName/commitEmail (worktree.go's
-			// CommitUnit).
-			if d.resolveCloneIdentity != nil {
-				identity, err := d.resolveCloneIdentity(ctx, m.ConnectorID)
-				if err != nil {
-					d.log.Warn("driver: resolve clone identity failed; commits fall back to fixed identity", "mission_id", m.ID, "error", err)
-				} else {
-					connIdentity = &GitIdentity{Name: identity.Name, Email: identity.Email, Login: identity.Login, SigningKey: identity.SigningKey}
-				}
-			}
-		}
-		branchPattern := m.BranchPattern
-		if branchPattern == "" && d.gitBranchPattern != nil {
-			branchPattern = d.gitBranchPattern(ctx)
-		}
-		baseRef := d.followUpBaseRef(ctx, m)
-		workspace, worktree, branch, baseCommit, baseUsed, err := d.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity, branchPattern, baseRef)
-		if err != nil {
-			return m, fmt.Errorf("provision: %w", err)
-		}
-		if err := d.store.SetProvisioned(ctx, m.ID, workspace, worktree, branch, baseCommit); err != nil {
-			return m, err
-		}
-		m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
-		if m.ParentMissionID != "" && missionPolicyFor(m).needsWorktree {
-			ref := baseUsed
-			if ref == "" {
-				ref = "the repo's default branch (parent branch unreachable)"
-			}
-			if err := d.store.AppendProgress(ctx, m.ID, fmt.Sprintf("Follow-up of mission %s: worktree based on %s", m.ParentMissionID, ref)); err != nil {
-				d.log.Warn("driver: record follow-up base note failed", "mission_id", m.ID, "error", err)
-			}
-		}
-		if m.AutoApproveSafe && d.perms != nil && m.SessionID != "" {
-			// Register the mission's own directory as the session's
-			// sandbox: destructive-classified commands provably confined
-			// to it (writing the mission's own artifacts, cleaning its
-			// own files) stop parking on a human prompt. Best-effort, same
-			// as the grants in grantSessionDefaults.
-			root := worktree
-			if root == "" {
-				root = workspace
-			}
-			if err := d.perms.Grant(ctx, m.SessionID, tools.SandboxGrantTool, root, missionGrantTTL); err != nil {
-				d.log.Warn("driver: sandbox grant failed", "mission_id", m.ID, "error", err)
-			}
-		}
-	}
-	return m, nil
+	return d.provision.ensureProvisioned(ctx, m)
 }
 
-// followUpBaseRef resolves a follow-up mission's worktree base: the
-// parent's own branch, but only when the parent actually has one
-// (kind=coding) and shares this mission's RepoURL — a follow-up to a
-// general mission, or one cloning a different repo, has no
-// meaningful base to hand Provision. Any failure (parent gone, no
-// branch) degrades to "" (Provision's own default-branch behavior),
-// never fails provisioning.
-func (d *Driver) followUpBaseRef(ctx context.Context, m Mission) string {
-	if m.ParentMissionID == "" {
-		return ""
-	}
-	parent, err := d.store.Get(ctx, m.ParentMissionID)
-	if err != nil {
-		d.log.Debug("driver: follow-up base ref: parent lookup failed", "mission_id", m.ID, "parent_id", m.ParentMissionID, "error", err)
-		return ""
-	}
-	if parent.Branch == "" || parent.RepoURL != m.RepoURL {
-		return ""
-	}
-	return parent.Branch
-}
-
-// grantSessionDefaults pre-authorizes a freshly created hidden session:
-// standing "safe shell" approval when the mission opted in, plus every
-// tool in the mission's agent's ApprovalAllowlist (resolved at
-// provisioning time via resolveAgent, same fire-time-not-create-time
-// principle as scheduler.go's createFromTemplate — an agent's allowlist
-// edited after the mission started still applies to a not-yet-
-// provisioned mission). All best-effort: a failed grant just means the
-// mission asks on its first call instead of running unattended —
-// degraded autonomy, never a broken mission.
-//
-// AutoApproveSafe is deliberately shell-scoped only ("shell" + sandbox
-// root) — it does not widen to connector tools, which default
-// danger=safe unclassified; doing so would silently unlock every
-// connector write (send an email, delete a calendar event) for an
-// unattended mission with no per-tool review. Autonomy over connector
-// tools comes only from the agent's ApprovalAllowlist grants below,
-// matched against the connector-namespaced tool name via matchGrant's
-// suffix rule (D-036).
+// grantSessionDefaults delegates to provisioner.grantSessionDefaults
+// (provision.go, D-074) — kept as a Driver method since Signal's resume
+// re-grant, and driver_test.go's direct guard-behavior assertion, both
+// call it as d.grantSessionDefaults.
 func (d *Driver) grantSessionDefaults(ctx context.Context, m Mission) {
-	if d.perms == nil {
-		return
-	}
-	if m.AutoApproveSafe {
-		if err := d.perms.Grant(ctx, m.SessionID, "shell", "*", missionGrantTTL); err != nil {
-			d.log.Warn("driver: auto-approve grant failed", "mission_id", m.ID, "error", err)
-		}
-	}
-	if d.resolveAgent == nil {
-		return
-	}
-	defaults, ok := d.resolveAgent(ctx, m.AgentID)
-	if !ok {
-		return
-	}
-	for _, tool := range defaults.ApprovalAllowlist {
-		if err := d.perms.Grant(ctx, m.SessionID, tool, "*", missionGrantTTL); err != nil {
-			d.log.Warn("driver: approval allowlist grant failed", "mission_id", m.ID, "tool", tool, "error", err)
-		}
-	}
+	d.provision.grantSessionDefaults(ctx, m)
 }
 
 // Advance performs exactly one worker turn, review round, or planning
@@ -995,22 +840,10 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 }
 
 // toStepState projects a Mission onto the state machine's input shape,
-// pulling actual ledger spend for the budget brake. A Spend query
-// failure is treated the same as zero spend (best-effort, never blocks
-// Advance/Signal over a bookkeeping read) — just logged.
+// pulling actual ledger spend for the budget brake via budgetProjector
+// (budget.go, D-074).
 func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
-	var spent float64
-	var mixed bool
-	var rateAsOf string
-	if m.BudgetAmount != nil {
-		usage, err := d.store.Spend(ctx, m.ID)
-		if err != nil {
-			d.log.Warn("driver: mission spend lookup failed", "mission_id", m.ID, "error", err)
-		} else {
-			spent = usage.ByCurrency[m.BudgetCurrency]
-			spent, mixed, rateAsOf = d.convertOtherCurrencySpend(ctx, usage, m.BudgetCurrency, spent)
-		}
-	}
+	spent, mixed, rateAsOf := d.budget.projectSpend(ctx, d.store, m)
 	return StepState{
 		Phase: m.Phase, Status: m.Status, PauseReason: m.PauseReason,
 		Iteration: m.Iteration, MaxIterations: m.MaxIterations,
@@ -1019,50 +852,6 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
 		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed, Light: m.Light,
 	}
-}
-
-// convertOtherCurrencySpend folds every currency in usage OTHER than
-// budgetCurrency into spent, using the driver's stored fx rate table —
-// same USD-base cross the display-conversion seam uses (D-013's spend
-// sibling: never a guessed rate). mixed comes back true the moment ANY
-// currency has no usable stored rate (missing pair, or stale beyond
-// the store's own bound) — at that point the brake can no longer
-// safely judge the mission's true spend, so it must pause rather than
-// under-count. rateAsOf is the oldest date among whichever converted
-// legs participated, "" when nothing needed converting.
-func (d *Driver) convertOtherCurrencySpend(ctx context.Context, usage MissionSpend, budgetCurrency string, spent float64) (newSpent float64, mixed bool, rateAsOf string) {
-	others := make([]string, 0, len(usage.ByCurrency))
-	for currency, amount := range usage.ByCurrency {
-		if currency != budgetCurrency && amount > 0 {
-			others = append(others, currency)
-		}
-	}
-	if len(others) == 0 {
-		return spent, false, ""
-	}
-	if d.fxRates == nil {
-		return spent, true, "" // no rate source wired: same conservative pause as before
-	}
-	rates, err := d.fxRates.LatestUSDRates(ctx)
-	if err != nil {
-		d.log.Warn("driver: fx rate lookup failed; treating as unconvertible", "error", err)
-		return spent, true, ""
-	}
-	var oldest fxrates.Rate
-	for _, currency := range others {
-		converted, rate, ok := fxrates.Convert(usage.ByCurrency[currency], currency, budgetCurrency, rates)
-		if !ok {
-			return spent, true, ""
-		}
-		spent += converted
-		if oldest.AsOf.IsZero() || rate.AsOf.Before(oldest.AsOf) {
-			oldest = rate
-		}
-	}
-	if !oldest.AsOf.IsZero() {
-		rateAsOf = oldest.AsOf.Format("2006-01-02")
-	}
-	return spent, false, rateAsOf
 }
 
 // isLastUnit reports whether every unit in the plan has passed — the
@@ -1317,7 +1106,7 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string
 	if unit == nil || len(unit.Artifacts) == 0 {
 		return StepInput{}, false
 	}
-	if err := d.verifyCurrentUnit(ctx, m, seenURLs); err != nil {
+	if err := d.verify.verifyCurrentUnit(ctx, m, seenURLs); err != nil {
 		var vf *verifyFailure
 		if errors.As(err, &vf) {
 			note := fmt.Sprintf("Verification failed for unit %d before review: %s", vf.unit+1, vf.excerpt)
@@ -1330,7 +1119,7 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string
 		d.log.Warn("driver: pre-review verify errored; falling back to review", "mission_id", m.ID, "error", err)
 		return StepInput{}, false
 	}
-	if in, regressed := d.checkRegressions(ctx, m); regressed {
+	if in, regressed := d.verify.checkRegressions(ctx, m); regressed {
 		return in, true
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{
@@ -1339,73 +1128,6 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string
 		d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 	}
 	return StepInput{Input: InputReviewApprove}, true
-}
-
-// checkRegressions re-verifies every unit that had ALREADY passed
-// (excluding whichever unit the caller just verified) after a unit's
-// own verify_cmd/CheckArtifacts just succeeded — a later unit's work
-// can silently break an earlier unit's artifacts, and passes today
-// only ever moves forward, never re-checked. Cheap and deterministic
-// (harness-side shell, same as verifyCurrentUnit), capped at the
-// spec's own unit count. Re-fetches the mission first: verifyCurrentUnit's
-// SetSpec write is not reflected in the caller's in-memory m.
-func (d *Driver) checkRegressions(ctx context.Context, m Mission) (StepInput, bool) {
-	fresh, err := d.store.Get(ctx, m.ID)
-	if err != nil {
-		d.log.Warn("driver: regression check reload failed", "mission_id", m.ID, "error", err)
-		return StepInput{}, false
-	}
-	// Deliberately omits verifyCurrentUnit's CheckCitations step: that
-	// check validates URLs against seenURLs, which only ever holds the
-	// citations from the turn that just produced the current unit's
-	// output (runExecute's live evidence). A regression recheck has no
-	// such turn — it's re-verifying units OTHER than the one just
-	// worked — so seenURLs would be empty here and CheckCitations would
-	// false-fail every already-passed unit on every regression pass.
-	workRoot := fresh.WorkRoot()
-	for i, u := range fresh.Spec.Units {
-		if !u.Passes {
-			continue
-		}
-		if problems := CheckArtifacts(workRoot, u.Artifacts); len(problems) > 0 {
-			return d.regressed(ctx, fresh, i, "artifacts", strings.Join(problems, "\n"))
-		}
-		if u.VerifyCmd == "" {
-			continue
-		}
-		res, err := d.runVerify(ctx, fresh.ID, fresh.Environment, workRoot, u.VerifyCmd)
-		if err != nil {
-			d.log.Warn("driver: regression re-verify errored", "mission_id", fresh.ID, "unit", i, "error", err)
-			continue
-		}
-		if !res.Passed {
-			return d.regressed(ctx, fresh, i, "verify_cmd", res.Excerpt)
-		}
-	}
-	return StepInput{}, false
-}
-
-// regressed flips a previously-passed unit back to unverified, records
-// mission.regression, and returns the same StepInput shape a failed
-// current-unit verify produces — the existing worker-retry/stall
-// machinery drives the fix with zero statemachine changes.
-func (d *Driver) regressed(ctx context.Context, m Mission, unit int, check, excerpt string) (StepInput, bool) {
-	units := make([]PlanUnit, len(m.Spec.Units))
-	copy(units, m.Spec.Units)
-	title := units[unit].Title
-	units[unit].Passes = false
-	if err := d.store.SetSpec(ctx, m.ID, Spec{Units: units}); err != nil {
-		d.log.Warn("driver: record regression spec write failed", "mission_id", m.ID, "error", err)
-	}
-	if err := d.store.AppendEvent(ctx, m.ID, "mission.regression", map[string]any{"unit": title, "check": check}); err != nil {
-		d.log.Warn("driver: record regression event failed", "mission_id", m.ID, "error", err)
-	}
-	note := fmt.Sprintf("Regression: unit %q, previously verified, now fails its %s check:\n%s", title, check, excerpt)
-	if err := d.recordProgress(ctx, m.ID, note); err != nil {
-		d.log.Warn("driver: record regression progress note failed", "mission_id", m.ID, "error", err)
-	}
-	fp := "regression:" + title
-	return StepInput{Input: InputWorkerRetry, Reason: truncate(note, 500), GapFingerprint: fp}, true
 }
 
 // currentUnit returns the plan's first unverified unit and its index,
@@ -1466,7 +1188,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 
 	if verdict.Approved {
 		var vf *verifyFailure
-		if err := d.verifyCurrentUnit(ctx, m, nil); err != nil {
+		if err := d.verify.verifyCurrentUnit(ctx, m, nil); err != nil {
 			if errors.As(err, &vf) {
 				// The reviewer approved, but the harness's own verify_cmd
 				// disagrees — real evidence the approval didn't hold up
@@ -1487,7 +1209,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 			}
 			return StepInput{Input: InputReviewInfraFailure}, err
 		}
-		if in, regressed := d.checkRegressions(ctx, m); regressed {
+		if in, regressed := d.verify.checkRegressions(ctx, m); regressed {
 			return in, nil
 		}
 		return StepInput{Input: InputReviewApprove}, nil
@@ -1512,99 +1234,11 @@ func reviewReason(findings []Finding) string {
 	return strings.Join(titles, "; ")
 }
 
-// verifyFailure is a unit's verify_cmd genuinely running and reporting
-// failure — real evidence the reviewer's approval didn't hold up, not
-// an infrastructure fault. Kept distinct from a plain error (RunVerify
-// itself erroring: timeout, exec failure) so the caller can route each
-// to a different StepInput instead of conflating both as infra.
-type verifyFailure struct {
-	unit    int
-	excerpt string
-}
-
-func (e *verifyFailure) Error() string {
-	return fmt.Sprintf("driver: unit %d verify_cmd failed", e.unit)
-}
-
-// verifyCurrentUnit runs the harness's own checks for the plan's
-// current (first unverified) unit and marks it passed — only this
-// harness-run evidence may flip a unit's Passes flag, never model
-// output. Declared artifacts are checked first (exists, non-empty),
-// then (general missions only, D-059) that every URL cited in those
-// artifacts was actually seen by the worker via web_fetch/web_search
-// this turn — a tautological verify_cmd cannot pass a unit whose
-// artifact was never written, or whose citations were invented.
-// seenURLs is only ever populated by the caller right after the
-// worker turn that produced it (runExecute); it is empty on the later
-// runReview call, which is fine — for a general mission trySkipReview
-// already ran this exact check with the real evidence, and runReview
-// only reaches this path for coding missions (out of scope) or the
-// rare infra-failure fallback.
-func (d *Driver) verifyCurrentUnit(ctx context.Context, m Mission, seenURLs []string) error {
-	for i, u := range m.Spec.Units {
-		if u.Passes {
-			continue
-		}
-		workRoot := m.WorkRoot()
-		if problems := CheckArtifacts(workRoot, u.Artifacts); len(problems) > 0 {
-			excerpt := "declared artifacts failed the harness check:\n" + strings.Join(problems, "\n")
-			// Show what DOES exist: the dominant failure here is a
-			// worker writing a real file under a slightly different
-			// name and never spotting the mismatch from "not found"
-			// alone.
-			if listing := ListWorkspace(workRoot); listing != "" {
-				excerpt += "\nfiles currently in the workspace:\n" + listing
-			} else {
-				excerpt += "\nthe workspace is currently empty"
-			}
-			if err := d.store.AppendEvent(ctx, m.ID, "mission.unit_verified", map[string]any{
-				"unit": i, "passed": false, "check": "artifacts", "problems": problems,
-			}); err != nil {
-				d.log.Warn("driver: record verify failed", "mission_id", m.ID, "error", err)
-			}
-			return &verifyFailure{unit: i, excerpt: excerpt}
-		}
-		if missionPolicyFor(m).checksCitations {
-			if problems := CheckCitations(workRoot, u.Artifacts, seenURLs); len(problems) > 0 {
-				excerpt := "citation check failed:\n" + strings.Join(problems, "\n")
-				if err := d.store.AppendEvent(ctx, m.ID, "mission.unit_verified", map[string]any{
-					"unit": i, "passed": false, "check": "citations", "problems": problems,
-				}); err != nil {
-					d.log.Warn("driver: record verify failed", "mission_id", m.ID, "error", err)
-				}
-				return &verifyFailure{unit: i, excerpt: excerpt}
-			}
-		}
-		if u.VerifyCmd == "" {
-			return d.markUnitPassed(ctx, m, i)
-		}
-		res, err := d.runVerify(ctx, m.ID, m.Environment, workRoot, u.VerifyCmd)
-		if err != nil {
-			return fmt.Errorf("driver: verify unit %d: %w", i, err)
-		}
-		if err := d.store.AppendEvent(ctx, m.ID, "mission.unit_verified", map[string]any{
-			"unit": i, "passed": res.Passed, "check": "verify_cmd", "exit_code": res.ExitCode, "output_sha256": res.OutputSHA256,
-		}); err != nil {
-			d.log.Warn("driver: record verify failed", "mission_id", m.ID, "error", err)
-		}
-		if !res.Passed {
-			return &verifyFailure{unit: i, excerpt: res.Excerpt}
-		}
-		return d.markUnitPassed(ctx, m, i)
-	}
-	return nil
-}
-
-// markUnitPassed persists unit as passed. It copies Units before
-// mutating — m.Spec.Units is a slice header, so writing through it
-// in place would silently mutate the caller's own Mission value too
-// (same backing array), corrupting whatever that caller does with it
-// afterward in the same round (e.g. Advance's toStepState call).
+// markUnitPassed delegates to verifier.markUnitPassed (verifier.go,
+// D-074) — kept as a Driver method since units_test.go's alias-safety
+// guard calls it directly as d.markUnitPassed.
 func (d *Driver) markUnitPassed(ctx context.Context, m Mission, unit int) error {
-	units := make([]PlanUnit, len(m.Spec.Units))
-	copy(units, m.Spec.Units)
-	units[unit].Passes = true
-	return d.store.SetSpec(ctx, m.ID, Spec{Units: units})
+	return d.verify.markUnitPassed(ctx, m, unit)
 }
 
 // packet builds the WorkPacket for the current phase/iteration
@@ -1620,18 +1254,6 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext, Attachments: m.Attachments,
 		Light: missionPolicyFor(m).skipsPlanning,
 	}, nil
-}
-
-// runVerify executes verify_cmd via the mission's sandbox container —
-// the verify-side counterpart of nativeRunner routing shell/write_file
-// through the same backend. environment (D-05x) only matters on the
-// mission's first exec, since a container's image is fixed once
-// created.
-func (d *Driver) runVerify(ctx context.Context, missionID, environment, workRoot, verifyCmd string) (VerifyResult, error) {
-	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
-		return d.sandboxExec(ctx, missionID, environment, workdir, command, timeout, out)
-	}
-	return RunVerifyWithBackend(ctx, backend, workRoot, verifyCmd)
 }
 
 func (d *Driver) recordProgress(ctx context.Context, id, text string) error {
