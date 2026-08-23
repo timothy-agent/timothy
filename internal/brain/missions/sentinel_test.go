@@ -386,3 +386,13 @@ func TestExtractTextSentinelHandoffRoundTripsThroughParseWorkerVerdict(t *testin
 		t.Fatalf("parseWorkerVerdict = %+v", v)
 	}
 }
+
+func TestParseWorkerVerdictFinalOutput(t *testing.T) {
+	v, err := parseWorkerVerdict(json.RawMessage(`{"outcome":"done","evidence":"wrote it","final_output":"# Briefing\nfull text"}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if v.FinalOutput != "# Briefing\nfull text" {
+		t.Fatalf("FinalOutput = %q", v.FinalOutput)
+	}
+}

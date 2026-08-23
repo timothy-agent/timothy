@@ -90,7 +90,7 @@ func TestWorkPacketRenderLightUsesLightPreamble(t *testing.T) {
 	if strings.Contains(system, "declared artifacts exist on disk") {
 		t.Fatalf("light system prompt still promises the artifact-check contract: %q", system)
 	}
-	if !strings.Contains(system, "delivered to the user as the result") {
+	if !strings.Contains(system, "final_output argument") {
 		t.Fatalf("light system prompt missing the deliverable framing: %q", system)
 	}
 }

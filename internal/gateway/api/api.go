@@ -286,6 +286,26 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if res.failed {
+			// Request-shape failure (noFailoverCodes): the next provider
+			// would reject the same request identically, so the chain must
+			// not advance — but the attempt still gets the same WARN +
+			// capture as a failed-over one, and the client must still see
+			// a terminal event; without it the stream just ends and the
+			// caller reports "stream ended without a terminal event" with
+			// the real reason lost entirely.
+			a.log.Warn("stream attempt failed",
+				"provider", att.ProviderName, "model", att.Model,
+				"route", req.Route, "code", res.entry.ErrorCode,
+				"reason", res.reason)
+			a.captureFailure(res.entry, req.Route, req.Purpose, att.ProviderName, att.Model, res.reason, completion)
+			a.recordAttempt(r.Context(), res.entry)
+			send(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
+				Code:    res.entry.ErrorCode,
+				Message: "provider rejected the request (" + res.entry.ErrorCode + ")",
+			}})
+			return
+		}
 		a.recordAttempt(r.Context(), res.entry)
 		return
 	}

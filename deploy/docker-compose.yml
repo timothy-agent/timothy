@@ -251,6 +251,7 @@ services:
     environment:
       <<: *db-env
       PORT: "8081"
+      GATEWAY_FAILURE_CAPTURE_DIR: ${GATEWAY_FAILURE_CAPTURE_DIR:-}
       # Root of trust for the encrypted secret store (base64, 32
       # bytes). Generate with: openssl rand -base64 32. Provider
       # credentials are configured in Settings, not env — this key is

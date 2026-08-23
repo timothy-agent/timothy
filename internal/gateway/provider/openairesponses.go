@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -112,12 +113,14 @@ type orsState struct {
 const orsDriverTag = "openai-responses"
 
 // strictSchema normalizes t's input schema for OpenAI's strict
-// function-calling mode: unmarshal, and on the TOP-LEVEL object only
-// set additionalProperties:false and required to every declared
-// property name (strict mode demands every property required). If
-// unmarshal fails or there are no properties, the schema is returned
-// unchanged and strict is false for that tool — mirrors
-// sanitizeNovaSchema's top-level-only scoping (bedrock.go).
+// function-calling mode: every object node — top level AND nested
+// (array items, $defs, anyOf/oneOf/allOf branches) — must carry
+// additionalProperties:false and list every declared property as
+// required, or the API rejects the whole request with http_400
+// ("'additionalProperties' is required to be supplied and to be
+// false" naming the nested context). If unmarshal fails or the top
+// level has no properties, the schema is returned unchanged and
+// strict is false for that tool.
 func strictSchema(raw json.RawMessage) (json.RawMessage, bool) {
 	if len(raw) == 0 {
 		return raw, false
@@ -130,17 +133,50 @@ func strictSchema(raw json.RawMessage) (json.RawMessage, bool) {
 	if !ok || len(props) == 0 {
 		return raw, false
 	}
-	required := make([]string, 0, len(props))
-	for k := range props {
-		required = append(required, k)
-	}
-	m["additionalProperties"] = false
-	m["required"] = required
+	strictify(m)
 	out, err := json.Marshal(m)
 	if err != nil {
 		return raw, false
 	}
 	return out, true
+}
+
+// strictify walks a schema node applying strict-mode object rules at
+// every depth.
+func strictify(node map[string]any) {
+	if props, ok := node["properties"].(map[string]any); ok {
+		required := make([]string, 0, len(props))
+		for k := range props {
+			required = append(required, k)
+		}
+		sort.Strings(required)
+		node["additionalProperties"] = false
+		node["required"] = required
+		for _, v := range props {
+			if child, ok := v.(map[string]any); ok {
+				strictify(child)
+			}
+		}
+	}
+	if items, ok := node["items"].(map[string]any); ok {
+		strictify(items)
+	}
+	if defs, ok := node["$defs"].(map[string]any); ok {
+		for _, v := range defs {
+			if child, ok := v.(map[string]any); ok {
+				strictify(child)
+			}
+		}
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if branches, ok := node[key].([]any); ok {
+			for _, v := range branches {
+				if child, ok := v.(map[string]any); ok {
+					strictify(child)
+				}
+			}
+		}
+	}
 }
 
 // imageInputParts builds the input_image content parts for a user
@@ -205,7 +241,16 @@ func appendMessage(items []orsInputItem, m Message) []orsInputItem {
 		}
 		return items
 	default:
-		return append(items, messageItem(m))
+		item := messageItem(m)
+		if len(item.Content) == 0 {
+			// The Responses API rejects a message item with no content
+			// ("Missing required parameter: 'input[N].content'"). An
+			// empty assistant entry is a real history shape — a
+			// tool-call-only reply whose text the loop recorded as "" —
+			// so drop the item instead of failing the whole request.
+			return items
+		}
+		return append(items, item)
 	}
 }
 

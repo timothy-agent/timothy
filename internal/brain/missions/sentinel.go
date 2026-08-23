@@ -49,6 +49,10 @@ func MissionStatusTool() *tools.Tool {
 				"handoff": {
 					"type": "string",
 					"description": "Optional: a concise note to the next worker session — current state of the work, what remains, and any gotchas discovered. This is the ONLY context the next session receives besides the plan and git log, so include anything it must know."
+				},
+				"final_output": {
+					"type": "string",
+					"description": "Required for done on a light mission: the COMPLETE final deliverable text, verbatim — this is what the user receives and what destinations deliver. Never a summary of the deliverable; the deliverable itself."
 				}
 			},
 			"required": ["outcome"]
@@ -152,6 +156,14 @@ type WorkerVerdict struct {
 	Analysis string
 	Question string
 	Handoff  string
+	// FinalOutput is the mission_status call's own final_output argument
+	// — the deliverable a light-mission worker carries in the sentinel
+	// itself (D-069). Reasoning models routinely produce tool calls with
+	// no plain assistant text at all, so free-text capture (FinalMessage
+	// below) can come back empty; the schema field is the reliable
+	// carrier. json tag needed because Go's case-insensitive field match
+	// doesn't cross the underscore.
+	FinalOutput string `json:"final_output"`
 	// Forced marks a verdict the runner fabricated because NEITHER a
 	// tool call NOR a text-form sentinel (extractTextSentinel) could be
 	// found after the recovery re-run — set true ONLY on that path
@@ -192,7 +204,7 @@ func parseWorkerVerdict(args json.RawMessage) (WorkerVerdict, error) {
 // the only fields WorkerVerdict/ReviewVerdict-parsing code ever reads
 // are these.
 var sentinelAttrs = map[string][]string{
-	missionStatusToolName: {"outcome", "evidence", "analysis", "question", "handoff"},
+	missionStatusToolName: {"outcome", "evidence", "analysis", "question", "handoff", "final_output"},
 	reviewVerdictToolName: {"decision"},
 	exploreNotesToolName:  {"findings"},
 }

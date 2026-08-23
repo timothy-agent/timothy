@@ -1050,7 +1050,14 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			// the whole multi-turn transcript (text) — fall back to text
 			// only when a worker never wrote anything after its last tool
 			// call (e.g. it called a tool, then immediately mission_status).
-			finalOutput := verdict.FinalMessage
+			// Priority: the sentinel's own final_output argument (the
+			// reliable carrier — reasoning models often emit tool calls
+			// with no plain text at all), then the free-text segment,
+			// then the whole transcript.
+			finalOutput := verdict.FinalOutput
+			if finalOutput == "" {
+				finalOutput = verdict.FinalMessage
+			}
 			if finalOutput == "" {
 				finalOutput = text
 			}

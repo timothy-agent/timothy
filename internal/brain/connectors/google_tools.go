@@ -468,10 +468,10 @@ func (s *googleSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
 		Name:        "calendar_list_events",
 		ReadOnly:    true,
-		Description: "List events from the connected Google Calendar (primary calendar). time_min/time_max are RFC3339 timestamps; both default to the next 7 days. Returns start, end, summary, and location per event.",
+		Description: "List events from the connected Google Calendar (primary calendar). Omit time_min/time_max for the default window — the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, summary, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"time_min":{"type":"string","description":"RFC3339, e.g. 2026-07-21T00:00:00Z"},
-			"time_max":{"type":"string","description":"RFC3339"},
+			"time_min":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
+			"time_max":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
 			"max_results":{"type":"integer","minimum":1,"maximum":50}
 		},"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {

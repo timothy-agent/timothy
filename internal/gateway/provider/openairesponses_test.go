@@ -487,3 +487,80 @@ func TestOpenAIResponsesStaleStateRetry(t *testing.T) {
 		t.Fatalf("last = %v, want done", lastType(t, events))
 	}
 }
+
+func TestStrictSchemaNestedObjects(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"summary": {"type": "string"},
+			"units": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"title": {"type": "string"},
+						"artifacts": {"type": "array", "items": {"type": "string"}},
+						"verify": {"type": "object", "properties": {"cmd": {"type": "string"}}}
+					}
+				}
+			}
+		}
+	}`)
+	out, strict := strictSchema(raw)
+	if !strict {
+		t.Fatal("want strict=true")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertStrictNode := func(path string, node map[string]any, wantRequired []string) {
+		t.Helper()
+		if ap, ok := node["additionalProperties"].(bool); !ok || ap {
+			t.Fatalf("%s: additionalProperties = %v, want false", path, node["additionalProperties"])
+		}
+		req, _ := node["required"].([]any)
+		if len(req) != len(wantRequired) {
+			t.Fatalf("%s: required = %v, want %v", path, req, wantRequired)
+		}
+		for i, want := range wantRequired {
+			if req[i] != want {
+				t.Fatalf("%s: required[%d] = %v, want %v", path, i, req[i], want)
+			}
+		}
+	}
+	assertStrictNode("top", m, []string{"summary", "units"})
+	units := m["properties"].(map[string]any)["units"].(map[string]any)
+	items := units["items"].(map[string]any)
+	assertStrictNode("units.items", items, []string{"artifacts", "title", "verify"})
+	verify := items["properties"].(map[string]any)["verify"].(map[string]any)
+	assertStrictNode("units.items.verify", verify, []string{"cmd"})
+	// The string-items array must NOT gain object keys.
+	artifacts := items["properties"].(map[string]any)["artifacts"].(map[string]any)
+	strItems := artifacts["items"].(map[string]any)
+	if _, ok := strItems["additionalProperties"]; ok {
+		t.Fatal("string items must not gain additionalProperties")
+	}
+}
+
+func TestStrictSchemaNoPropertiesStaysLoose(t *testing.T) {
+	raw := json.RawMessage(`{"type": "object"}`)
+	out, strict := strictSchema(raw)
+	if strict {
+		t.Fatal("want strict=false for schema without properties")
+	}
+	if string(out) != `{"type": "object"}` {
+		t.Fatalf("schema changed: %s", out)
+	}
+}
+
+func TestAppendMessageDropsEmptyMessage(t *testing.T) {
+	items := appendMessage(nil, Message{Role: "assistant", Content: ""})
+	if len(items) != 0 {
+		t.Fatalf("empty assistant message must be dropped, got %d items", len(items))
+	}
+	items = appendMessage(nil, Message{Role: "user", Content: "hi"})
+	if len(items) != 1 || len(items[0].Content) != 1 {
+		t.Fatalf("non-empty message must map to one item, got %+v", items)
+	}
+}
