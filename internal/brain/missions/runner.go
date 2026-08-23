@@ -1096,7 +1096,7 @@ func parseSpec(raw string) (Spec, error) {
 	if shPath, err := exec.LookPath("/bin/sh"); err == nil {
 		for _, u := range spec.Units {
 			shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			out, err := exec.CommandContext(shCtx, shPath, "-n", "-c", u.VerifyCmd).CombinedOutput()
+			out, err := exec.CommandContext(shCtx, shPath, "-n", "-c", u.VerifyCmd).CombinedOutput() //nolint:gosec // G204: shPath is LookPath("/bin/sh"); -n parses only, never executes
 			cancel()
 			if err != nil {
 				stderr := strings.TrimSpace(string(out))
