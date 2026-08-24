@@ -418,6 +418,26 @@ func (s *Store) AppendProgress(ctx context.Context, id, note string) error {
 	return tx.Commit(ctx)
 }
 
+// Progress reads back one mission's live progress log: a narrower
+// query than Get (just the progress column), used by nativeRunner's
+// mid-run steering poll (missions.ProgressReader) so an in-flight
+// worker turn can see an operator note posted after it started.
+func (s *Store) Progress(ctx context.Context, id string) ([]ProgressNote, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("missions progress: %w", err)
+	}
+	var raw []byte
+	if err := db.QueryRow(ctx, `SELECT progress FROM missions WHERE id = $1`, id).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("missions progress: %w", err)
+	}
+	var notes []ProgressNote
+	if err := json.Unmarshal(raw, &notes); err != nil {
+		return nil, fmt.Errorf("missions progress: %w", err)
+	}
+	return notes, nil
+}
+
 // SetPendingPermission records a mission's turn parking on a tool-call
 // permission prompt (loop.PermBroker id plus the detail the UI needs
 // to render a real decision, not a bare "waiting" banner). Independent

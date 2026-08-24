@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS memories (
     -- memories unretrieved for 180d) — this is NOT last_confirmed_at,
     -- which only explicit confirmation or re-extraction may bump
     -- (D-011).
-    last_retrieved_at timestamptz
+    last_retrieved_at timestamptz,
+    -- Usage-driven decay bookkeeping (memory-extraction-v2 slice 5):
+    -- how many times retrieval has returned this memory. Metadata
+    -- bookkeeping, not a fact UPDATE (D-011); memory content stays
+    -- supersede-only.
+    retrieval_hits    integer NOT NULL DEFAULT 0
 );
 
 -- m/ef_construction over pgvector defaults (16/64): better recall at

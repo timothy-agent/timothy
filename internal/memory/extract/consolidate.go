@@ -38,6 +38,15 @@ const (
 	reflectMaxEpisodics = 200
 	reflectWindow       = 7 * 24 * time.Hour
 
+	// unusedDemoteAfter: pending memories never retrieved and never
+	// confirmed are noise past this age (memory-extraction-v2 slice 5).
+	unusedDemoteAfter = 60 * 24 * time.Hour
+	// unusedDemoteConfidence: only low-confidence pendings demote - a
+	// high-confidence fact still unconfirmed is a queue-hygiene problem
+	// (slice 3's TTL), not a usage problem.
+	unusedDemoteConfidence = autoPromoteConfidence
+	demoteBatch            = 50 // stalest per run; a queue, not a flood
+
 	// mergeGuard thresholds. A guard false positive only keeps a
 	// near-dup group as-is (extraction already tolerates that state)
 	// and retries next pass with a fresh LLM sample; a false negative
@@ -60,6 +69,7 @@ type ConsolidateStore interface {
 	ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error)
 	DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error)
 	RecentEpisodic(ctx context.Context, since time.Time, limit int) ([]store.Memory, error)
+	DemoteUnused(ctx context.Context, olderThan time.Time, confidenceBelow float64, limit int) ([]string, error)
 }
 
 // Metrics counts every consolidation action; any counter may be nil
@@ -69,6 +79,7 @@ type Metrics struct {
 	Rejects  *prometheus.CounterVec // reason: token_loss|shrink|bloat|conflict|error
 	Archived prometheus.Counter
 	Decayed  prometheus.Counter
+	Demoted  prometheus.Counter
 }
 
 // Summary counts one Run pass. RunLoop discards it; the manual
@@ -79,11 +90,12 @@ type Summary struct {
 	Archived  int `json:"archived"`
 	Decayed   int `json:"decayed"`
 	Reflected int `json:"reflected"`
+	Demoted   int `json:"demoted"`
 }
 
 // Consolidator is the daily lifecycle job (D-011): merge near-dup
 // groups, archive unused episodic memories, decay unconfirmed
-// semantic facts.
+// semantic facts, demote unused pending memories.
 type Consolidator struct {
 	gw      Gateway
 	store   ConsolidateStore
@@ -158,6 +170,12 @@ func (c *Consolidator) Run(ctx context.Context) (Summary, error) {
 
 	reflected, err := c.reflect(ctx)
 	summary.Reflected = reflected
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+
+	demoted, err := c.demoteUnused(ctx)
+	summary.Demoted = demoted
 	if err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -446,6 +464,25 @@ func (c *Consolidator) decayStale(ctx context.Context) (int, error) {
 		c.log.Info("stale semantic facts decayed; queued for reconfirmation", "count", len(ids))
 		if c.metrics.Decayed != nil {
 			c.metrics.Decayed.Add(float64(len(ids)))
+		}
+	}
+	return len(ids), nil
+}
+
+// demoteUnused closes out pending memories nobody ever retrieved or
+// confirmed (memory-extraction-v2 slice 5): retrieval usage, not
+// extraction confidence, is what proves a memory's value. Reinforced
+// or ever-retrieved memories are immune - the store query filters on
+// retrieval_hits and status directly.
+func (c *Consolidator) demoteUnused(ctx context.Context) (int, error) {
+	ids, err := c.store.DemoteUnused(ctx, time.Now().Add(-unusedDemoteAfter), unusedDemoteConfidence, demoteBatch)
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) > 0 {
+		c.log.Info("unused pending memories demoted", "count", len(ids))
+		if c.metrics.Demoted != nil {
+			c.metrics.Demoted.Add(float64(len(ids)))
 		}
 	}
 	return len(ids), nil

@@ -1173,7 +1173,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	workRoot := m.WorkRoot()
 	packet := ReviewPacket{
 		Goal: m.Goal, Plan: m.Spec, Diff: diff, Evidence: m.LastEvidence,
-		Listing: ListWorkspace(workRoot),
+		Listing: ListWorkspace(workRoot), Progress: m.Progress,
 	}
 	if unit, _ := currentUnit(m.Spec); unit != nil {
 		packet.UnitTitle = unit.Title

@@ -893,6 +893,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	if conns != nil {
 		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
 	}
+	nativeRunner.SetProgressReader(store)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch — resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,

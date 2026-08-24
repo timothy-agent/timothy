@@ -296,6 +296,15 @@ type Request struct {
 	// answers everything the turn needed; empty means today's behavior
 	// (always continue).
 	EndTurnTools []string
+
+	// Steering, when set, is polled once per iteration at the top of
+	// every model round after the first; each returned string is
+	// appended to Messages as a user-role message before that round's
+	// call. Lets an operator note posted while a turn is mid-flight
+	// reach the SAME turn instead of only the next one. Empty result is
+	// a no-op. nil for every caller but mission worker turns: the loop
+	// itself knows nothing about missions.
+	Steering func(ctx context.Context) []string
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -412,6 +421,11 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	hint := req.ModelHint
 
 	for step := 1; ; step++ {
+		if step > 1 && req.Steering != nil {
+			for _, note := range req.Steering(ctx) {
+				msgs = append(msgs, provider.Message{Role: "user", Content: note})
+			}
+		}
 		directive := tools.CeilingFor(step, a.maxSteps)
 		// A model retrying the same call over and over (e.g. hoping a
 		// search tool will "book" something on a later attempt) forces

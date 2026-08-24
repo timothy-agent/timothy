@@ -50,10 +50,15 @@ type consolidateStore struct {
 	pairs    [][2]string
 	archived int64
 	decayed  []string
+	demoted  []string
 
 	applyMergeErr  error
 	superseded     map[string]string
 	recentEpisodic []store.Memory
+}
+
+func (s *consolidateStore) DemoteUnused(context.Context, time.Time, float64, int) ([]string, error) {
+	return s.demoted, nil
 }
 
 func (s *consolidateStore) RecentEpisodic(context.Context, time.Time, int) ([]store.Memory, error) {
@@ -343,5 +348,37 @@ func TestConsolidatorReflect(t *testing.T) {
 	c3 := NewConsolidator(gw2, st, testLog(), Metrics{})
 	if s, err := c3.Run(t.Context()); err != nil || s.Reflected != 0 {
 		t.Fatalf("unwired reflector: %+v err=%v", s, err)
+	}
+}
+
+// TestConsolidateDemotesUnused checks that Run surfaces whatever the
+// store's DemoteUnused selects into Summary.Demoted - the selection
+// logic itself (eligible vs immune rows) lives in the store's own
+// query and is covered by the store integration test.
+func TestConsolidateDemotesUnused(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{}
+	st := &consolidateStore{demoted: []string{"m1", "m2"}}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.Demoted != 2 {
+		t.Fatalf("Demoted = %d, want 2", summary.Demoted)
+	}
+}
+
+func TestConsolidateDemotesNothing(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{}
+	st := &consolidateStore{}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.Demoted != 0 {
+		t.Fatalf("Demoted = %d, want 0", summary.Demoted)
 	}
 }

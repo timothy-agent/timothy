@@ -175,9 +175,12 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 	return rows.Err()
 }
 
-// MarkRetrieved stamps last_retrieved_at on the returned memories so
-// the consolidation job can see what is actually used. Deliberately
-// NOT last_confirmed_at (D-011). Failures only log — retrieval
+// MarkRetrieved stamps last_retrieved_at and bumps retrieval_hits on
+// the returned memories so the consolidation job can see what is
+// actually used (archival window and usage-driven decay,
+// memory-extraction-v2 slice 5). This is metadata bookkeeping,
+// deliberately NOT a supersede or last_confirmed_at bump (D-011);
+// memory content stays supersede-only. Failures only log — retrieval
 // already succeeded.
 func (s *Searcher) MarkRetrieved(ctx context.Context, ids []string) {
 	if len(ids) == 0 {
@@ -189,7 +192,9 @@ func (s *Searcher) MarkRetrieved(ctx context.Context, ids []string) {
 		return
 	}
 	if _, err := db.Exec(ctx,
-		`UPDATE memories SET last_retrieved_at = now() WHERE id = ANY($1)`, ids); err != nil {
+		`UPDATE memories SET last_retrieved_at = now(),
+			retrieval_hits = retrieval_hits + 1
+			WHERE id = ANY($1)`, ids); err != nil {
 		s.log.Warn("mark retrieved failed", "error", err, "ids", strings.Join(ids, ","))
 	}
 }
