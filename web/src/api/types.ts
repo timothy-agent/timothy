@@ -549,9 +549,11 @@ export interface TestResult {
 }
 
 // AvailableModel is one model reported by a provider's own listing
-// endpoint (GET /v1/admin/providers/:id/models).
+// endpoint (GET /v1/admin/providers/:id/models). display_name is set
+// only by drivers whose listing endpoint reports one (cursor-cli).
 export interface AvailableModel {
   id: string
+  display_name?: string
 }
 
 // AdminAgent is one row of the agent registry (D-034): who serves a

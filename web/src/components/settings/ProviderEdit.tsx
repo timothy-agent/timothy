@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
+  availableModels,
   catalogModelsForProvider,
   deleteProvider,
   deleteSecret,
@@ -589,19 +590,42 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
   const [saving, setSaving] = useState(false)
   // Cursor has its own model slug namespace (not the Claude Code CLI's
   // aliases, and not filed under any catalog provider), so its picker
-  // gets no alias pinning and no catalog-backed suggestions: a free
-  // text field, same posture an unrecognized preset gets.
+  // gets no alias pinning and no catalog-backed suggestions. Instead it
+  // fetches Cursor's own live model list (below).
   const isCursor = provider.driver === 'cursor-cli'
 
   const search = useCallback((q: string) => catalogModelsForProvider(provider.id, q), [provider.id])
   const catalogModels = useCatalogSearch(defaultModel, search)
+
+  // cursorModels is Cursor's own live list (GET .../providers/:id/models,
+  // gateway-cached ~5min). Fetched once per provider id; failures or an
+  // empty list just fall back to free text, no error toast, since this is
+  // an advisory suggestion list, not a required lookup.
+  const [cursorModels, setCursorModels] = useState<ModelSuggestion[]>([])
+  useEffect(() => {
+    if (!isCursor) return
+    let cancelled = false
+    availableModels(provider.id).then(
+      (models) => {
+        if (!cancelled) {
+          setCursorModels(models.map((m) => ({ id: m.id, name: m.display_name })))
+        }
+      },
+      () => {
+        if (!cancelled) setCursorModels([])
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [isCursor, provider.id])
 
   useEffect(() => {
     setDefaultModel(provider.default_model)
   }, [provider.default_model])
 
   const suggestions: ModelSuggestion[] = useMemo(() => {
-    if (isCursor) return []
+    if (isCursor) return cursorModels
     const seen = new Map<string, ModelSuggestion>(cliModelAliases.map((a) => [a, { id: a }]))
     for (const m of catalogModels) {
       const id = catalogRowID(m)
@@ -614,7 +638,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
       }
     }
     return [...seen.values()]
-  }, [catalogModels, isCursor])
+  }, [catalogModels, isCursor, cursorModels])
 
   const saveDefaultModel = async (v: string) => {
     const trimmed = v.trim()

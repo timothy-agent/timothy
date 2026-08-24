@@ -9,8 +9,11 @@ import (
 
 // AvailableModel is one model reported by a provider's listing
 // endpoint. Only the id is normalized; providers disagree on the rest.
+// DisplayName is set only by drivers whose listing endpoint reports one
+// (cursor-cli); empty for the rest.
 type AvailableModel struct {
-	ID string `json:"id"`
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // ModelLister is implemented by providers whose API can enumerate its

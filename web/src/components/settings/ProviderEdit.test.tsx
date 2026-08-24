@@ -5,6 +5,7 @@ import type { AdminProvider } from '../../api/types'
 import { ProviderEdit } from './ProviderEdit'
 
 vi.mock('../../api/client', () => ({
+  availableModels: vi.fn(),
   catalogModelsForProvider: vi.fn(),
   deleteProvider: vi.fn(),
   deleteSecret: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('../../api/client', () => ({
 }))
 
 import {
+  availableModels,
   catalogModelsForProvider,
   listProviders,
   listSecretBackends,
@@ -54,6 +56,18 @@ const cliProvider: AdminProvider = {
   enabled: true,
 }
 
+const cursorProvider: AdminProvider = {
+  id: 'p4',
+  name: 'Cursor',
+  kind: 'cli',
+  driver: 'cursor-cli',
+  base_url: '',
+  default_model: '',
+  credential_ref: 'cursor-subscription',
+  headers: {},
+  enabled: true,
+}
+
 const openaicompatProvider: AdminProvider = {
   id: 'p2',
   name: 'Ollama',
@@ -83,6 +97,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
   vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+  vi.mocked(availableModels).mockResolvedValue([])
   vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
   vi.mocked(listSecretBackends).mockResolvedValue([
     { backend: 'db', configured: true, default: true },
@@ -231,6 +246,38 @@ describe('ProviderEdit cli (subscription) provider', () => {
 
     await screen.findByText('Claude Code')
     expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
+  })
+})
+
+describe('ProviderEdit cursor-cli provider', () => {
+  it('offers cursor\'s live model list as suggestions', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cursorProvider])
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'composer-2.5', display_name: 'Composer 2.5' },
+      { id: 'sonic' },
+    ])
+    renderPage('p4')
+
+    const input = await screen.findByPlaceholderText('composer-2.5')
+    await waitFor(() => expect(availableModels).toHaveBeenCalledWith('p4'))
+    fireEvent.focus(input)
+
+    expect(await screen.findByRole('option', { name: /Composer 2\.5/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /^sonic/ })).toBeInTheDocument()
+  })
+
+  it('falls back to free text with no error toast when the fetch fails', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cursorProvider])
+    vi.mocked(availableModels).mockRejectedValue(new Error('502'))
+    renderPage('p4')
+
+    const input = await screen.findByPlaceholderText('composer-2.5')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'anything' } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p4', { default_model: 'anything' }))
+    expect(screen.queryByText(/could not/i)).not.toBeInTheDocument()
   })
 })
 

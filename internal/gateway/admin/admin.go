@@ -502,6 +502,9 @@ func validateHarnessWireFormat(harness, driver string, opts map[string]string) e
 	if !known {
 		return nil
 	}
+	if len(accepted) == 0 {
+		return fmt.Errorf("harness %q only runs on its own cli provider row", harness)
+	}
 	overrideOK := accepted["anthropic"] && opts["anthropic_base_url"] != ""
 	if !accepted[driver] && !overrideOK {
 		return fmt.Errorf("harness %q requires driver in %v or options.anthropic_base_url", harness, sortedDrivers(accepted))
@@ -1319,11 +1322,20 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 
 // AvailableModels proxies the provider's own model-listing endpoint.
 // Drivers that cannot enumerate models (bedrock) return an error the
-// UI turns into its manual-entry fallback.
+// UI turns into its manual-entry fallback. kind='cli' rows never build
+// a chat driver (D-051, BuildSnapshot skips them entirely) so they
+// never reach the serving snapshot below; cursor-cli is the one cli
+// driver with a listing endpoint of its own, called directly.
 func (a *Admin) AvailableModels(ctx context.Context, id string) ([]provider.AvailableModel, error) {
 	p, err := a.get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if p.Kind == "cli" {
+		if p.Driver != "cursor-cli" {
+			return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
+		}
+		return a.cursorAvailableModels(ctx, p)
 	}
 	snap := a.store.Snapshot()
 	if snap == nil {
@@ -1479,6 +1491,10 @@ var (
 	ErrNotFound    = fmt.Errorf("not found")
 	ErrInUse       = fmt.Errorf("in use")
 	ErrUnsupported = fmt.Errorf("unsupported")
+	// ErrUpstream marks a failure reaching a third-party API the gateway
+	// itself calls out to (e.g. Cursor's model listing): a 502, not a
+	// 400, since the request was fine but the upstream wasn't reachable.
+	ErrUpstream = fmt.Errorf("upstream unavailable")
 )
 
 func (a *Admin) get(ctx context.Context, id string) (Provider, error) {
