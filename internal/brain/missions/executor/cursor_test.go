@@ -238,7 +238,7 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 	}{
 		{
 			name: "basic",
-			spec: InvocationSpec{
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
 				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
 				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
 			},
@@ -259,7 +259,7 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 		},
 		{
 			name: "config file carries attribution flags disabled",
-			spec: InvocationSpec{
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
 				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md",
 				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
 			},
@@ -282,7 +282,7 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 		},
 		{
 			name: "allow/deny tools map into permissions",
-			spec: InvocationSpec{
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
 				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md",
 				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
 				AllowTools: []string{"Write", "Read"}, DenyTools: []string{"Bash(git push:*)"},
