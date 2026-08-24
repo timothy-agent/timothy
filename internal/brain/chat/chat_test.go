@@ -275,6 +275,58 @@ func TestChatPersistsTurnAsEvents(t *testing.T) {
 	}
 }
 
+// TestChatSegmentsTextAcrossToolActivity confirms text chunks from
+// consecutive agent-loop steps, separated by tool activity, persist as
+// distinct UI blocks joined by "\n\n" rather than fusing byte-for-byte
+// ("...area.I'm searching for...").
+func TestChatSegmentsTextAcrossToolActivity(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: []stream.StreamEvent{
+		{Type: stream.EventChunk, Text: "exact nature area."},
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "call_1", Name: "web_search", Status: "ok"}},
+		{Type: stream.EventChunk, Text: "I'm searching for"},
+		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led"}},
+	}}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "the question"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	events := drain(t, ch)
+
+	var streamed strings.Builder
+	for _, ev := range events {
+		if ev.Type == stream.EventChunk {
+			streamed.WriteString(ev.Text)
+		}
+	}
+	if got := streamed.String(); got != "exact nature area.\n\nI'm searching for" {
+		t.Fatalf("streamed text = %q", got)
+	}
+
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+	stored, _ := log.Events(t.Context(), "s1")
+	var turn session.AssistantTurn
+	if err := json.Unmarshal(stored[2].Payload, &turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	if turn.LLM.Message != "exact nature area.\n\nI'm searching for" {
+		t.Fatalf("turn.LLM.Message = %q", turn.LLM.Message)
+	}
+	var textBlocks []string
+	for _, b := range turn.UI.Blocks {
+		if b.Type == "text" {
+			textBlocks = append(textBlocks, b.Text)
+		}
+	}
+	want := []string{"exact nature area.", "I'm searching for"}
+	if !slices.Equal(textBlocks, want) {
+		t.Fatalf("text blocks = %v, want %v", textBlocks, want)
+	}
+}
+
 // TestChatPersistsTurnCost confirms the persisted assistant_turn
 // carries the gateway's cost attribution (D-013: cost is priced or
 // absent, never guessed) exactly as the done-frame meta reported it.
