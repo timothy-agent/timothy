@@ -90,7 +90,7 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
         for (const b of item.blocks ?? []) {
           // An empty block serializes without its text key (omitempty);
           // naive concat would render a literal "undefined".
-          if (b.type === 'text') text += b.text ?? ''
+          if (b.type === 'text') text += (text && b.text ? '\n\n' : '') + (b.text ?? '')
           else if (b.type === 'reasoning') reasoning += b.text ?? ''
         }
         const tools = pendingTools.map((p) => toToolRun(p.tool))
