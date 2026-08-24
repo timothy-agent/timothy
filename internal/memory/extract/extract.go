@@ -1,6 +1,6 @@
 // Package extract turns raw conversation turns into staged long-term
-// memories (D-011). One mini LLM call proposes atomic facts; code —
-// never the model — validates them, deduplicates against active
+// memories (D-011). One mini LLM call proposes atomic facts; code -
+// never the model - validates them, deduplicates against active
 // memories, resolves entities, and decides promotion. Extraction is
 // best-effort by contract: a failure must never fail or delay the
 // user-facing turn.
@@ -51,7 +51,7 @@ const (
 
 	// nearDupSimilarity marks a candidate as restating known
 	// knowledge; exactDupSimilarity (or byte-equal content) drops it
-	// outright. Near-dups still insert — the consolidation job merges
+	// outright. Near-dups still insert - the consolidation job merges
 	// them by the same similarity measure.
 	nearDupSimilarity  = 0.95
 	exactDupSimilarity = 0.99
@@ -63,17 +63,26 @@ const (
 
 // system demands strict JSON. Content must be self-contained: absolute
 // dates, no pronouns that need surrounding context.
-const system = `You extract durable facts from a conversation excerpt for an AI assistant's long-term memory. Reply with ONLY a JSON array — no prose, no markdown fences:
+const system = `You extract durable facts from a conversation excerpt for an AI assistant's long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
-Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic — even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation — facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss (documentation facts, quiz answers, how a technology works) is false. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
+Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic - even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation - facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss (documentation facts, quiz answers, how a technology works) is false. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
 
 // missionSystem is the mission-digest extraction contract. The input
-// is a mission's OutcomeDigest — goal, title, kind, unit statuses —
+// is a mission's OutcomeDigest - goal, title, kind, unit statuses -
 // which is a RECORD, not knowledge: everything in its header lines
 // already lives in the missions table. Only deltas qualify.
-const missionSystem = `You extract durable facts from a completed background mission's outcome digest for an AI assistant's long-term memory. Reply with ONLY a JSON array — no prose, no markdown fences:
+const missionSystem = `You extract durable facts from a completed background mission's outcome digest for an AI assistant's long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
-Set changes_behavior true only when knowing the fact would change how the assistant acts in a future conversation. ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state — those are bookkeeping the system already stores, not knowledge. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
+Set changes_behavior true only when knowing the fact would change how the assistant acts in a future conversation. ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state - those are bookkeeping the system already stores, not knowledge. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
+
+// reflectionSystem is the consolidation reflection contract: distill
+// recurring patterns across recent episodic memories into rare,
+// cross-cutting semantic insights - the slow-learning half of the
+// episodic/semantic split (memory-extraction-v2 plan, slice 4). The
+// episodics themselves stay; this only proposes what they add up to.
+const reflectionSystem = `You are reviewing an AI assistant's recent episodic memories (things that happened) to distill durable insights for long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
+[{"type":"semantic","content":"one atomic self-contained insight","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
+An insight qualifies ONLY when a RECURRING pattern across several distinct episodes reveals something durable no single episode states: a habit, a recurring problem, a stable preference, a relationship between things the user deals with repeatedly. Propose at most 3 insights per review, each grounded in at least 2 separate episodes. Never restate a single episode, never summarize the list, never propose general knowledge. An empty array is the expected common answer.`
 
 // Request is one extraction job: text from a completed turn or from
 // turns about to be compacted away.
@@ -81,7 +90,7 @@ type Request struct {
 	SessionID string `json:"session_id"`
 	SourceSeq int64  `json:"source_seq"`
 	Text      string `json:"text"`
-	// Route overrides sideRoute for this job's LLM call — set by the
+	// Route overrides sideRoute for this job's LLM call - set by the
 	// caller when the source turn/session executed a sensitive tool, so
 	// extraction honors the same route floor the tool loop already
 	// pinned the turn to instead of falling back to sideRoute's cloud
@@ -89,7 +98,7 @@ type Request struct {
 	Route string `json:"route,omitempty"`
 	// Source names what produced Text: "chat" (default), "mission"
 	// (a terminal mission's OutcomeDigest), or "compaction". Mission
-	// digests get their own extraction contract — the generic prompt
+	// digests get their own extraction contract - the generic prompt
 	// dutifully extracted the digest's own goal/title/kind header
 	// lines as "facts", flooding the confirmation queue with
 	// restatements of things the missions table already records.
@@ -140,12 +149,12 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 		if f.ChangesBehavior != nil && !*f.ChangesBehavior {
 			// The model itself judged this fact wouldn't change future
 			// behavior (general knowledge the conversation happened to
-			// touch) — the utility gate drops it before it can queue.
+			// touch) - the utility gate drops it before it can queue.
 			e.log.Info("memory dropped by utility gate", "session_id", req.SessionID)
 			continue
 		}
 		if echoesDeny(f.Content, deny) {
-			// The model restated the digest's own goal/title header —
+			// The model restated the digest's own goal/title header -
 			// bookkeeping the missions table already records, never a
 			// memory. Code enforces what the prompt asks for (D-011).
 			e.log.Info("memory dropped as source-header echo", "session_id", req.SessionID)
@@ -230,8 +239,11 @@ func (e *Extractor) proposeOnce(ctx context.Context, req Request) (string, error
 		route = req.Route
 	}
 	sys := system
-	if req.Source == "mission" {
+	switch req.Source {
+	case "mission":
 		sys = missionSystem
+	case "reflection":
+		sys = reflectionSystem
 	}
 	events, err := e.gw.Stream(ctx, gwclient.StreamRequest{
 		Route: route,
@@ -288,7 +300,7 @@ var validEntityTypes = map[string]bool{
 
 // ParseFacts decodes the model's reply strictly: fences stripped,
 // unknown fields rejected, every enum and range checked. One bad fact
-// rejects the whole batch — a model that hallucinates structure once
+// rejects the whole batch - a model that hallucinates structure once
 // gets its retry, not partial trust.
 func ParseFacts(raw string) ([]Fact, error) {
 	text := strings.TrimSpace(raw)
@@ -331,7 +343,7 @@ func ParseFacts(raw string) ([]Fact, error) {
 // sensitive marks content that must never skip the confirmation queue
 // regardless of type or confidence: credentials-adjacent topics and
 // standing-instruction phrasing. The list is deliberately broad in
-// the directive direction — a false positive only queues an innocent
+// the directive direction - a false positive only queues an innocent
 // fact for confirmation, a false negative activates an instruction
 // without review. Keyword matching can never be complete; the fence
 // (D-011 trust="data") is the containment for what slips through.
@@ -341,7 +353,7 @@ var sensitive = regexp.MustCompile(`(?i)` +
 	`must |shall |should |do not |don't |ensure |make sure |` +
 	`from now on|going forward|all future`)
 
-// AutoPromote is the promotion policy — code, not LLM (D-011).
+// AutoPromote is the promotion policy - code, not LLM (D-011).
 // Episodic observations with high confidence activate directly;
 // semantic and procedural facts (preferences, identity, standing
 // instructions live here) always wait for the user, as does anything

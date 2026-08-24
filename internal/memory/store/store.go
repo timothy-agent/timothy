@@ -1,7 +1,7 @@
 // Package store persists Timothy's long-term memories (D-011). Writes
 // are staged: agent-extracted facts land pending and are promoted by
 // policy or user confirmation; user-explicit facts activate directly.
-// Facts are never updated in place — corrections insert a new row and
+// Facts are never updated in place - corrections insert a new row and
 // supersede the old one.
 package store
 
@@ -116,6 +116,32 @@ func (s *Store) Get(ctx context.Context, id string) (Memory, error) {
 
 // ListByStatus returns memories in a lifecycle stage, optionally
 // narrowed to types, oldest first (queue order).
+// RecentEpisodic returns active episodic memories created since the
+// cutoff, newest first - the reflection pass's raw material.
+func (s *Store) RecentEpisodic(ctx context.Context, since time.Time, limit int) ([]Memory, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("recent episodic: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT `+memoryColumns+` FROM memories
+		WHERE status = $1 AND type = $2 AND created_at >= $3
+		ORDER BY created_at DESC LIMIT $4`,
+		StatusActive, TypeEpisodic, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent episodic: %w", err)
+	}
+	defer rows.Close()
+	var out []Memory
+	for rows.Next() {
+		m, err := scanMemory(rows)
+		if err != nil {
+			return nil, fmt.Errorf("recent episodic: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ListByStatus(ctx context.Context, status Status, types ...MemoryType) ([]Memory, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -208,11 +234,11 @@ func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string,
 
 // NearDupPairs returns every pair of active embedded memories of the
 // same type whose cosine similarity meets the threshold. The
-// consolidation job builds merge groups from these edges — a
+// consolidation job builds merge groups from these edges - a
 // semantic+episodic pair never merges, even at similarity 1.0: they
 // answer different questions (a durable fact vs. something that
 // happened) and collapsing them silently loses that distinction.
-// O(n²) join — fine for a single-user corpus; revisit if the active
+// O(n²) join - fine for a single-user corpus; revisit if the active
 // set grows past tens of thousands.
 func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]string, error) {
 	db, err := s.db.Get()
@@ -245,8 +271,8 @@ func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]strin
 // ApplyMerge inserts the consolidator's merged fact and supersedes
 // every member in a single transaction: a crash mid-sequence can no
 // longer leave the merged row active alongside still-active members
-// (D-011 double-count). The merged row activates directly — it
-// replaces confirmed knowledge — with last_confirmed_at defaulting to
+// (D-011 double-count). The merged row activates directly - it
+// replaces confirmed knowledge - with last_confirmed_at defaulting to
 // now(). Any member whose Supersede predicate no longer matches (already
 // superseded, or no longer active/pending) aborts the whole tx: the
 // merged content was computed from a stale read, and the deferred
@@ -294,7 +320,7 @@ func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (s
 }
 
 // Confirm bumps an active memory's last_confirmed_at without touching
-// its content — lifecycle metadata, not a fact UPDATE (D-011).
+// its content - lifecycle metadata, not a fact UPDATE (D-011).
 // Extraction calls it when a proposed fact turns out to be an exact
 // duplicate of an active memory: dropping the duplicate would
 // otherwise discard the confirmation signal entirely.
@@ -334,7 +360,7 @@ func (s *Store) ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (
 
 // DecayStaleSemantic multiplies confidence by factor for active
 // semantic memories unconfirmed since the cutoff and returns their
-// ids, stalest first (capped) — the reconfirmation queue. Confidence
+// ids, stalest first (capped) - the reconfirmation queue. Confidence
 // is lifecycle metadata; decaying it is not a fact UPDATE (D-011).
 func (s *Store) DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error) {
 	db, err := s.db.Get()

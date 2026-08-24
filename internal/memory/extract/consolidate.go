@@ -27,9 +27,16 @@ const (
 	decayBatch         = 10 // stalest per run; a queue, not a flood
 
 	// Reasoning models spend thinking tokens from the same budget
-	// before emitting content — 300 would starve the one-sentence
+	// before emitting content - 300 would starve the one-sentence
 	// reply the same way extraction's old 1000 cap did.
 	mergeMaxTokens = 2000
+
+	// reflection pass bounds: enough recent episodes to plausibly hold
+	// a pattern, a hard cap on how many are read, and how far back
+	// "recent" reaches.
+	reflectMinEpisodics = 10
+	reflectMaxEpisodics = 200
+	reflectWindow       = 7 * 24 * time.Hour
 
 	// mergeGuard thresholds. A guard false positive only keeps a
 	// near-dup group as-is (extraction already tolerates that state)
@@ -52,6 +59,7 @@ type ConsolidateStore interface {
 	ApplyMerge(ctx context.Context, m store.Memory, memberIDs []string) (string, error)
 	ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error)
 	DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error)
+	RecentEpisodic(ctx context.Context, since time.Time, limit int) ([]store.Memory, error)
 }
 
 // Metrics counts every consolidation action; any counter may be nil
@@ -66,10 +74,11 @@ type Metrics struct {
 // Summary counts one Run pass. RunLoop discards it; the manual
 // trigger endpoint returns it.
 type Summary struct {
-	Merged   int `json:"merged"`
-	Rejected int `json:"rejected"`
-	Archived int `json:"archived"`
-	Decayed  int `json:"decayed"`
+	Merged    int `json:"merged"`
+	Rejected  int `json:"rejected"`
+	Archived  int `json:"archived"`
+	Decayed   int `json:"decayed"`
+	Reflected int `json:"reflected"`
 }
 
 // Consolidator is the daily lifecycle job (D-011): merge near-dup
@@ -80,6 +89,19 @@ type Consolidator struct {
 	store   ConsolidateStore
 	log     Logger
 	metrics Metrics
+
+	// reflector runs the reflection pass through the Extractor's full
+	// pipeline (dedup-reinforce, utility gate, promotion policy) with
+	// the reflection contract - nil disables the pass entirely, the
+	// same nil-gated optional-dependency contract the drivers use.
+	reflector *Extractor
+}
+
+// SetReflector wires the extractor the reflection pass distills
+// episodics through - a setter because cmd/memoryd/main.go builds the
+// Extractor and Consolidator side by side.
+func (c *Consolidator) SetReflector(e *Extractor) {
+	c.reflector = e
 }
 
 // Logger is the slog surface consolidation uses.
@@ -93,7 +115,7 @@ func NewConsolidator(gw Gateway, st ConsolidateStore, log Logger, m Metrics) *Co
 }
 
 // RunLoop runs a pass every interval until ctx ends. The first pass
-// waits one interval — a restart never triggers an immediate sweep.
+// waits one interval - a restart never triggers an immediate sweep.
 func (c *Consolidator) RunLoop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -134,6 +156,12 @@ func (c *Consolidator) Run(ctx context.Context) (Summary, error) {
 		errs = append(errs, err.Error())
 	}
 
+	reflected, err := c.reflect(ctx)
+	summary.Reflected = reflected
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+
 	if len(errs) > 0 {
 		return summary, fmt.Errorf("consolidate: %s", strings.Join(errs, "; "))
 	}
@@ -164,7 +192,7 @@ func (c *Consolidator) mergeNearDups(ctx context.Context) (merged, rejected int,
 			}
 		case reject == dissolvedGroup:
 			// Fewer than 2 members were still active by the time we
-			// read them — nothing to merge, nothing to count.
+			// read them - nothing to merge, nothing to count.
 		case reject != "":
 			rejected++
 			if c.metrics.Rejects != nil {
@@ -181,7 +209,7 @@ func (c *Consolidator) mergeNearDups(ctx context.Context) (merged, rejected int,
 }
 
 // dissolvedGroup is mergeGroup's internal reject sentinel for a group
-// that no longer has 2+ active members by the time it's read — never
+// that no longer has 2+ active members by the time it's read - never
 // surfaced as a Rejects metric label, just silently skipped.
 const dissolvedGroup = "dissolved"
 
@@ -189,7 +217,7 @@ const dissolvedGroup = "dissolved"
 // guards the result, and applies the merge transactionally. An empty
 // reject string with a nil error means the merge applied; a non-empty
 // reject means the group was dissolved or the guard rejected the
-// rewrite — either way the group is kept as-is and nothing is
+// rewrite - either way the group is kept as-is and nothing is
 // counted as an error. A dissolved group (fewer than 2 active
 // members) returns (dissolvedGroup, nil) and counts nothing, same as
 // today.
@@ -254,7 +282,7 @@ func (c *Consolidator) mergeGroup(ctx context.Context, ids []string) (reject str
 
 // sigTokens lowercases s and splits it on runs of non-letter,
 // non-digit characters, keeping tokens that contain a digit (dates,
-// versions, quantities — least paraphrasable) or are at least 4 runes
+// versions, quantities - least paraphrasable) or are at least 4 runes
 // long (a cheap stopword filter).
 func sigTokens(s string) map[string]bool {
 	out := map[string]bool{}
@@ -285,7 +313,7 @@ func sigTokens(s string) map[string]bool {
 // information, else a reject reason: "token_loss", "shrink", or
 // "bloat". Accepted limitation: near-dup members already share most
 // tokens, so dropping ONE member's unique detail can still pass token
-// retention — this is a residual LLM-judge-free risk, not something
+// retention - this is a residual LLM-judge-free risk, not something
 // the guard can catch; the reject counters make persistent cases
 // visible instead.
 func mergeGuard(members []string, merged string) string {
@@ -332,7 +360,7 @@ func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (strin
 	// Always sideRoute, never a sensitive-tool route override: this
 	// merges lines from already-active memories across an unbounded,
 	// cross-session batch, not one turn/session whose sensitivity is
-	// known — there is no single caller-side sensitivity flag that
+	// known - there is no single caller-side sensitivity flag that
 	// would even apply here.
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
 		Route: sideRoute,
@@ -358,6 +386,41 @@ func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (strin
 		return "", fmt.Errorf("merge llm returned nothing")
 	}
 	return merged, nil
+}
+
+// reflect distills recurring patterns across recent episodic memories
+// into semantic insights (memory-extraction-v2 slice 4): the fast
+// per-event layer stays episodic, and this slow pass is where
+// cross-cutting semantic knowledge gets minted. The insights run
+// through the Extractor's normal pipeline - dedup reinforces instead
+// of re-inserting on repeat passes over the same episodes, the utility
+// gate drops non-behavioral output, and semantic facts land pending
+// so the user confirms them (AutoPromote never activates semantics).
+func (c *Consolidator) reflect(ctx context.Context) (int, error) {
+	if c.reflector == nil {
+		return 0, nil
+	}
+	episodics, err := c.store.RecentEpisodic(ctx, time.Now().Add(-reflectWindow), reflectMaxEpisodics)
+	if err != nil {
+		return 0, fmt.Errorf("reflect: %w", err)
+	}
+	if len(episodics) < reflectMinEpisodics {
+		return 0, nil
+	}
+	var b strings.Builder
+	for _, m := range episodics {
+		fmt.Fprintf(&b, "- (%s) %s\n", m.CreatedAt.Format("2006-01-02"), m.Content)
+	}
+	ids, err := c.reflector.Extract(ctx, Request{
+		SessionID: "reflection", Text: b.String(), Source: "reflection",
+	})
+	if err != nil {
+		return 0, fmt.Errorf("reflect: %w", err)
+	}
+	if len(ids) > 0 {
+		c.log.Info("reflection minted semantic insights", "count", len(ids), "episodes", len(episodics))
+	}
+	return len(ids), nil
 }
 
 func (c *Consolidator) archiveStale(ctx context.Context) (int, error) {

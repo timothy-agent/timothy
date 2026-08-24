@@ -51,8 +51,13 @@ type consolidateStore struct {
 	archived int64
 	decayed  []string
 
-	applyMergeErr error
-	superseded    map[string]string
+	applyMergeErr  error
+	superseded     map[string]string
+	recentEpisodic []store.Memory
+}
+
+func (s *consolidateStore) RecentEpisodic(context.Context, time.Time, int) ([]store.Memory, error) {
+	return s.recentEpisodic, nil
 }
 
 func (s *consolidateStore) NearDupPairs(context.Context, float64) ([][2]string, error) {
@@ -293,5 +298,50 @@ func TestConsolidateApplyConflictKeepsGroup(t *testing.T) {
 	}
 	if len(st.inserted) != 0 || len(st.superseded) != 0 {
 		t.Fatal("conflicting merge still mutated the store")
+	}
+}
+
+// Reflection distills recent episodics into pending semantic insights
+// through the extractor pipeline; below the minimum episode count the
+// pass is a no-op, and an unwired reflector disables it entirely.
+func TestConsolidatorReflect(t *testing.T) {
+	t.Parallel()
+	episodics := make([]store.Memory, reflectMinEpisodics)
+	for i := range episodics {
+		episodics[i] = store.Memory{ID: fmt.Sprintf("e%d", i), Type: store.TypeEpisodic,
+			Status: store.StatusActive, Content: "user asked about the juaab ALB alarm again", CreatedAt: time.Now()}
+	}
+	st := &consolidateStore{recentEpisodic: episodics}
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"The juaab admin ALB alarm recurs and the user always wants it triaged first.","entities":[],"confidence":0.8,"changes_behavior":true}]`}}
+	inner := &fakeStore{}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	c.SetReflector(New(gw, inner, testLog()))
+
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.Reflected != 1 || len(inner.inserted) != 1 {
+		t.Fatalf("Reflected = %d inserted = %d, want 1/1", summary.Reflected, len(inner.inserted))
+	}
+
+	// Below the minimum: no LLM call, nothing minted.
+	st.recentEpisodic = episodics[:reflectMinEpisodics-1]
+	gw2 := &fakeGateway{replies: []string{`[]`}}
+	inner2 := &fakeStore{}
+	c2 := NewConsolidator(gw2, st, testLog(), Metrics{})
+	c2.SetReflector(New(gw2, inner2, testLog()))
+	summary, err = c2.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run below minimum: %v", err)
+	}
+	if summary.Reflected != 0 || gw2.calls != 0 {
+		t.Fatalf("below minimum: Reflected=%d llm calls=%d, want 0/0", summary.Reflected, gw2.calls)
+	}
+
+	// Unwired reflector: pass disabled.
+	c3 := NewConsolidator(gw2, st, testLog(), Metrics{})
+	if s, err := c3.Run(t.Context()); err != nil || s.Reflected != 0 {
+		t.Fatalf("unwired reflector: %+v err=%v", s, err)
 	}
 }

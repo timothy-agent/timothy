@@ -62,6 +62,7 @@ func main() {
 		Archived: app.Metrics.NewCounter("memory_archived_total", "Stale episodic memories archived."),
 		Decayed:  app.Metrics.NewCounter("memory_decayed_total", "Stale semantic facts decayed and queued for reconfirmation."),
 	})
+	consolidator.SetReflector(extractor)
 	kbStore := store.NewKBStore(app.DB)
 	api.Register(app.Server, extractor, searcher, gwc, st, consolidator, kbStore, kbStore, app.Log)
 	go consolidator.RunLoop(ctx, consolidateEvery)
