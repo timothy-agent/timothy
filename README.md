@@ -25,6 +25,7 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 |---|---|
 | **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day. |
 | **Give it real work** | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done. |
+| **Results find you** | Any task or schedule can deliver its result to Telegram, email, or a webhook the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are. |
 | **It writes code safely** | Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can even drive Claude Code or Codex for you while keeping review and budgets in your hands. |
 | **Your daily briefings** | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock. |
 | **Connected to your life** | Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive. |
@@ -81,37 +82,23 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 
 The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker and the released images.
 
-1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases). While Timothy is alpha, every release is marked prerelease, so GitHub's `/releases/latest` redirect doesn't resolve; take the newest entry from the releases list instead:
+```sh
+curl -fsSL https://raw.githubusercontent.com/timothy-agent/timothy/main/deploy/release/install.sh | sh
+```
 
-   ```sh
-   mkdir timothy && cd timothy
-   TAG=$(curl -fsSL https://api.github.com/repos/timothy-agent/timothy/releases \
-     | grep -m1 '"tag_name"' | cut -d'"' -f4)
-   curl -fsSLo install.sh "https://github.com/timothy-agent/timothy/releases/download/$TAG/install.sh"
-   ```
+The installer resolves the newest release, installs into `~/timothy` (override with `TIMOTHY_HOME=/some/dir`), generates a `.env` with fresh secrets (`POSTGRES_PASSWORD`, `TIMOTHY_MASTER_KEY`, `TIMOTHY_API_TOKEN`), pulls the images, starts the stack, and prints a magic sign-in link once the web UI is up. Open the link: the web UI signs in automatically.
 
-2. Read `install.sh` before running it. Then run it:
+Prefer to inspect scripts before running them? Every release also ships `install.sh` as an asset: download it from the [releases page](https://github.com/timothy-agent/timothy/releases), read it, then `sh install.sh`.
 
-   ```sh
-   sh install.sh
-   ```
+### Upgrading
 
-   It downloads `docker-compose.yml` and `env.example`, generates a `.env` with fresh secrets (`POSTGRES_PASSWORD`, `TIMOTHY_MASTER_KEY`, `TIMOTHY_API_TOKEN`), pulls the images, starts the stack, and prints a magic sign-in link once the web UI is up.
+Run the exact same command again:
 
-3. Open the printed link: the web UI signs in automatically from the token in the URL.
+```sh
+curl -fsSL https://raw.githubusercontent.com/timothy-agent/timothy/main/deploy/release/install.sh | sh
+```
 
-To upgrade later, in this order:
-
-1. Download the new release's `docker-compose.yml` (it changes between releases; the old one may reference services or settings the new images don't expect):
-
-   ```sh
-   curl -fsSLo docker-compose.yml "https://github.com/timothy-agent/timothy/releases/download/<new-tag>/docker-compose.yml"
-   ```
-
-2. Set `TIMOTHY_VERSION` in `.env` to the new tag (without the `v` prefix).
-3. `docker compose pull && docker compose up -d`
-
-Or bump `TIMOTHY_VERSION` in `.env` and re-run the new release's `install.sh`, which handles the rest (it leaves an existing `.env` untouched, refreshes `docker-compose.yml` and the searxng config, and pre-pulls the mission sandbox image). Sandbox images (base and the per-language variants) are otherwise pulled on demand by sandboxd the first time a mission needs them.
+The installer finds your existing install (`~/timothy`, `TIMOTHY_HOME`, or the directory you run it from), keeps all your secrets, bumps `TIMOTHY_VERSION` to the newest release, refreshes `docker-compose.yml` and the searxng config, pulls the new images (including the mission sandbox), and restarts the stack. Your data lives in Docker volumes and your secrets in `.env`; neither is touched. Database migrations run automatically when the new version starts. Downgrading is not supported once a newer version's migrations have run.
 
 The rest of this README covers building and running from source instead.
 
@@ -187,7 +174,7 @@ docker compose -f deploy/docker-compose.yml exec postgres pg_dump -U timothy tim
 
 A full backup is the `pgdata` volume plus `deploy/.env`: without `TIMOTHY_MASTER_KEY`, the encrypted secrets in that dump are unrecoverable.
 
-### Upgrading
+### Upgrading a source build
 
 ```sh
 git pull

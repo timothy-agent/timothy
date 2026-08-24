@@ -4,8 +4,6 @@
 set -eu
 
 TAG="__TIMOTHY_TAG__"
-RELEASE_TAG="v${TAG}"
-BASE_URL="https://github.com/timothy-agent/timothy/releases/download/${RELEASE_TAG}"
 
 fail() {
   echo "error: $1" >&2
@@ -21,6 +19,26 @@ fetch() {
   fi
 }
 
+# Release assets ship with TAG baked in. When this script is fetched
+# straight from the repo instead, the placeholder is still present
+# (the case pattern is a prefix so the release sed leaves it alone);
+# resolve the newest release tag from the GitHub API.
+case "$TAG" in
+__TIMOTHY*)
+  if command -v curl >/dev/null 2>&1; then
+    releases=$(curl -fsSL "https://api.github.com/repos/timothy-agent/timothy/releases?per_page=1")
+  else
+    releases=$(wget -qO- "https://api.github.com/repos/timothy-agent/timothy/releases?per_page=1")
+  fi
+  TAG=$(printf '%s' "$releases" | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  TAG=${TAG#v}
+  [ -n "$TAG" ] || fail "could not determine the latest release tag"
+  ;;
+esac
+
+RELEASE_TAG="v${TAG}"
+BASE_URL="https://github.com/timothy-agent/timothy/releases/download/${RELEASE_TAG}"
+
 echo "Timothy installer (${RELEASE_TAG})"
 
 # --- Preflight ---
@@ -29,6 +47,19 @@ docker compose version >/dev/null 2>&1 || fail "'docker compose' plugin not avai
 command -v openssl >/dev/null 2>&1 || fail "openssl not found on PATH. Install it to generate secrets."
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   fail "neither curl nor wget found on PATH."
+fi
+
+# --- Install directory ---
+# Operate in the current directory when it already holds a Timothy
+# install (in-place upgrade); otherwise use TIMOTHY_HOME (default
+# ~/timothy) so the one-liner works from anywhere.
+if [ -f .env ] && [ -f docker-compose.yml ]; then
+  echo "Existing install detected in $(pwd)."
+else
+  TIMOTHY_HOME="${TIMOTHY_HOME:-$HOME/timothy}"
+  mkdir -p "$TIMOTHY_HOME"
+  cd "$TIMOTHY_HOME"
+  echo "Installing into ${TIMOTHY_HOME}"
 fi
 
 # --- Download assets ---
@@ -40,7 +71,8 @@ fetch "${BASE_URL}/searxng-settings.yml" searxng/settings.yml
 
 # --- .env ---
 if [ -f .env ]; then
-  echo "Existing .env found — leaving it untouched (upgrade path)."
+  echo "Existing .env found (upgrade path): keeping your secrets, bumping TIMOTHY_VERSION to ${TAG}."
+  sed -i.bak "s#^TIMOTHY_VERSION=.*#TIMOTHY_VERSION=${TAG}#" .env && rm -f .env.bak
 else
   echo "Generating .env with fresh secrets..."
   cp env.example .env
@@ -76,10 +108,8 @@ docker compose pull
 
 # compose pull only covers services; the mission sandbox image is an
 # env var handed to sandboxd (which pulls per-mission containers via
-# the Docker socket, not through compose), so pull it explicitly here —
-# same TIMOTHY_VERSION tag as everything else, read back from .env so
-# an upgrade (TIMOTHY_VERSION bumped by hand, .env otherwise untouched)
-# pulls the matching sandbox tag too.
+# the Docker socket, not through compose), so pull it explicitly here,
+# same TIMOTHY_VERSION tag as everything else, read back from .env.
 timothy_version=$(sed -n 's/^TIMOTHY_VERSION=//p' .env | head -n1)
 echo "Pulling mission sandbox image..."
 docker pull "ghcr.io/timothy-agent/timothy-sandbox:${timothy_version}"
@@ -107,6 +137,8 @@ api_token=$(sed -n 's/^TIMOTHY_API_TOKEN=//p' .env | head -n1)
 echo ""
 echo "================================================================"
 echo " Timothy is up."
+echo ""
+echo " Install dir: $(pwd)"
 echo ""
 echo " Sign in:  http://localhost:${web_port}/#token=${api_token}"
 echo " (this magic link signs the web UI in automatically)"
