@@ -93,8 +93,7 @@ func (a *TelegramAdapter) Deliver(ctx context.Context, config json.RawMessage, c
 			}
 		}
 	default:
-		text := renderTelegramText(payload)
-		if err := a.sendMessage(ctx, token, cfg.ChatID, text); err != nil {
+		if err := a.sendTelegramText(ctx, token, cfg.ChatID, payload); err != nil {
 			return fmt.Errorf("telegram adapter: send message: %w", err)
 		}
 	}
@@ -170,17 +169,26 @@ func renderTelegramCaption(p Payload) string {
 	return full[:cut]
 }
 
-// renderTelegramText builds the MarkdownV2 body: digest + links +
-// oversize notice, escaped, then truncated to telegramMessageLimit
-// with a notice appended (the mission link, when present, is preserved
-// after truncation rather than being the first thing cut).
-func renderTelegramText(p Payload) string {
-	var b strings.Builder
-	if p.Subject != "" {
-		b.WriteString(escapeMarkdownV2(p.Subject))
-		b.WriteString("\n\n")
+// sendTelegramText renders a body-only delivery (the light-mission
+// digest path, D-069: no artifacts, the deliverable is Payload.Body)
+// the same way sendTextArtifacts renders a text artifact: a bold
+// title + completion date head, the body run through RenderMarkdownV2
+// instead of raw-escaped, chunked via ChunkMarkdownV2 rather than a
+// single truncated message so a chunk boundary never lands inside an
+// unescaped entity. Name heads the message when set (missions always
+// set it); Subject (the ad-hoc deliver tool's only identifying field)
+// stands in for it when Name is empty, so an ad-hoc send still gets a
+// title instead of renderTelegramCaption's bare "**".
+func (a *TelegramAdapter) sendTelegramText(ctx context.Context, token, chatID string, p Payload) error {
+	var header string
+	switch {
+	case p.Name != "":
+		header = renderTelegramCaption(p)
+	case p.Subject != "":
+		header = "*" + escapeMarkdownV2(p.Subject) + "*"
 	}
-	b.WriteString(escapeMarkdownV2(p.Body))
+	var b strings.Builder
+	b.WriteString(RenderMarkdownV2(p.Body))
 	if len(p.Links) > 0 {
 		b.WriteString("\n\n")
 		b.WriteString(escapeMarkdownV2("Links:"))
@@ -193,40 +201,15 @@ func renderTelegramText(p Payload) string {
 		b.WriteString(escapeMarkdownV2(notice))
 	}
 	full := b.String()
-	if len(full) <= telegramMessageLimit {
-		return full
+	if header != "" {
+		full = header + "\n\n" + full
 	}
-	return truncateMarkdownV2(full, p.Links)
-}
-
-// truncationSuffix is appended, escaped, when a message is cut for
-// length — the mission link (if any) is repeated here since it may
-// have been cut from the body itself.
-func truncationSuffix(links []string) string {
-	suffix := "\n\n" + escapeMarkdownV2("[truncated]")
-	if len(links) > 0 {
-		suffix += "\n" + escapeMarkdownV2(links[0])
-	}
-	return suffix
-}
-
-// truncateMarkdownV2 cuts full to fit telegramMessageLimit once the
-// truncation suffix is accounted for, at a rune boundary so no
-// multi-byte rune (or its escaping backslash) is split.
-func truncateMarkdownV2(full string, links []string) string {
-	suffix := truncationSuffix(links)
-	budget := telegramMessageLimit - len(suffix)
-	if budget < 0 {
-		budget = 0
-	}
-	cut := 0
-	for i, r := range full {
-		if i+len(string(r)) > budget {
-			break
+	for _, chunk := range ChunkMarkdownV2(full, telegramMessageLimit) {
+		if err := a.sendMessage(ctx, token, chatID, chunk); err != nil {
+			return err
 		}
-		cut = i + len(string(r))
 	}
-	return full[:cut] + suffix
+	return nil
 }
 
 // markdownV2Escapes are the characters Telegram's MarkdownV2 requires
