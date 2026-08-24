@@ -202,13 +202,14 @@ function Browser() {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         <Input
           placeholder="Search memories…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && search()}
           data-testid="memory-search"
+          className="h-10"
         />
         <Button onClick={search} disabled={busy}>
           Search
@@ -272,16 +273,17 @@ function Browser() {
 
       <div className="space-y-2">
         <h3 className="text-sm font-medium text-muted-foreground">Remember something</h3>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Input
             placeholder="Timothy, remember…"
             value={newFact}
             onChange={(e) => setNewFact(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && add()}
             data-testid="manual-add"
+            className="h-10"
           />
           <Select value={newType} onValueChange={setNewType}>
-            <SelectTrigger className="w-36">
+            <SelectTrigger className="h-10 w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

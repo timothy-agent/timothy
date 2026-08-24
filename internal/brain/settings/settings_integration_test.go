@@ -269,3 +269,34 @@ func TestGitStrategySettings(t *testing.T) {
 		t.Fatal("unknown commit style accepted")
 	}
 }
+
+// TestTimezoneSetting covers Location's fallback to UTC (unset, and a
+// stale/invalid stored value) and its use of the stored IANA name once
+// validated on write.
+func TestTimezoneSetting(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if got := s.Location(ctx); got != time.UTC {
+		t.Fatalf("Location default = %v, want time.UTC", got)
+	}
+
+	if err := s.SetValue(ctx, ValueTimezone, "Not/AZone"); err == nil {
+		t.Fatal("unknown IANA timezone accepted")
+	}
+
+	if err := s.SetValue(ctx, ValueTimezone, "Europe/Amsterdam"); err != nil {
+		t.Fatalf("SetValue Europe/Amsterdam: %v", err)
+	}
+	loc := s.Location(ctx)
+	if loc == nil || loc.String() != "Europe/Amsterdam" {
+		t.Fatalf("Location after set = %v, want Europe/Amsterdam", loc)
+	}
+
+	if err := s.SetValue(ctx, ValueTimezone, ""); err != nil {
+		t.Fatalf("SetValue clear: %v", err)
+	}
+	if got := s.Location(ctx); got != time.UTC {
+		t.Fatalf("Location after clear = %v, want time.UTC", got)
+	}
+}

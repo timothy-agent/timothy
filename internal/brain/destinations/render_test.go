@@ -14,7 +14,7 @@ func TestRender(t *testing.T) {
 	m := missions.Mission{ID: "m1", Goal: "ship the thing", Name: "Ship it"}
 
 	t.Run("no web base url, no branch, no pr", func(t *testing.T) {
-		p := Render(m, "", nil)
+		p := Render(m, "", nil, time.UTC)
 		if p.MissionID != "m1" || p.Name != "Ship it" || p.Goal != "ship the thing" || p.Body != "Mission complete: Ship it" {
 			t.Fatalf("unexpected payload: %+v", p)
 		}
@@ -24,7 +24,7 @@ func TestRender(t *testing.T) {
 	})
 
 	t.Run("with web base url", func(t *testing.T) {
-		p := Render(m, "https://timothy.example.lan/", nil)
+		p := Render(m, "https://timothy.example.lan/", nil, time.UTC)
 		if len(p.Links) != 1 || p.Links[0] != "https://timothy.example.lan/missions/m1" {
 			t.Fatalf("unexpected links: %v", p.Links)
 		}
@@ -33,7 +33,7 @@ func TestRender(t *testing.T) {
 	t.Run("with branch", func(t *testing.T) {
 		coding := m
 		coding.Branch = "feat/ship-it"
-		p := Render(coding, "", nil)
+		p := Render(coding, "", nil, time.UTC)
 		if len(p.Links) != 1 || p.Links[0] != "branch: feat/ship-it" {
 			t.Fatalf("unexpected links: %v", p.Links)
 		}
@@ -42,7 +42,7 @@ func TestRender(t *testing.T) {
 	t.Run("with pr opened event", func(t *testing.T) {
 		payload, _ := json.Marshal(map[string]any{"url": "https://github.com/org/repo/pull/1", "number": 1})
 		events := []missions.Event{{Kind: "mission.pr_opened", Payload: payload}}
-		p := Render(m, "", events)
+		p := Render(m, "", events, time.UTC)
 		if len(p.Links) != 1 || p.Links[0] != "https://github.com/org/repo/pull/1" {
 			t.Fatalf("unexpected links: %v", p.Links)
 		}
@@ -53,7 +53,7 @@ func TestRender(t *testing.T) {
 		coding.Branch = "feat/ship-it"
 		payload, _ := json.Marshal(map[string]any{"url": "https://github.com/org/repo/pull/1"})
 		events := []missions.Event{{Kind: "mission.pr_opened", Payload: payload}}
-		p := Render(coding, "https://timothy.example.lan", events)
+		p := Render(coding, "https://timothy.example.lan", events, time.UTC)
 		want := []string{
 			"https://timothy.example.lan/missions/m1",
 			"branch: feat/ship-it",
@@ -72,7 +72,7 @@ func TestRender(t *testing.T) {
 	t.Run("falls back to goal when name empty", func(t *testing.T) {
 		noName := m
 		noName.Name = ""
-		p := Render(noName, "", nil)
+		p := Render(noName, "", nil, time.UTC)
 		if p.Name != "ship the thing" {
 			t.Fatalf("Name = %q, want fallback to goal", p.Name)
 		}
@@ -89,7 +89,7 @@ func TestRender(t *testing.T) {
 		withArtifact := m
 		withArtifact.Workspace = root
 		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"report.md"}}}}
-		p := Render(withArtifact, "", nil)
+		p := Render(withArtifact, "", nil, time.UTC)
 		if len(p.Files) != 0 {
 			t.Fatalf("expected report.md NOT attached as a file, got %+v", p.Files)
 		}
@@ -106,7 +106,7 @@ func TestRender(t *testing.T) {
 		withArtifact := m
 		withArtifact.Workspace = root
 		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"data.csv"}}}}
-		p := Render(withArtifact, "", nil)
+		p := Render(withArtifact, "", nil, time.UTC)
 		if len(p.TextArtifacts) != 0 {
 			t.Fatalf("expected data.csv NOT rendered inline, got %+v", p.TextArtifacts)
 		}
@@ -119,7 +119,7 @@ func TestRender(t *testing.T) {
 		light := m
 		light.Light = true
 		light.FinalOutput = "here is the complete deliverable"
-		p := Render(light, "", nil)
+		p := Render(light, "", nil, time.UTC)
 		if p.Body != "here is the complete deliverable" {
 			t.Fatalf("Body = %q, want the light mission's final output", p.Body)
 		}
@@ -128,7 +128,7 @@ func TestRender(t *testing.T) {
 	t.Run("light mission with no final output falls back to the completion line", func(t *testing.T) {
 		light := m
 		light.Light = true
-		p := Render(light, "", nil)
+		p := Render(light, "", nil, time.UTC)
 		if p.Body != "Mission complete: Ship it" {
 			t.Fatalf("Body = %q, want the completion-line fallback", p.Body)
 		}
@@ -141,12 +141,29 @@ func TestRender(t *testing.T) {
 			t.Fatalf("parse fixture time: %v", err)
 		}
 		withTime.UpdatedAt = parsed
-		p := Render(withTime, "", nil)
+		p := Render(withTime, "", nil, time.UTC)
 		if p.CompletedAt.IsZero() {
 			t.Fatal("CompletedAt is zero, want the mission's UpdatedAt")
 		}
 		if got, want := p.CompletedAt.UTC().Format("2006-01-02T15:04:05Z"), "2026-08-21T18:30:00Z"; got != want {
 			t.Fatalf("CompletedAt = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("CompletedAt converts into the given non-UTC location", func(t *testing.T) {
+		withTime := m
+		parsed, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00Z")
+		if err != nil {
+			t.Fatalf("parse fixture time: %v", err)
+		}
+		withTime.UpdatedAt = parsed
+		loc, err := time.LoadLocation("Europe/Amsterdam")
+		if err != nil {
+			t.Fatalf("LoadLocation: %v", err)
+		}
+		p := Render(withTime, "", nil, loc)
+		if got, want := p.CompletedAt.Format("2006-01-02T15:04:05 MST"), "2026-08-21T22:30:00 CEST"; got != want {
+			t.Fatalf("CompletedAt = %q, want %q (converted into Europe/Amsterdam)", got, want)
 		}
 	})
 }

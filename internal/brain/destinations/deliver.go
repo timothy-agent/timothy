@@ -3,6 +3,7 @@ package destinations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -39,6 +40,7 @@ type Deliverer struct {
 	events   eventRecorder
 	adapters map[string]Adapter
 	webURL   func(ctx context.Context) string
+	location func(ctx context.Context) *time.Location
 	log      *slog.Logger
 }
 
@@ -49,8 +51,9 @@ type Deliverer struct {
 // leaves that kind unregistered in adapters — deliverOne's map lookup
 // then reports "no adapter for kind" rather than boxing a nil adapter
 // as a non-nil Adapter (which would panic on first field access
-// inside Deliver).
-func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, webURL func(ctx context.Context) string, log *slog.Logger) *Deliverer {
+// inside Deliver). location follows the same fresh-read pattern as
+// webURL; nil (or a nil *time.Location it returns) defaults to UTC.
+func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
 	adapters := map[string]Adapter{"webhook": webhook}
 	if email != nil {
 		adapters["email"] = email
@@ -63,6 +66,7 @@ func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdap
 		events:   events,
 		adapters: adapters,
 		webURL:   webURL,
+		location: location,
 		log:      log,
 	}
 }
@@ -101,7 +105,13 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destination
 	if d.webURL != nil {
 		webBaseURL = d.webURL(ctx)
 	}
-	payload := Render(m, webBaseURL, events)
+	loc := time.UTC
+	if d.location != nil {
+		if l := d.location(ctx); l != nil {
+			loc = l
+		}
+	}
+	payload := Render(m, webBaseURL, events, loc)
 
 	for _, id := range destinationIDs {
 		if already[id] {
@@ -146,6 +156,12 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID str
 			return
 		}
 		d.log.Warn("destinations: delivery attempt failed", "mission_id", missionID, "destination_id", destinationID, "attempt", i+1, "error", lastErr)
+		if errors.Is(lastErr, errMaybeDelivered) {
+			// The request may have already reached the provider: retrying
+			// risks sending the same message twice, so stop here rather than
+			// continue the schedule.
+			break
+		}
 	}
 	d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, lastErr.Error())
 }

@@ -141,16 +141,17 @@ type Service struct {
 	classify       agents.Classify // nil: auto-dispatch falls back to default
 	budget         func(context.Context) int
 	packs          []skills.Skill
-	skillAllow     func(context.Context, string) bool // nil: all packs allowed
-	skillBodies    map[string]string                  // name -> full pack body, for skill_hint
-	flushEvery     time.Duration                      // pending-state flush cadence mid-stream
-	turnTimeout    time.Duration                      // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
-	sensitive      *session.SensitiveTools            // nil: no sensitive-tool route pin for side-calls
-	attachments    AttachmentStore                    // nil: attachments disabled (ATTACHMENTS_DIR unset)
-	markitdownURL  string                             // "": pdf attachments disabled (MARKITDOWN_URL unset)
-	markitdownHTTP *http.Client                       // shared client for the markitdown sidecar call
-	kbSearch       KBSearch                           // nil: kb_search never offered, regardless of agent config
-	kbRead         KBRead                             // nil: kb_read never offered, regardless of agent config
+	skillAllow     func(context.Context, string) bool   // nil: all packs allowed
+	location       func(context.Context) *time.Location // nil: date line renders in UTC
+	skillBodies    map[string]string                    // name -> full pack body, for skill_hint
+	flushEvery     time.Duration                        // pending-state flush cadence mid-stream
+	turnTimeout    time.Duration                        // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
+	sensitive      *session.SensitiveTools              // nil: no sensitive-tool route pin for side-calls
+	attachments    AttachmentStore                      // nil: attachments disabled (ATTACHMENTS_DIR unset)
+	markitdownURL  string                               // "": pdf attachments disabled (MARKITDOWN_URL unset)
+	markitdownHTTP *http.Client                         // shared client for the markitdown sidecar call
+	kbSearch       KBSearch                             // nil: kb_search never offered, regardless of agent config
+	kbRead         KBRead                               // nil: kb_read never offered, regardless of agent config
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -370,7 +371,7 @@ type AgentResolver func(ctx context.Context, name string) (agents.Agent, bool)
 // back to the default agent.
 type AgentCandidates func(ctx context.Context) []agents.Agent
 
-func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget func(context.Context) int, packs []skills.Skill, skillAllow func(context.Context, string) bool, resolver AgentResolver, logger *slog.Logger) *Service {
+func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budget func(context.Context) int, packs []skills.Skill, skillAllow func(context.Context, string) bool, location func(context.Context) *time.Location, resolver AgentResolver, logger *slog.Logger) *Service {
 	logger.Info("chat service ready", "system_prompt_version", systemPromptVersion)
 	bodies := make(map[string]string, len(packs))
 	for _, p := range packs {
@@ -380,6 +381,7 @@ func New(gw Gateway, log SessionLog, distill Distill, compactor Compactor, budge
 		gw: gw, log: log, distill: distill, compactor: compactor, budget: budget,
 		packs:       packs,
 		skillAllow:  skillAllow,
+		location:    location,
 		agents:      resolver,
 		skillBodies: bodies,
 		flushEvery:  2 * time.Second, turnTimeout: turnTimeout, logger: logger,
@@ -1138,7 +1140,11 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	// (D-011 poisoning defense); the skill body is instructions the
 	// user explicitly selected, deterministically loaded rather than
 	// left to the model's load_skill judgment.
-	system := assembleSystem(skills.Index(s.allowedPacks(turnCtx, profile)), time.Now())
+	var loc *time.Location
+	if s.location != nil {
+		loc = s.location(turnCtx)
+	}
+	system := assembleSystem(skills.Index(s.allowedPacks(turnCtx, profile)), time.Now(), loc)
 	// The agent overlay is stable for a given agent, so it sits ahead
 	// of the per-turn tail and stays inside the cacheable prefix.
 	if profile.PromptOverlay != "" {

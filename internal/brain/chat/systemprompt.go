@@ -32,9 +32,13 @@ const systemPromptClose = `Be concise; do not restate context or repeat the ques
 // data and mangles date-bounded tool calls (e.g. Gmail after:/before:
 // operators). Date only, no clock time: a timestamp would bust the
 // provider prompt cache's tail every single request, where a date
-// busts it once per day (D-018) — acceptable.
-func assembleSystem(skillsIndex string, now time.Time) string {
-	dateLine := "Today is " + now.UTC().Format("Monday, 2006-01-02") + " (UTC)."
+// busts it once per day (D-018), acceptable. loc is the operator's
+// configured timezone; nil renders in UTC.
+func assembleSystem(skillsIndex string, now time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	dateLine := "Today is " + now.In(loc).Format("Monday, 2006-01-02 (MST).")
 	if skillsIndex == "" {
 		return systemPrompt + "\n\n" + dateLine + "\n\n" + systemPromptClose
 	}

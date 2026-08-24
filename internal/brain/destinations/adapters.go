@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 )
@@ -13,6 +15,30 @@ import (
 // own webhookTimeout for the same reasoning (a slow/unreachable
 // receiver must never stall the caller).
 const webhookTimeout = 10 * time.Second
+
+// errMaybeDelivered means the request may have reached the provider: a
+// retry can duplicate an already-sent message. deliverOne (deliver.go)
+// stops its retry loop on this, unlike a dial/connection-setup failure
+// (nothing left the machine, safe to retry).
+var errMaybeDelivered = errors.New("delivery status unknown, request may have been received")
+
+// classifySendErr sorts one HTTP client Do() error into retry-safe or
+// errMaybeDelivered. A dial/connection-setup failure (DNS, refused,
+// no route) never reached the peer, so a retry cannot duplicate
+// anything. Everything else, a timeout, a canceled context, any other
+// transport error, may have reached the peer after the client gave up
+// waiting, so it wraps errMaybeDelivered.
+func classifySendErr(err error) error {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return err
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errMaybeDelivered, err)
+}
 
 // Adapter delivers one rendered Payload to a destination's config.
 // credentialRef is the destination's stored credential_ref name (never
@@ -120,11 +146,14 @@ func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, _ 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("webhook adapter: post: %w", err)
+		return fmt.Errorf("webhook adapter: post: %w", classifySendErr(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook adapter: status %d", resp.StatusCode)
+		// A non-2xx response was definitely processed by the receiver; a
+		// retry cannot un-process it, and for a 5xx may cause a duplicate
+		// side effect, so this counts as maybe-delivered too.
+		return fmt.Errorf("webhook adapter: %w: status %d", errMaybeDelivered, resp.StatusCode)
 	}
 	return nil
 }

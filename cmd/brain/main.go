@@ -202,7 +202,7 @@ func main() {
 	fxStore := fxrates.NewStore(app.DB)
 	go fxrates.NewFetcher(fxStore, settings.AllowedCurrencies(), app.Log).Run(ctx)
 
-	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore)
+	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -423,7 +423,7 @@ func main() {
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
-		agentReg.Resolve, app.Log)
+		flags.Location, agentReg.Resolve, app.Log)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
 	// TURN_TIMEOUT raises the detached-turn ceiling above the compiled
@@ -698,7 +698,7 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	if secrets != nil {
 		telegram = &destinations.TelegramAdapter{ResolveToken: secrets.Resolve}
 	}
-	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, flags.WebBaseURL, log)
+	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, flags.WebBaseURL, flags.Location, log)
 	return store, deliverer
 }
 
@@ -894,6 +894,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
 	}
 	nativeRunner.SetProgressReader(store)
+	nativeRunner.SetLocation(flags.Location)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch — resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,
@@ -914,6 +915,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetCapacityGate(sandboxMgr)
 	driver.SetGitBranchPattern(flags.GitBranchPattern)
 	driver.SetGitCommitStyle(flags.GitCommitStyle)
+	driver.SetLocation(flags.Location)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 	driver.SetNameMission(chat.TitleOverGateway(gwc, log))
@@ -1009,6 +1011,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		return err == nil
 	}
 	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, routeExists, flags.CodingExecutor, nil, log)
+	scheduler.SetLocation(flags.Location)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace, hub, scheduler
 }
@@ -1271,10 +1274,10 @@ func (r turnRouter) RouteForRole(ctx context.Context, role string) (string, bool
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string, fxStore *fxrates.Store) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, defaultLoc func(context.Context) *time.Location, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string, fxStore *fxrates.Store) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
-		builtin.CurrentTime(time.Now),
+		builtin.CurrentTime(time.Now, defaultLoc),
 		builtin.ConvertTime(),
 		builtin.Calculator(),
 		builtin.WebFetch(builtin.WebFetchConfig{MarkitdownURL: markitdownURL}),

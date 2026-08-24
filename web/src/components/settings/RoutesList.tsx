@@ -126,14 +126,14 @@ export function RoutesList() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="my-route"
-                className="w-40"
+                className="h-10 w-40"
                 aria-label="New route name"
               />
             </label>
             <label className="grid gap-1 text-xs text-muted-foreground">
               Capability
               <Select value={newCapability} onValueChange={setNewCapability}>
-                <SelectTrigger className="h-9 w-32" aria-label="New route capability">
+                <SelectTrigger className="h-10 w-32" aria-label="New route capability">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

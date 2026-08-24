@@ -28,9 +28,14 @@ function managedRoleSuffix(ref: SecretRefEntry): string | null {
 export function CredentialModeToggle({
   mode,
   onChange,
+  labels,
 }: {
   mode: CredentialMode
   onChange: (mode: CredentialMode) => void
+  // labels override the segment text where "New credential" would
+  // mislead (e.g. rotating a token writes the current ref's value,
+  // it never creates a credential).
+  labels?: { new: string; existing: string }
 }) {
   return (
     <div className="inline-flex rounded-lg border border-border p-0.5 text-sm">
@@ -43,7 +48,7 @@ export function CredentialModeToggle({
             mode === m ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          {m === 'new' ? 'New credential' : 'Use existing'}
+          {m === 'new' ? (labels?.new ?? 'New credential') : (labels?.existing ?? 'Use existing')}
         </button>
       ))}
     </div>

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -13,8 +14,10 @@ import (
 )
 
 // telegramTimeout bounds one Telegram Bot API call — same reasoning as
-// webhookTimeout.
-const telegramTimeout = 10 * time.Second
+// webhookTimeout. 30s, not 10s: a slow path to api.telegram.org (seen
+// on the homelab VM) hit 10s AFTER Telegram had already accepted the
+// send, so every retry re-sent an already-delivered message.
+const telegramTimeout = 30 * time.Second
 
 // telegramMessageLimit is the Bot API's sendMessage text cap. A
 // message over this is truncated with a notice + mission link
@@ -145,7 +148,9 @@ const telegramCaptionLimit = 1024
 // renderTelegramCaption builds the bold title + completion date shown
 // above the first attached file — MarkdownV2, escaped. CompletedAt
 // zero (the ad-hoc deliver tool's payload, which never sets it) omits
-// the date line rather than guessing "now".
+// the date line rather than guessing "now"; otherwise it renders in
+// whatever location Render already converted it into, "MST" showing
+// that zone's abbreviation instead of a hardcoded "UTC".
 func renderTelegramCaption(p Payload) string {
 	var b strings.Builder
 	b.WriteString("*")
@@ -153,7 +158,7 @@ func renderTelegramCaption(p Payload) string {
 	b.WriteString("*")
 	if !p.CompletedAt.IsZero() {
 		b.WriteString("\n")
-		b.WriteString(escapeMarkdownV2(p.CompletedAt.Format("2 Jan 2006, 15:04 UTC")))
+		b.WriteString(escapeMarkdownV2(p.CompletedAt.Format("2 Jan 2006, 15:04 MST")))
 	}
 	full := b.String()
 	if len(full) <= telegramCaptionLimit {
@@ -271,31 +276,62 @@ func (a *TelegramAdapter) sendDocument(ctx context.Context, token, chatID string
 }
 
 // call POSTs one Bot API method and treats any non-2xx status or
-// {"ok": false} response body as failure.
+// {"ok": false} response body as failure. Every returned error is
+// redacted (redactToken) before it leaves this function: url embeds
+// the bot token, and a *url.Error from http.Client.Do carries the full
+// request URL verbatim, so an unredacted error would leak the token
+// into WARN logs.
 func (a *TelegramAdapter) call(ctx context.Context, token, method, contentType string, body io.Reader) error {
 	cctx, cancel := context.WithTimeout(ctx, telegramTimeout)
 	defer cancel()
 	url := a.apiBase() + "/bot" + token + "/" + method
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, url, body)
 	if err != nil {
-		return fmt.Errorf("request: %w", err)
+		return redactToken(fmt.Errorf("request: %w", err), token)
 	}
 	req.Header.Set("Content-Type", contentType)
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return fmt.Errorf("post: %w", err)
+		return redactToken(fmt.Errorf("post: %w", classifySendErr(err)), token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("api status %d: %s", resp.StatusCode, string(data))
+		// A non-2xx response was definitely processed by Telegram; retrying
+		// a rejection is pointless and a 5xx may still have side effects.
+		return redactToken(fmt.Errorf("api status %d: %s: %w", resp.StatusCode, string(data), errMaybeDelivered), token)
 	}
 	var result struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(data, &result); err == nil && !result.OK {
-		return fmt.Errorf("api error: %s", result.Description)
+		return redactToken(fmt.Errorf("api error: %s: %w", result.Description, errMaybeDelivered), token)
 	}
 	return nil
 }
+
+// redactToken rebuilds err with every occurrence of token in its
+// message replaced by "REDACTED". errors.Is(err, errMaybeDelivered)
+// still holds afterwards (wrapped via %w against the already-redacted
+// text, never re-appending the sentinel's own message) since deliver.go's
+// retry loop classifies on the returned error.
+func redactToken(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	msg := strings.ReplaceAll(err.Error(), token, "REDACTED")
+	if errors.Is(err, errMaybeDelivered) {
+		return fmt.Errorf("%w", redactedMaybeDelivered{msg})
+	}
+	return errors.New(msg)
+}
+
+// redactedMaybeDelivered carries a redacted message while still
+// satisfying errors.Is(err, errMaybeDelivered) via Unwrap, needed
+// because the original message (with the token already replaced) must
+// not be reconstructed by re-wrapping errMaybeDelivered's own text.
+type redactedMaybeDelivered struct{ msg string }
+
+func (e redactedMaybeDelivered) Error() string { return e.msg }
+func (e redactedMaybeDelivered) Unwrap() error { return errMaybeDelivered }

@@ -76,6 +76,10 @@ const (
 	// in destination deliveries (destinations/render.go); "" omits the
 	// link entirely rather than guessing a LAN address.
 	ValueWebBaseURL = "web_base_url"
+	// ValueTimezone is the operator's IANA timezone name (e.g.
+	// "Europe/Amsterdam"), used to render delivery timestamps
+	// (destinations/render.go); "" defers to time.UTC.
+	ValueTimezone = "timezone"
 )
 
 var knownValueKeys = map[string]bool{
@@ -84,7 +88,7 @@ var knownValueKeys = map[string]bool{
 	ValueSensitiveToolRoute: true, ValueDefaultCurrency: true,
 	ValueCodingExecutor:   true,
 	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
-	ValueWebBaseURL: true,
+	ValueWebBaseURL: true, ValueTimezone: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -196,6 +200,22 @@ func (s *Store) GitCommitStyle(ctx context.Context) string {
 // mission link) when unset.
 func (s *Store) WebBaseURL(ctx context.Context) string {
 	return s.Value(ctx, ValueWebBaseURL)
+}
+
+// Location returns the operator's configured timezone, time.UTC when
+// unset or when the stored value fails to load (SetValue already
+// rejects a non-IANA value at write time, so a load failure here means
+// stale data, not a fresh mistake).
+func (s *Store) Location(ctx context.Context) *time.Location {
+	v := s.Value(ctx, ValueTimezone)
+	if v == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(v)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 // SkillAllowed reports whether the allowlist admits a pack name;
@@ -315,6 +335,11 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 	if key == ValueGitCommitStyle && value != "" {
 		if err := missions.ValidateCommitStyle(value); err != nil {
 			return fmt.Errorf("%s: %w", key, err)
+		}
+	}
+	if key == ValueTimezone && value != "" {
+		if _, err := time.LoadLocation(value); err != nil {
+			return fmt.Errorf("%s: unknown IANA timezone %q", key, value)
 		}
 	}
 	return s.write(ctx, key, s.Value(ctx, key), value)

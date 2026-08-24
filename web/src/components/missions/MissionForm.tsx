@@ -1020,7 +1020,7 @@ export function MissionForm({
                       value={expiresAtToTime(expiresAt)}
                       onChange={(e) => pickExpiresTime(e.target.value)}
                       disabled={!expiresAt}
-                      className="flex-1"
+                      className="h-8.5 flex-1"
                     />
                     <Button variant="outline" size="sm" onClick={() => setExpiresAt('')}>
                       Clear

@@ -1,13 +1,42 @@
 import { useCallback, useEffect, useState } from 'react'
+import { ChevronDownIcon } from 'lucide-react'
 import { getSettings, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
 import { CURRENCIES } from '../../lib/currencies'
 import { getNotificationSoundEnabled, setNotificationSoundEnabled } from '../../lib/sound'
 import { Button } from '../ui/button'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Input } from '../ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { ErrorBanner, Toggle } from './shared'
 import { errText } from './util'
+
+// FALLBACK_TIMEZONES stands in for Intl.supportedValuesOf('timeZone')
+// when that API is unavailable (older test environments): a short,
+// common list, not an attempt to cover every IANA zone.
+const FALLBACK_TIMEZONES = [
+  'UTC',
+  'Europe/Amsterdam',
+  'Europe/London',
+  'Europe/Berlin',
+  'America/New_York',
+  'America/Los_Angeles',
+  'America/Chicago',
+  'Asia/Kolkata',
+  'Asia/Dhaka',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Australia/Sydney',
+]
+
+function listTimezones(): string[] {
+  try {
+    return Intl.supportedValuesOf('timeZone')
+  } catch {
+    return FALLBACK_TIMEZONES
+  }
+}
 
 const featureCopy: Record<string, { label: string; description: string }> = {
   tools_enabled: {
@@ -69,6 +98,7 @@ export function FeaturesTab() {
         </div>
       ))}
       {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <TimezoneCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
       {values && <GitBranchPatternCard values={values} onError={setError} onSaved={refresh} />}
@@ -260,7 +290,7 @@ function GitBranchPatternCard({
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
             placeholder="{type}/{slug}"
-            className="w-72"
+            className="h-10 w-72"
             aria-label="Default branch pattern"
           />
         </label>
@@ -398,7 +428,7 @@ function SensitiveRouteCard({
               value={route}
               onChange={(e) => setRoute(e.target.value)}
               placeholder="empty = off"
-              className="w-56"
+              className="h-10 w-56"
               aria-label="Sensitive tool route"
             />
           </label>
@@ -415,3 +445,95 @@ function SensitiveRouteCard({
   )
 }
 
+// TimezoneCard picks the IANA timezone destination deliveries (email,
+// telegram) render completion timestamps in: mirrors KnowledgePicker's
+// combobox-with-typeahead shape (Command + Popover), single-select
+// instead of multi. Empty means UTC (settings.Store.Location's
+// fallback).
+function TimezoneCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [timezone, setTimezone] = useState(values.timezone ?? '')
+  const [saved, setSaved] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [zones] = useState(listTimezones)
+
+  const save = (next: string) => {
+    setSaved(false)
+    patchSettingValues({ timezone: next })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  const choose = (zone: string) => {
+    setTimezone(zone)
+    setOpen(false)
+    save(zone)
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Timezone</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <span>Zone</span>
+          <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={open}
+                aria-label="Timezone"
+                className="h-10 w-56 justify-between font-normal"
+              >
+                <span className="truncate text-left">{timezone || 'UTC (default)'}</span>
+                <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[min(92vw,20rem)] p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search timezones…" />
+                <CommandList>
+                  <CommandEmpty>No timezone matches.</CommandEmpty>
+                  <CommandGroup>
+                    <CommandItem
+                      value="UTC (default)"
+                      data-checked={timezone === '' || undefined}
+                      onSelect={() => choose('')}
+                    >
+                      UTC (default)
+                    </CommandItem>
+                    {zones.map((z) => (
+                      <CommandItem
+                        key={z}
+                        value={z}
+                        data-checked={timezone === z || undefined}
+                        onSelect={() => choose(z)}
+                      >
+                        {z}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        </div>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Dates and times everywhere follow this timezone: delivery timestamps, schedule cron
+        times, and the current date shown to models. Empty defaults to UTC.
+      </p>
+    </div>
+  )
+}

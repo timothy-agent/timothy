@@ -159,6 +159,11 @@ type Driver struct {
 	// to CommitMessage's own conventional-style default.
 	gitCommitStyle func(ctx context.Context) string
 
+	// location resolves the operator's configured timezone for the
+	// worker packet's exec-environment note and progress-note timestamps
+	// (see SetLocation), nil-safe: unset renders both in UTC.
+	location func(ctx context.Context) *time.Location
+
 	// completer runs a mission's recorded on_complete choice
 	// (push/push_pr) once it reaches phase=done (see SetCompleter,
 	// fireOnComplete) — nil-safe: unset (no connectors/secrets wired)
@@ -364,6 +369,13 @@ func (d *Driver) SetGitBranchPattern(get func(ctx context.Context) string) {
 // same reason SetGitBranchPattern is.
 func (d *Driver) SetGitCommitStyle(get func(ctx context.Context) string) {
 	d.gitCommitStyle = get
+}
+
+// SetLocation wires the operator timezone accessor used for worker
+// packet date/timestamp rendering, a setter for the same reason
+// SetGitCommitStyle is.
+func (d *Driver) SetLocation(loc func(ctx context.Context) *time.Location) {
+	d.location = loc
 }
 
 // SetCompleter wires the Completer the driver's auto-fire-on-done hook
@@ -1268,11 +1280,15 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	if m.Worktree != "" {
 		gitLog, _ = gitLogSince(ctx, m.Worktree, m.BaseCommit)
 	}
+	var loc *time.Location
+	if d.location != nil {
+		loc = d.location(ctx)
+	}
 	p := WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext, Attachments: m.Attachments,
-		Light: missionPolicyFor(m).skipsPlanning,
+		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext, Attachments: m.Attachments,
+		Light: missionPolicyFor(m).skipsPlanning, Location: loc,
 	}
 	if d.skillsIndex != nil && m.AgentID != "" {
 		p.SkillsIndex = d.skillsIndex(ctx, m.AgentID)
