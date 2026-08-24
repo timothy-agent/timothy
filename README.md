@@ -36,6 +36,20 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 | **Private by design** | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager), never in logs, never in the UI. |
 | **Talk to it** | Optional voice input with fully local speech-to-text. Audio never leaves your machine. |
 
+## A day with Timothy
+
+Things Timothy's own operator actually runs it for:
+
+- **07:00, your phone buzzes.** "Two things need you today: the client call at 14:00 has an unanswered thread from yesterday, and your card was charged twice by the same vendor. The other 14 emails were newsletters." A scheduled briefing read your inbox and calendar, cross-referenced them, and messaged you on Telegram.
+- **"Find every receipt from my Portugal trip and total it per currency."** Timothy searches your Gmail, opens each receipt (never trusting a snippet), and reports an itemized breakdown with per-currency totals it computed with a calculator, not vibes.
+- **"Research the current EU AI Act timeline and write me a cited summary."** It searches the web, reads primary sources, writes the report to a file, and a verification step checks the artifact exists and cites real URLs before you ever see "done".
+- **"Fix the flaky test in my repo."** A coding mission clones the repo into a sandbox, works on its own branch, runs the tests, and opens the result for your review. Your laptop stays untouched.
+- **"Remember that Ana owes me EUR 200 from dinner, she'll pay in September."** Weeks later: "Who owes me money?" answers correctly, because facts you tell it persist and stay retrievable.
+- **Drop a PDF into the knowledge base.** It lands in the right topic collection automatically, and next week "what did that scaling article say about probabilistic counting?" quotes it back.
+- **Every evening at 20:00**, an expense digest lists the day's spending from your inbox; every Monday at 07:00, a week-prep note cross-references your calendar with recent email threads and flags meetings that need preparation.
+
+Each of these is a schedule, a chat message, or a one-line task. No plugins to write, no pipelines to build.
+
 ## Architecture
 
 Go microservices behind a single public API, one PostgreSQL database, React web UI. All run via Docker Compose.
