@@ -37,9 +37,11 @@ var SystemRoles = []struct{ Role, Capability string }{
 // is the caller's catalog search restricted to p's candidate
 // litellm_provider(s) (catalog.CandidateProvidersForRow) — kept as a
 // plain slice rather than a *catalog.Store dependency so this stays
-// pure and unit-testable with plain fixtures.
+// pure and unit-testable with plain fixtures. A kind="cli" row never
+// serves chat routes, so it is excluded from bootstrap like
+// ExcludeFromBootstrap.
 func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry, candidates []catalog.Model) map[string][]ChainEntry {
-	if p.ExcludeFromBootstrap {
+	if p.ExcludeFromBootstrap || p.Kind == "cli" {
 		return nil
 	}
 	out := map[string][]ChainEntry{}
