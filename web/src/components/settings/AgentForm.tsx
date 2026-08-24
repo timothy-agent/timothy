@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Input } from '../ui/input'
+import { Textarea } from '../ui/textarea'
 import {
   Select,
   SelectContent,
@@ -126,13 +127,13 @@ export function AgentForm({
         />
       </Field>
       <Field label="Prompt overlay" hint="appended to the system prompt">
-        <textarea
+        <Textarea
           value={fields.overlay}
           onChange={(e) => fields.setOverlay(e.target.value)}
           aria-label="Prompt overlay"
           rows={5}
-          placeholder="Instructions, persona, house rules…"
-          className="mt-1.5 w-full rounded-lg border border-input bg-transparent p-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          placeholder="Instructions, persona, house rules… Markdown supported."
+          className="mt-1.5 min-h-32 resize-y text-sm"
         />
       </Field>
       <div className="grid gap-5 sm:grid-cols-2">
