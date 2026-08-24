@@ -303,7 +303,7 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 		},
 		{
 			name: "system append rides a separate argv element before @PROMPT@",
-			spec: InvocationSpec{
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
 				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md",
 				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
 				SystemAppend: "be nice",
@@ -320,7 +320,7 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 		},
 		{
 			name: "argv exact with no system append",
-			spec: InvocationSpec{
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
 				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
 				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
 			},
