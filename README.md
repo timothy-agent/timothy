@@ -11,7 +11,9 @@
 
 ![Timothy](assets/timothy.png)
 
-Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents, running on your own hardware, talking to whichever LLM providers you configure.
+**The personal AI assistant you actually own.** Timothy runs on your hardware and works for you around the clock: it chats, researches, and writes code; it reads your inbox and calendar and briefs you about what matters; it remembers who you are across every conversation; and it delivers results to your phone while you sleep. Every conversation, memory, document, and API key stays on infrastructure you control.
+
+Use any model you want: Anthropic, OpenAI, Amazon Bedrock, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to the model that earns it, switch anytime from settings, no code changes, no lock-in.
 
 **Status: early, under active development.** 
 
@@ -21,32 +23,32 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 
 | Feature | What you get |
 |---|---|
-| **Use any AI model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider — all behind one interface. Pick which model handles chat, coding, research, or digests, switch anytime from settings, and let Timothy fail over to a backup model when a provider has a bad day. |
-| **Give it real work** | Hand Timothy a task — research a topic, write a report, fix a bug — and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done. |
+| **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day. |
+| **Give it real work** | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done. |
 | **It writes code safely** | Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can even drive Claude Code or Codex for you while keeping review and budgets in your hands. |
-| **Your daily briefings** | Schedule digests of your inbox, calendar, and spending — delivered to Telegram, email, or a webhook, in your timezone, saying only what actually needs your attention. |
-| **Connected to your life** | Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it — and asks before doing anything destructive. |
-| **Shape your own assistants** | Create named agents with their own personality, model, and exactly the tools and knowledge they should have — a digest agent that only reads mail and calendar, a coder that only touches code. |
-| **It remembers you** | Preferences, projects, and facts you share carry across conversations. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you. |
-| **Your documents, searchable** | Drop in files or URLs and Timothy files them into topic collections and uses them to answer questions — your own knowledge base, on your own disk. |
-| **Nothing gets lost** | Conversations survive restarts, crashes, and upgrades — pick up any session exactly where it left off. |
+| **Your daily briefings** | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock. |
+| **Connected to your life** | Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive. |
+| **Shape your own assistants** | Create named agents with their own personality, favorite model, and exactly the tools and knowledge they need, nothing more. A briefing agent that reads only your mail and calendar can never touch your code or send a message on your behalf. |
+| **It remembers you** | Preferences, projects, and facts you share carry across conversations, and recurring patterns become insights over time. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you. |
+| **Your documents, searchable** | Drop in files or URLs; Timothy files them into topic collections and uses them to answer your questions. Your own knowledge base, on your own disk. |
+| **Nothing gets lost** | Conversations survive restarts, crashes, and upgrades. Pick up any session exactly where it left off. |
 | **You control the spend** | Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models. |
-| **Private by design** | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager) — never in logs, never in the UI. |
-| **Talk to it** | Optional voice input with fully local speech-to-text — audio never leaves your machine. |
+| **Private by design** | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager), never in logs, never in the UI. |
+| **Talk to it** | Optional voice input with fully local speech-to-text. Audio never leaves your machine. |
 
 ## Architecture
 
 Go microservices behind a single public API, one PostgreSQL database, React web UI. All run via Docker Compose.
 
-| Service      | Role                                                                                         |
-|--------------|----------------------------------------------------------------------------------------------|
-| `brain`      | Public API: chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming |
-| `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                   |
-| `memoryd`    | Internal memory service: pgvector-backed recall                                             |
-| `sandboxd`   | Internal service holding the Docker socket: per-mission sandbox containers                  |
-| `web`        | React + Tailwind interface: chat, missions, usage, settings                                 |
-| `searxng`    | Internal metasearch backend for the web_search tool                                          |
-| `markitdown` | Internal Python sidecar: file→markdown conversion                                           |
+| Service      | Role                                                                                          |
+|--------------|-----------------------------------------------------------------------------------------------|
+| `brain`      | Public API: chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming   |
+| `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                     |
+| `memoryd`    | Internal memory service: pgvector-backed recall                                               |
+| `sandboxd`   | Internal service holding the Docker socket: per-mission sandbox containers                    |
+| `web`        | React + Tailwind interface: chat, missions, usage, settings                                   |
+| `searxng`    | Internal metasearch backend for the web_search tool                                           |
+| `markitdown` | Internal Python sidecar: file→markdown conversion                                             |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`.
@@ -203,4 +205,4 @@ Design decisions are documented as `D-0XX` markers in code comments next to the 
 
 ## License
 
-[AGPL-3.0](LICENSE). Versions up to and including the last MIT-licensed commit remain available under MIT.
+[AGPL-3.0](LICENSE).
