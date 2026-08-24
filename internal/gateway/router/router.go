@@ -638,6 +638,17 @@ type ResolvedRouteEntry struct {
 	Wire string
 }
 
+// selfPaired reports whether harness is subscription-locked to its own
+// kind='cli' provider row (cursor-cli): an empty harnessDrivers set
+// already means no kind='api' row can ever satisfy it, so a route's
+// chain membership is meaningless ceremony for that harness: the
+// operator would just be pointing at the one row that was always going
+// to be used anyway. ResolveRoute bypasses the chain for these and
+// resolves directly against matching provider rows instead.
+func selfPaired(harness string) bool {
+	return len(harnessDrivers[harness]) == 0
+}
+
 // ResolveRoute returns route's chain in stored order, annotated with
 // the gate appropriate to the requested axis (D-051 rework — harness is
 // now a caller-supplied param, not a per-entry chain field): harness ==
@@ -648,15 +659,23 @@ type ResolvedRouteEntry struct {
 // anthropic_base_url override for a non-anthropic driver row. ok is
 // false when the route doesn't exist (disabled or unknown name) OR
 // harness is non-empty and unknown — an existing route with zero
-// entries still returns ok true and an empty slice.
+// entries still returns ok true and an empty slice. For a self-paired
+// harness the route must still exist (callers rely on that contract)
+// but its chain is ignored: entries are synthesized from every enabled
+// kind='cli' row whose driver matches the harness, sorted by provider
+// name for determinism.
 func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bool) {
-	chain, ok := s.routes[route]
+	_, ok := s.routes[route]
 	if !ok {
 		return nil, false
 	}
 	if harness != "" && !KnownHarnesses[harness] {
 		return nil, false
 	}
+	if harness != "" && selfPaired(harness) {
+		return s.resolveSelfPaired(harness), true
+	}
+	chain := s.routes[route]
 	required := []provider.Capability{s.requiredCapability(route)}
 	out := make([]ResolvedRouteEntry, 0, len(chain))
 	for _, e := range chain {
@@ -701,6 +720,35 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 		out = append(out, re)
 	}
 	return out, true
+}
+
+// resolveSelfPaired builds entries for a self-paired harness directly
+// from provider rows, bypassing the route chain entirely: harness's
+// only possible entries are enabled kind='cli' rows whose driver
+// matches it (a kind='api' row can never satisfy an empty
+// harnessDrivers set). Sorted by provider name for a deterministic
+// order, since there's no chain priority to preserve.
+func (s *Snapshot) resolveSelfPaired(harness string) []ResolvedRouteEntry {
+	rows, _ := s.Providers()
+	out := make([]ResolvedRouteEntry, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind != "cli" || row.Driver != harness {
+			continue
+		}
+		re := ResolvedRouteEntry{
+			ProviderID:    row.ID,
+			ProviderName:  row.Name,
+			Driver:        row.Driver,
+			Kind:          row.Kind,
+			CredentialRef: row.CredentialRef,
+			Model:         row.DefaultModel,
+			BaseURL:       row.BaseURL,
+		}
+		re.Prices = s.Prices(row.Name, re.Model)
+		re.Usable, re.SkipReason = executorUsable(row, harness)
+		out = append(out, re)
+	}
+	return out
 }
 
 // executorUsable applies the harness-entry rule (D-051), deliberately

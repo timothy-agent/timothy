@@ -1444,3 +1444,119 @@ func TestResolveRouteOpenAIResponsesGate(t *testing.T) {
 		t.Fatalf("entry = %+v, want usable (opencode doesn't need /responses)", entries[0])
 	}
 }
+
+// TestResolveRouteSelfPairedIgnoresChain covers cursor-cli's
+// subscription-locked resolution: a self-paired harness (empty
+// harnessDrivers set) resolves straight to its own kind='cli' provider
+// row, even though the route's chain never mentions that row at all;
+// chain membership is meaningless ceremony for a harness that can only
+// ever run against one kind of row.
+func TestResolveRouteSelfPairedIgnoresChain(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+			DefaultModel: "sonnet", CredentialRef: "A_KEY", Enabled: true},
+		{ID: "p2", Name: "cursor-sub", Kind: "cli", Driver: "cursor-cli",
+			DefaultModel: "gpt-5-cursor", CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		// The chain only lists the anthropic row; cursor-sub is absent.
+		{Name: "coding", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "sonnet"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
+
+	entries, ok := snap.ResolveRoute("coding", "cursor-cli")
+	if !ok {
+		t.Fatalf("ResolveRoute: route not found")
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v, want exactly the cursor-sub row despite chain not listing it", entries)
+	}
+	e := entries[0]
+	if e.ProviderID != "p2" || e.ProviderName != "cursor-sub" || !e.Usable || e.SkipReason != "" {
+		t.Fatalf("entry = %+v, want usable cursor-sub", e)
+	}
+	if e.Model != "gpt-5-cursor" {
+		t.Fatalf("entry model = %q, want row.DefaultModel", e.Model)
+	}
+}
+
+// TestResolveRouteSelfPairedSkipsDisabled: a disabled cursor row must
+// still surface (so admin/UI can show why it's unusable), just not
+// usable.
+func TestResolveRouteSelfPairedSkipsDisabled(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p2", Name: "cursor-sub", Kind: "cli", Driver: "cursor-cli",
+			CredentialRef: "subscription", Enabled: false},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding", Enabled: true, Chain: nil},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
+
+	entries, ok := snap.ResolveRoute("coding", "cursor-cli")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[0].Usable || entries[0].SkipReason != "disabled" {
+		t.Fatalf("entry = %+v, want unusable with reason disabled", entries[0])
+	}
+}
+
+// TestResolveRouteClaudeCLIStillRequiresChainMembership regression-
+// guards that only a self-paired harness gets the chain-bypass:
+// claude-cli (non-empty harnessDrivers set) must keep resolving the
+// route's actual chain, so a cli row absent from the chain never
+// appears in its results.
+func TestResolveRouteClaudeCLIStillRequiresChainMembership(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+			DefaultModel: "sonnet", CredentialRef: "A_KEY", Enabled: true},
+		{ID: "p2", Name: "claude-sub", Kind: "cli", Driver: "claude-cli",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		// claude-sub is deliberately absent from the chain.
+		{Name: "coding", Enabled: true, Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "sonnet"},
+		}},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
+
+	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	if !ok || len(entries) != 1 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v, want the chain's single entry only", entries, ok)
+	}
+	if entries[0].ProviderID != "p1" {
+		t.Fatalf("entry = %+v, claude-cli must not synthesize entries outside the chain", entries[0])
+	}
+}
+
+// TestResolveRouteSelfPairedMultipleRowsSortedByName confirms
+// determinism: multiple enabled cursor-cli rows resolve in provider
+// name order, matching Providers()'s own sort.
+func TestResolveRouteSelfPairedMultipleRowsSortedByName(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "cursor-zeta", Kind: "cli", Driver: "cursor-cli",
+			CredentialRef: "subscription", Enabled: true},
+		{ID: "p2", Name: "cursor-alpha", Kind: "cli", Driver: "cursor-cli",
+			CredentialRef: "subscription", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding", Enabled: true, Chain: nil},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
+
+	entries, ok := snap.ResolveRoute("coding", "cursor-cli")
+	if !ok || len(entries) != 2 {
+		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
+	}
+	if entries[0].ProviderName != "cursor-alpha" || entries[1].ProviderName != "cursor-zeta" {
+		t.Fatalf("entries not sorted by provider name: %+v", entries)
+	}
+}
