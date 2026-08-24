@@ -208,6 +208,12 @@ func (m Mission) WorkRoot() string {
 // independently by RunVerify before the mission can advance past it.
 type Spec struct {
 	Units []PlanUnit `json:"units"`
+	// Infeasible marks a plan the planner refused to write because the
+	// goal cannot be achieved as stated (D-077); Units is empty when
+	// this is true. InfeasibleReason carries why (json tag "reason" to
+	// match the submit_plan tool schema's property name).
+	Infeasible       bool   `json:"infeasible,omitempty"`
+	InfeasibleReason string `json:"reason,omitempty"`
 }
 
 // PlanUnit is one item of the plan. Passes is flipped only by the

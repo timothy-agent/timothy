@@ -290,6 +290,25 @@ func TestStep(t *testing.T) {
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseDone, Status: StatusDone},
 		},
+		{
+			// D-077: a planner-reported infeasible goal fails the mission
+			// outright instead of falling through to a rewritten plan.
+			name:  "plan_infeasible in plan phase fails the mission",
+			state: StepState{Phase: PhasePlan, Status: StatusWorking},
+			input: StepInput{Input: InputPlanInfeasible, Reason: "goal forbids the only possible action"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseFailed, Status: StatusError},
+		},
+		{
+			// InputPlanInfeasible is valid only in PhasePlan; arriving in
+			// any other phase is a no-op, same convention as the default
+			// unrecognized-input case.
+			name:  "plan_infeasible outside plan phase is a no-op",
+			state: StepState{Phase: PhaseExecute, Status: StatusWorking},
+			input: StepInput{Input: InputPlanInfeasible, Reason: "goal forbids the only possible action"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseExecute, Status: StatusWorking},
+		},
 	}
 
 	for _, tc := range cases {
@@ -319,6 +338,27 @@ func TestStepReviewApproveEmitsPassedTrue(t *testing.T) {
 	passed, ok := got.Events[0].Payload["passed"].(bool)
 	if !ok || !passed {
 		t.Fatalf("Events[0].Payload = %+v, want passed=true", got.Events[0].Payload)
+	}
+}
+
+// TestStepPlanInfeasibleEmitsGoalInfeasibleEvent confirms the plan
+// phase's infeasible transition emits mission.failed with
+// reason=goal_infeasible and the planner's own detail, distinguishable
+// in the event log from a max_iterations or cancelled failure.
+func TestStepPlanInfeasibleEmitsGoalInfeasibleEvent(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhasePlan, Status: StatusWorking},
+		StepInput{Input: InputPlanInfeasible, Reason: "goal forbids the only possible action"},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.failed" {
+		t.Fatalf("Events = %+v, want exactly one mission.failed event", got.Events)
+	}
+	if reason, _ := got.Events[0].Payload["reason"].(string); reason != "goal_infeasible" {
+		t.Fatalf("mission.failed payload reason = %q, want %q", reason, "goal_infeasible")
+	}
+	if detail, _ := got.Events[0].Payload["detail"].(string); detail != "goal forbids the only possible action" {
+		t.Fatalf("mission.failed payload detail = %q, want the planner's reason", detail)
 	}
 }
 

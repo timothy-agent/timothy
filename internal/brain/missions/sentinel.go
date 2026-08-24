@@ -99,9 +99,17 @@ func PlanTool() *tools.Tool {
 						},
 						"required": ["title", "artifacts", "verify_cmd"]
 					}
+				},
+				"infeasible": {
+					"type": "boolean",
+					"description": "D-077: set true when the goal cannot be achieved as stated (it forbids the only possible action, contradicts what exists in the workspace, or is self-contradictory). No units are needed then."
+				},
+				"reason": {
+					"type": "string",
+					"description": "Required when infeasible is true: why the goal is infeasible."
 				}
 			},
-			"required": ["units"]
+			"required": []
 		}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			return "plan recorded", nil

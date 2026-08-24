@@ -946,6 +946,15 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	if err != nil {
 		return StepInput{}, err
 	}
+	// D-077: the planner refused to write a plan because the goal cannot
+	// be achieved as stated: fail the mission instead of storing a spec
+	// and advancing to execute.
+	if spec.Infeasible {
+		if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_infeasible", map[string]any{"reason": spec.InfeasibleReason}); err != nil {
+			return StepInput{}, fmt.Errorf("driver: record plan infeasible: %w", err)
+		}
+		return StepInput{Input: InputPlanInfeasible, Reason: spec.InfeasibleReason}, nil
+	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_created", map[string]any{"units": len(spec.Units)}); err != nil {
 		return StepInput{}, fmt.Errorf("driver: record plan: %w", err)
 	}

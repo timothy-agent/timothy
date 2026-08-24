@@ -569,6 +569,42 @@ func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 	}
 }
 
+// TestPlanSessionParsesInfeasible pins D-077: infeasible=true with a
+// reason parses to Spec.Infeasible, no units needed.
+func TestPlanSessionParsesInfeasible(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"infeasible":true,"reason":"goal forbids the only possible action"}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "impossible goal"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if !spec.Infeasible {
+		t.Fatal("PlanSession spec.Infeasible = false, want true")
+	}
+	if spec.InfeasibleReason != "goal forbids the only possible action" {
+		t.Fatalf("PlanSession spec.InfeasibleReason = %q", spec.InfeasibleReason)
+	}
+	if len(spec.Units) != 0 {
+		t.Fatalf("PlanSession spec.Units = %+v, want empty on an infeasible plan", spec.Units)
+	}
+}
+
+// TestPlanSessionRejectsInfeasibleWithoutReason confirms infeasible=true
+// with no reason is rejected, same one-recovery-turn ladder as any
+// other invalid plan.
+func TestPlanSessionRejectsInfeasibleWithoutReason(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"infeasible":true}`)},
+		{toolEndEvent(planToolName, `{"infeasible":true}`)},
+	}}
+	r := newTestRunner(agent)
+	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, ""); err == nil {
+		t.Fatal("PlanSession accepted infeasible=true with no reason")
+	}
+}
+
 // TestPlanSessionRejectsCommandSubstitution guards parseSpec's
 // determinism rule: verify_cmd runs harness-side via RunVerify,
 // outside the permission chain (D-050's sandbox relaxation for a

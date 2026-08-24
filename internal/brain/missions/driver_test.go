@@ -575,6 +575,46 @@ func TestDriverPlanReceivesStoredExploreNotes(t *testing.T) {
 	}
 }
 
+// TestDriverPlanInfeasibleFailsMission confirms D-077: when the
+// planner reports the goal cannot be achieved as stated, the driver
+// feeds InputPlanInfeasible through the normal transition path and the
+// mission ends phase=failed rather than storing a spec and advancing
+// to execute.
+func TestDriverPlanInfeasibleFailsMission(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		plans: []Spec{{Infeasible: true, InfeasibleReason: "goal forbids the only possible action"}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	got := store.missions["m1"]
+	if got.Phase != PhaseFailed {
+		t.Fatalf("Phase = %q, want failed", got.Phase)
+	}
+	if len(got.Spec.Units) != 0 {
+		t.Fatalf("Spec.Units = %+v, want no units stored for an infeasible plan", got.Spec.Units)
+	}
+	var sawFailed, sawInfeasible bool
+	for _, ev := range store.events["m1"] {
+		switch ev.Kind {
+		case "mission.failed":
+			sawFailed = true
+		case "mission.plan_infeasible":
+			sawInfeasible = true
+		}
+	}
+	if !sawFailed {
+		t.Fatal("no mission.failed event recorded")
+	}
+	if !sawInfeasible {
+		t.Fatal("no mission.plan_infeasible event recorded")
+	}
+}
+
 // TestDriverExecuteRecordsHandoffOverRawText confirms that when the
 // worker's mission_status call carries a handoff note, the harness
 // records THAT as the progress note for the next session, not the

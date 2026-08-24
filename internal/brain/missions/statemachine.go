@@ -100,6 +100,10 @@ const (
 	InputReviewInfraFailure Input = "review_infra_failure"
 	InputResume             Input = "resume"
 	InputCancel             Input = "cancel"
+	// InputPlanInfeasible fires when the planner reports the goal cannot
+	// be achieved as stated (D-077); valid only in PhasePlan, fails the
+	// mission instead of letting a rewritten goal reach execute.
+	InputPlanInfeasible Input = "plan_infeasible"
 )
 
 // StepState is the state-machine-relevant slice of a Mission — Step
@@ -249,6 +253,17 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 		return Transition{
 			Next:   withPause(s, PauseInfra),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+		}
+	case InputPlanInfeasible:
+		// Valid only in PhasePlan (D-077): a mission that reaches plan and
+		// gets told the goal itself cannot be done fails outright rather
+		// than falling through to a rewritten (fabricated) plan.
+		if s.Phase != PhasePlan {
+			return Transition{Next: s}
+		}
+		return Transition{
+			Next:   withPhaseFailed(s),
+			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "goal_infeasible", "detail": in.Reason}}},
 		}
 	default:
 		// Unrecognized input: no-op rather than a panic or a silent
