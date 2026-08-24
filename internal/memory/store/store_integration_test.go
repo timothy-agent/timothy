@@ -763,6 +763,94 @@ func TestDecayStaleSemantic(t *testing.T) {
 	}
 }
 
+func TestDemoteUnused(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	backdate := func(id string) {
+		if _, err := db.Exec(ctx,
+			"UPDATE memories SET created_at = now() - interval '90 days' WHERE id = $1", id); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+	}
+
+	eligible := mem("stale unused pending fact")
+	eligible.Confidence = 0.5
+	eligibleID, _ := s.Insert(ctx, eligible)
+	backdate(eligibleID)
+
+	retrieved := mem("stale but retrieved pending fact")
+	retrieved.Confidence = 0.5
+	retrievedID, _ := s.Insert(ctx, retrieved)
+	backdate(retrievedID)
+	if _, err := db.Exec(ctx,
+		"UPDATE memories SET retrieval_hits = 1, last_retrieved_at = now() WHERE id = $1", retrievedID); err != nil {
+		t.Fatalf("mark retrieved: %v", err)
+	}
+
+	// Retrieved before retrieval_hits existed: zero counter but a
+	// non-null last_retrieved_at, must stay immune.
+	legacy := mem("stale pending fact retrieved pre-counter")
+	legacy.Confidence = 0.5
+	legacyID, _ := s.Insert(ctx, legacy)
+	backdate(legacyID)
+	if _, err := db.Exec(ctx,
+		"UPDATE memories SET last_retrieved_at = now() WHERE id = $1", legacyID); err != nil {
+		t.Fatalf("mark legacy retrieved: %v", err)
+	}
+
+	confirmed := mem("stale but confirmed fact")
+	confirmed.Confidence = 0.5
+	confirmedID, _ := s.Insert(ctx, confirmed)
+	backdate(confirmedID)
+	if err := s.Promote(ctx, confirmedID); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	highConfidence := mem("stale high-confidence pending fact")
+	highConfidence.Confidence = 0.95
+	highConfidenceID, _ := s.Insert(ctx, highConfidence)
+	backdate(highConfidenceID)
+
+	fresh := mem("recent unused pending fact")
+	fresh.Confidence = 0.5
+	freshID, _ := s.Insert(ctx, fresh)
+
+	ids, err := s.DemoteUnused(ctx, time.Now().Add(-60*24*time.Hour), 0.8, 10)
+	if err != nil {
+		t.Fatalf("DemoteUnused: %v", err)
+	}
+	demoted := map[string]bool{}
+	for _, id := range ids {
+		demoted[id] = true
+	}
+	if !demoted[eligibleID] {
+		t.Fatalf("eligible memory not demoted: %v", ids)
+	}
+	for name, id := range map[string]string{
+		"retrieved": retrievedID, "confirmed": confirmedID,
+		"high-confidence": highConfidenceID, "fresh": freshID,
+		"legacy-retrieved": legacyID,
+	} {
+		if demoted[id] {
+			t.Fatalf("%s memory wrongly demoted", name)
+		}
+	}
+
+	if got, _ := s.Get(ctx, eligibleID); got.Status != StatusArchived {
+		t.Fatalf("eligible status = %s, want archived", got.Status)
+	}
+	if got, _ := s.Get(ctx, retrievedID); got.Status != StatusPending {
+		t.Fatalf("retrieved status = %s, want still pending", got.Status)
+	}
+	if got, _ := s.Get(ctx, confirmedID); got.Status != StatusActive {
+		t.Fatalf("confirmed status = %s, want still active", got.Status)
+	}
+}
+
 // rawDB opens a direct connection for tests that must corrupt state in
 // ways the store API forbids.
 func rawDB(t *testing.T) *pgxpool.Pool {

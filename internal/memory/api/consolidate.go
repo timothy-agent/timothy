@@ -25,6 +25,7 @@ func (a *API) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 		"rejected": summary.Rejected,
 		"archived": summary.Archived,
 		"decayed":  summary.Decayed,
+		"demoted":  summary.Demoted,
 	}
 	if err != nil {
 		a.log.Warn("consolidation pass failed", "error", err)

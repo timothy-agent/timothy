@@ -49,6 +49,7 @@ type Memory struct {
 	SupersededBy    string
 	Status          Status
 	Confidence      float32
+	RetrievalHits   int
 }
 
 // Entity is a named thing memories can reference. MemoryCount is the

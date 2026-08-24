@@ -34,7 +34,7 @@ func New(db *pgpool.Pool, log *slog.Logger) *Store {
 const memoryColumns = `id, type, content, entity_refs, ` +
 	`COALESCE(source_session::text, ''), COALESCE(source_seq, 0), actor, ` +
 	`created_at, last_confirmed_at, COALESCE(superseded_by::text, ''), ` +
-	`status, COALESCE(confidence, 0)`
+	`status, COALESCE(confidence, 0), retrieval_hits`
 
 // Insert stores a new memory and returns its id. Status is derived,
 // not caller-chosen: user-explicit memories activate immediately,
@@ -340,6 +340,41 @@ func (s *Store) Confirm(ctx context.Context, id string) error {
 	return nil
 }
 
+// DemoteUnused archives pending memories that were never retrieved,
+// never confirmed (still pending: confirmation is Promote to active),
+// low confidence, and older than the cutoff. The last_retrieved_at
+// IS NULL guard keeps rows retrieved before retrieval_hits existed
+// immune despite their zero counter. This never overwrites content,
+// only closes the row out (D-011). Returns the demoted ids.
+func (s *Store) DemoteUnused(ctx context.Context, olderThan time.Time, confidenceBelow float64, limit int) ([]string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("demote unused: %w", err)
+	}
+	rows, err := db.Query(ctx, `UPDATE memories SET status = $1
+		WHERE id IN (
+			SELECT id FROM memories
+			WHERE status = $2 AND retrieval_hits = 0 AND last_retrieved_at IS NULL
+			  AND confidence < $3 AND created_at < $4
+			ORDER BY created_at
+			LIMIT $5)
+		RETURNING id`,
+		StatusArchived, StatusPending, confidenceBelow, olderThan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("demote unused: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("demote unused: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // ArchiveStaleEpisodic retires active episodic memories neither
 // retrieved nor created within the window. Returns how many.
 func (s *Store) ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error) {
@@ -398,7 +433,7 @@ func scanMemory(r rowScanner) (Memory, error) {
 	var m Memory
 	err := r.Scan(&m.ID, &m.Type, &m.Content, &m.EntityRefs, &m.SourceSession,
 		&m.SourceSeq, &m.Actor, &m.CreatedAt, &m.LastConfirmedAt,
-		&m.SupersededBy, &m.Status, &m.Confidence)
+		&m.SupersededBy, &m.Status, &m.Confidence, &m.RetrievalHits)
 	return m, err
 }
 
