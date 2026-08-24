@@ -13,7 +13,7 @@
 
 **The personal AI assistant you actually own.** Timothy runs on your hardware and works for you around the clock: it chats, researches, and writes code; it reads your inbox and calendar and briefs you about what matters; it remembers who you are across every conversation; and it delivers results to your phone while you sleep. Every conversation, memory, document, and API key stays on infrastructure you control.
 
-Use any model you want: Anthropic, OpenAI, Amazon Bedrock, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to the model that earns it, switch anytime from settings, no code changes, no lock-in.
+Use any model you want: Anthropic, OpenAI, Amazon Bedrock, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to whichever model does it best, switch anytime from settings, no code changes, no lock-in.
 
 **Status: early, under active development.** 
 
