@@ -32,10 +32,12 @@ func New(baseURL string) *Client {
 // Extract posts one extraction job and returns the inserted memory
 // ids. route overrides memoryd's own side-call route when non-empty —
 // set when the turn/session being extracted executed a sensitive tool
-// and must not fall back to the default side-call route.
-func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64, text, route string) ([]string, error) {
+// and must not fall back to the default side-call route. source names
+// what produced the text ("chat", "mission", "compaction") so memoryd
+// can pick a source-appropriate extraction contract; empty means chat.
+func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64, text, route, source string) ([]string, error) {
 	body, err := json.Marshal(map[string]any{
-		"session_id": sessionID, "source_seq": sourceSeq, "text": text, "route": route,
+		"session_id": sessionID, "source_seq": sourceSeq, "text": text, "route": route, "source": source,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("memclient: marshal: %w", err)

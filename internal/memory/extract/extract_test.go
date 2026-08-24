@@ -245,7 +245,7 @@ func TestExtractDropsExactDuplicate(t *testing.T) {
 	}
 }
 
-func TestExtractKeepsNearDuplicate(t *testing.T) {
+func TestExtractNearDuplicateReinforcesInsteadOfInserting(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
 	st := &fakeStore{}
@@ -254,8 +254,44 @@ func TestExtractKeepsNearDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
+	if len(ids) != 0 || len(st.inserted) != 0 {
+		t.Fatalf("near dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	if len(st.confirmed) != 1 || st.confirmed[0] != "existing" {
+		t.Fatalf("confirmed = %v, want [existing]", st.confirmed)
+	}
+}
+
+// A mission-source job uses the mission contract and drops facts that
+// merely restate the digest's goal/title header lines.
+func TestExtractMissionSourceFiltersGoalEchoes(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[` +
+		`{"type":"semantic","content":"The user mandated a mission goal to create a file named redirects.md explaining 301 302 and 307 redirects in ten lines.","entities":[],"confidence":0.95},` +
+		`{"type":"semantic","content":"The bKash production API rejects requests without an app key header.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	digest := "mission goal: Create a file named redirects.md explaining 301, 302, and 307 redirects in ten lines\n" +
+		"mission title: Understanding Redirects\nmission kind: general\n\nterminal state: done\n"
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: digest, Source: "mission"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
 	if len(ids) != 1 || len(st.inserted) != 1 {
-		t.Fatalf("near dup dropped: ids=%v inserted=%d", ids, len(st.inserted))
+		t.Fatalf("want the goal echo dropped and the real fact kept: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	if !strings.Contains(st.inserted[0].Content, "bKash") {
+		t.Fatalf("kept the wrong fact: %q", st.inserted[0].Content)
+	}
+}
+
+func TestEchoesDeny(t *testing.T) {
+	t.Parallel()
+	deny := []string{"create a file named redirects.md explaining 301, 302, and 307 redirects"}
+	if !echoesDeny("The user mandated a mission goal to create a file named redirects.md that explains 301, 302, and 307 redirects.", deny) {
+		t.Fatal("paraphrased goal echo not caught")
+	}
+	if echoesDeny("The bKash production API rejects requests without an app key header.", deny) {
+		t.Fatal("unrelated fact wrongly dropped")
 	}
 }
 

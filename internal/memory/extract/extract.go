@@ -67,6 +67,14 @@ const system = `You extract durable facts from a conversation excerpt for an AI 
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0}]
 Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic — even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
 
+// missionSystem is the mission-digest extraction contract. The input
+// is a mission's OutcomeDigest — goal, title, kind, unit statuses —
+// which is a RECORD, not knowledge: everything in its header lines
+// already lives in the missions table. Only deltas qualify.
+const missionSystem = `You extract durable facts from a completed background mission's outcome digest for an AI assistant's long-term memory. Reply with ONLY a JSON array — no prose, no markdown fences:
+[{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0}]
+ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state — those are bookkeeping the system already stores, not knowledge. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
+
 // Request is one extraction job: text from a completed turn or from
 // turns about to be compacted away.
 type Request struct {
@@ -79,6 +87,13 @@ type Request struct {
 	// pinned the turn to instead of falling back to sideRoute's cloud
 	// model.
 	Route string `json:"route,omitempty"`
+	// Source names what produced Text: "chat" (default), "mission"
+	// (a terminal mission's OutcomeDigest), or "compaction". Mission
+	// digests get their own extraction contract — the generic prompt
+	// dutifully extracted the digest's own goal/title/kind header
+	// lines as "facts", flooding the confirmation queue with
+	// restatements of things the missions table already records.
+	Source string `json:"source,omitempty"`
 }
 
 // Extractor runs the pipeline.
@@ -119,29 +134,34 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 		vecs = make([][]float32, len(facts))
 	}
 
+	deny := denyText(req)
 	var ids []string
 	for i, f := range facts {
+		if echoesDeny(f.Content, deny) {
+			// The model restated the digest's own goal/title header —
+			// bookkeeping the missions table already records, never a
+			// memory. Code enforces what the prompt asks for (D-011).
+			e.log.Info("memory dropped as source-header echo", "session_id", req.SessionID)
+			continue
+		}
 		emb := store.Vector(vecs[i])
 		if len(emb) > 0 {
 			dupID, sim, found, err := e.store.NearestActive(ctx, emb)
 			if err != nil {
 				return ids, fmt.Errorf("extract: dedup: %w", err)
 			}
-			if found && sim >= exactDupSimilarity {
-				// Dropping the fact would otherwise lose the
-				// confirmation signal entirely; best-effort, never
-				// fails extraction.
+			if found && sim >= nearDupSimilarity {
+				// Exact and near duplicates both reinforce the existing
+				// row instead of inserting: repetition is a confidence
+				// signal, not new knowledge. Inserting near-dups "for
+				// consolidation to merge later" flooded the confirmation
+				// queue with the same fact many times over.
 				if err := e.store.Confirm(ctx, dupID); err != nil {
-					e.log.Warn("confirm on exact duplicate failed; fact still dropped", "of", dupID, "error", err)
+					e.log.Warn("confirm on duplicate failed; fact still dropped", "of", dupID, "error", err)
 				}
-				e.log.Info("memory dropped as exact duplicate",
+				e.log.Info("memory duplicate reinforced existing row",
 					"of", dupID, "similarity", sim, "session_id", req.SessionID)
 				continue
-			}
-			if found && sim >= nearDupSimilarity {
-				// Near-dup: keep it, consolidation merges the group later.
-				e.log.Info("memory near-duplicate kept for consolidation",
-					"of", dupID, "similarity", sim, "session_id", req.SessionID)
 			}
 		}
 
@@ -202,10 +222,14 @@ func (e *Extractor) proposeOnce(ctx context.Context, req Request) (string, error
 	if req.Route != "" {
 		route = req.Route
 	}
+	sys := system
+	if req.Source == "mission" {
+		sys = missionSystem
+	}
 	events, err := e.gw.Stream(ctx, gwclient.StreamRequest{
 		Route: route,
 		Purpose:      "memory-extract",
-		System:       system,
+		System:       sys,
 		Messages:     []provider.Message{{Role: "user", Content: req.Text}},
 		// Reasoning models spend thinking tokens from the same budget
 		// before emitting content; 1000 starved the JSON reply entirely
@@ -318,4 +342,55 @@ func AutoPromote(f Fact) bool {
 		return false
 	}
 	return !sensitive.MatchString(f.Content)
+}
+
+// denyText collects the source-record lines a proposed fact must not
+// restate. Only mission digests carry them: OutcomeDigest's "mission
+// goal:" and "mission title:" headers are bookkeeping, not knowledge,
+// and models reliably extract them as "facts" without this fence.
+func denyText(req Request) []string {
+	if req.Source != "mission" {
+		return nil
+	}
+	var deny []string
+	for _, line := range strings.Split(req.Text, "\n") {
+		for _, prefix := range []string{"mission goal:", "mission title:"} {
+			if rest, ok := strings.CutPrefix(line, prefix); ok {
+				if v := strings.TrimSpace(rest); v != "" {
+					deny = append(deny, strings.ToLower(v))
+				}
+			}
+		}
+	}
+	return deny
+}
+
+// echoesDeny reports whether content substantially restates any deny
+// line: most of the deny line's words (>70%) reappear in the fact.
+// Word-overlap rather than substring, because extraction paraphrases
+// ("The user mandated a mission goal to create...") instead of quoting.
+func echoesDeny(content string, deny []string) bool {
+	if len(deny) == 0 {
+		return false
+	}
+	words := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(content)) {
+		words[strings.Trim(w, ".,;:'\"()")] = true
+	}
+	for _, d := range deny {
+		fields := strings.Fields(d)
+		if len(fields) == 0 {
+			continue
+		}
+		hits := 0
+		for _, w := range fields {
+			if words[strings.Trim(w, ".,;:'\"()")] {
+				hits++
+			}
+		}
+		if float64(hits)/float64(len(fields)) > 0.7 {
+			return true
+		}
+	}
+	return false
 }

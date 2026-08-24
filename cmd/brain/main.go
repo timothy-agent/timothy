@@ -464,7 +464,7 @@ func main() {
 		}
 		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 		defer cancel()
-		if _, err := mc.Extract(ectx, sessionID, seq, text, route); err != nil {
+		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat"); err != nil {
 			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
 		}
 	})
@@ -480,7 +480,7 @@ func main() {
 			}
 			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 			defer cancel()
-			if _, err := mc.Extract(ectx, sessionID, seq, text, route); err != nil {
+			if _, err := mc.Extract(ectx, sessionID, seq, text, route, "mission"); err != nil {
 				app.Log.Warn("mission memory extraction failed", "session_id", sessionID, "error", err)
 			}
 		})
@@ -493,7 +493,7 @@ func main() {
 		// never starve the summarize that follows it.
 		ectx, cancel := context.WithTimeout(ctx, preCompactExtractBudget)
 		defer cancel()
-		ids, err := mc.Extract(ectx, sessionID, seq, text, route)
+		ids, err := mc.Extract(ectx, sessionID, seq, text, route, "compaction")
 		if err != nil {
 			app.Log.Warn("pre-compaction extraction failed", "session_id", sessionID, "error", err)
 			return nil
