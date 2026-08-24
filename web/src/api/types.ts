@@ -856,7 +856,7 @@ export interface MissionSteeredPayload {
   note: string
 }
 
-// MissionTurnPayload is mission.turn's payload — one event per phase
+// MissionTurnPayload is mission.turn's payload: one event per phase
 // run (driver.go's Advance), recording wall time and the StepInput that
 // resulted regardless of which phase actually ran.
 export interface MissionTurnPayload {
@@ -868,7 +868,7 @@ export interface MissionTurnPayload {
   escalated_route?: string
 }
 
-// MissionRetryPayload is mission.retry's payload (statemachine.go) —
+// MissionRetryPayload is mission.retry's payload (statemachine.go);
 // cause is the fixed StepInput driving the retry, reason is whatever
 // text the failing turn reported.
 export interface MissionRetryPayload {
@@ -877,7 +877,7 @@ export interface MissionRetryPayload {
 }
 
 // MissionPermissionDeniedPayload is mission.permission_denied's payload
-// (runner.go's OnPermissionDenied) — tool is the denied call, detail is
+// (runner.go's OnPermissionDenied); tool is the denied call, detail is
 // a short digest of why (never the full args/rationale).
 export interface MissionPermissionDeniedPayload {
   tool: string

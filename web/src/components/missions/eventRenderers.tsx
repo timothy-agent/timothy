@@ -60,7 +60,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     if (ok || !reason) return <span className={ok ? undefined : 'text-red-400'}>{base}</span>
     return (
       <span className="text-red-400" title={reason}>
-        {base} — {truncateForDisplay(reason, 160)}
+        {base}: {truncateForDisplay(reason, 160)}
       </span>
     )
   },
@@ -102,7 +102,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return (
       <span className="text-red-400" title={detail}>
         Permission denied: {tool}
-        {detail ? ` — ${truncateForDisplay(detail, 160)}` : ''}
+        {detail ? `: ${truncateForDisplay(detail, 160)}` : ''}
       </span>
     )
   },
