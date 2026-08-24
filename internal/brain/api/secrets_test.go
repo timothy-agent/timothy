@@ -347,7 +347,7 @@ func TestListSecretsIncludesDestinationReferent(t *testing.T) {
 		{RefName: "TELEGRAM_DEST_REF"},
 	}}
 	dests := &fakeDestinationLister{rows: []destinations.Destination{
-		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"},
+		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"}, //nolint:gosec // ref name, not a secret value
 		{Name: "webhook-sink", Kind: "webhook", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
@@ -385,7 +385,7 @@ func TestDeleteSecretRefusesWhenDestinationReferencesIt(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{}
 	dests := &fakeDestinationLister{rows: []destinations.Destination{
-		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"},
+		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"}, //nolint:gosec // ref name, not a secret value
 	}}
 	m := http.NewServeMux()
 	a.registerSecrets(m.Handle, gw, nil, dests)
