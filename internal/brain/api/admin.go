@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
 )
@@ -126,12 +127,20 @@ type connectorLister interface {
 	List(ctx context.Context) ([]connectors.Connector, error)
 }
 
+// destinationLister is the slice of destinations.Store the directory
+// needs; *destinations.Store satisfies it. Includes disabled
+// destinations: a disabled destination still owns its credential_ref.
+type destinationLister interface {
+	List(ctx context.Context) ([]destinations.Destination, error)
+}
+
 // secretRefEntry is the credentials panel's per-ref shape: the
-// gateway's directory metadata plus every referent (provider or
-// connector) across both services, merged here because neither service
-// alone can see both tables. Never a value. System marks a configured
-// secret backend's own bootstrap credential (passed straight through
-// from the gateway) — the panel hides the delete action for these.
+// gateway's directory metadata plus every referent (provider,
+// connector, or destination) across both services, merged here because
+// neither service alone can see both tables. Never a value. System
+// marks a configured secret backend's own bootstrap credential (passed
+// straight through from the gateway); the panel hides the delete
+// action for these.
 type secretRefEntry struct {
 	RefName      string          `json:"name"`
 	Backend      string          `json:"backend"`
@@ -142,7 +151,7 @@ type secretRefEntry struct {
 }
 
 type referenceInfo struct {
-	Kind string `json:"kind"` // "provider" | "connector"
+	Kind string `json:"kind"` // "provider" | "connector" | "destination"
 	Name string `json:"name"`
 	// Role distinguishes what the ref is used for, so the frontend can
 	// refuse manual picks of machine-managed refs: "credential" (a
@@ -155,27 +164,30 @@ type referenceInfo struct {
 
 // registerSecrets mounts brain's own credentials-directory endpoints.
 // GET assembles the gateway's per-ref provider referents with brain's
-// own connector referents (two independent DBs, no new cross-service
-// dependency — see admin_test.go for the design note). DELETE checks
-// connector references itself before forwarding to the gateway, which
-// independently refuses on provider references — each service stays
-// authoritative for the referents it owns. nil gw leaves the surface
-// unmounted; nil conns (connectors disabled — no master key) still
-// mounts it, minus the connector-reference guard, because DELETE has
-// no proxied fallback (see adminRoutePatterns) and the gateway's own
-// provider guard still applies.
-func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister) {
+// own connector and destination referents (independent DBs, no new
+// cross-service dependency; see admin_test.go for the design note).
+// DELETE checks connector and destination references itself before
+// forwarding to the gateway, which independently refuses on provider
+// references; each service stays authoritative for the referents it
+// owns. nil gw leaves the surface unmounted; nil conns (connectors
+// disabled, no master key) still mounts it, minus the
+// connector-reference guard, because DELETE has no proxied fallback
+// (see adminRoutePatterns) and the gateway's own provider guard still
+// applies. nil dests (destinations disabled) is the same: skips the
+// destination referents and the delete guard.
+func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister, dests destinationLister) {
 	if gw == nil {
 		return
 	}
-	h := &secretsAPI{gw: gw, connectors: conns}
+	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests}
 	handle("GET /v1/admin/secrets", a.auth(http.HandlerFunc(h.list)))
 	handle("DELETE /v1/admin/secrets/{ref_name}", a.auth(http.HandlerFunc(h.delete)))
 }
 
 type secretsAPI struct {
-	gw         GatewaySecrets
-	connectors connectorLister
+	gw           GatewaySecrets
+	connectors   connectorLister
+	destinations destinationLister
 }
 
 // connectorRefs maps every stored secret ref name to the connector
@@ -224,6 +236,28 @@ func connectorRefs(ctx context.Context, store connectorLister) (map[string][]ref
 	return out, nil
 }
 
+// destinationCredentialRefs maps every stored secret ref name to the
+// destination names referencing it: a telegram destination's
+// credential_ref (bot token). Email/webhook destinations have no
+// credential_ref and contribute nothing.
+func destinationCredentialRefs(ctx context.Context, store destinationLister) (map[string][]referenceInfo, error) {
+	if store == nil {
+		return map[string][]referenceInfo{}, nil
+	}
+	rows, err := store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]referenceInfo{}
+	for _, d := range rows {
+		if d.CredentialRef == "" {
+			continue
+		}
+		out[d.CredentialRef] = append(out[d.CredentialRef], referenceInfo{Kind: "destination", Name: d.Name, Role: "credential"})
+	}
+	return out, nil
+}
+
 func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	refs, err := h.gw.ListSecrets(r.Context())
 	if err != nil {
@@ -233,6 +267,11 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	byConnector, err := connectorRefs(r.Context(), h.connectors)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		return
+	}
+	byDestination, err := destinationCredentialRefs(r.Context(), h.destinations)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "destinations_failed", err.Error())
 		return
 	}
 
@@ -245,6 +284,7 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 			referents = append(referents, referenceInfo{Kind: "provider", Name: name, Role: "credential"})
 		}
 		referents = append(referents, byConnector[ref.RefName]...)
+		referents = append(referents, byDestination[ref.RefName]...)
 		out[i] = secretRefEntry{
 			RefName: ref.RefName, Backend: ref.Backend, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
 			ReferencedBy: referents, System: ref.System,
@@ -253,10 +293,11 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
 }
 
-// delete refuses (409) while any connector still names ref_name as its
-// credential_ref, without ever asking the gateway — a connector-only
-// reference is brain's own domain. Otherwise it forwards to the
-// gateway, which independently refuses on provider references.
+// delete refuses (409) while any connector or destination still names
+// ref_name as its credential_ref, without ever asking the gateway; a
+// connector/destination-only reference is brain's own domain.
+// Otherwise it forwards to the gateway, which independently refuses on
+// provider references.
 func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 	refName := r.PathValue("ref_name")
 	byConnector, err := connectorRefs(r.Context(), h.connectors)
@@ -271,6 +312,20 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonError(w, http.StatusConflict, "in_use",
 			refName+" is referenced by connector(s) "+joinNames(names))
+		return
+	}
+	byDestination, err := destinationCredentialRefs(r.Context(), h.destinations)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "destinations_failed", err.Error())
+		return
+	}
+	if refs := byDestination[refName]; len(refs) > 0 {
+		names := make([]string, len(refs))
+		for i, ref := range refs {
+			names[i] = ref.Name
+		}
+		jsonError(w, http.StatusConflict, "in_use",
+			refName+" is referenced by destination(s) "+joinNames(names))
 		return
 	}
 	status, err := h.gw.DeleteSecret(r.Context(), refName)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 )
 
@@ -36,13 +37,24 @@ func (f *fakeGatewaySecrets) DeleteSecret(_ context.Context, refName string) (in
 }
 
 // fakeConnectorLister stubs connectors.Store's List for the same
-// reason — no DB needed to test the merge/guard logic.
+// reason; no DB needed to test the merge/guard logic.
 type fakeConnectorLister struct {
 	rows []connectors.Connector
 	err  error
 }
 
 func (f *fakeConnectorLister) List(context.Context) ([]connectors.Connector, error) {
+	return f.rows, f.err
+}
+
+// fakeDestinationLister stubs destinations.Store's List for the same
+// reason; no DB needed to test the merge/guard logic.
+type fakeDestinationLister struct {
+	rows []destinations.Destination
+	err  error
+}
+
+func (f *fakeDestinationLister) List(context.Context) ([]destinations.Destination, error) {
 	return f.rows, f.err
 }
 
@@ -60,7 +72,7 @@ func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 		{Name: "no-cred", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -118,7 +130,7 @@ func TestListSecretsPropagatesGatewayFailure(t *testing.T) {
 	gw := &fakeGatewaySecrets{listErr: errors.New("gateway down")}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -143,7 +155,7 @@ func TestListSecretsCountsGoogleClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_id":"x.apps.googleusercontent.com","client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -183,7 +195,7 @@ func TestDeleteSecretRefusesGoogleClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GMAIL_GOOGLE_CLIENT_SECRET", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -206,7 +218,7 @@ func TestDeleteSecretRefusesWhenConnectorReferencesIt(t *testing.T) {
 		{Name: "github-mcp", CredentialRef: "GITHUB_PAT"},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GITHUB_PAT", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -236,7 +248,7 @@ func TestDeleteSecretForwardsOrphanedRefToGateway(t *testing.T) {
 	gw := &fakeGatewaySecrets{}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/ORPHAN_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -261,7 +273,7 @@ func TestDeleteSecretPropagatesGatewayInUseRefusal(t *testing.T) {
 	gw := &fakeGatewaySecrets{deleteErr: errors.New("SOME_KEY is referenced by provider(s) [openai]: in use"), deleteCode: http.StatusConflict}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns)
+	a.registerSecrets(m.Handle, gw, conns, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -282,7 +294,7 @@ func TestSecretsRoutesCoexistWithAdminProxy(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	m := http.NewServeMux()
 	a.registerAdmin(m.Handle, http.NotFoundHandler())
-	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{})
+	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{}, nil)
 }
 
 // TestRegisterSecretsMountsWithoutConnectors pins that a nil connector
@@ -294,7 +306,7 @@ func TestRegisterSecretsMountsWithoutConnectors(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil)
+	a.registerSecrets(m.Handle, gw, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -313,7 +325,7 @@ func TestRegisterSecretsUnmountedWithoutGatewayOrConnectors(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, nil, nil)
+	a.registerSecrets(m.Handle, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -322,5 +334,115 @@ func TestRegisterSecretsUnmountedWithoutGatewayOrConnectors(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (route unmounted)", w.Code)
+	}
+}
+
+// TestListSecretsIncludesDestinationReferent pins the bug this test
+// file was extended for: a telegram destination's credential_ref must
+// never look orphaned.
+func TestListSecretsIncludesDestinationReferent(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "TELEGRAM_BOT_TOKEN"},
+	}}
+	dests := &fakeDestinationLister{rows: []destinations.Destination{
+		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_BOT_TOKEN"},
+		{Name: "webhook-sink", Kind: "webhook", CredentialRef: ""},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, dests)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Secrets []secretRefEntry `json:"secrets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Secrets) != 1 {
+		t.Fatalf("secrets = %+v, want 1 entry", body.Secrets)
+	}
+	got := body.Secrets[0].ReferencedBy
+	want := referenceInfo{Kind: "destination", Name: "alerts-bot", Role: "credential"}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("TELEGRAM_BOT_TOKEN referenced_by = %+v, want [%+v] (never orphaned)", got, want)
+	}
+}
+
+// TestDeleteSecretRefusesWhenDestinationReferencesIt mirrors the
+// connector-guard test: a destination-only reference must refuse
+// deletion without ever asking the gateway.
+func TestDeleteSecretRefusesWhenDestinationReferencesIt(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	dests := &fakeDestinationLister{rows: []destinations.Destination{
+		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_BOT_TOKEN"},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, dests)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/TELEGRAM_BOT_TOKEN", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called (destination guard must short-circuit)", gw.deletedRef)
+	}
+	var respBody struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body := respBody.Message; body == "" {
+		t.Fatal("error message empty, want it to name the referencing destination")
+	}
+}
+
+// TestListSecretsSkipsDestinationsWithoutCredentialRef pins that
+// email/webhook destinations (empty credential_ref) never contribute a
+// spurious referent.
+func TestListSecretsSkipsDestinationsWithoutCredentialRef(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "ORPHAN_KEY"},
+	}}
+	dests := &fakeDestinationLister{rows: []destinations.Destination{
+		{Name: "webhook-sink", Kind: "webhook", CredentialRef: ""},
+		{Name: "email-out", Kind: "email", CredentialRef: ""},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, dests)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Secrets []secretRefEntry `json:"secrets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Secrets) != 1 || len(body.Secrets[0].ReferencedBy) != 0 {
+		t.Fatalf("secrets = %+v, want ORPHAN_KEY with empty referenced_by", body.Secrets)
 	}
 }

@@ -120,7 +120,14 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if conns != nil {
 		connLister = conns.Store()
 	}
-	a.registerSecrets(srv.Handle, gwSecrets, connLister)
+	// Same nil-box guard as connLister above: a nil *destinations.Store
+	// boxed straight into destLister would be a non-nil interface value,
+	// breaking registerSecrets' nil dests gate.
+	var destLister destinationLister
+	if destinationStore != nil {
+		destLister = destinationStore
+	}
+	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister)
 	a.registerSettings(srv.Handle, flags, whisperURL)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, secrets)
