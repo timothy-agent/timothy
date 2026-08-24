@@ -771,7 +771,7 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 // so the ladder's last resort is the raw turn text rather than a forced
 // failure.
 func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
-	system := "You are exploring one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only — do not create or modify files; the execute phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one explore_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + execEnvironmentNote()
+	system := "You are exploring one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only — do not create or modify files; the execute phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one explore_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + execEnvironmentNote()
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)

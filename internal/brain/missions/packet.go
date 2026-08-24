@@ -52,16 +52,23 @@ type WorkPacket struct {
 	Light bool
 }
 
+// toolDisciplineNote is the tool-loop stop-rule contract shared by the
+// explore prompt (runner.go) and both worker preambles: without it,
+// models repeat failed tool calls verbatim and burn iterations
+// (observed on glm-5.3 and the nova family), and fill gaps with
+// plausible guesses instead of naming what's missing.
+const toolDisciplineNote = " Tool discipline: before each tool call, know what you still need; after each result, judge whether it answered that. Never repeat a failed call unchanged — vary the approach or move on. If information cannot be found after a few attempts, continue with what you have and state what is missing rather than guessing."
+
 // nativeSystemPreamble is the mission_status/write_file contract a
 // native (in-process loop.Agent) worker turn must follow — meaningless
 // to a delegated CLI, which has neither tool (RenderForDelegated uses
 // delegatedSystemPreamble instead).
-const nativeSystemPreamble = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you; artifact tracking depends on write_file being the only way files get created. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff, the plan, and the git log."
+const nativeSystemPreamble = "You are executing one unit of a plan. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you; artifact tracking depends on write_file being the only way files get created. Use shell for reading and checking, not writing. The harness verifies your declared artifacts exist on disk; describing a file is not producing it. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff, the plan, and the git log." + toolDisciplineNote
 
 // lightSystemPreamble is nativeSystemPreamble's counterpart for a light
 // mission (D-069): single pass, no plan, no artifact check — the
 // worker's final message is delivered to the user verbatim.
-const lightSystemPreamble = "You are completing this goal in a single pass. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). On done, put the COMPLETE final deliverable text in the mission_status call's final_output argument — it is delivered to the user verbatim as the result, so it must be the deliverable itself, never a summary of work done. Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you. Use shell for reading and checking, not writing. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff and the git log."
+const lightSystemPreamble = "You are completing this goal in a single pass. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). On done, put the COMPLETE final deliverable text in the mission_status call's final_output argument — it is delivered to the user verbatim as the result, so it must be the deliverable itself, never a summary of work done. Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you. Use shell for reading and checking, not writing. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff and the git log." + toolDisciplineNote
 
 // Render turns the packet into the system/user message a native
 // worker session's first turn receives. Progress notes and git log

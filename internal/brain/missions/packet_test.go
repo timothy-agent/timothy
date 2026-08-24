@@ -242,3 +242,15 @@ func TestWorkPacketRenderNeutralizesAttachmentMarkdown(t *testing.T) {
 		t.Fatal("Render did not neutralize an injected framing sequence in attachment markdown")
 	}
 }
+
+// Both worker preambles carry the tool-discipline stop rules — the
+// contract that stops models from repeating failed tool calls verbatim.
+func TestWorkPacketRenderCarriesToolDiscipline(t *testing.T) {
+	for _, light := range []bool{false, true} {
+		p := WorkPacket{Goal: "g", Light: light}
+		system, _ := p.Render()
+		if !strings.Contains(system, "Never repeat a failed call unchanged") {
+			t.Fatalf("light=%v: system prompt missing tool discipline note", light)
+		}
+	}
+}
