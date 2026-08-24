@@ -46,7 +46,8 @@ var drivers = map[string]bool{"anthropic": true, "openaicompat": true, "openai-r
 // wire-format compatibility are validated here (D-051). codex-cli is
 // api_key only (no subscription/oauth mode), so in practice it's
 // always a kind='api' row — this entry costs nothing to keep either way.
-var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true}
+// cursor-cli is subscription-auth only, same posture as claude-cli.
+var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true, "cursor-cli": true}
 
 // credentialRefPattern accepts names and paths (env var names, Vault
 // paths, AWS profile names) and rejects anything that could be a
@@ -470,12 +471,15 @@ func validateProvider(p Provider) error {
 // override. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat (its whole point is dual-wire support);
 // codex-cli and opencode speak openaicompat only (codex's own responses
-// wire; opencode's config-file baseURL).
+// wire; opencode's config-file baseURL). cursor-cli accepts no api rows
+// at all (no BYOK, no custom endpoint support): only its own kind='cli'
+// row, which never reaches this check (see the comment below).
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
+	"cursor-cli": {},
 }
 
 // validateHarnessWireFormat checks that a kind='api' provider row can
@@ -497,6 +501,9 @@ func validateHarnessWireFormat(harness, driver string, opts map[string]string) e
 	accepted, known := harnessDrivers[harness]
 	if !known {
 		return nil
+	}
+	if len(accepted) == 0 {
+		return fmt.Errorf("harness %q only runs on its own cli provider row", harness)
 	}
 	overrideOK := accepted["anthropic"] && opts["anthropic_base_url"] != ""
 	if !accepted[driver] && !overrideOK {
@@ -1315,11 +1322,20 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 
 // AvailableModels proxies the provider's own model-listing endpoint.
 // Drivers that cannot enumerate models (bedrock) return an error the
-// UI turns into its manual-entry fallback.
+// UI turns into its manual-entry fallback. kind='cli' rows never build
+// a chat driver (D-051, BuildSnapshot skips them entirely) so they
+// never reach the serving snapshot below; cursor-cli is the one cli
+// driver with a listing endpoint of its own, called directly.
 func (a *Admin) AvailableModels(ctx context.Context, id string) ([]provider.AvailableModel, error) {
 	p, err := a.get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if p.Kind == "cli" {
+		if p.Driver != "cursor-cli" {
+			return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
+		}
+		return a.cursorAvailableModels(ctx, p)
 	}
 	snap := a.store.Snapshot()
 	if snap == nil {
@@ -1475,6 +1491,10 @@ var (
 	ErrNotFound    = fmt.Errorf("not found")
 	ErrInUse       = fmt.Errorf("in use")
 	ErrUnsupported = fmt.Errorf("unsupported")
+	// ErrUpstream marks a failure reaching a third-party API the gateway
+	// itself calls out to (e.g. Cursor's model listing): a 502, not a
+	// 400, since the request was fine but the upstream wasn't reachable.
+	ErrUpstream = fmt.Errorf("upstream unavailable")
 )
 
 func (a *Admin) get(ctx context.Context, id string) (Provider, error) {

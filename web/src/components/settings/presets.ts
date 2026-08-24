@@ -6,7 +6,7 @@ import type { AdminProvider } from '../../api/types'
 export interface ProviderPreset {
   id: string
   name: string
-  driver: 'openaicompat' | 'openai-responses' | 'anthropic' | 'bedrock' | 'claude-cli'
+  driver: 'openaicompat' | 'openai-responses' | 'anthropic' | 'bedrock' | 'claude-cli' | 'cursor-cli'
   description: string
   // Sprite symbol in ProviderLogo; custom endpoints render a glyph.
   logo?: string
@@ -130,6 +130,19 @@ export const providerPresets: ProviderPreset[] = [
     validateModel: 'claude-haiku-4-5',
   },
   {
+    id: 'cursor',
+    name: 'Cursor',
+    driver: 'cursor-cli',
+    description: 'Cursor CLI for coding missions',
+    brandColor: '#000000',
+    baseURL: '',
+    requiresKey: true,
+    defaultRef: 'CURSOR_API_KEY',
+    keyHint: 'Create an API key in Cursor settings.',
+    keyURL: 'https://cursor.com/settings',
+    validateModel: 'composer-2.5',
+  },
+  {
     id: 'bedrock',
     name: 'AWS Bedrock',
     driver: 'bedrock',
@@ -205,9 +218,11 @@ export const providerPresets: ProviderPreset[] = [
 // host, then the custom fallback.
 export function matchPreset(p: AdminProvider): ProviderPreset {
   const custom = providerPresets.find((x) => x.id === 'custom')!
-  // kind='cli' rows (driver=claude-cli, D-051) are Anthropic subscription
-  // auth, not a separate preset — branding folds into the Anthropic card.
+  // kind='cli' rows (D-051) are subscription auth, not a separate
+  // preset per driver; branding folds into the matching CLI card
+  // (claude-cli -> anthropic, cursor-cli -> cursor).
   if (p.kind === 'cli') {
+    if (p.driver === 'cursor-cli') return providerPresets.find((x) => x.id === 'cursor') ?? custom
     return providerPresets.find((x) => x.id === 'anthropic') ?? custom
   }
   if (p.driver === 'anthropic' || p.driver === 'bedrock' || p.driver === 'openai-responses') {

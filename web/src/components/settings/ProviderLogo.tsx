@@ -1,3 +1,4 @@
+import { CursorIcon } from '../icons/CursorIcon'
 import { providerPresets, type ProviderPreset } from './presets'
 
 // Official provider marks (lobehub icon set, monochrome variants),
@@ -58,6 +59,17 @@ export function ProviderLogo({
   preset: ProviderPreset
   className?: string
 }) {
+  if (preset.id === 'cursor') {
+    return (
+      <span
+        className={`${className} grid shrink-0 place-items-center rounded-lg text-white`}
+        style={{ backgroundColor: preset.brandColor }}
+        aria-hidden="true"
+      >
+        <CursorIcon className="size-[60%]" />
+      </span>
+    )
+  }
   if (!preset.logo) {
     return (
       <span
@@ -117,6 +129,7 @@ export function ProviderMark({
   preset: ProviderPreset | undefined
   className?: string
 }) {
+  if (preset?.id === 'cursor') return <CursorIcon className={className} />
   if (!preset?.logo) return null
   return (
     <svg className={`${className} shrink-0 fill-current`} aria-hidden="true">

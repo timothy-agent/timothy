@@ -3,6 +3,7 @@ import type { Mission } from '../../api/types'
 import { missionDisplayName, relativeTime } from '../../lib/format'
 import { BrandMark } from '../BrandMark'
 import { ClaudeCodeIcon } from '../icons/ClaudeCodeIcon'
+import { CursorIcon } from '../icons/CursorIcon'
 import { OpenAIIcon } from '../icons/OpenAIIcon'
 import { OpenCodeIcon } from '../icons/OpenCodeIcon'
 import { PiIcon } from '../icons/PiIcon'
@@ -24,6 +25,7 @@ const harnessDisplayNames: Record<string, string> = {
   pi: 'pi',
   'codex-cli': 'Codex CLI',
   opencode: 'OpenCode',
+  'cursor-cli': 'Cursor CLI',
 }
 
 function harnessLabel(harness?: string): string {
@@ -36,6 +38,7 @@ function HarnessIcon({ harness }: { harness?: string }) {
   if (harness === 'codex-cli') return <OpenAIIcon />
   if (harness === 'opencode') return <OpenCodeIcon />
   if (harness === 'claude-cli') return <ClaudeCodeIcon />
+  if (harness === 'cursor-cli') return <CursorIcon />
   return <BrandMark className="size-3.5 shrink-0 rounded-[3px]" />
 }
 
