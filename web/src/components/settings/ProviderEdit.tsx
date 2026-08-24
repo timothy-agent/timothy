@@ -587,6 +587,11 @@ const cliModelAliases = ['fable', 'sonnet', 'opus', 'haiku']
 function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
   const [defaultModel, setDefaultModel] = useState(provider.default_model)
   const [saving, setSaving] = useState(false)
+  // Cursor has its own model slug namespace (not the Claude Code CLI's
+  // aliases, and not filed under any catalog provider), so its picker
+  // gets no alias pinning and no catalog-backed suggestions: a free
+  // text field, same posture an unrecognized preset gets.
+  const isCursor = provider.driver === 'cursor-cli'
 
   const search = useCallback((q: string) => catalogModelsForProvider(provider.id, q), [provider.id])
   const catalogModels = useCatalogSearch(defaultModel, search)
@@ -596,6 +601,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
   }, [provider.default_model])
 
   const suggestions: ModelSuggestion[] = useMemo(() => {
+    if (isCursor) return []
     const seen = new Map<string, ModelSuggestion>(cliModelAliases.map((a) => [a, { id: a }]))
     for (const m of catalogModels) {
       const id = catalogRowID(m)
@@ -608,7 +614,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
       }
     }
     return [...seen.values()]
-  }, [catalogModels])
+  }, [catalogModels, isCursor])
 
   const saveDefaultModel = async (v: string) => {
     const trimmed = v.trim()
@@ -629,10 +635,14 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
     <section className="space-y-4">
       <h2 className="text-sm font-semibold">Models</h2>
       <p className="text-sm text-muted-foreground">
-        Subscription auth uses the Claude Code CLI's own model aliases, not a declared list. This
-        sets the default model the CLI runs.
+        {isCursor
+          ? 'Subscription auth has no declared model list. This sets the default model the CLI runs.'
+          : "Subscription auth uses the Claude Code CLI's own model aliases, not a declared list. This sets the default model the CLI runs."}
       </p>
-      <Field label="Default model" hint={saving ? 'Saving…' : 'An alias, or a full Anthropic model id.'}>
+      <Field
+        label="Default model"
+        hint={saving ? 'Saving…' : isCursor ? undefined : 'An alias, or a full Anthropic model id.'}
+      >
         <ModelInput
           value={defaultModel}
           onChange={setDefaultModel}
@@ -641,7 +651,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
             void saveDefaultModel(v)
           }}
           suggestions={suggestions}
-          placeholder="sonnet"
+          placeholder={isCursor ? 'composer-2.5' : 'sonnet'}
           className="mt-1.5 h-10"
         />
       </Field>
