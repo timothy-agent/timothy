@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   compact,
   formatDuration,
@@ -126,6 +126,16 @@ describe('relativeTime', () => {
 })
 
 describe('relativeTimeUntil', () => {
+  // Freeze the clock: these offsets sit exactly on unit boundaries, and
+  // any real ms elapsing between the test's Date.now() and the
+  // function's floors the result into the unit below.
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('renders under a minute as "due now"', () => {
     expect(relativeTimeUntil(new Date(Date.now() + 10_000).toISOString())).toBe('due now')
   })
