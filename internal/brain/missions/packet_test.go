@@ -254,3 +254,17 @@ func TestWorkPacketRenderCarriesToolDiscipline(t *testing.T) {
 		}
 	}
 }
+
+// The agent's skill index reaches native worker prompts but never the
+// delegated path — a delegated CLI has no load_skill tool.
+func TestWorkPacketRenderSkillsIndex(t *testing.T) {
+	p := WorkPacket{Goal: "g", SkillsIndex: "Skills available via the load_skill tool:\n- email-research: gmail discipline"}
+	system, _ := p.Render()
+	if !strings.Contains(system, "email-research") {
+		t.Fatal("native render missing skills index")
+	}
+	system, _ = p.RenderForDelegated()
+	if strings.Contains(system, "email-research") {
+		t.Fatal("delegated render must not carry the skills index")
+	}
+}

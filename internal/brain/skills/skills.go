@@ -134,6 +134,26 @@ func isKebab(s string) bool {
 
 // Index renders the one-line-per-skill system prompt section. Bodies
 // never appear here — that is the entire point.
+// Allowed filters packs to those named in names — the per-agent skill
+// allowlist semantics (empty means none, opt-in only, same contract as
+// agents.Agent.Tools). Order follows packs, not names.
+func Allowed(packs []Skill, names []string) []Skill {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	out := make([]Skill, 0, len(names))
+	for _, p := range packs {
+		if set[p.Name] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func Index(skills []Skill) string {
 	if len(skills) == 0 {
 		return ""

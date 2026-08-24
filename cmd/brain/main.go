@@ -275,7 +275,7 @@ func main() {
 		}
 		return name
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, app.Log)
 	}
@@ -844,7 +844,7 @@ func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []
 // time) so an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here — no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, packs []skills.Skill, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -916,6 +916,18 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 	driver.SetNameMission(chat.TitleOverGateway(gwc, log))
+	// Mission workers see the same per-agent skill index chat sessions
+	// get (skills.Index over the agent's allowlist), resolved at packet
+	// build so agent edits apply on the next turn. The load_skill tool
+	// is already in the mission builtin set; this makes the packs
+	// discoverable there.
+	driver.SetSkillsIndex(func(ctx context.Context, agentID string) string {
+		a, ok := agentReg.ResolveByID(ctx, agentID)
+		if !ok {
+			return ""
+		}
+		return skills.Index(skills.Allowed(packs, a.Skills))
+	})
 	if conns != nil && secrets != nil {
 		// A repo_url mission's clone token: resolve connector_id straight
 		// to its credential_ref's secret value, same as resolveSecret does

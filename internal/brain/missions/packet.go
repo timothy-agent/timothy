@@ -46,6 +46,14 @@ type WorkPacket struct {
 	// every worker turn via Render, including a delegated executor's
 	// turn (executor packets also go through Render).
 	Attachments []MissionAttachment
+	// SkillsIndex is the rendered skill index for the mission's agent
+	// (skills.Index over the agent's allowlist), resolved at packet
+	// build time like the scheduler's other agent defaults — an agent
+	// edited mid-mission applies on the next turn. Empty when the
+	// mission has no agent, the agent lists no skills, or the driver's
+	// resolver is unwired. Native workers only: a delegated CLI has no
+	// load_skill tool, so RenderForDelegated never includes it.
+	SkillsIndex string
 	// Light marks a mission that skips explore/plan/review (D-069) —
 	// Render uses lightSystemPreamble instead of nativeSystemPreamble,
 	// and Spec is always empty so the Plan block never renders.
@@ -96,6 +104,11 @@ func (p WorkPacket) RenderForDelegated() (system, user string) {
 
 func (p WorkPacket) render(preamble string) (system, user string) {
 	system = preamble + p.ExecEnvironmentNote
+	if preamble != "" && p.SkillsIndex != "" {
+		// preamble=="" is the delegated path (RenderForDelegated) —
+		// no load_skill tool there, so the index would only mislead.
+		system += "\n\n" + p.SkillsIndex
+	}
 	if p.PromptOverlay != "" {
 		// Operator-authored config, not model output — unlike Progress/
 		// GitLog below, this never passes through NeutralizeSlot.

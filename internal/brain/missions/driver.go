@@ -118,6 +118,10 @@ type Driver struct {
 	sandboxExec   sandboxExec
 	sandboxRemove sandboxRemover
 
+	// skillsIndex renders the mission agent's skill index for worker
+	// prompts (SetSkillsIndex) — nil means workers get no index.
+	skillsIndex func(ctx context.Context, agentID string) string
+
 	// provision holds the mission-provisioning slice split out into its
 	// own type (D-074): ensureProvisioned, grantSessionDefaults,
 	// followUpBaseRef and their resolver deps. Driver's Set* setters
@@ -278,6 +282,15 @@ func retryDelay(consecutiveFailures int) time.Duration {
 // closes over.
 func (d *Driver) SetAgentResolver(resolve AgentResolver) {
 	d.provision.resolveAgent = resolve
+}
+
+// SetSkillsIndex wires the resolver packet() uses to render the
+// mission agent's skill index into worker prompts — a setter for the
+// same construction-order reason SetAgentResolver is. nil (unwired)
+// means workers see no skill index, matching every other nil-gated
+// optional dependency.
+func (d *Driver) SetSkillsIndex(fn func(ctx context.Context, agentID string) string) {
+	d.skillsIndex = fn
 }
 
 // SetFXRates wires the stored USD-base rate table the budget brake
@@ -1255,12 +1268,16 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	if m.Worktree != "" {
 		gitLog, _ = gitLogSince(ctx, m.Worktree, m.BaseCommit)
 	}
-	return WorkPacket{
+	p := WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 		ExecEnvironmentNote: execEnvironmentNote(), ParentContext: m.ParentContext, Attachments: m.Attachments,
 		Light: missionPolicyFor(m).skipsPlanning,
-	}, nil
+	}
+	if d.skillsIndex != nil && m.AgentID != "" {
+		p.SkillsIndex = d.skillsIndex(ctx, m.AgentID)
+	}
+	return p, nil
 }
 
 func (d *Driver) recordProgress(ctx context.Context, id, text string) error {

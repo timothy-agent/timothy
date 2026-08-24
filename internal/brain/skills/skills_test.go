@@ -168,3 +168,14 @@ func TestRepoSkillsAreValid(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowedFiltersOptIn(t *testing.T) {
+	packs := []Skill{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	if got := Allowed(packs, nil); got != nil {
+		t.Fatalf("empty allowlist must admit nothing, got %v", got)
+	}
+	got := Allowed(packs, []string{"c", "a", "nope"})
+	if len(got) != 2 || got[0].Name != "a" || got[1].Name != "c" {
+		t.Fatalf("Allowed = %v, want [a c] in pack order", got)
+	}
+}
