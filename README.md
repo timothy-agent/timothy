@@ -19,20 +19,20 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 
 ## Features
 
-<table>
-<tr><td><b>Use any AI model</b></td><td>Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider — all behind one interface. Pick which model handles chat, coding, research, or digests, switch anytime from settings, and let Timothy fail over to a backup model when a provider has a bad day.</td></tr>
-<tr><td><b>Give it real work</b></td><td>Hand Timothy a task — research a topic, write a report, fix a bug — and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.</td></tr>
-<tr><td><b>It writes code safely</b></td><td>Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can even drive Claude Code or Codex for you while keeping review and budgets in your hands.</td></tr>
-<tr><td><b>Your daily briefings</b></td><td>Schedule digests of your inbox, calendar, and spending — delivered to Telegram, email, or a webhook, in your timezone, saying only what actually needs your attention.</td></tr>
-<tr><td><b>Connected to your life</b></td><td>Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it — and asks before doing anything destructive.</td></tr>
-<tr><td><b>Shape your own assistants</b></td><td>Create named agents with their own personality, model, and exactly the tools and knowledge they should have — a digest agent that only reads mail and calendar, a coder that only touches code.</td></tr>
-<tr><td><b>It remembers you</b></td><td>Preferences, projects, and facts you share carry across conversations. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you.</td></tr>
-<tr><td><b>Your documents, searchable</b></td><td>Drop in files or URLs and Timothy files them into topic collections and uses them to answer questions — your own knowledge base, on your own disk.</td></tr>
-<tr><td><b>Nothing gets lost</b></td><td>Conversations survive restarts, crashes, and upgrades — pick up any session exactly where it left off.</td></tr>
-<tr><td><b>You control the spend</b></td><td>Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models.</td></tr>
-<tr><td><b>Private by design</b></td><td>Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager) — never in logs, never in the UI.</td></tr>
-<tr><td><b>Talk to it</b></td><td>Optional voice input with fully local speech-to-text — audio never leaves your machine.</td></tr>
-</table>
+| Feature | What you get |
+|---|---|
+| **Use any AI model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider — all behind one interface. Pick which model handles chat, coding, research, or digests, switch anytime from settings, and let Timothy fail over to a backup model when a provider has a bad day. |
+| **Give it real work** | Hand Timothy a task — research a topic, write a report, fix a bug — and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done. |
+| **It writes code safely** | Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can even drive Claude Code or Codex for you while keeping review and budgets in your hands. |
+| **Your daily briefings** | Schedule digests of your inbox, calendar, and spending — delivered to Telegram, email, or a webhook, in your timezone, saying only what actually needs your attention. |
+| **Connected to your life** | Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it — and asks before doing anything destructive. |
+| **Shape your own assistants** | Create named agents with their own personality, model, and exactly the tools and knowledge they should have — a digest agent that only reads mail and calendar, a coder that only touches code. |
+| **It remembers you** | Preferences, projects, and facts you share carry across conversations. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you. |
+| **Your documents, searchable** | Drop in files or URLs and Timothy files them into topic collections and uses them to answer questions — your own knowledge base, on your own disk. |
+| **Nothing gets lost** | Conversations survive restarts, crashes, and upgrades — pick up any session exactly where it left off. |
+| **You control the spend** | Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models. |
+| **Private by design** | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager) — never in logs, never in the UI. |
+| **Talk to it** | Optional voice input with fully local speech-to-text — audio never leaves your machine. |
 
 ## Architecture
 
