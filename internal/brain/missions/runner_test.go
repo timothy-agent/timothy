@@ -1902,3 +1902,100 @@ func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
 		}
 	})
 }
+
+// fakeProgressReader is a ProgressReader backed by an in-memory slice,
+// mutable between polls so tests can simulate a note posted mid-turn.
+type fakeProgressReader struct {
+	notes []ProgressNote
+}
+
+func (f *fakeProgressReader) Progress(_ context.Context, _ string) ([]ProgressNote, error) {
+	return f.notes, nil
+}
+
+// TestSteeringForSkipsNotesSeededInPacket pins the watermark's starting
+// point: operator notes already rendered into the worker's seed packet
+// (WorkPacket.Progress) must never be redelivered as mid-turn steering.
+func TestSteeringForSkipsNotesSeededInPacket(t *testing.T) {
+	seeded := []ProgressNote{{Note: "Operator note: already seen"}}
+	reader := &fakeProgressReader{notes: seeded}
+	r := &nativeRunner{log: slog.Default(), progressReader: reader}
+
+	steer := r.steeringFor("m1", seeded)
+	if steer == nil {
+		t.Fatal("steeringFor returned nil with a progressReader wired")
+	}
+	if got := steer(context.Background()); got != nil {
+		t.Fatalf("steering = %v, want nil (note already in the seed packet)", got)
+	}
+}
+
+// TestSteeringForDeliversNoteExactlyOnce pins the core contract: a note
+// appended to the store mid-turn is delivered on the next poll, and
+// never again on a later poll once the watermark has advanced.
+func TestSteeringForDeliversNoteExactlyOnce(t *testing.T) {
+	reader := &fakeProgressReader{}
+	r := &nativeRunner{log: slog.Default(), progressReader: reader}
+	steer := r.steeringFor("m1", nil)
+
+	if got := steer(context.Background()); got != nil {
+		t.Fatalf("steering before any note = %v, want nil", got)
+	}
+
+	reader.notes = append(reader.notes, ProgressNote{Note: "Operator note: hurry up"})
+	got := steer(context.Background())
+	if len(got) != 1 || got[0] != "Operator steering note (mid-run): hurry up" {
+		t.Fatalf("steering after note posted = %v, want one formatted note", got)
+	}
+
+	if got := steer(context.Background()); got != nil {
+		t.Fatalf("steering re-delivered the same note: %v", got)
+	}
+
+	reader.notes = append(reader.notes, ProgressNote{Note: "not an operator note"})
+	if got := steer(context.Background()); got != nil {
+		t.Fatalf("steering delivered a non-operator progress note: %v", got)
+	}
+}
+
+// TestSteeringForNilWithoutProgressReader pins that RunWorker's Steering
+// wiring degrades to a no-op when no ProgressReader was ever set
+// (SetProgressReader unwired): the pre-existing behavior everywhere
+// this feature isn't configured.
+func TestSteeringForNilWithoutProgressReader(t *testing.T) {
+	r := &nativeRunner{log: slog.Default()}
+	if steer := r.steeringFor("m1", nil); steer != nil {
+		t.Fatal("steeringFor should return nil with no progressReader wired")
+	}
+}
+
+// TestRunWorkerWiresSteeringFromProgressReader confirms RunWorker's
+// loop.Request actually carries a non-nil Steering func end-to-end when
+// a ProgressReader is wired, and that the request has none when it
+// isn't: the seam other packages (loop.Agent) rely on.
+func TestRunWorkerWiresSteeringFromProgressReader(t *testing.T) {
+	doneBatch := [][]stream.StreamEvent{{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)}}
+
+	t.Run("wired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: doneBatch}
+		r := newTestRunner(agent)
+		r.SetProgressReader(&fakeProgressReader{})
+		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker: %v", err)
+		}
+		if agent.requests[0].Steering == nil {
+			t.Fatal("Steering not wired on the worker request despite a ProgressReader")
+		}
+	})
+
+	t.Run("unwired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: doneBatch}
+		r := newTestRunner(agent)
+		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker: %v", err)
+		}
+		if agent.requests[0].Steering != nil {
+			t.Fatal("Steering wired despite no ProgressReader")
+		}
+	})
+}

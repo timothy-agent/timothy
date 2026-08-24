@@ -49,6 +49,11 @@ type ReviewPacket struct {
 	// artifacts.
 	Listing  string
 	Evidence string
+	// Progress is the mission's progress log, rendered so an operator
+	// steering note posted mid-mission reaches the reviewer too: a
+	// rework-triggering note ("skip the CSS polish") must not be invisible
+	// to the round deciding whether the unit passes.
+	Progress []ProgressNote
 }
 
 // ReadArtifacts reads each declared artifact from workRoot, capped at

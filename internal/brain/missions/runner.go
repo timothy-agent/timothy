@@ -170,6 +170,82 @@ type nativeRunner struct {
 	// turns (see SetConnectorReads) — nil-safe: unset means no connector
 	// reads are offered, same as before this existed.
 	connectorReads ConnectorReadsResolver
+
+	// progressReader reads back a mission's live progress log: backs
+	// mid-run steering note delivery (see steeringFor). nil-safe: unset
+	// means a worker turn's Steering func is never wired, matching
+	// today's behavior (a note only reaches the NEXT worker turn).
+	progressReader ProgressReader
+}
+
+// ProgressReader re-reads one mission's progress notes mid-run, the
+// minimal slice of *Store nativeRunner needs for steering, so runner.go
+// never depends on Store's full surface (query shape, transactions).
+type ProgressReader interface {
+	Progress(ctx context.Context, missionID string) ([]ProgressNote, error)
+}
+
+// SetProgressReader wires the reader RunWorker uses to poll for
+// mid-turn operator notes: a setter (not a NewNativeRunner parameter)
+// so cmd/brain/main.go can pass the same *Store it builds the runner
+// alongside, same pattern as SetConnectorReads.
+func (r *nativeRunner) SetProgressReader(pr ProgressReader) {
+	r.progressReader = pr
+}
+
+// operatorNotePrefix marks a progress note as operator-authored
+// steering (api/missions.go's note handler writes exactly this prefix);
+// steeringFor only ever redelivers notes carrying it.
+const operatorNotePrefix = "Operator note: "
+
+// D-076: steeringFor builds a worker turn's loop.Request.Steering
+// closure: the watermark starts at the count of operator notes already
+// present in the packet the worker was seeded with, so those never
+// redeliver; each poll re-reads the mission's live progress log, takes
+// operator notes past the watermark, and advances it by however many it
+// found. A poll error logs and returns nil rather than failing the
+// turn: steering is a best-effort mid-run nicety, not load-bearing.
+func (r *nativeRunner) steeringFor(missionID string, seeded []ProgressNote) func(ctx context.Context) []string {
+	if r.progressReader == nil {
+		return nil
+	}
+	watermark := countOperatorNotes(seeded)
+	return func(ctx context.Context) []string {
+		notes, err := r.progressReader.Progress(ctx, missionID)
+		if err != nil {
+			r.log.Warn("mission worker: poll steering notes failed", "mission_id", missionID, "error", err)
+			return nil
+		}
+		var operator []string
+		for _, n := range notes {
+			if strings.HasPrefix(n.Note, operatorNotePrefix) {
+				operator = append(operator, strings.TrimPrefix(n.Note, operatorNotePrefix))
+			}
+		}
+		if watermark >= len(operator) {
+			return nil
+		}
+		fresh := operator[watermark:]
+		watermark = len(operator)
+		out := make([]string, len(fresh))
+		for i, note := range fresh {
+			out[i] = "Operator steering note (mid-run): " + note
+		}
+		return out
+	}
+}
+
+// countOperatorNotes counts how many of notes are operator-authored
+// steering notes: the watermark's starting point, so a note already
+// rendered into the worker's seed packet is never redelivered mid-turn.
+func countOperatorNotes(notes []ProgressNote) int {
+	n := 0
+	for _, note := range notes {
+		if strings.HasPrefix(note.Note, operatorNotePrefix) {
+			n++
+		}
+	}
+	return n
 }
 
 // ConnectorReadsResolver resolves an agent id to the read-only
@@ -672,6 +748,9 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		// with feedback instead of parking (D-039). UI-created missions
 		// (ScheduleID empty) keep the park-and-answer flow.
 		Unattended: m.ScheduleID != "",
+		// Only the worker turn gets mid-run steering (D-076): explore/
+		// plan/review turns are unaffected.
+		Steering: r.steeringFor(m.ID, packet.Progress),
 	}
 
 	res, err := r.runTurn(ctx, req, missionStatusToolName)
@@ -972,6 +1051,16 @@ func renderReviewContent(p ReviewPacket) string {
 		b.WriteString("\nDiff to review:\n")
 		b.WriteString(p.Diff)
 		b.WriteString("\n")
+	}
+	if len(p.Progress) > 0 {
+		notes := p.Progress
+		if len(notes) > progressRenderCap {
+			notes = notes[len(notes)-progressRenderCap:]
+		}
+		b.WriteString("\nRecent progress (includes any operator steering notes):\n")
+		for _, n := range notes {
+			fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(n.Note))
+		}
 	}
 	if p.Evidence != "" {
 		b.WriteString("\nWorker's own report (verify against the artifacts above, do not take at face value):\n")

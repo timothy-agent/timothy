@@ -913,6 +913,82 @@ func (g *grantRecordingPerms) Grant(ctx context.Context, sid, tool, pattern stri
 	return g.rec.Grant(ctx, sid, tool, pattern, ttl)
 }
 
+// TestAgentSteeringInjectsMidTurn pins the Steering seam: a note
+// returned by Request.Steering must land as a user message on the
+// SECOND model call of a turn (never the first, which has nothing to
+// steer), and steering must not fire again once the model stops
+// calling tools.
+func TestAgentSteeringInjectsMidTurn(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	var calls int
+	steering := func(context.Context) []string {
+		calls++
+		return []string{"operator says hurry up"}
+	}
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID: "s1", Route: "coding",
+		Messages: []provider.Message{{Role: "user", Content: "go"}},
+		Steering: steering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(gw.requests))
+	}
+	if calls != 1 {
+		t.Fatalf("steering called %d times, want exactly 1 (never on step 1)", calls)
+	}
+	var sawFirst bool
+	for _, m := range gw.requests[0].Messages {
+		if strings.Contains(m.Content, "operator says hurry up") {
+			sawFirst = true
+		}
+	}
+	if sawFirst {
+		t.Fatal("steering note leaked into the first model call")
+	}
+	var sawSecond bool
+	for _, m := range gw.requests[1].Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "operator says hurry up") {
+			sawSecond = true
+		}
+	}
+	if !sawSecond {
+		t.Fatalf("steering note missing from second call: %+v", gw.requests[1].Messages)
+	}
+}
+
+// TestAgentNilSteeringIsNoop pins that a nil Steering (every existing
+// caller) never changes behavior: the loop must not even attempt to
+// call it.
+func TestAgentNilSteeringIsNoop(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+	if len(ofType(evs, stream.EventDone)) != 1 {
+		t.Fatal("must still finish cleanly with nil Steering")
+	}
+}
+
 func TestAgentResearchCoercion(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
