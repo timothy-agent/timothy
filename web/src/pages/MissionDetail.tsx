@@ -42,6 +42,7 @@ import {
 } from '../components/ui/dialog'
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
+import { CursorIcon } from '../components/icons/CursorIcon'
 import { OpenAIIcon } from '../components/icons/OpenAIIcon'
 import { OpenCodeIcon } from '../components/icons/OpenCodeIcon'
 import { PiIcon } from '../components/icons/PiIcon'
@@ -162,6 +163,7 @@ const harnessDisplayNames: Record<string, string> = {
   pi: 'pi',
   'codex-cli': 'Codex CLI',
   opencode: 'OpenCode',
+  'cursor-cli': 'Cursor CLI',
 }
 
 function harnessDisplayName(harness: string): string {
@@ -174,6 +176,7 @@ function HarnessIcon({ harness }: { harness: string }) {
   if (harness === 'pi') return <PiIcon />
   if (harness === 'codex-cli') return <OpenAIIcon />
   if (harness === 'opencode') return <OpenCodeIcon />
+  if (harness === 'cursor-cli') return <CursorIcon />
   return <ClaudeCodeIcon />
 }
 

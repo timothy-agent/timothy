@@ -16,12 +16,15 @@ function event(payload: unknown, kind = 'mission.unit_verified', seq = 1): Missi
 
 describe('mission.unit_verified rendering', () => {
   it('names the unit 1-indexed when the payload carries a 0-indexed index', () => {
-    expect(renderEvent(event({ unit: 0, passed: true }))).toBe('Unit 1 verification: passed')
-    expect(renderEvent(event({ unit: 2, passed: false }))).toBe('Unit 3 verification: failed')
+    render(<div>{renderEvent(event({ unit: 0, passed: true }))}</div>)
+    expect(screen.getByText('Unit 1 verification: passed')).toHaveClass('text-green-400')
+    render(<div>{renderEvent(event({ unit: 2, passed: false }))}</div>)
+    expect(screen.getByText('Unit 3 verification: failed')).toHaveClass('text-red-400')
   })
 
   it('omits the unit index when the payload has none, rather than showing "Unit ?"', () => {
-    expect(renderEvent(event({ passed: true }))).toBe('Unit verification: passed')
+    render(<div>{renderEvent(event({ passed: true }))}</div>)
+    expect(screen.getByText('Unit verification: passed')).toBeInTheDocument()
   })
 })
 
@@ -35,13 +38,13 @@ describe('mission.pushed rendering', () => {
 
 describe('mission.push_failed rendering', () => {
   it('names the failure reason', () => {
-    expect(renderEvent(event({ reason: 'push rejected' }, 'mission.push_failed'))).toBe(
-      'Push failed: push rejected',
-    )
+    render(<div>{renderEvent(event({ reason: 'push rejected' }, 'mission.push_failed'))}</div>)
+    expect(screen.getByText('Push failed: push rejected')).toHaveClass('text-red-400')
   })
 
   it('falls back to "unknown reason" when the payload has none', () => {
-    expect(renderEvent(event({}, 'mission.push_failed'))).toBe('Push failed: unknown reason')
+    render(<div>{renderEvent(event({}, 'mission.push_failed'))}</div>)
+    expect(screen.getByText('Push failed: unknown reason')).toBeInTheDocument()
   })
 })
 
@@ -241,6 +244,51 @@ describe('executor lifecycle event rendering', () => {
     )
     expect(screen.getByText(/Harness skipped: no_usable_entry/)).toBeInTheDocument()
     expect(screen.getByText(/no credential configured/)).toBeInTheDocument()
+  })
+})
+
+describe('mission.turn rendering', () => {
+  it('renders phase, ok, and duration for a successful turn', () => {
+    render(
+      <div>{renderEvent(event({ phase: 'execute', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+    )
+    expect(screen.getByText('Turn (execute): ok · 1.5s')).toBeInTheDocument()
+  })
+
+  it('renders a failed turn in red with the reason', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ phase: 'plan', duration_ms: 500, ok: false, input: 'worker_failed', reason: 'model returned empty' }, 'mission.turn'),
+        )}
+      </div>,
+    )
+    const row = screen.getByText(/Turn \(plan\): failed · 500ms/)
+    expect(row).toHaveClass('text-red-400')
+    expect(row).toHaveTextContent('model returned empty')
+  })
+})
+
+describe('mission.retry rendering', () => {
+  it('shows the cause and reason', () => {
+    render(<div>{renderEvent(event({ cause: 'worker_failed', reason: 'transport_death' }, 'mission.retry'))}</div>)
+    const row = screen.getByText(/Retrying \(worker_failed\)/)
+    expect(row).toHaveClass('text-amber-400')
+    expect(row).toHaveTextContent('transport_death')
+  })
+
+  it('falls back to a bare "Retrying" when the payload has no cause', () => {
+    render(<div>{renderEvent(event({}, 'mission.retry'))}</div>)
+    expect(screen.getByText('Retrying')).toHaveClass('text-amber-400')
+  })
+})
+
+describe('mission.permission_denied rendering', () => {
+  it('shows the tool and a trimmed detail', () => {
+    render(<div>{renderEvent(event({ tool: 'shell', detail: 'rm -rf /workspace' }, 'mission.permission_denied'))}</div>)
+    const row = screen.getByText(/Permission denied: shell/)
+    expect(row).toHaveClass('text-red-400')
+    expect(row).toHaveTextContent('rm -rf /workspace')
   })
 })
 

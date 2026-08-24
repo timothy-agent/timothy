@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
+  availableModels,
   catalogModelsForProvider,
   deleteProvider,
   deleteSecret,
@@ -587,15 +588,44 @@ const cliModelAliases = ['fable', 'sonnet', 'opus', 'haiku']
 function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; onChanged: () => void }) {
   const [defaultModel, setDefaultModel] = useState(provider.default_model)
   const [saving, setSaving] = useState(false)
+  // Cursor has its own model slug namespace (not the Claude Code CLI's
+  // aliases, and not filed under any catalog provider), so its picker
+  // gets no alias pinning and no catalog-backed suggestions. Instead it
+  // fetches Cursor's own live model list (below).
+  const isCursor = provider.driver === 'cursor-cli'
 
   const search = useCallback((q: string) => catalogModelsForProvider(provider.id, q), [provider.id])
   const catalogModels = useCatalogSearch(defaultModel, search)
+
+  // cursorModels is Cursor's own live list (GET .../providers/:id/models,
+  // gateway-cached ~5min). Fetched once per provider id; failures or an
+  // empty list just fall back to free text, no error toast, since this is
+  // an advisory suggestion list, not a required lookup.
+  const [cursorModels, setCursorModels] = useState<ModelSuggestion[]>([])
+  useEffect(() => {
+    if (!isCursor) return
+    let cancelled = false
+    availableModels(provider.id).then(
+      (models) => {
+        if (!cancelled) {
+          setCursorModels(models.map((m) => ({ id: m.id, name: m.display_name })))
+        }
+      },
+      () => {
+        if (!cancelled) setCursorModels([])
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [isCursor, provider.id])
 
   useEffect(() => {
     setDefaultModel(provider.default_model)
   }, [provider.default_model])
 
   const suggestions: ModelSuggestion[] = useMemo(() => {
+    if (isCursor) return cursorModels
     const seen = new Map<string, ModelSuggestion>(cliModelAliases.map((a) => [a, { id: a }]))
     for (const m of catalogModels) {
       const id = catalogRowID(m)
@@ -608,7 +638,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
       }
     }
     return [...seen.values()]
-  }, [catalogModels])
+  }, [catalogModels, isCursor, cursorModels])
 
   const saveDefaultModel = async (v: string) => {
     const trimmed = v.trim()
@@ -629,10 +659,14 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
     <section className="space-y-4">
       <h2 className="text-sm font-semibold">Models</h2>
       <p className="text-sm text-muted-foreground">
-        Subscription auth uses the Claude Code CLI's own model aliases, not a declared list. This
-        sets the default model the CLI runs.
+        {isCursor
+          ? 'Subscription auth has no declared model list. This sets the default model the CLI runs.'
+          : "Subscription auth uses the Claude Code CLI's own model aliases, not a declared list. This sets the default model the CLI runs."}
       </p>
-      <Field label="Default model" hint={saving ? 'Saving…' : 'An alias, or a full Anthropic model id.'}>
+      <Field
+        label="Default model"
+        hint={saving ? 'Saving…' : isCursor ? undefined : 'An alias, or a full Anthropic model id.'}
+      >
         <ModelInput
           value={defaultModel}
           onChange={setDefaultModel}
@@ -641,7 +675,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
             void saveDefaultModel(v)
           }}
           suggestions={suggestions}
-          placeholder="sonnet"
+          placeholder={isCursor ? 'composer-2.5' : 'sonnet'}
           className="mt-1.5 h-10"
         />
       </Field>

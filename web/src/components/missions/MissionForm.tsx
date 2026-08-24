@@ -142,6 +142,7 @@ const executorChoices: { value: string; label: string }[] = [
   { value: 'pi', label: 'pi' },
   { value: 'codex-cli', label: 'Codex CLI' },
   { value: 'opencode', label: 'OpenCode' },
+  { value: 'cursor-cli', label: 'Cursor CLI' },
 ]
 
 // Sentinel for the environment Select's "auto-detect" choice — wire

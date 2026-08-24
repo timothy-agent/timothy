@@ -7,8 +7,11 @@ import type {
   ExecutorSkippedPayload,
   ExecutorSpawnedPayload,
   MissionEvent,
+  MissionPermissionDeniedPayload,
   MissionPROpenedPayload,
+  MissionRetryPayload,
   MissionSteeredPayload,
+  MissionTurnPayload,
 } from '../../api/types'
 import { formatDuration } from '../../lib/format'
 
@@ -40,13 +43,37 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.unit_verified': (p) => {
     const { unit, passed } = asRecord(p)
     const label = typeof unit === 'number' ? `Unit ${unit + 1} verification` : 'Unit verification'
-    return `${label}: ${passed ? 'passed' : 'failed'}`
+    return (
+      <span className={passed ? 'text-green-400' : 'text-red-400'}>
+        {label}: {passed ? 'passed' : 'failed'}
+      </span>
+    )
   },
   'mission.review_verdict': (p) => {
     const { decision } = asRecord(p)
-    return `Review verdict: ${String(decision ?? '?')}`
+    const approved = decision === 'approve'
+    return <span className={approved ? 'text-green-400' : 'text-amber-400'}>Review verdict: {String(decision ?? '?')}</span>
   },
-  'mission.retry': () => 'Retrying',
+  'mission.turn': (p) => {
+    const { phase, duration_ms, ok, reason } = p as MissionTurnPayload
+    const base = `Turn (${phase}): ${ok ? 'ok' : 'failed'} · ${formatDuration(duration_ms)}`
+    if (ok || !reason) return <span className={ok ? undefined : 'text-red-400'}>{base}</span>
+    return (
+      <span className="text-red-400" title={reason}>
+        {base}: {truncateForDisplay(reason, 160)}
+      </span>
+    )
+  },
+  'mission.retry': (p) => {
+    const { cause, reason } = p as MissionRetryPayload
+    const label = cause ? `Retrying (${cause})` : 'Retrying'
+    if (!reason) return <span className="text-amber-400">{label}</span>
+    return (
+      <span className="text-amber-400" title={reason}>
+        {label}: {truncateForDisplay(reason, 160)}
+      </span>
+    )
+  },
   'mission.blocked': (p) => {
     const { question } = asRecord(p)
     return `Blocked: ${String(question ?? 'waiting on the user')}`
@@ -70,10 +97,19 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const { tool, decision } = asRecord(p)
     return `Permission ${String(decision ?? '?')}: ${String(tool ?? 'a tool call')}`
   },
+  'mission.permission_denied': (p) => {
+    const { tool, detail } = p as MissionPermissionDeniedPayload
+    return (
+      <span className="text-red-400" title={detail}>
+        Permission denied: {tool}
+        {detail ? `: ${truncateForDisplay(detail, 160)}` : ''}
+      </span>
+    )
+  },
   'mission.paused': (p) => {
     const { reason, detail } = asRecord(p)
     const base = `Paused (${String(reason ?? 'unknown reason')})`
-    return detail ? `${base}: ${String(detail)}` : base
+    return <span className="text-amber-400">{detail ? `${base}: ${String(detail)}` : base}</span>
   },
   'mission.resumed': () => 'Resumed',
   'mission.steered': (p) => {
@@ -81,11 +117,11 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return <span className="text-amber-400">Operator note: {note}</span>
   },
   'mission.recovery': () => 'Recovered after a restart',
-  'mission.violation': () => 'Policy violation detected',
-  'mission.done': () => 'Mission completed',
+  'mission.violation': () => <span className="text-red-400">Policy violation detected</span>,
+  'mission.done': () => <span className="text-green-400">Mission completed</span>,
   'mission.failed': (p) => {
     const { reason } = asRecord(p)
-    return `Mission failed${reason ? `: ${String(reason)}` : ''}`
+    return <span className="text-red-400">Mission failed{reason ? `: ${String(reason)}` : ''}</span>
   },
   'mission.reconciled': (p) => {
     const { canonical_phase } = asRecord(p)
@@ -97,7 +133,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
   'mission.push_failed': (p) => {
     const { reason } = asRecord(p)
-    return `Push failed: ${String(reason ?? 'unknown reason')}`
+    return <span className="text-red-400">Push failed: {String(reason ?? 'unknown reason')}</span>
   },
   'mission.pr_opened': (p) => {
     const { url, number } = p as MissionPROpenedPayload
