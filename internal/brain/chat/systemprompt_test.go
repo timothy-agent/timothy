@@ -9,7 +9,7 @@ import (
 func TestAssembleSystemDateLine(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.July, 28, 15, 4, 5, 0, time.UTC)
-	got := assembleSystem("", now)
+	got := assembleSystem("", now, nil)
 
 	want := "Today is Tuesday, 2026-07-28 (UTC)."
 	if !strings.Contains(got, want) {
@@ -20,15 +20,30 @@ func TestAssembleSystemDateLine(t *testing.T) {
 	}
 }
 
-func TestAssembleSystemDateLineNonUTCInputNormalized(t *testing.T) {
+func TestAssembleSystemDateLineNilLocationIsUTC(t *testing.T) {
 	t.Parallel()
 	loc := time.FixedZone("UTC-5", -5*60*60)
 	// 2026-07-28 23:30 UTC-5 == 2026-07-29 04:30 UTC.
 	now := time.Date(2026, time.July, 28, 23, 30, 0, 0, loc)
-	got := assembleSystem("", now)
+	got := assembleSystem("", now, nil)
 
 	if !strings.Contains(got, "Today is Wednesday, 2026-07-29 (UTC).") {
 		t.Fatalf("date line not normalized to UTC:\n%s", got)
+	}
+}
+
+func TestAssembleSystemDateLineOperatorLocation(t *testing.T) {
+	t.Parallel()
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	// 2026-07-28 23:30 UTC == 2026-07-29 01:30 CEST.
+	now := time.Date(2026, time.July, 28, 23, 30, 0, 0, time.UTC)
+	got := assembleSystem("", now, loc)
+
+	if !strings.Contains(got, "Today is Wednesday, 2026-07-29 (CEST).") {
+		t.Fatalf("date line not rendered in operator location:\n%s", got)
 	}
 }
 
@@ -37,7 +52,7 @@ func TestAssembleSystemCloseStaysLast(t *testing.T) {
 	now := time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC)
 
 	for _, skillsIndex := range []string{"", "# Skills\n\n- foo: does foo"} {
-		got := assembleSystem(skillsIndex, now)
+		got := assembleSystem(skillsIndex, now, nil)
 		if !strings.HasSuffix(got, systemPromptClose) {
 			t.Fatalf("close steer not last line (skillsIndex=%q):\n%s", skillsIndex, got)
 		}
@@ -47,8 +62,8 @@ func TestAssembleSystemCloseStaysLast(t *testing.T) {
 func TestAssembleSystemStablePrefixUnchangedByDate(t *testing.T) {
 	t.Parallel()
 	skillsIndex := "# Skills\n\n- foo: does foo"
-	day1 := assembleSystem(skillsIndex, time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC))
-	day2 := assembleSystem(skillsIndex, time.Date(2026, time.July, 29, 0, 0, 0, 0, time.UTC))
+	day1 := assembleSystem(skillsIndex, time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC), nil)
+	day2 := assembleSystem(skillsIndex, time.Date(2026, time.July, 29, 0, 0, 0, 0, time.UTC), nil)
 
 	prefix := systemPrompt + "\n\n" + skillsIndex
 	if !strings.HasPrefix(day1, prefix) || !strings.HasPrefix(day2, prefix) {

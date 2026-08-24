@@ -23,9 +23,10 @@ type Payload struct {
 	// of its mission-derived default when non-empty.
 	Subject string `json:"subject,omitempty"`
 	Body    string `json:"body"`
-	// CompletedAt is the mission's terminal-transition time, UTC. Zero
-	// for the ad-hoc deliver tool (no mission behind it) — adapters
-	// render nothing when zero, never a guessed "now".
+	// CompletedAt is the mission's terminal-transition time, in the
+	// operator's configured timezone (Render's loc argument). Zero for
+	// the ad-hoc deliver tool (no mission behind it): adapters render
+	// nothing when zero, never a guessed "now".
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 	Links       []string  `json:"links"`
 	Files       []File    `json:"-"`
@@ -41,14 +42,14 @@ type Payload struct {
 // mission's generated output, not the goal/plan/review process digest.
 // missions.OutcomeDigest keeps serving memory extraction and follow-up
 // parent_context, both untouched by this. CompletedAt is the mission's
-// terminal-transition timestamp (UpdatedAt), UTC — never a guessed
-// local timezone, since destinations carry no per-mission timezone
-// setting. links is the mission detail URL (built from webBaseURL when
+// terminal-transition timestamp (UpdatedAt) converted into loc, the
+// operator's configured timezone (settings.Store.Location), UTC when
+// unset. links is the mission detail URL (built from webBaseURL when
 // non-empty) plus branch/PR URL when the mission has them.
 // Files/TextArtifacts/OversizeFiles come from the mission's declared
 // plan-unit artifacts, read from its workspace (resolveArtifactFiles) —
 // exactly what CheckArtifacts already verified exists.
-func Render(m missions.Mission, webBaseURL string, events []missions.Event) Payload {
+func Render(m missions.Mission, webBaseURL string, events []missions.Event, loc *time.Location) Payload {
 	name := m.Name
 	if name == "" {
 		name = m.Goal
@@ -76,7 +77,7 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event) Payl
 		Name:          name,
 		Goal:          m.Goal,
 		Body:          body,
-		CompletedAt:   m.UpdatedAt.UTC(),
+		CompletedAt:   m.UpdatedAt.In(loc),
 		Links:         links,
 		Files:         files,
 		TextArtifacts: texts,

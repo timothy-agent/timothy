@@ -266,19 +266,31 @@ export function DestinationEdit() {
           <div className="space-y-3 rounded-xl border border-border p-4">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-foreground">Rotate bot token</span>
-              <CredentialModeToggle mode={botTokenMode} onChange={setBotTokenMode} />
+              <CredentialModeToggle
+                mode={botTokenMode}
+                onChange={(m) => {
+                  setBotTokenMode(m)
+                  if (m === 'existing' && !existingBotTokenRef) setExistingBotTokenRef(destination.credential_ref)
+                }}
+                labels={{ new: 'New token', existing: 'Different credential' }}
+              />
             </div>
             {botTokenMode === 'existing' ? (
               <Field label="Existing credential">
                 <ExistingCredentialSelect value={existingBotTokenRef} onChange={setExistingBotTokenRef} />
               </Field>
             ) : (
-              <Input
-                value={botToken}
-                onChange={(e) => setBotToken(e.target.value)}
-                placeholder="123456:ABC-DEF..."
-                className="h-10"
-              />
+              <div className="space-y-1.5">
+                <Input
+                  value={botToken}
+                  onChange={(e) => setBotToken(e.target.value)}
+                  placeholder="123456:ABC-DEF..."
+                  className="h-10"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Replaces the stored value of {destination.credential_ref}.
+                </p>
+              </div>
             )}
             <Button
               size="sm"

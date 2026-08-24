@@ -19,7 +19,7 @@ func fixedClock(t *testing.T, rfc3339 string) Clock {
 
 func TestCurrentTime(t *testing.T) {
 	t.Parallel()
-	tool := CurrentTime(fixedClock(t, "2026-07-11T03:15:00Z"))
+	tool := CurrentTime(fixedClock(t, "2026-07-11T03:15:00Z"), nil)
 
 	tests := []struct {
 		name    string
@@ -27,7 +27,7 @@ func TestCurrentTime(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{name: "defaults to UTC", args: `{}`, want: "2026-07-11T03:15:00Z"},
+		{name: "defaults to UTC when no location func wired", args: `{}`, want: "2026-07-11T03:15:00Z"},
 		{name: "IANA zone", args: `{"timezone":"Asia/Dhaka"}`, want: "2026-07-11T09:15:00+06:00"},
 		{name: "weekday present", args: `{"timezone":"Asia/Dhaka"}`, want: "Saturday"},
 		{name: "unknown zone", args: `{"timezone":"EST5"}`, wantErr: "unknown timezone"},
@@ -49,6 +49,32 @@ func TestCurrentTime(t *testing.T) {
 				t.Fatalf("result %q does not contain %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCurrentTimeDefaultsToOperatorLocation(t *testing.T) {
+	t.Parallel()
+	loc, err := time.LoadLocation("Asia/Dhaka")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	tool := CurrentTime(fixedClock(t, "2026-07-11T03:15:00Z"), func(context.Context) *time.Location { return loc })
+
+	got, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(got, "2026-07-11T09:15:00+06:00") {
+		t.Fatalf("result %q did not default to the wired operator location", got)
+	}
+
+	// An explicit timezone argument still overrides the default.
+	got, err = tool.Execute(context.Background(), json.RawMessage(`{"timezone":"UTC"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(got, "2026-07-11T03:15:00Z") {
+		t.Fatalf("explicit timezone argument was overridden by the default: %q", got)
 	}
 }
 

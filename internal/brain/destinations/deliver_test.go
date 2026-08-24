@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -75,6 +76,27 @@ func (f *fakeAdapter) callCount() int {
 	return f.calls
 }
 
+// maybeDeliveredAdapter always fails with errMaybeDelivered: the
+// "the request may have reached the provider" case deliverOne must
+// never retry.
+type maybeDeliveredAdapter struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *maybeDeliveredAdapter) Deliver(_ context.Context, _ json.RawMessage, _ string, _ Payload) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return fmt.Errorf("timeout: %w", errMaybeDelivered)
+}
+
+func (f *maybeDeliveredAdapter) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func withFastBackoff(t *testing.T) {
 	t.Helper()
 	orig := deliverBackoff
@@ -85,7 +107,7 @@ func withFastBackoff(t *testing.T) {
 func TestDeliverZeroDestinationsNoop(t *testing.T) {
 	destStore := &fakeDestStore{rows: map[string]Destination{}}
 	eventStore := &fakeEventStore{}
-	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, nil, discardLog())
+	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, nil, nil, discardLog())
 
 	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, nil)
 
@@ -126,6 +148,29 @@ func TestDeliverRetryExhaustedThenFail(t *testing.T) {
 
 	if adapter.callCount() != 3 {
 		t.Fatalf("expected 3 attempts (1 + 2 retries), got %d", adapter.callCount())
+	}
+	if len(eventStore.events) != 1 || eventStore.events[0].Kind != eventDeliveryFailed {
+		t.Fatalf("expected one mission.delivery_failed event, got %+v", eventStore.events)
+	}
+}
+
+// TestDeliverStopsRetryingOnMaybeDelivered covers the fix: an error
+// wrapping errMaybeDelivered (the request may have already reached the
+// provider) must stop the retry loop after the first attempt, unlike a
+// plain failure which retries the full schedule.
+func TestDeliverStopsRetryingOnMaybeDelivered(t *testing.T) {
+	withFastBackoff(t)
+	adapter := &maybeDeliveredAdapter{}
+	destStore := &fakeDestStore{rows: map[string]Destination{
+		"d1": {ID: "d1", Name: "telegram-1", Kind: "telegram", Enabled: true, Config: json.RawMessage(`{"chat_id":"1"}`)},
+	}}
+	eventStore := &fakeEventStore{}
+	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"telegram": adapter}, log: discardLog()}
+
+	d.Deliver(t.Context(), missions.Mission{ID: "m1"}, []string{"d1"})
+
+	if adapter.callCount() != 1 {
+		t.Fatalf("expected exactly 1 attempt (no retry on errMaybeDelivered), got %d", adapter.callCount())
 	}
 	if len(eventStore.events) != 1 || eventStore.events[0].Kind != eventDeliveryFailed {
 		t.Fatalf("expected one mission.delivery_failed event, got %+v", eventStore.events)

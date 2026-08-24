@@ -153,6 +153,13 @@ type Scheduler struct {
 	codingExecutorDefault func(context.Context) string
 	destinationEnabled    DestinationEnabled
 	log                   *slog.Logger
+
+	// location resolves the operator's configured timezone: cron
+	// expressions are evaluated in this zone (schedule.Next reads the
+	// wall-clock fields of the time it's given), UTC when unset or
+	// unwired. This is a deliberate behavior change from the prior
+	// always-UTC evaluation (see SetLocation).
+	location func(ctx context.Context) *time.Location
 }
 
 // NewScheduler wires the scheduler with the agent resolver
@@ -185,6 +192,13 @@ func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabl
 // buildMissions), same late-wiring shape as Driver.SetDestinationDeliver.
 func (s *Scheduler) SetDestinationEnabled(fn DestinationEnabled) {
 	s.destinationEnabled = fn
+}
+
+// SetLocation wires the operator timezone accessor cron expressions
+// are evaluated against, a setter for the same reason
+// SetDestinationEnabled is.
+func (s *Scheduler) SetLocation(loc func(ctx context.Context) *time.Location) {
+	s.location = loc
 }
 
 // Run ticks forever until ctx is done. Double-fire protection across
@@ -220,7 +234,11 @@ const (
 // last run, now, grace), decide fire/skip/backfill-skip. Kept separate
 // from tick's I/O so it's unit-testable without a Store. anchor is
 // lastRun if set, else the schedule's created-at equivalent — callers
-// pass whichever applies.
+// pass whichever applies. The cron expression fires in whatever
+// location anchor/now carry (schedule.Next reads their wall-clock
+// fields): fireOne converts both into the operator's configured
+// timezone before calling this, so cron fires in the operator
+// timezone, UTC when unset.
 func dueDecision(cronExpr string, anchor, now time.Time, grace time.Duration) (decision, error) {
 	schedule, err := cron.ParseStandard(cronExpr)
 	if err != nil {
@@ -305,7 +323,17 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 		anchor = *sc.LastRun
 	}
 
-	dec, err := dueDecision(sc.Cron, anchor, now, misfireGrace)
+	// Cron expressions are evaluated in the operator's configured
+	// timezone (UTC when unset), not the container's local time: only
+	// dueDecision's inputs change here, last_run/last_skipped_at below
+	// still store the original instant.
+	loc := time.UTC
+	if s.location != nil {
+		if l := s.location(ctx); l != nil {
+			loc = l
+		}
+	}
+	dec, err := dueDecision(sc.Cron, anchor.In(loc), now.In(loc), misfireGrace)
 	if err != nil {
 		return err
 	}

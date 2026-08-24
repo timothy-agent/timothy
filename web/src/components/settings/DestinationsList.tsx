@@ -1,5 +1,6 @@
-import { Mail01Icon, GlobalIcon, TelegramIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { Mail01Icon, GlobalIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { TelegramIcon } from '@/components/icons/TelegramIcon'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -16,7 +17,7 @@ import {
 import { Toggle } from './shared'
 import { errText } from './util'
 
-const kindIcon = { email: Mail01Icon, webhook: GlobalIcon, telegram: TelegramIcon } as const
+const kindIcon = { email: Mail01Icon, webhook: GlobalIcon } as const
 
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
@@ -93,7 +94,7 @@ export function DestinationsList() {
             onClick={() => navigate('/settings/destinations/new/telegram')}
             className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
           >
-            <HugeiconsIcon icon={TelegramIcon} className="size-9" />
+            <TelegramIcon className="size-9" />
             <span className="min-w-0">
               <span className="block text-sm font-semibold">Telegram</span>
               <span className="block truncate text-sm text-muted-foreground">
@@ -153,7 +154,11 @@ function DestinationCard({
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:shadow-md">
       <div className="flex items-center gap-3">
-        <HugeiconsIcon icon={kindIcon[destination.kind]} className="size-9" />
+        {destination.kind === 'telegram' ? (
+          <TelegramIcon className="size-9" />
+        ) : (
+          <HugeiconsIcon icon={kindIcon[destination.kind]} className="size-9" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{destination.name}</div>
           <div className="text-xs text-muted-foreground uppercase">{destination.kind}</div>

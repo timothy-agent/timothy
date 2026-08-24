@@ -18,11 +18,15 @@ import (
 // Clock returns the current time; injectable for tests.
 type Clock func() time.Time
 
+// LocationFunc returns the operator's configured timezone (UTC when
+// unset); injectable for tests. Matches settings.Store.Location.
+type LocationFunc func(context.Context) *time.Location
+
 type currentTimeArgs struct {
 	Timezone string `json:"timezone"`
 }
 
-func CurrentTime(now Clock) *tools.Tool {
+func CurrentTime(now Clock, defaultLoc LocationFunc) *tools.Tool {
 	return &tools.Tool{
 		Name: "current_time",
 		Description: `Returns the current date and time.
@@ -32,8 +36,9 @@ somewhere, day of week, or anything relative to the present.
 
 Arguments:
 - timezone (string, optional): IANA timezone name, e.g. "Africa/Nairobi",
-  "America/New_York", "UTC". Defaults to UTC. Abbreviations like "EST"
-  or offsets like "+03:00" are NOT accepted — use the IANA name.
+  "America/New_York", "UTC". Defaults to the configured operator
+  timezone, UTC when unset. Abbreviations like "EST" or offsets like
+  "+03:00" are NOT accepted, use the IANA name.
 
 Returns the time in RFC 3339 format plus a human-readable line with
 the weekday.
@@ -45,17 +50,22 @@ Example: {"timezone": "Asia/Dhaka"} →
 			"properties": {
 				"timezone": {
 					"type": "string",
-					"description": "IANA timezone name (e.g. Africa/Nairobi). Defaults to UTC."
+					"description": "IANA timezone name (e.g. Africa/Nairobi). Defaults to the configured operator timezone, UTC when unset."
 				}
 			},
 			"additionalProperties": false
 		}`),
-		Execute: func(_ context.Context, raw json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var args currentTimeArgs
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
 			}
 			loc := time.UTC
+			if defaultLoc != nil {
+				if l := defaultLoc(ctx); l != nil {
+					loc = l
+				}
+			}
 			if args.Timezone != "" {
 				l, err := time.LoadLocation(args.Timezone)
 				if err != nil {

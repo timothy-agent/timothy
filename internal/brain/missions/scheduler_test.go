@@ -90,6 +90,40 @@ func TestDueDecision(t *testing.T) {
 	}
 }
 
+// TestDueDecisionNonUTCLocation proves cron evaluates against whatever
+// location anchor/now carry, not the process's local time: "0 8 * * *"
+// fires at 08:00 Europe/Amsterdam, which is 06:00 UTC in August (CEST,
+// UTC+2), a caller (fireOne) that passed the raw UTC instants instead
+// would see the boundary two hours late.
+func TestDueDecisionNonUTCLocation(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	const dailyAt8 = "0 8 * * *"
+	anchor := time.Date(2026, 8, 1, 8, 0, 0, 0, loc)
+
+	// 06:00 UTC == 08:00 CEST: due.
+	now := time.Date(2026, 8, 2, 6, 0, 0, 0, time.UTC).In(loc)
+	got, err := dueDecision(dailyAt8, anchor, now, time.Hour)
+	if err != nil {
+		t.Fatalf("dueDecision: %v", err)
+	}
+	if got != decisionFire {
+		t.Fatalf("dueDecision = %v, want decisionFire (08:00 CEST boundary)", got)
+	}
+
+	// 06:00 UTC == 07:00 CEST-equivalent wall clock one hour early: not yet due.
+	early := time.Date(2026, 8, 2, 5, 0, 0, 0, time.UTC).In(loc)
+	got, err = dueDecision(dailyAt8, anchor, early, time.Hour)
+	if err != nil {
+		t.Fatalf("dueDecision: %v", err)
+	}
+	if got != decisionSkip {
+		t.Fatalf("dueDecision = %v, want decisionSkip (07:00 CEST, before boundary)", got)
+	}
+}
+
 func TestResolveTemplateDefaults(t *testing.T) {
 	t.Parallel()
 	budget := 5.0

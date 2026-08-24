@@ -360,3 +360,83 @@ func TestTelegramAdapterDeliverBadConfig(t *testing.T) {
 		t.Fatal("expected error for malformed config")
 	}
 }
+
+// TestTelegramAdapterDeliverNeverLeaksTokenOnTimeout covers the token
+// leak: call() builds its request URL with the raw token, and a
+// *url.Error from http.Client.Do embeds that URL verbatim. A server
+// that never responds forces a client timeout so Do returns exactly
+// that shape of error.
+func TestTelegramAdapterDeliverNeverLeaksTokenOnTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	// Defers run LIFO: srv.Close() (declared second, runs first) would
+	// otherwise block forever waiting for the still-blocked handler, so
+	// close(block) must be declared AFTER srv.Close() to run BEFORE it.
+	defer srv.Close()
+	defer close(block)
+
+	const token = "123456:super-secret-bot-token"
+	a := &TelegramAdapter{
+		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", token),
+		APIBase:      srv.URL,
+		HTTP:         &http.Client{Timeout: 50 * time.Millisecond},
+	}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaks the bot token: %q", err.Error())
+	}
+	if !errors.Is(err, errMaybeDelivered) {
+		t.Fatalf("expected errMaybeDelivered for a client timeout, got %v", err)
+	}
+}
+
+// TestTelegramAdapterDeliverNeverLeaksTokenOn500 covers the same
+// redaction requirement on the non-2xx response path, and asserts the
+// response is treated as maybe-delivered (retrying a processed request
+// is pointless and a 5xx may still have side effects).
+func TestTelegramAdapterDeliverNeverLeaksTokenOn500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	const token = "123456:super-secret-bot-token"
+	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", token), APIBase: srv.URL}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	if err == nil {
+		t.Fatal("expected an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaks the bot token: %q", err.Error())
+	}
+	if !errors.Is(err, errMaybeDelivered) {
+		t.Fatalf("expected errMaybeDelivered for a non-2xx response, got %v", err)
+	}
+}
+
+// TestTelegramAdapterDeliverDialFailureIsSafeToRetry covers the other
+// leg of classifySendErr: a connection that never got established
+// (dialing a closed port) must NOT be errMaybeDelivered, since nothing
+// left the machine and a retry cannot duplicate anything.
+func TestTelegramAdapterDeliverDialFailureIsSafeToRetry(t *testing.T) {
+	// A server that's immediately closed leaves its port refusing
+	// connections, forcing a dial failure rather than any response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := srv.URL
+	srv.Close()
+
+	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"), APIBase: closedURL}
+	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	if err == nil {
+		t.Fatal("expected an error dialing a closed port")
+	}
+	if errors.Is(err, errMaybeDelivered) {
+		t.Fatalf("expected a dial failure to be safe-to-retry, got errMaybeDelivered: %v", err)
+	}
+}

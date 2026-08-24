@@ -170,6 +170,59 @@ describe('Features tab sensitive tool route', () => {
   })
 })
 
+describe('Features tab timezone', () => {
+  beforeEach(() => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: { tools_enabled: true },
+      values: { timezone: '' },
+    })
+    vi.mocked(usageBudget).mockResolvedValue({
+      day: { currency: '', limit: null, spend: 0, over: false },
+      month: { currency: '', limit: null, spend: 0, over: false },
+    })
+    vi.mocked(patchSettingValues).mockResolvedValue()
+    vi.mocked(listRoutes).mockResolvedValue([])
+  })
+
+  it('shows the UTC default placeholder when unset', async () => {
+    renderPage('/settings/features')
+    expect(await screen.findByRole('combobox', { name: 'Timezone' })).toHaveTextContent(
+      'UTC (default)',
+    )
+  })
+
+  it('filters by typeahead and patches the chosen zone', async () => {
+    renderPage('/settings/features')
+    const trigger = await screen.findByRole('combobox', { name: 'Timezone' })
+    fireEvent.click(trigger)
+
+    const search = await screen.findByPlaceholderText('Search timezones…')
+    fireEvent.change(search, { target: { value: 'amster' } })
+
+    fireEvent.click(await screen.findByText('Europe/Amsterdam'))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ timezone: 'Europe/Amsterdam' }),
+    )
+  })
+
+  it('clears back to UTC default', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: { tools_enabled: true },
+      values: { timezone: 'Europe/Amsterdam' },
+    })
+
+    renderPage('/settings/features')
+    const trigger = await screen.findByRole('combobox', { name: 'Timezone' })
+    expect(trigger).toHaveTextContent('Europe/Amsterdam')
+    fireEvent.click(trigger)
+
+    fireEvent.click(await screen.findByText('UTC (default)'))
+
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ timezone: '' }))
+  })
+})
+
 describe('Secrets tab default backend', () => {
   it('shows the built-in storage card carrying the default badge', async () => {
     renderPage('/settings/secrets')

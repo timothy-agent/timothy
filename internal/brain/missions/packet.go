@@ -3,6 +3,7 @@ package missions
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // gitLogCap bounds how much committed history a fresh worker sees —
@@ -58,6 +59,9 @@ type WorkPacket struct {
 	// Render uses lightSystemPreamble instead of nativeSystemPreamble,
 	// and Spec is always empty so the Plan block never renders.
 	Light bool
+	// Location is the operator's configured timezone, used to render
+	// progress-note timestamps; nil renders in UTC.
+	Location *time.Location
 }
 
 // toolDisciplineNote is the tool-loop stop-rule contract shared by the
@@ -141,6 +145,10 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	}
 
 	if len(p.Progress) > 0 {
+		loc := p.Location
+		if loc == nil {
+			loc = time.UTC
+		}
 		b.WriteString("Progress so far:\n")
 		notes := p.Progress
 		if len(notes) > progressRenderCap {
@@ -148,7 +156,7 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 			notes = notes[len(notes)-progressRenderCap:]
 		}
 		for _, n := range notes {
-			fmt.Fprintf(&b, "- %s: %s\n", n.At.Format("2006-01-02 15:04"), NeutralizeSlot(n.Note))
+			fmt.Fprintf(&b, "- %s: %s\n", n.At.In(loc).Format("2006-01-02 15:04 MST"), NeutralizeSlot(n.Note))
 		}
 		b.WriteString("\n")
 	}

@@ -30,7 +30,6 @@ func staticBudget(n int) func(context.Context) int {
 	return func(context.Context) int { return n }
 }
 
-
 // fakeLog is an in-memory SessionLog.
 type fakeLog struct {
 	mu        sync.Mutex
@@ -208,7 +207,7 @@ func okEvents(text string) []stream.StreamEvent {
 }
 
 func newService(gw Gateway, log SessionLog) *Service {
-	return New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, discard())
+	return New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
 }
 
 func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
@@ -853,7 +852,7 @@ func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 	}
 	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), []skills.Skill{
 		{Name: "travel-planning", Description: "Use when planning a trip", Body: "Ask about dates, budget, destination."},
-	}, nil, resolver, discard())
+	}, nil, nil, resolver, discard())
 
 	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "Tokyo, 5 days", SkillHint: "travel-planning"})
 	if err != nil {
@@ -893,7 +892,7 @@ func TestKBToolsOfferedFromSessionKnowledgeAlone(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true}, true // empty Knowledge
 	}
-	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
 		return nil, nil
 	})
@@ -971,7 +970,7 @@ func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true, Knowledge: []string{"a"}}, true
 	}
-	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 
 	var gotCollections []string
 	s.SetKBSearch(func(_ context.Context, _ string, collections []string, _ string, _ int) ([]builtin.KBSearchHit, error) {
@@ -1004,7 +1003,7 @@ func TestKBToolsFallBackOnSessionKnowledgeLookupFailure(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true, Knowledge: []string{"docs"}}, true
 	}
-	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
 		return nil, nil
 	})
@@ -1062,7 +1061,7 @@ func TestChatSkillAllowlistGatesIndexAndHint(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true, Skills: []string{"allowed-skill", "blocked-skill"}}, true
 	}
-	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, resolver, discard())
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, allow, nil, resolver, discard())
 
 	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "blocked-skill"}); err == nil {
 		t.Fatal("skill_hint for a disallowed pack accepted")
@@ -1100,7 +1099,7 @@ func TestChatEmptySkillsAllowlistDeniesEveryPack(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true}, true // Skills left empty
 	}
-	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, resolver, discard())
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, nil, resolver, discard())
 
 	// skill_hint naming a pack the (empty) allowlist doesn't list must
 	// be refused, same as an unknown skill — a denied hint is never
@@ -1132,7 +1131,7 @@ func TestChatNonEmptySkillsAllowlistAdmitsOnlyListedPacks(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true, Skills: []string{"listed-skill"}}, true
 	}
-	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, resolver, discard())
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, nil, resolver, discard())
 
 	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
 	if err != nil {
@@ -1205,7 +1204,7 @@ func TestChatEmptyToolsAllowlistStillOffersRetrieveOutput(t *testing.T) {
 	resolver := func(context.Context, string) (agents.Agent, bool) {
 		return agents.Agent{Memory: true}, true // Tools left empty
 	}
-	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 
 	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
 	if err != nil {
@@ -1254,7 +1253,7 @@ func TestChatCompactsBeforeSend(t *testing.T) {
 	log := newFakeLog()
 	order := &orderCompactor{}
 	gw := &gwAfterCompact{fakeGW: &fakeGW{events: okEvents("hi")}, order: order}
-	svc := New(gw, log, nil, order, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, nil, order, staticBudget(60_000), nil, nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{Message: "hello"})
 	if err != nil {
@@ -1303,7 +1302,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 
 	gw := &fakeGW{events: okEvents("fresh reply")}
-	svc := New(gw, log, nil, &compactingLog{log: log}, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, nil, &compactingLog{log: log}, staticBudget(60_000), nil, nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "new question"})
 	if err != nil {
@@ -1354,7 +1353,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		}
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
 	if err != nil {
@@ -1416,7 +1415,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 	distill := func(context.Context, string, string, string) *session.TurnMemory {
 		return &session.TurnMemory{KeyFindings: []string{"user moved to Porto"}}
 	}
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
 
 	type call struct {
 		sessionID string
@@ -1538,7 +1537,7 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 	drain(t, ch)
 
 	got := chatRequest(t, gw).System
-	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})), time.Now())
+	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})), time.Now(), nil)
 	if got != want {
 		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, want)
 	}
@@ -1622,7 +1621,7 @@ func TestChatAutoDispatchesAgent(t *testing.T) {
 			return agents.Agent{}, false
 		}
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	candidates := []agents.Agent{
 		{Name: "general", Description: "everyday tasks"},
 		{Name: "researcher", Description: "consults sources"},
@@ -1672,7 +1671,7 @@ func TestChatAutoWithoutDispatchWiredFallsBackToDefault(t *testing.T) {
 		}
 		return agents.Agent{}, false
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: autoAgentName})
 	if err != nil {
@@ -1707,7 +1706,7 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 			return agents.Agent{}, false
 		}
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	recalled := false
 	svc.SetMemoryRetrieve(func(context.Context, string, string) string {
 		recalled = true
@@ -2373,7 +2372,7 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
 			ApprovalAllowlist: []string{"calendar_list_events"}}, true
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
@@ -2400,7 +2399,7 @@ func TestChatWithoutAllowlistGrantsNothing(t *testing.T) {
 	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
 		return agents.Agent{ID: "agent-2", Name: "plain", Memory: true}, true
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
@@ -2427,7 +2426,7 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
 			ApprovalAllowlist: []string{"calendar_list_events"}}, true
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
@@ -2471,7 +2470,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 			return agents.Agent{}, false
 		}
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
@@ -2514,7 +2513,7 @@ func TestDistillUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
 		got <- route
 		return nil
 	}
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
 	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize my inbox"})
@@ -2550,7 +2549,7 @@ func TestDistillUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T) {
 		got <- route
 		return nil
 	}
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
 	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "run a shell command"})
@@ -2718,7 +2717,7 @@ func TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive(t *testing.T) {
 		distillRoute <- route
 		return nil
 	}
-	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, discard())
+	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
 	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	extractRoute := make(chan string, 1)
@@ -3090,7 +3089,7 @@ func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
 			return agents.Agent{}, false
 		}
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, resolver, discard())
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	candidates := []agents.Agent{
 		{Name: "general", Description: "everyday tasks"},
 		{Name: "researcher", Description: "consults sources"},
