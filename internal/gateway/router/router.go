@@ -108,7 +108,7 @@ type ChainEntry struct {
 // CLIs live in brain (internal/brain/missions/executor); the gateway
 // only validates names and wire-format compatibility, never runs a
 // subprocess itself.
-var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true, "opencode": true}
+var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true, "opencode": true, "cursor-cli": true}
 
 // harnessDrivers names the set of driver names each known harness
 // accepts directly from its provider row — checked by both admin
@@ -126,6 +126,7 @@ var harnessDrivers = map[string]map[string]bool{
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
+	"cursor-cli": {"anthropic": true},
 }
 
 // harnessNeedsResponses names harnesses that speak the OpenAI Responses

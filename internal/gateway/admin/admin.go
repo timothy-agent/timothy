@@ -46,7 +46,8 @@ var drivers = map[string]bool{"anthropic": true, "openaicompat": true, "openai-r
 // wire-format compatibility are validated here (D-051). codex-cli is
 // api_key only (no subscription/oauth mode), so in practice it's
 // always a kind='api' row — this entry costs nothing to keep either way.
-var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true}
+// cursor-cli is subscription-auth only, same posture as claude-cli.
+var cliDrivers = map[string]bool{"claude-cli": true, "codex-cli": true, "cursor-cli": true}
 
 // credentialRefPattern accepts names and paths (env var names, Vault
 // paths, AWS profile names) and rejects anything that could be a
@@ -476,6 +477,7 @@ var harnessDrivers = map[string]map[string]bool{
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
+	"cursor-cli": {"anthropic": true},
 }
 
 // validateHarnessWireFormat checks that a kind='api' provider row can
