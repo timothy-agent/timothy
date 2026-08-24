@@ -62,6 +62,8 @@ func fail(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
 	case errors.Is(err, admin.ErrUnsupported):
 		jsonError(w, http.StatusUnprocessableEntity, "unsupported", err.Error())
+	case errors.Is(err, admin.ErrUpstream):
+		jsonError(w, http.StatusBadGateway, "upstream_unavailable", err.Error())
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}

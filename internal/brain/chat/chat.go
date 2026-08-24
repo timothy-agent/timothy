@@ -1259,13 +1259,37 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 	// persisted. persistTurn appends it as KindTurnFailed when there is
 	// no partial text worth keeping instead.
 	var failure *session.TurnFailed
-	noteToolResult := func(ev stream.StreamEvent) {
-		if ev.Type != stream.EventToolResult || ev.ToolResult == nil {
-			return
+	// sawToolSinceChunk marks a tool call (or its result) landed since
+	// the last text chunk: consecutive agent-loop steps otherwise fuse
+	// their text with no separator ("...area.I'm searching for...").
+	// nextChunkStartsSegment checks and clears it, prepending "\n\n" to
+	// the chunk text that follows so live, persisted, and replayed text
+	// all agree; segmentStarts records the byte offset into text where
+	// each new segment begins, so persistTurn can split it back into one
+	// UIBlock per segment.
+	sawToolSinceChunk := false
+	var segmentStarts []int
+	nextChunkStartsSegment := func(chunkText string) string {
+		if sawToolSinceChunk && text.Len() > 0 {
+			chunkText = "\n\n" + chunkText
+			segmentStarts = append(segmentStarts, text.Len()+2)
 		}
-		ranTool = true
-		if s.sensitive.Matches(reqCtx, ev.ToolResult.Name) {
-			turnSensitive = true
+		sawToolSinceChunk = false
+		return chunkText
+	}
+	noteToolResult := func(ev stream.StreamEvent) {
+		switch ev.Type {
+		case stream.EventToolStart, stream.EventToolEnd:
+			sawToolSinceChunk = true
+		case stream.EventToolResult:
+			sawToolSinceChunk = true
+			if ev.ToolResult == nil {
+				return
+			}
+			ranTool = true
+			if s.sensitive.Matches(reqCtx, ev.ToolResult.Name) {
+				turnSensitive = true
+			}
 		}
 	}
 	noteFailure := func(ev stream.StreamEvent) {
@@ -1350,6 +1374,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 		for ev := range upstream {
 			switch ev.Type {
 			case stream.EventChunk:
+				ev.Text = nextChunkStartsSegment(ev.Text)
 				text.WriteString(ev.Text)
 			case stream.EventUsage:
 				usage = ev.Usage
@@ -1363,7 +1388,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order — mirrors missions.Store's own "publish only after
@@ -1388,6 +1413,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			}
 			switch ev.Type {
 			case stream.EventChunk:
+				ev.Text = nextChunkStartsSegment(ev.Text)
 				text.WriteString(ev.Text)
 			case stream.EventReasoningChunk:
 				reasoning.WriteString(ev.Text)
@@ -1432,7 +1458,7 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -1489,8 +1515,14 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	// Models occasionally restate their entire answer after a late
 	// tool call; the loop concatenates every step's text, so the
 	// restatement lands as a verbatim duplicate tail. Collapse it
-	// before the turn becomes durable.
-	text = collapseRepeatedTail(text)
+	// before the turn becomes durable. Collapse only trims from the
+	// tail, so a segment boundary past the collapsed length is dropped
+	// along with the text it pointed into.
+	collapsed := collapseRepeatedTail(text)
+	for len(segmentStarts) > 0 && segmentStarts[len(segmentStarts)-1] >= len(collapsed) {
+		segmentStarts = segmentStarts[:len(segmentStarts)-1]
+	}
+	text = collapsed
 	reasoning = collapseRepeatedTail(reasoning)
 
 	var turn session.AssistantTurn
@@ -1500,9 +1532,22 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	}
 	// A turn whose answer landed entirely in reasoning has no text;
 	// an empty text block serializes without its text key (omitempty)
-	// and renders as a literal "undefined" in older clients.
+	// and renders as a literal "undefined" in older clients. Split on
+	// the recorded segment boundaries so consecutive agent-loop steps
+	// persist as separate blocks instead of one fused string.
 	if text != "" {
-		turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "text", Text: text})
+		start := 0
+		for _, at := range segmentStarts {
+			// at is the segment's start (right after the injected "\n\n"),
+			// so the PRECEDING segment ends 2 bytes earlier.
+			if seg := text[start : at-2]; seg != "" {
+				turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "text", Text: seg})
+			}
+			start = at
+		}
+		if seg := text[start:]; seg != "" {
+			turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "text", Text: seg})
+		}
 	}
 	if meta != nil {
 		turn.Provider, turn.Model, turn.LedgerID = meta.Provider, meta.Model, meta.LedgerID

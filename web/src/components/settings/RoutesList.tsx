@@ -205,7 +205,12 @@ export function RoutesList() {
                   <ol className="space-y-0.5 text-xs text-muted-foreground">
                     {r.chain.map((c, i) => (
                       <li key={`${c.provider_id}-${c.model}-${i}`} className="truncate">
-                        {i + 1}. {nameOf(c.provider_id)} / <span className="font-mono">{c.model}</span>
+                        {i + 1}. {nameOf(c.provider_id)} /{' '}
+                        {/* An empty entry model follows the provider's default;
+                            show what the router actually resolved it to. */}
+                        <span className="font-mono" title={c.model ? undefined : 'provider default'}>
+                          {c.model || r.resolved?.[i]?.model || ''}
+                        </span>
                       </li>
                     ))}
                   </ol>

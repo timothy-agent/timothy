@@ -176,6 +176,37 @@ describe('ProviderAdd seeds options.litellm_provider', () => {
   })
 })
 
+describe('ProviderAdd credential reference placement', () => {
+  it('shows the credential reference field under the key input, not inside Advanced', async () => {
+    renderPage('glm')
+
+    await screen.findByPlaceholderText('paste key')
+    expect(screen.getByPlaceholderText('name (e.g. OPENAI_API_KEY)')).toBeInTheDocument()
+    expect(screen.queryByText('Advanced: base URL & credential reference')).not.toBeInTheDocument()
+    expect(screen.getByText('Advanced: base URL')).toBeInTheDocument()
+  })
+
+  it('hides the credential reference field when using an existing credential', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'ZAI_API_KEY', backend: 'db', referenced_by: [] },
+    ])
+    renderPage('glm')
+
+    await screen.findByPlaceholderText('paste key')
+    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+
+    expect(screen.queryByPlaceholderText('name (e.g. OPENAI_API_KEY)')).not.toBeInTheDocument()
+  })
+
+  it('drops the Advanced section entirely for bedrock, showing the ref field under the keys instead', async () => {
+    renderPage('bedrock')
+
+    await screen.findByPlaceholderText('AKIA…')
+    expect(screen.getByPlaceholderText('name (e.g. BEDROCK_KEYS)')).toBeInTheDocument()
+    expect(screen.queryByText(/^Advanced/)).not.toBeInTheDocument()
+  })
+})
+
 describe('ProviderAdd key hint links', () => {
   it('links to the provider\'s key-creation page', async () => {
     renderPage('glm')
@@ -432,6 +463,45 @@ describe('ProviderAdd anthropic auth folding', () => {
 
     expect(await screen.findByText(/claude setup-token/)).toBeInTheDocument()
     expect(screen.getByText(/long-lived/)).toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd cursor preset', () => {
+  beforeEach(() => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createProvider).mockResolvedValue('p-cursor')
+  })
+
+  it('renders a CLI-style form with no connection test', async () => {
+    renderPage('cursor')
+
+    expect(await screen.findByPlaceholderText('paste key')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('name (e.g. CURSOR_API_KEY)')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('composer-2.5')).toBeInTheDocument()
+    expect(screen.getByText('CLI providers have no connection test.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
+  })
+
+  it('rejects an empty key and requires no fixed prefix otherwise', async () => {
+    renderPage('cursor')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    expect(await screen.findByText('An API key is required.')).toBeInTheDocument()
+    expect(createProvider).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'any-cursor-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('CURSOR_API_KEY', 'any-cursor-key')
+    const call = vi.mocked(createProvider).mock.calls[0][0]
+    expect(call).toMatchObject({
+      kind: 'cli',
+      driver: 'cursor-cli',
+      base_url: '',
+      credential_ref: 'CURSOR_API_KEY',
+      default_model: 'composer-2.5',
+    })
   })
 })
 

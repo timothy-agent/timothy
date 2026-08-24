@@ -120,9 +120,15 @@ func (g *fakeGateway) Embed(_ context.Context, texts []string, _ string) ([][]fl
 	if g.embeds != nil {
 		return g.embeds, "fake-embed", nil
 	}
+	// One-hot per text index: cosine similarity between any two distinct
+	// texts is exactly 0, so unrelated facts in the same batch never
+	// collide as intra-batch dups by accident. Tests exercising real
+	// near-dup similarity set g.embeds explicitly instead.
 	out := make([][]float32, len(texts))
 	for i := range texts {
-		out[i] = []float32{1, 0, 0}
+		v := make([]float32, len(texts))
+		v[i] = 1
+		out[i] = v
 	}
 	return out, "fake-embed", nil
 }
@@ -134,9 +140,10 @@ type fakeStore struct {
 	confirmed []string
 	entities  map[string]string
 	nearest   struct {
-		id  string
-		sim float64
-		ok  bool
+		id     string
+		sim    float64
+		status store.Status
+		ok     bool
 	}
 	nextID int
 }
@@ -169,8 +176,12 @@ func (s *fakeStore) UpsertEntity(_ context.Context, typ, name string) (string, e
 	return s.entities[key], nil
 }
 
-func (s *fakeStore) NearestActive(context.Context, store.Vector) (string, float64, bool, error) {
-	return s.nearest.id, s.nearest.sim, s.nearest.ok, nil
+func (s *fakeStore) NearestActive(context.Context, store.Vector) (string, float64, store.Status, bool, error) {
+	status := s.nearest.status
+	if status == "" {
+		status = store.StatusActive
+	}
+	return s.nearest.id, s.nearest.sim, status, s.nearest.ok, nil
 }
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -259,6 +270,66 @@ func TestExtractNearDuplicateReinforcesInsteadOfInserting(t *testing.T) {
 	}
 	if len(st.confirmed) != 1 || st.confirmed[0] != "existing" {
 		t.Fatalf("confirmed = %v, want [existing]", st.confirmed)
+	}
+}
+
+// A near-dup match against a still-pending row must skip the insert
+// without calling Confirm: Confirm's UPDATE is active-only and would
+// silently no-op on a pending row.
+func TestExtractPendingDuplicateSkipsWithoutConfirm(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-pending", 0.96, store.StatusPending, true
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 || len(st.inserted) != 0 {
+		t.Fatalf("pending dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	if len(st.confirmed) != 0 {
+		t.Fatalf("confirmed = %v, want none (Confirm is active-only)", st.confirmed)
+	}
+}
+
+// A near-dup match against an active row still reinforces via Confirm
+// (unchanged behavior, pinned against the status-branch refactor).
+func TestExtractActiveDuplicateStillConfirms(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-active", 0.96, store.StatusActive, true
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 || len(st.inserted) != 0 {
+		t.Fatalf("active dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	if len(st.confirmed) != 1 || st.confirmed[0] != "existing-active" {
+		t.Fatalf("confirmed = %v, want [existing-active]", st.confirmed)
+	}
+}
+
+// Two near-identical facts proposed in the same run must dedup against
+// each other before either reaches the DB or NearestActive.
+func TestExtractIntraBatchNearDuplicateSkipped(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{
+		replies: []string{`[
+			{"type":"semantic","content":"User timezone preference is Europe/Amsterdam.","entities":[],"confidence":0.9},
+			{"type":"semantic","content":"All times should be interpreted in Europe/Amsterdam.","entities":[],"confidence":0.9}
+		]`},
+		embeds: [][]float32{{1, 0, 0}, {0.999, 0.001, 0}},
+	}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 || len(st.inserted) != 1 {
+		t.Fatalf("want intra-batch dup skipped, one insert: ids=%v inserted=%d", ids, len(st.inserted))
 	}
 }
 

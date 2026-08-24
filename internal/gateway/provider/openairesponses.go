@@ -469,6 +469,7 @@ type orsEventPayload struct {
 func (o *OpenAIResponses) relay(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 	tools := newToolAccumulator()
 	finished := false
+	lastTextIndex := -1 // OutputIndex of the previous text delta; -1 means none seen yet
 
 	err := sse.Read(body, func(ev sse.Event) bool {
 		var p orsEventPayload
@@ -484,7 +485,14 @@ func (o *OpenAIResponses) relay(ctx context.Context, body io.Reader, ch chan<- s
 
 		switch ev.Name {
 		case "response.output_text.delta":
-			return emit(ctx, ch, stream.StreamEvent{Type: stream.EventChunk, Text: p.Delta})
+			// Two message output items in one response (e.g. answer + a
+			// "## Sources" section) must not fuse: mark the item boundary.
+			text := p.Delta
+			if lastTextIndex != -1 && p.OutputIndex != lastTextIndex {
+				text = "\n\n" + text
+			}
+			lastTextIndex = p.OutputIndex
+			return emit(ctx, ch, stream.StreamEvent{Type: stream.EventChunk, Text: text})
 		case "response.reasoning_summary_text.delta":
 			return emit(ctx, ch, stream.StreamEvent{Type: stream.EventReasoningChunk, Text: p.Delta})
 		case "response.output_item.added":

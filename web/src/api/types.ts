@@ -549,9 +549,11 @@ export interface TestResult {
 }
 
 // AvailableModel is one model reported by a provider's own listing
-// endpoint (GET /v1/admin/providers/:id/models).
+// endpoint (GET /v1/admin/providers/:id/models). display_name is set
+// only by drivers whose listing endpoint reports one (cursor-cli).
 export interface AvailableModel {
   id: string
+  display_name?: string
 }
 
 // AdminAgent is one row of the agent registry (D-034): who serves a
@@ -713,8 +715,8 @@ export interface Mission {
   environment?: string
   // harness is the delegated CLI executor this coding mission's worker
   // turns run under (D-051): "" or absent is native in-process
-  // dispatch, "claude-cli"/"pi"/"codex-cli"/"opencode" name a
-  // registered executor.
+  // dispatch, "claude-cli"/"pi"/"codex-cli"/"opencode"/"cursor-cli" name
+  // a registered executor.
   harness?: string
   // branch_pattern/commit_style are this mission's own override of the
   // settings-configured git strategy defaults; "" or absent means the
@@ -854,6 +856,34 @@ export interface ExecutorSkippedPayload {
 // guidance injected into a running mission via POST .../note.
 export interface MissionSteeredPayload {
   note: string
+}
+
+// MissionTurnPayload is mission.turn's payload: one event per phase
+// run (driver.go's Advance), recording wall time and the StepInput that
+// resulted regardless of which phase actually ran.
+export interface MissionTurnPayload {
+  phase: string
+  duration_ms: number
+  ok: boolean
+  input: string
+  reason?: string
+  escalated_route?: string
+}
+
+// MissionRetryPayload is mission.retry's payload (statemachine.go);
+// cause is the fixed StepInput driving the retry, reason is whatever
+// text the failing turn reported.
+export interface MissionRetryPayload {
+  cause: string
+  reason?: string
+}
+
+// MissionPermissionDeniedPayload is mission.permission_denied's payload
+// (runner.go's OnPermissionDenied); tool is the denied call, detail is
+// a short digest of why (never the full args/rationale).
+export interface MissionPermissionDeniedPayload {
+  tool: string
+  detail?: string
 }
 
 // MissionPROpenedPayload is mission.pr_opened's payload — recorded by

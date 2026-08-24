@@ -49,6 +49,19 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @openai/codex@0.147.0
 # bump both together.
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g opencode-ai@1.18.18
 
+# Headless Cursor CLI, same rationale as claude/pi/codex/opencode
+# above. No npm package exists; the official installer is the only
+# distribution channel, so the version floats with whatever it ships
+# (fixtures recorded at 2026.08.11, see
+# internal/brain/missions/executor/testdata/cursor-2026.08.11). It
+# installs under $HOME, so give it a world-readable home and link the
+# launcher onto PATH for uid 65534.
+RUN mkdir -p /opt/cursor \
+    && HOME=/opt/cursor bash -c 'curl -fsSL https://cursor.com/install | bash' \
+    && ln -s /opt/cursor/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
+    && chmod -R a+rX /opt/cursor \
+    && cursor-agent --version
+
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in
 # nobody has HOME=/nonexistent, which breaks pip/npm; give it a real,
