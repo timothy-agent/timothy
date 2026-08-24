@@ -344,10 +344,10 @@ func TestListSecretsIncludesDestinationReferent(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
-		{RefName: "TELEGRAM_BOT_TOKEN"},
+		{RefName: "TELEGRAM_DEST_REF"},
 	}}
 	dests := &fakeDestinationLister{rows: []destinations.Destination{
-		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_BOT_TOKEN"},
+		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"},
 		{Name: "webhook-sink", Kind: "webhook", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
@@ -373,7 +373,7 @@ func TestListSecretsIncludesDestinationReferent(t *testing.T) {
 	got := body.Secrets[0].ReferencedBy
 	want := referenceInfo{Kind: "destination", Name: "alerts-bot", Role: "credential"}
 	if len(got) != 1 || got[0] != want {
-		t.Fatalf("TELEGRAM_BOT_TOKEN referenced_by = %+v, want [%+v] (never orphaned)", got, want)
+		t.Fatalf("TELEGRAM_DEST_REF referenced_by = %+v, want [%+v] (never orphaned)", got, want)
 	}
 }
 
@@ -385,12 +385,12 @@ func TestDeleteSecretRefusesWhenDestinationReferencesIt(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{}
 	dests := &fakeDestinationLister{rows: []destinations.Destination{
-		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_BOT_TOKEN"},
+		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"},
 	}}
 	m := http.NewServeMux()
 	a.registerSecrets(m.Handle, gw, nil, dests)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/TELEGRAM_BOT_TOKEN", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/TELEGRAM_DEST_REF", nil)
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
