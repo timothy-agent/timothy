@@ -405,22 +405,25 @@ func TestNearestActive(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	// Pending rows are invisible to dedup.
-	if gotID, _, ok, err := s.NearestActive(ctx, base); err != nil {
+	// Pending rows are visible to dedup (status tells the caller not to
+	// Confirm them - Confirm's UPDATE is active-only).
+	gotID, sim, status, ok, err := s.NearestActive(ctx, base)
+	if err != nil {
 		t.Fatalf("NearestActive: %v", err)
-	} else if ok && gotID == id {
-		t.Fatal("pending row surfaced in NearestActive")
+	}
+	if !ok || gotID != id || status != StatusPending {
+		t.Fatalf("NearestActive = (%s, status=%s, ok=%v), want (%s, pending, true)", gotID, status, ok, id)
 	}
 
 	if err := s.Promote(ctx, id); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	gotID, sim, ok, err := s.NearestActive(ctx, base)
+	gotID, sim, status, ok, err = s.NearestActive(ctx, base)
 	if err != nil {
 		t.Fatalf("NearestActive: %v", err)
 	}
-	if !ok || gotID != id {
-		t.Fatalf("NearestActive = (%s, ok=%v), want %s", gotID, ok, id)
+	if !ok || gotID != id || status != StatusActive {
+		t.Fatalf("NearestActive = (%s, status=%s, ok=%v), want (%s, active, true)", gotID, status, ok, id)
 	}
 	if sim < 0.999 {
 		t.Fatalf("identical vector similarity = %f, want ~1", sim)

@@ -206,4 +206,49 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	if _, err := adm.AvailableModels(ctx, bid); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("bedrock AvailableModels err = %v, want ErrUnsupported", err)
 	}
+
+	// kind='cli' rows never build a chat driver at all (D-051); only
+	// cursor-cli has a models-listing endpoint of its own. claude-cli
+	// (subscription auth, no such endpoint) must reject as ErrUnsupported
+	// rather than fail on "not in the serving snapshot".
+	claudeCliName := adminMarker + "models-claude-cli"
+	ccid, err := adm.Create(ctx, Provider{
+		Name: claudeCliName, Kind: "cli", Driver: "claude-cli", CredentialRef: "CC_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("Create claude-cli: %v", err)
+	}
+	if _, err := adm.AvailableModels(ctx, ccid); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("claude-cli AvailableModels err = %v, want ErrUnsupported", err)
+	}
+
+	// cursor-cli calls its own listing endpoint directly, bypassing the
+	// serving snapshot entirely.
+	cursorRef := adminMarker + "models-cursor-key" //nolint:gosec // test fixture name, not a secret
+	if err := adm.SetSecret(ctx, cursorRef, "cursor-key"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	cursorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"id":"composer-2.5","displayName":"Composer 2.5"}]}`))
+	}))
+	t.Cleanup(cursorSrv.Close)
+	origURL := cursorModelsURL
+	cursorModelsURL = cursorSrv.URL
+	t.Cleanup(func() { cursorModelsURL = origURL })
+
+	cursorName := adminMarker + "models-cursor"
+	cid, err := adm.Create(ctx, Provider{
+		Name: cursorName, Kind: "cli", Driver: "cursor-cli", CredentialRef: cursorRef,
+	})
+	if err != nil {
+		t.Fatalf("Create cursor-cli: %v", err)
+	}
+	cursorModels, err := adm.AvailableModels(ctx, cid)
+	if err != nil {
+		t.Fatalf("cursor-cli AvailableModels: %v", err)
+	}
+	if len(cursorModels) != 1 || cursorModels[0].ID != "composer-2.5" || cursorModels[0].DisplayName != "Composer 2.5" {
+		t.Fatalf("cursor-cli models = %+v", cursorModels)
+	}
 }

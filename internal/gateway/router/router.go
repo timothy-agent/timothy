@@ -108,7 +108,7 @@ type ChainEntry struct {
 // CLIs live in brain (internal/brain/missions/executor); the gateway
 // only validates names and wire-format compatibility, never runs a
 // subprocess itself.
-var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true, "opencode": true}
+var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli": true, "opencode": true, "cursor-cli": true}
 
 // harnessDrivers names the set of driver names each known harness
 // accepts directly from its provider row — checked by both admin
@@ -116,16 +116,22 @@ var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli"
 // never disagree. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat natively (its whole point is dual-wire
 // support); codex-cli and opencode speak openaicompat only (codex's own
-// responses wire; opencode's config-file baseURL).
+// responses wire; opencode's config-file baseURL). cursor-cli accepts no
+// api rows at all: cursor-agent has no BYOK and no custom endpoint
+// support, so it only ever runs against its own kind='cli' row
+// (executorUsable's row.Driver == harness check), never a kind='api' row
+// however wired.
 // Independent of this set, the anthropic_base_url override (D-051)
 // always satisfies claude-cli/pi, since it exposes an anthropic-format
-// endpoint regardless of the row's own driver — codex-cli/opencode have
-// no such override, since neither speaks anthropic.
+// endpoint regardless of the row's own driver. codex-cli/opencode/
+// cursor-cli have no such override, since cursor-cli speaks no
+// third-party wire at all.
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
+	"cursor-cli": {},
 }
 
 // harnessNeedsResponses names harnesses that speak the OpenAI Responses
@@ -632,6 +638,17 @@ type ResolvedRouteEntry struct {
 	Wire string
 }
 
+// selfPaired reports whether harness is subscription-locked to its own
+// kind='cli' provider row (cursor-cli): an empty harnessDrivers set
+// already means no kind='api' row can ever satisfy it, so a route's
+// chain membership is meaningless ceremony for that harness: the
+// operator would just be pointing at the one row that was always going
+// to be used anyway. ResolveRoute bypasses the chain for these and
+// resolves directly against matching provider rows instead.
+func selfPaired(harness string) bool {
+	return len(harnessDrivers[harness]) == 0
+}
+
 // ResolveRoute returns route's chain in stored order, annotated with
 // the gate appropriate to the requested axis (D-051 rework — harness is
 // now a caller-supplied param, not a per-entry chain field): harness ==
@@ -642,15 +659,23 @@ type ResolvedRouteEntry struct {
 // anthropic_base_url override for a non-anthropic driver row. ok is
 // false when the route doesn't exist (disabled or unknown name) OR
 // harness is non-empty and unknown — an existing route with zero
-// entries still returns ok true and an empty slice.
+// entries still returns ok true and an empty slice. For a self-paired
+// harness the route must still exist (callers rely on that contract)
+// but its chain is ignored: entries are synthesized from every enabled
+// kind='cli' row whose driver matches the harness, sorted by provider
+// name for determinism.
 func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bool) {
-	chain, ok := s.routes[route]
+	_, ok := s.routes[route]
 	if !ok {
 		return nil, false
 	}
 	if harness != "" && !KnownHarnesses[harness] {
 		return nil, false
 	}
+	if harness != "" && selfPaired(harness) {
+		return s.resolveSelfPaired(harness), true
+	}
+	chain := s.routes[route]
 	required := []provider.Capability{s.requiredCapability(route)}
 	out := make([]ResolvedRouteEntry, 0, len(chain))
 	for _, e := range chain {
@@ -697,6 +722,35 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 	return out, true
 }
 
+// resolveSelfPaired builds entries for a self-paired harness directly
+// from provider rows, bypassing the route chain entirely: harness's
+// only possible entries are enabled kind='cli' rows whose driver
+// matches it (a kind='api' row can never satisfy an empty
+// harnessDrivers set). Sorted by provider name for a deterministic
+// order, since there's no chain priority to preserve.
+func (s *Snapshot) resolveSelfPaired(harness string) []ResolvedRouteEntry {
+	rows, _ := s.Providers()
+	out := make([]ResolvedRouteEntry, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind != "cli" || row.Driver != harness {
+			continue
+		}
+		re := ResolvedRouteEntry{
+			ProviderID:    row.ID,
+			ProviderName:  row.Name,
+			Driver:        row.Driver,
+			Kind:          row.Kind,
+			CredentialRef: row.CredentialRef,
+			Model:         row.DefaultModel,
+			BaseURL:       row.BaseURL,
+		}
+		re.Prices = s.Prices(row.Name, re.Model)
+		re.Usable, re.SkipReason = executorUsable(row, harness)
+		out = append(out, re)
+	}
+	return out
+}
+
 // executorUsable applies the harness-entry rule (D-051), deliberately
 // separate from entryGate: a harness entry is dispatched by brain's
 // missions harness as a CLI subprocess, never streamed through this
@@ -726,6 +780,8 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 		if row.Driver != harness {
 			return false, fmt.Sprintf("cli provider row serves the %s harness", row.Driver)
 		}
+	} else if len(harnessDrivers[harness]) == 0 {
+		return false, fmt.Sprintf("%s only runs on its own cli provider row", harness)
 	} else {
 		wireOK := harnessDrivers[harness][row.Driver] ||
 			(row.AnthropicBaseURL != "" && harnessDrivers[harness]["anthropic"])

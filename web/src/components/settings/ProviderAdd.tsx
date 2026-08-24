@@ -101,7 +101,7 @@ export function ProviderAdd() {
     setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
-    setCliModel('claude-sonnet-4-6')
+    setCliModel(preset.id === 'cursor' ? 'composer-2.5' : 'claude-sonnet-4-6')
     setBusy(false)
     setKeyError(null)
     setTest(null)
@@ -143,9 +143,11 @@ export function ProviderAdd() {
 
   const isBedrock = preset.driver === 'bedrock'
   const isAnthropic = preset.id === 'anthropic'
-  // isCli: the subscription-token auth mode creates a kind='cli' row
-  // (D-051) instead of the plain kind='api' key flow.
-  const isCli = isAnthropic && anthropicAuth === 'oauth'
+  const isCursor = preset.id === 'cursor'
+  // isCli: the subscription-token auth mode (Anthropic) or a CLI-only
+  // preset (Cursor) creates a kind='cli' row (D-051) instead of the
+  // plain kind='api' key flow.
+  const isCli = (isAnthropic && anthropicAuth === 'oauth') || isCursor
   const wantsKey = preset.requiresKey
 
   // Bedrock always splits into access key id / secret access key —
@@ -174,21 +176,22 @@ export function ProviderAdd() {
     setKeyError(null)
   }
 
-  // submitCli validates the pasted subscription token's prefix, stores
-  // it, and creates the kind='cli' row. No probe: no chat driver exists
-  // for these rows (D-051), so there is nothing to test against.
+  // submitCli validates the pasted subscription token, stores it, and
+  // creates the kind='cli' row. No probe: no chat driver exists for
+  // these rows (D-051), so there is nothing to test against. Anthropic
+  // subscription tokens must carry the sk-ant-oat prefix; Cursor's API
+  // key has no fixed prefix to check, so any non-empty value passes.
   const submitCli = async () => {
     if (!name.trim()) {
       toast.error('Name required', { description: 'Give this provider a unique name before adding.' })
       return
     }
     const trimmedKey = stripPaste(key)
-    const isOauthToken = trimmedKey.startsWith('sk-ant-oat')
     if (!trimmedKey) {
-      setKeyError('A subscription token is required.')
+      setKeyError(isCursor ? 'An API key is required.' : 'A subscription token is required.')
       return
     }
-    if (!isOauthToken) {
+    if (!isCursor && !trimmedKey.startsWith('sk-ant-oat')) {
       setKeyError('Subscription tokens start with sk-ant-oat. Run `claude setup-token` to generate one.')
       return
     }
@@ -203,7 +206,10 @@ export function ProviderAdd() {
       await createProvider({
         name: name.trim(),
         kind: 'cli',
-        driver: 'claude-cli',
+        // Anthropic's preset.driver is 'anthropic' (its api-kind
+        // flow); the oauth mode's kind='cli' row is always claude-cli.
+        // Cursor is a CLI-only preset, so its driver is used as-is.
+        driver: isCursor ? preset.driver : 'claude-cli',
         base_url: '',
         credential_ref: ref.trim(),
         headers: {},
@@ -381,7 +387,7 @@ export function ProviderAdd() {
         {isCli && (
           <div className="grid gap-5">
             <div>
-              <Field label="Subscription token">
+              <Field label={isCursor ? 'API key' : 'Subscription token'}>
                 <Input
                   type="password"
                   value={key}
@@ -389,7 +395,7 @@ export function ProviderAdd() {
                     setKey(e.target.value)
                     invalidate()
                   }}
-                  placeholder="sk-ant-oat…"
+                  placeholder={isCursor ? 'paste key' : 'sk-ant-oat…'}
                   className="mt-1.5 h-10"
                   autoComplete="off"
                   aria-invalid={keyError != null}
@@ -401,21 +407,20 @@ export function ProviderAdd() {
                   {keyError}
                 </p>
               )}
+              <Field label="Credential reference" className="mt-3">
+                <Input
+                  value={ref}
+                  onChange={(e) => {
+                    setRef(e.target.value)
+                    setRefEdited(true)
+                    invalidate()
+                  }}
+                  placeholder={isCursor ? 'name (e.g. CURSOR_API_KEY)' : 'name (e.g. CLAUDE_CODE_TOKEN)'}
+                  className="mt-1.5 h-10"
+                />
+              </Field>
               {!keyError && <p className="mt-1.5 text-sm text-muted-foreground">{secretDestination(defaultBackend, ref)}</p>}
             </div>
-
-            <Field label="Credential reference">
-              <Input
-                value={ref}
-                onChange={(e) => {
-                  setRef(e.target.value)
-                  setRefEdited(true)
-                  invalidate()
-                }}
-                placeholder="name (e.g. CLAUDE_CODE_TOKEN)"
-                className="mt-1.5 h-10"
-              />
-            </Field>
 
             <Field label="Default model" hint="used when a mission's route chain doesn't specify one">
               <Input
@@ -424,12 +429,14 @@ export function ProviderAdd() {
                   setCliModel(e.target.value)
                   invalidate()
                 }}
-                placeholder="claude-sonnet-4-6"
+                placeholder={isCursor ? 'composer-2.5' : 'claude-sonnet-4-6'}
                 className="mt-1.5 h-10"
               />
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                CLI aliases like sonnet, opus, or haiku also work.
-              </p>
+              {!isCursor && (
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  CLI aliases like sonnet, opus, or haiku also work.
+                </p>
+              )}
             </Field>
           </div>
         )}
@@ -508,6 +515,18 @@ export function ProviderAdd() {
                 {keyError}
               </p>
             )}
+            <Field label="Credential reference" className="mt-3">
+              <Input
+                value={ref}
+                onChange={(e) => {
+                  setRef(e.target.value)
+                  setRefEdited(true)
+                  invalidate()
+                }}
+                placeholder="name (e.g. BEDROCK_KEYS)"
+                className="mt-1.5 h-10"
+              />
+            </Field>
           </div>
         )}
         {!isCli && wantsKey && !bedrockSplit && (
@@ -554,6 +573,18 @@ export function ProviderAdd() {
                     {keyError}
                   </p>
                 )}
+                <Field label="Credential reference" className="mt-3">
+                  <Input
+                    value={ref}
+                    onChange={(e) => {
+                      setRef(e.target.value)
+                      setRefEdited(true)
+                      invalidate()
+                    }}
+                    placeholder="name (e.g. OPENAI_API_KEY)"
+                    className="mt-1.5 h-10"
+                  />
+                </Field>
                 {!keyError && (
                   <div className="mt-1.5 space-y-1 text-sm text-muted-foreground">
                     {preset.keyHint && (
@@ -597,34 +628,20 @@ export function ProviderAdd() {
           </Field>
         )}
 
-        {!isCli && (
+        {!isCli && !isBedrock && (
           <details className="group">
             <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-              Advanced: {isBedrock ? 'credential reference' : 'base URL & credential reference'}
+              Advanced: base URL
             </summary>
             <div className="mt-3 grid gap-5 sm:grid-cols-2">
-              {!isBedrock && (
-                <Field label="Base URL">
-                  <Input
-                    value={baseURL}
-                    onChange={(e) => {
-                      setBaseURL(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder={preset.driver === 'anthropic' ? 'https://api.anthropic.com (default)' : 'https://…/v1'}
-                    className="mt-1.5 h-10"
-                  />
-                </Field>
-              )}
-              <Field label="Credential reference">
+              <Field label="Base URL">
                 <Input
-                  value={ref}
+                  value={baseURL}
                   onChange={(e) => {
-                    setRef(e.target.value)
-                    setRefEdited(true)
+                    setBaseURL(e.target.value)
                     invalidate()
                   }}
-                  placeholder="name (e.g. OPENAI_API_KEY)"
+                  placeholder={preset.driver === 'anthropic' ? 'https://api.anthropic.com (default)' : 'https://…/v1'}
                   className="mt-1.5 h-10"
                 />
               </Field>

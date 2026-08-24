@@ -84,6 +84,13 @@ var execEnvAllowlist = map[string]bool{
 	// file the adapter wrote into the run dir.
 	"OPENCODE_API_KEY": true,
 	"OPENCODE_CONFIG":  true,
+	// cursor adapter env (executor/cursor.go): CURSOR_API_KEY is the
+	// subscription credential; CURSOR_CONFIG_DIR pins cursor-agent's
+	// state/config dir inside the run dir; AGENT_CLI_CREDENTIAL_STORE
+	// forces file-based credential storage for the containerized run.
+	"CURSOR_API_KEY":             true,
+	"CURSOR_CONFIG_DIR":          true,
+	"AGENT_CLI_CREDENTIAL_STORE": true,
 }
 
 // execEnvMaxValueLen bounds a single env value — generous for a token

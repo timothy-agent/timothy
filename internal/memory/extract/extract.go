@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ type Storer interface {
 	Promote(ctx context.Context, id string) error
 	Confirm(ctx context.Context, id string) error
 	UpsertEntity(ctx context.Context, typ, name string) (string, error)
-	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, ok bool, err error)
+	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
 }
 
 const (
@@ -65,7 +66,7 @@ const (
 // dates, no pronouns that need surrounding context.
 const system = `You extract durable facts from a conversation excerpt for an AI assistant's long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
-Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic - even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation - facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss (documentation facts, quiz answers, how a technology works) is false. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
+Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic - even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation - facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss (documentation facts, quiz answers, how a technology works) is false. Skip small talk, transient state, and anything already obvious. Also skip filesystem paths, directory/file permissions and ownership, container or sandbox environment details, UUIDs and other identifiers, and any other machine-state observations - these are transient environment facts, not durable knowledge about the user. Empty array when nothing qualifies.`
 
 // missionSystem is the mission-digest extraction contract. The input
 // is a mission's OutcomeDigest - goal, title, kind, unit statuses -
@@ -145,6 +146,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 
 	deny := denyText(req)
 	var ids []string
+	var batchEmbeddings []store.Vector // accepted so far, this run only
 	for i, f := range facts {
 		if f.ChangesBehavior != nil && !*f.ChangesBehavior {
 			// The model itself judged this fact wouldn't change future
@@ -162,11 +164,27 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 		}
 		emb := store.Vector(vecs[i])
 		if len(emb) > 0 {
-			dupID, sim, found, err := e.store.NearestActive(ctx, emb)
+			// Intra-batch dedup: one extraction run can propose the same
+			// fact twice (e.g. stated then restated in the same turn).
+			// Compare against facts already accepted earlier in this
+			// same run, before either the DB or NearestActive sees them.
+			if nearDupVector(emb, batchEmbeddings) {
+				e.log.Info("memory dropped as intra-batch duplicate", "session_id", req.SessionID)
+				continue
+			}
+			dupID, sim, status, found, err := e.store.NearestActive(ctx, emb)
 			if err != nil {
 				return ids, fmt.Errorf("extract: dedup: %w", err)
 			}
 			if found && sim >= nearDupSimilarity {
+				if status == store.StatusPending {
+					// A pending row already carries this fact awaiting
+					// confirmation; Confirm's UPDATE is active-only and
+					// would silently no-op here, so just skip the insert.
+					e.log.Info("memory duplicate matched pending row; skipped",
+						"of", dupID, "similarity", sim, "session_id", req.SessionID)
+					continue
+				}
 				// Exact and near duplicates both reinforce the existing
 				// row instead of inserting: repetition is a confidence
 				// signal, not new knowledge. Inserting near-dups "for
@@ -179,6 +197,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 					"of", dupID, "similarity", sim, "session_id", req.SessionID)
 				continue
 			}
+			batchEmbeddings = append(batchEmbeddings, emb)
 		}
 
 		refs := make([]string, 0, len(f.Entities))
@@ -387,6 +406,35 @@ func denyText(req Request) []string {
 		}
 	}
 	return deny
+}
+
+// nearDupVector reports whether emb is a near-duplicate (by the same
+// nearDupSimilarity threshold as NearestActive) of any vector already
+// accepted this run. Batch sizes are small (maxFacts), so a linear
+// scan needs no index.
+func nearDupVector(emb store.Vector, accepted []store.Vector) bool {
+	for _, other := range accepted {
+		if cosineSimilarity(emb, other) >= nearDupSimilarity {
+			return true
+		}
+	}
+	return false
+}
+
+func cosineSimilarity(a, b store.Vector) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
 // echoesDeny reports whether content substantially restates any deny

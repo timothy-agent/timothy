@@ -52,6 +52,11 @@ describe('matchPreset', () => {
     expect(matchPreset(p).id).toBe('anthropic')
   })
 
+  it('matches the cursor preset for a kind=cli cursor-cli row', () => {
+    const p = provider({ kind: 'cli', driver: 'cursor-cli', base_url: '' })
+    expect(matchPreset(p).id).toBe('cursor')
+  })
+
   it('matches the openai-responses preset by driver, not the openai preset sharing its host', () => {
     const p = provider({ driver: 'openai-responses', base_url: 'https://api.openai.com/v1' })
     expect(matchPreset(p).id).toBe('openai-responses')

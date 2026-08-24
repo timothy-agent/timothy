@@ -376,6 +376,45 @@ func TestOpenAIResponsesRelayFullTurn(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesRelayTextItemBoundary(t *testing.T) {
+	t.Parallel()
+	p := orsServer(t, func(w http.ResponseWriter, r *http.Request) {
+		orsWrite(w, "response.output_text.delta", `{"output_index":0,"delta":"Zuid-Kennemerland."}`)
+		orsWrite(w, "response.output_text.delta", `{"output_index":1,"delta":"## Sources"}`)
+		orsWrite(w, "response.completed", `{"response":{"id":"resp_1","status":"completed"}}`)
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "gpt-5.4", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	want := "Zuid-Kennemerland.\n\n## Sources"
+	if got := textOf(events, stream.EventChunk); got != want {
+		t.Fatalf("chunks = %q, want %q", got, want)
+	}
+}
+
+func TestOpenAIResponsesRelaySameIndexNoBoundary(t *testing.T) {
+	t.Parallel()
+	p := orsServer(t, func(w http.ResponseWriter, r *http.Request) {
+		orsWrite(w, "response.output_text.delta", `{"output_index":0,"delta":"Hel"}`)
+		orsWrite(w, "response.output_text.delta", `{"output_index":0,"delta":"lo"}`)
+		orsWrite(w, "response.completed", `{"response":{"id":"resp_1","status":"completed"}}`)
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "gpt-5.4", Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if got := textOf(events, stream.EventChunk); got != "Hello" {
+		t.Fatalf("chunks = %q, want Hello", got)
+	}
+}
+
 func TestOpenAIResponsesEmptyStream(t *testing.T) {
 	t.Parallel()
 	p := orsServer(t, func(w http.ResponseWriter, r *http.Request) {
