@@ -617,7 +617,11 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 	if err != nil {
 		a.log.Warn("provider create: catalog lookup failed", "error", err)
 	}
-	if p.DefaultModel == "" {
+	// kind='cli' rows have no chat driver (D-051) and the UI always
+	// sends an explicit default_model for them; auto-seeding from the
+	// catalog here would risk a wrong-provider candidate pool leaking
+	// a junk model name into a subscription-harness row.
+	if p.DefaultModel == "" && p.Kind != "cli" {
 		if model, ok := router.CheapestCapable(candidates, "chat"); ok {
 			p.DefaultModel = model
 		}
@@ -636,7 +640,7 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
 	a.audit(ctx, "create", "provider", id, nil, p)
-	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, ExcludeFromBootstrap: p.ExcludeFromBootstrap}, candidates)
+	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, Kind: p.Kind, ExcludeFromBootstrap: p.ExcludeFromBootstrap}, candidates)
 	a.reload(ctx)
 	return id, nil
 }

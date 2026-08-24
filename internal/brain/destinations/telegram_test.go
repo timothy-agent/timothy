@@ -30,62 +30,108 @@ func TestEscapeMarkdownV2(t *testing.T) {
 	}
 }
 
-func TestRenderTelegramTextUnderLimit(t *testing.T) {
-	p := Payload{Body: "short digest.", Links: []string{"https://timothy.example/missions/m1"}}
-	got := renderTelegramText(p)
-	if len(got) > telegramMessageLimit {
-		t.Fatalf("got %d bytes, want <= %d", len(got), telegramMessageLimit)
+// sentMessages drives a fake Telegram Bot API and captures every
+// sendMessage body, for tests that need to inspect what sendTelegramText
+// actually sent (as opposed to renderTelegramText's pre-refactor pure
+// rendering, which no longer exists now that headers/chunking need a
+// live adapter call).
+func sentMessages(t *testing.T, deliver func(a *TelegramAdapter)) []string {
+	t.Helper()
+	var texts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if text, ok := body["text"].(string); ok {
+			texts = append(texts, text)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	deliver(&TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"), APIBase: srv.URL})
+	return texts
+}
+
+func TestSendTelegramTextHeadsWithTitleAndDate(t *testing.T) {
+	completedAt, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00Z")
+	if err != nil {
+		t.Fatalf("parse fixture time: %v", err)
 	}
-	if !strings.Contains(got, "short digest") {
-		t.Fatalf("expected digest content, got %q", got)
+	p := Payload{Name: "inbox-digest-8h", CompletedAt: completedAt, Body: "# heading\n\n**bold** text."}
+	texts := sentMessages(t, func(a *TelegramAdapter) {
+		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	})
+	if len(texts) != 1 {
+		t.Fatalf("expected one sendMessage, got %d: %v", len(texts), texts)
 	}
-	if !strings.Contains(got, `missions/m1`) {
-		t.Fatalf("expected link content, got %q", got)
+	got := texts[0]
+	if !strings.HasPrefix(got, "*inbox\\-digest\\-8h*\n21 Aug 2026, 20:30 UTC\n\n") {
+		t.Fatalf("expected bold title + date head, got %q", got)
+	}
+	if strings.Contains(got, "**") {
+		t.Fatalf("expected markdown converted (no literal **), got %q", got)
+	}
+	if !strings.Contains(got, "*bold*") {
+		t.Fatalf("expected **bold** converted to MarkdownV2 bold, got %q", got)
+	}
+	if !strings.Contains(got, "*heading*") {
+		t.Fatalf("expected # heading converted to a bold line, got %q", got)
 	}
 }
 
-func TestRenderTelegramTextPrependsSubjectWhenSet(t *testing.T) {
+func TestSendTelegramTextUsesSubjectWhenNameEmpty(t *testing.T) {
 	p := Payload{Subject: "Daily digest", Body: "the content"}
-	got := renderTelegramText(p)
-	if !strings.HasPrefix(got, "Daily digest\n\nthe content") {
-		t.Fatalf("got = %q, want subject prepended", got)
+	texts := sentMessages(t, func(a *TelegramAdapter) {
+		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	})
+	if len(texts) != 1 {
+		t.Fatalf("expected one sendMessage, got %d: %v", len(texts), texts)
+	}
+	if !strings.HasPrefix(texts[0], "*Daily digest*\n\nthe content") {
+		t.Fatalf("got = %q, want subject as bold title", texts[0])
 	}
 }
 
-func TestRenderTelegramTextTruncatesOverLimit(t *testing.T) {
-	p := Payload{Body: strings.Repeat("x", telegramMessageLimit*2), Links: []string{"https://timothy.example/missions/m1"}}
-	got := renderTelegramText(p)
-	if len(got) > telegramMessageLimit {
-		t.Fatalf("truncated text is %d bytes, want <= %d", len(got), telegramMessageLimit)
+func TestSendTelegramTextIncludesLinksAndOversizeNotice(t *testing.T) {
+	p := Payload{Body: "digest", Links: []string{"https://timothy.example/missions/m1"}, OversizeFiles: []string{"huge.zip"}}
+	texts := sentMessages(t, func(a *TelegramAdapter) {
+		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	})
+	if len(texts) != 1 {
+		t.Fatalf("expected one sendMessage, got %d: %v", len(texts), texts)
 	}
-	if !strings.Contains(got, "truncated") {
-		t.Fatalf("expected a truncation notice, got tail %q", got[len(got)-80:])
+	if !strings.Contains(texts[0], `missions/m1`) {
+		t.Fatalf("expected link content, got %q", texts[0])
 	}
-	if !strings.Contains(got, "missions/m1") {
-		t.Fatalf("expected the mission link preserved after truncation, got tail %q", got[len(got)-200:])
-	}
-}
-
-func TestRenderTelegramTextTruncationRespectsMultibyteRunes(t *testing.T) {
-	// A body made entirely of multi-byte runes must not panic or corrupt
-	// output when cut for length.
-	p := Payload{Body: strings.Repeat("测试", telegramMessageLimit)}
-	got := renderTelegramText(p)
-	if len(got) > telegramMessageLimit {
-		t.Fatalf("got %d bytes, want <= %d", len(got), telegramMessageLimit)
-	}
-	if !strings.HasPrefix(got, "测试") {
-		t.Fatalf("expected valid utf8 prefix preserved, got %q", got[:min(20, len(got))])
+	if !strings.Contains(texts[0], escapeMarkdownV2("huge.zip")) {
+		t.Fatalf("expected oversize file name in text, got %q", texts[0])
 	}
 }
 
-func TestRenderTelegramTextIncludesOversizeNotice(t *testing.T) {
-	p := Payload{Body: "digest", OversizeFiles: []string{"huge.zip"}}
-	got := renderTelegramText(p)
-	// The oversize notice text is itself MarkdownV2-escaped, so the
-	// file name's literal dot comes through escaped too.
-	if !strings.Contains(got, escapeMarkdownV2("huge.zip")) {
-		t.Fatalf("expected oversize file name in text, got %q", got)
+func TestSendTelegramTextChunksLongBody(t *testing.T) {
+	// A body long enough to force ChunkMarkdownV2 into multiple
+	// sendMessage calls rather than a single truncated one.
+	p := Payload{Name: "long-digest", Body: strings.Repeat("line of digest text.\n\n", 400)}
+	texts := sentMessages(t, func(a *TelegramAdapter) {
+		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	})
+	if len(texts) < 2 {
+		t.Fatalf("expected chunking into multiple messages, got %d: %v", len(texts), texts)
+	}
+	for i, chunk := range texts {
+		if len(chunk) > telegramMessageLimit {
+			t.Fatalf("chunk %d is %d bytes, want <= %d", i, len(chunk), telegramMessageLimit)
+		}
+	}
+	if !strings.HasPrefix(texts[0], "*long\\-digest*") {
+		t.Fatalf("expected the title heading only the first chunk, got %q", texts[0])
 	}
 }
 

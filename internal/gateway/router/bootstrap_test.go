@@ -153,6 +153,22 @@ func TestBootstrapChainExcludedProviderYieldsNoUpdates(t *testing.T) {
 	}
 }
 
+// TestBootstrapChainCliKindYieldsNoUpdates confirms a kind='cli' row
+// (subscription-harness providers like claude-cli/codex-cli) never
+// bootstraps into chat routes: those rows serve no chat traffic
+// (BuildSnapshot skips them), so appending them here only pollutes
+// chains with catalog junk.
+func TestBootstrapChainCliKindYieldsNoUpdates(t *testing.T) {
+	p := ProviderRow{ID: "cli1", Kind: "cli"}
+	candidates := []catalog.Model{priced("m", 1, "chat", false)}
+
+	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
+
+	if got != nil {
+		t.Fatalf("BootstrapChain(kind=cli) = %+v, want nil (no route touched)", got)
+	}
+}
+
 // TestBootstrapChainSeedsVisionRoute confirms a newly connected
 // vision-capable provider auto-chains into the "vision" route (D-046),
 // the same as the other fixed bootstrap routes.

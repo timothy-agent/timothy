@@ -50,19 +50,19 @@ describe('fromTranscript', () => {
     expect(items.map((i) => i.id)).toEqual(['replay-2', 'replay-3', 'replay-4', 'replay-5', 'replay-6'])
   })
 
-  it('concatenates multiple blocks of the same type', () => {
+  it('joins multiple text blocks with a blank line', () => {
     const items = fromTranscript([
       {
         seq: 1,
         kind: 'assistant',
         blocks: [
-          { type: 'text', text: 'part one, ' },
+          { type: 'text', text: 'part one' },
           { type: 'text', text: 'part two' },
         ],
         created_at: at,
       },
     ])
-    expect(items[0]).toMatchObject({ role: 'assistant', text: 'part one, part two' })
+    expect(items[0]).toMatchObject({ role: 'assistant', text: 'part one\n\npart two' })
   })
 
   it('omits meta when the turn has no provider attribution', () => {
