@@ -1385,6 +1385,29 @@ func TestExecutorUsableOpenAIResponsesGate(t *testing.T) {
 	}
 }
 
+// TestExecutorUsableCursorCLIRejectsAPIRows: cursor-agent has no BYOK
+// and no custom endpoint support at all, so no kind='api' row, not
+// even one with options.anthropic_base_url set (the override every
+// other anthropic-wire harness accepts), can ever serve the cursor-cli
+// harness. Only its own kind='cli' row (driver == harness) is usable.
+// Regression test for a live-tested bug: an api row with
+// anthropic_base_url set (GLM) resolved usable for cursor-cli, then
+// BuildInvocation failed at spawn since cursor-agent rejects any
+// non-empty base url.
+func TestExecutorUsableCursorCLIRejectsAPIRows(t *testing.T) {
+	t.Parallel()
+	apiRow := ProviderRow{Kind: "api", Driver: "openaicompat", CredentialRef: "K", Enabled: true,
+		AnthropicBaseURL: "https://glm.example/v1"}
+	if usable, reason := executorUsable(apiRow, "cursor-cli"); usable {
+		t.Fatalf("api row with anthropic_base_url usable for cursor-cli, reason=%q, want unusable", reason)
+	}
+
+	cliRow := ProviderRow{Kind: "cli", Driver: "cursor-cli", CredentialRef: "K", Enabled: true}
+	if usable, reason := executorUsable(cliRow, "cursor-cli"); !usable {
+		t.Fatalf("cursor-cli's own cli row unusable, reason=%q, want usable", reason)
+	}
+}
+
 // TestResolveRouteOpenAIResponsesGate is the same gate exercised through
 // ResolveRoute, confirming the wire-incompatible check still wins when
 // both would otherwise fire (order matters: a provider whose driver

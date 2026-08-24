@@ -116,17 +116,22 @@ var KnownHarnesses = map[string]bool{"claude-cli": true, "pi": true, "codex-cli"
 // never disagree. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat natively (its whole point is dual-wire
 // support); codex-cli and opencode speak openaicompat only (codex's own
-// responses wire; opencode's config-file baseURL).
+// responses wire; opencode's config-file baseURL). cursor-cli accepts no
+// api rows at all: cursor-agent has no BYOK and no custom endpoint
+// support, so it only ever runs against its own kind='cli' row
+// (executorUsable's row.Driver == harness check), never a kind='api' row
+// however wired.
 // Independent of this set, the anthropic_base_url override (D-051)
 // always satisfies claude-cli/pi, since it exposes an anthropic-format
-// endpoint regardless of the row's own driver — codex-cli/opencode have
-// no such override, since neither speaks anthropic.
+// endpoint regardless of the row's own driver. codex-cli/opencode/
+// cursor-cli have no such override, since cursor-cli speaks no
+// third-party wire at all.
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
-	"cursor-cli": {"anthropic": true},
+	"cursor-cli": {},
 }
 
 // harnessNeedsResponses names harnesses that speak the OpenAI Responses
@@ -727,6 +732,8 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 		if row.Driver != harness {
 			return false, fmt.Sprintf("cli provider row serves the %s harness", row.Driver)
 		}
+	} else if len(harnessDrivers[harness]) == 0 {
+		return false, fmt.Sprintf("%s only runs on its own cli provider row", harness)
 	} else {
 		wireOK := harnessDrivers[harness][row.Driver] ||
 			(row.AnthropicBaseURL != "" && harnessDrivers[harness]["anthropic"])

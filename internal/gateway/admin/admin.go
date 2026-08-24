@@ -471,13 +471,15 @@ func validateProvider(p Provider) error {
 // override. claude-cli speaks anthropic only; pi speaks either
 // anthropic or openaicompat (its whole point is dual-wire support);
 // codex-cli and opencode speak openaicompat only (codex's own responses
-// wire; opencode's config-file baseURL).
+// wire; opencode's config-file baseURL). cursor-cli accepts no api rows
+// at all (no BYOK, no custom endpoint support): only its own kind='cli'
+// row, which never reaches this check (see the comment below).
 var harnessDrivers = map[string]map[string]bool{
 	"claude-cli": {"anthropic": true},
 	"pi":         {"anthropic": true, "openaicompat": true},
 	"codex-cli":  {"openaicompat": true},
 	"opencode":   {"openaicompat": true},
-	"cursor-cli": {"anthropic": true},
+	"cursor-cli": {},
 }
 
 // validateHarnessWireFormat checks that a kind='api' provider row can
