@@ -40,16 +40,21 @@ via the existing `--env-file` Make targets.
 
 ## Layout
 
-- `cmd/{brain,gateway,memoryd,skills-validate}`: binaries; all wiring
-  in each `main.go` (nil-able deps, env-gated features).
+- `cmd/{brain,gateway,memoryd,sandboxd,skills-validate}`: binaries;
+  all wiring in each `main.go` (nil-able deps, env-gated features).
 - `internal/brain/`: `api` (HTTP handlers, nil-gated `register*`),
   `loop` (THE tool loop, lives here only), `tools` + `tools/builtin`,
   `chat`, `session`, `agents`, `missions` (agent harness),
-  `connectors`, `gwclient`, `memclient`, `settings`, `skills`.
+  `workflows` (orchestration above missions, env-gated
+  `WORKFLOWS_ENABLED`), `connectors`, `destinations`, `kb`,
+  `attachments`, `gwclient`, `memclient`, `sandboxclient`,
+  `settings`, `skills`.
 - `internal/gateway/`: `provider` (wire adapters only), `router`,
-  `ledger`, `stream`, `admin`, `api`.
+  `catalog`, `ledger`, `stream`, `admin`, `api`.
+- `internal/memory/`: `api`, `store` (pgvector), `chunk`, `extract`
+  (source-aware fact extraction), `retrieval` (hybrid, RRF-fused).
 - `internal/platform/`: shared (`migrate`, `pgpool`, `sse`,
-  `httpserver`, `metrics`, `logging`, `config`, `service`,
+  `httpserver`, `metrics`, `logging`, `config`, `service`, `netguard`,
   `markitdown`, `whisper`).
 - `migrations/`: numbered idempotent SQL, embedded via `embed.go`.
   Pre-release: schema changes edit the original migration in place
@@ -60,7 +65,14 @@ via the existing `--env-file` Make targets.
 
 - `internal/brain/missions/`: `statemachine.go` (pure `Step()`, sole
   transition logic), `store.go` (`ApplyTransition` is the only state
-  writer; append-only `mission_events`), `driver.go`, `runner.go`.
+  writer; append-only `mission_events`), `driver.go`, `runner.go`,
+  `policy.go` (per-kind/light behavior), `provision.go`, `budget.go`,
+  `verifier.go`, `sentinel.go`, `packet.go`, `scheduler.go`.
+- Light missions (kind=general, `light` flag): born in phase=execute,
+  skip explore/plan/review; the worker carries the deliverable in
+  mission_status's `final_output` argument.
+- Worker turns end on successful sentinel execution
+  (`loop.Request.EndTurnTools`); never add a post-sentinel model call.
 - Harness-owned verification: `CheckArtifacts` runs BEFORE any
   model-authored `verify_cmd`; `passes` flags flip only on harness
   evidence, never on model claims.
@@ -83,7 +95,7 @@ via the existing `--env-file` Make targets.
 - Secrets by `credential_ref` name only; raw values never in DB, API,
   logs, or frontend. Never read `.env*`, `~/.ssh`, credentials.
 - Providers are wire adapters; routing/model choice is data
-  (`providers`/`task_routes` rows), not code.
+  (`providers`/`routes` rows), not code.
 - Cost honesty: unknown price recorded as NULL, never guessed.
 - No speculative abstractions: no interface with one implementation,
   no config nothing reads.

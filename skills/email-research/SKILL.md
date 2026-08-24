@@ -28,14 +28,14 @@ description: Searches, reads, and aggregates Gmail content, finding bookings, co
 
 ## Anti-rationalization
 
-| Excuse | Rebuttal |
-|---|---|
-| "The snippet already shows the amount" | Snippets truncate; gmail_read the message before citing a figure from it. |
-| "I can add these three numbers myself" | Mental arithmetic on amounts you'll report as fact goes through calculate, no exceptions. |
-| "Combining $40 and €40 into one total is close enough" | Different currencies are different totals; report each separately. |
-| "It's from the same sender as the confirmation, so it counts" | Marketing and reminders from that domain are not the transaction; label them separately. |
-| "The user's message implies this year" | Never guess a year: read it from the system prompt's current date. |
-| "No Gmail tool is available, but I probably know the answer" | Say "email not connected"; never answer from assumption when the tool is simply missing. |
+| Excuse                                                        | Rebuttal                                                                                  |
+|---------------------------------------------------------------|-------------------------------------------------------------------------------------------|
+| "The snippet already shows the amount"                        | Snippets truncate; gmail_read the message before citing a figure from it.                 |
+| "I can add these three numbers myself"                        | Mental arithmetic on amounts you'll report as fact goes through calculate, no exceptions. |
+| "Combining $40 and €40 into one total is close enough"        | Different currencies are different totals; report each separately.                        |
+| "It's from the same sender as the confirmation, so it counts" | Marketing and reminders from that domain are not the transaction; label them separately.  |
+| "The user's message implies this year"                        | Never guess a year: read it from the system prompt's current date.                        |
+| "No Gmail tool is available, but I probably know the answer"  | Say "email not connected"; never answer from assumption when the tool is simply missing.  |
 
 ## Red flags: stop and re-check
 

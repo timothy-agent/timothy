@@ -38,11 +38,11 @@ description: Source-grounded research with verification and citations. Use when 
 
 ## Anti-rationalization
 
-| Excuse | Rebuttal |
-|---|---|
-| "I already know this" | Knowledge has a training cutoff; the question is being asked now. |
-| "One good source is enough" | Single sources are wrong often enough that decisions deserve two. |
-| "Citing everything clutters the answer" | An uncited actionable claim is a liability, not a courtesy. |
+| Excuse                                              | Rebuttal                                                             |
+|-----------------------------------------------------|----------------------------------------------------------------------|
+| "I already know this"                               | Knowledge has a training cutoff; the question is being asked now.    |
+| "One good source is enough"                         | Single sources are wrong often enough that decisions deserve two.    |
+| "Citing everything clutters the answer"             | An uncited actionable claim is a liability, not a courtesy.          |
 | "The aggregator summarizes the primary source fine" | Aggregators introduce errors and lag; the primary is one fetch away. |
 
 ## Red flags: stop and re-check

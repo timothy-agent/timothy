@@ -55,7 +55,9 @@ First run: `cp deploy/env.example deploy/.env` and set
 - `internal/brain/`: `api` (HTTP handlers, nil-gated `register*`
   pattern), `loop` (THE tool loop, lives here only), `tools` +
   `tools/builtin` (registry, permission chain, builtin tools), `chat`,
-  `session`, `agents`, `missions` (agent harness), `connectors`
+  `session`, `agents`, `missions` (agent harness), `workflows`
+  (orchestration above missions: steps + outcome-driven edges, env-gated
+  `WORKFLOWS_ENABLED`), `connectors`
   (Google/MCP), `destinations` (mission result delivery: email/webhook/
   telegram), `kb` (knowledge-base collections/documents), `attachments`,
   `gwclient`, `memclient`, `sandboxclient`, `settings`, `skills`.
@@ -63,8 +65,9 @@ First run: `cp deploy/env.example deploy/.env` and set
   `catalog` (LiteLLM-synced model/pricing catalog), `ledger`, `stream`,
   `admin`, `api`.
 - `internal/memory/` (memoryd's implementation): `api`, `store`
-  (pgvector), `chunk`, `extract`, `retrieval` (hybrid vector+text+entity,
-  RRF-fused).
+  (pgvector), `chunk`, `extract` (source-aware contracts, echo fence,
+  duplicate reinforcement, `changes_behavior` utility gate), `retrieval`
+  (hybrid vector+text+entity, RRF-fused).
 - `internal/platform/`: shared: `migrate`, `pgpool`, `sse`,
   `httpserver`, `metrics`, `logging`, `config`, `service`, `netguard`
   (SSRF-guarded outbound dialer), `markitdown`, `whisper` (sidecar
@@ -79,10 +82,24 @@ First run: `cp deploy/env.example deploy/.env` and set
 - `internal/brain/missions/`: `statemachine.go` (pure `Step()`, sole
   transition logic), `store.go` (`ApplyTransition` is the only state
   writer; append-only `mission_events`), `driver.go`, `runner.go`
-  (native runner over `loop.Agent`), `worktree.go`, `packet.go`,
-  `sentinel.go`, `review.go`, `verify.go`, `scheduler.go`, `notify.go`,
-  `sweep.go`. Schema: `migrations/0010_missions.sql` (edited in place
+  (native runner over `loop.Agent`), `policy.go` (per-kind/light
+  behavior flags), `provision.go`, `budget.go`, `verifier.go`,
+  `worktree.go`, `packet.go`, `sentinel.go`, `review.go`, `verify.go`,
+  `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema: `migrations/0010_missions.sql` (edited in place
   pre-release, never new ALTER migrations), attachments in 0011.
+- Light missions (D-069, kind=general only): born in phase=execute,
+  skip explore/plan/review; the deliverable travels in mission_status's
+  `final_output` argument (reasoning models emit tool calls with no
+  plain text). Digest schedules run light.
+- Worker turns END on successful sentinel execution
+  (`loop.Request.EndTurnTools`, D-075): never reintroduce a
+  post-sentinel model call — chat models ramble through it, reasoning
+  models return empty and fail the turn.
+- Mission workers get their agent's skill index in the system prompt
+  (packet `SkillsIndex`, resolved at packet build); delegated CLI
+  packets never include it. Every mission prompt carries the current
+  date via `execEnvironmentNote` — models otherwise anchor on stale
+  dates in tool descriptions.
 - Follow-up missions: a terminal mission spawns a new one via
   `parent_mission_id`; the parent's outcome digest (`OutcomeDigest`,
   shared with memory extraction) is snapshotted into `parent_context`

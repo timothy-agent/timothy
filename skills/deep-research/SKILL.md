@@ -54,13 +54,13 @@ description: Decomposes a complex research question into independent sub-questio
 
 ## Anti-rationalization
 
-| Excuse | Rebuttal |
-|---|---|
-| "These sub-questions all touch the same topic, I'll merge them" | Same topic doesn't mean same unit; independence is about whether one needs the other's answer. |
-| "The snippet already told me, no need to fetch the page" | A snippet is a lead, not a source; fetch the page, confirm the claim, then cite it. |
-| "The synthesis can just re-search to fill a gap" | Synthesis reads findings files only; a gap found at synthesis time means a findings unit was incomplete, not a license to search again. |
-| "One source is fine, this fact is obviously true" | Obviousness is not verification; decision-driving claims still need two independent sources. |
-| "Close enough to the URL I remember" | The harness matches cited URLs against fetched ones exactly; a remembered or reconstructed URL fails the unit. |
+| Excuse                                                          | Rebuttal                                                                                                                                |
+|-----------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| "These sub-questions all touch the same topic, I'll merge them" | Same topic doesn't mean same unit; independence is about whether one needs the other's answer.                                          |
+| "The snippet already told me, no need to fetch the page"        | A snippet is a lead, not a source; fetch the page, confirm the claim, then cite it.                                                     |
+| "The synthesis can just re-search to fill a gap"                | Synthesis reads findings files only; a gap found at synthesis time means a findings unit was incomplete, not a license to search again. |
+| "One source is fine, this fact is obviously true"               | Obviousness is not verification; decision-driving claims still need two independent sources.                                            |
+| "Close enough to the URL I remember"                            | The harness matches cited URLs against fetched ones exactly; a remembered or reconstructed URL fails the unit.                          |
 
 ## Red flags: stop and re-check
 

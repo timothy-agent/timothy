@@ -1,42 +1,45 @@
 ---
 name: coding
-description: Disciplined software changes: plan first, test first, verify end-to-end. Use when writing, modifying, debugging, or reviewing code, or when a task produces anything a compiler, interpreter, or test suite will judge.
+description: Disciplined software changes: understand the requirement, reproduce failures, make the smallest safe change, and verify it with evidence. Use when writing, modifying, debugging, or reviewing code, or when a task produces anything a compiler, interpreter, linter, or test suite will evaluate.
 ---
 
 # Coding task discipline
 
 ## Rules
 
-- State the plan before the first edit: what changes, where, and how you will know it worked.
-- Write or identify the failing test before writing the fix; a bug you cannot reproduce is a bug you cannot claim to have fixed.
-- Make the smallest change that satisfies the requirement; delete nothing you did not orphan yourself.
-- Build and run the tests after every coherent step, not once at the end: a broken intermediate state with ten changes in flight has ten suspects.
-- Read the actual error message before theorizing; quote it, don't paraphrase it.
-- When a fix doesn't work, revert to the last known-good state before trying the next idea; stacked failed attempts compound.
-- Match the codebase's existing style, naming, and idiom even where you disagree with it.
-- Never weaken an assertion, delete a test, or broaden an exception handler to make a failure go away; make the code satisfy the test or prove the test wrong.
-- Treat compiler warnings and linter findings in changed code as errors.
+- Before editing, inspect the relevant code, tests, configuration, and repository conventions enough to understand the requested change and define success criteria.
+- State the plan before the first edit: what changes, where, and how you will verify them.
+- For bugs, reproduce the failure and write or identify a failing test before fixing it when practical. For other changes, define the verification criteria before editing.
+- Make the smallest change that satisfies the requirement; avoid unrelated cleanup or refactoring.
+- After each coherent change, run the smallest relevant verification available. After completing the coherent unit of work, run broader applicable tests.
+- Read the actual error output before theorizing; quote it rather than paraphrasing it.
+- When a fix fails, return to the last known-good state before trying a different fix, while preserving useful diagnostic instrumentation.
+- Match the codebase's existing style, naming, architecture, and idioms unless the task explicitly requires changing them.
+- Never weaken assertions, delete tests, or broaden exception handling merely to make failures disappear.
+- Treat new compiler warnings and linter findings introduced by the change as errors.
 
 ## Anti-rationalization
 
-| Excuse | Rebuttal |
-|---|---|
-| "Tests slow me down" | Untested code is unfinished code; the time returns on the first regression. |
-| "It's a one-line change, no need to run anything" | One-line changes have shipped outages; the cost of running the suite is minutes. |
-| "The error is probably X, let me just fix that" | Probably is a guess; reproduce first, then fix what actually failed. |
-| "I'll clean this up later" | Later never has more context than now. |
-| "The existing style is bad, I'll improve it while I'm here" | Unrequested churn hides the real change and breaks review. |
+| Excuse                                            | Rebuttal                                                                          |
+|---------------------------------------------------|-----------------------------------------------------------------------------------|
+| "Tests slow me down"                              | Use the smallest relevant verification first; unverified code is unfinished code. |
+| "It's a one-line change, no need to run anything" | Small changes can still cause regressions; run the applicable verification.       |
+| "The error is probably X"                         | Probably is a guess; reproduce and inspect the actual failure first.              |
+| "I'll clean this up while I'm here"               | Unrequested churn hides the real change and increases regression risk.            |
+| "The existing style is bad"                       | Match the repository unless changing it is part of the task.                      |
 
 ## Red flags: stop and re-check
 
-- You are about to change a test's expected value to match new output.
-- You cannot explain why the fix works, only that it does.
+- You are about to change a test expectation to match new output without establishing that the expected behavior should change.
+- You cannot explain why the fix works, only that a test happens to pass.
 - The diff touches files unrelated to the stated task.
-- You are adding a sleep, retry, or timeout to make a test pass.
-- Two consecutive fix attempts failed: stop patching, start reading.
+- You are adding a sleep, retry, timeout, or exception handling solely to make a test pass.
+- Two consecutive fix attempts failed: stop patching and inspect the code, test, and failure more deeply.
+- You cannot distinguish a newly introduced failure from a pre-existing failure.
 
 ## Evidence required
 
-- The failing output before the fix and the passing output after, from the same command.
-- A clean build/lint/test run at the final state, quoted, not summarized.
-- Self-assessment ("looks correct", "should work") counts for nothing.
+- For bug fixes: evidence of the failure before the fix and successful verification after the fix.
+- Applicable verification at the final state: build, lint, tests, type checks, static analysis, or other repository-specific checks.
+- Report actual command results and relevant output rather than claiming that something "looks correct."
+- Distinguish pre-existing failures from regressions introduced by the current change.

@@ -17,17 +17,22 @@ Self-hosted personal AI assistant: chat, cost tracking, tasks, and agents, runni
 
 Alpha releases with prebuilt images are available on the [Releases page](https://github.com/timothy-agent/timothy/releases); expect rough edges and breaking changes between releases.
 
-## What works today
+## Features
 
-- **Multi-provider chat**: Anthropic, Amazon Bedrock, and any OpenAI-compatible API behind one gateway; providers, models, and per-task routing are database configuration, editable at runtime from the settings panel with hot reload.
-- **Sessions that survive**: every conversation is an append-only event log; kill a container mid-stream and the session resumes and replays exactly.
-- **Tools, permissions, skills**: the agent loop executes tools behind a constraint/permission chain (destructive actions require explicit approval in the UI); skill packs load lazily by task.
-- **Missions**: long-running agent tasks with a pure state machine, harness-owned verification (artifacts must exist before any model claim counts), per-mission sandboxes, budgets, and LLM review; recurring missions fire from cron schedules. Coding missions auto-detect their language environment (Go, Node, Python, Java, PHP) and run in a matching per-language sandbox image, pulled on demand.
-- **Delegated coding harness**: a coding mission can hand its execution to headless Claude Code running inside the mission sandbox — against an Anthropic subscription, or any provider with an Anthropic-compatible endpoint (GLM, local Ollama) — while Timothy keeps verification, review, budgets, and the event timeline; it falls back to the native loop (recorded in the timeline) whenever the harness is unavailable.
-- **Memory-aware scheduling**: before starting a mission, sandboxd checks whether the host can actually afford another sandbox; if not, the mission queues idle and is retried automatically as resources free up.
-- **Long-term memory**: staged fact extraction with a confirmation queue, hybrid pgvector retrieval (vector + text + entity, RRF-fused) under a strict token budget.
-- **Cost accounting**: every request lands in a ledger with honest pricing (unknown price is recorded as null, never guessed); usage dashboard, spend budgets with alerts, Prometheus metrics on every service.
-- **Privacy floor**: tools whose output carries sensitive data (raw email) pin the rest of their turn, and every downstream side-call (memory extraction, compaction), to a dedicated route you can chain to a local model.
+<table>
+<tr><td><b>Use any AI model</b></td><td>Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider — all behind one interface. Pick which model handles chat, coding, research, or digests, switch anytime from settings, and let Timothy fail over to a backup model when a provider has a bad day.</td></tr>
+<tr><td><b>Give it real work</b></td><td>Hand Timothy a task — research a topic, write a report, fix a bug — and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.</td></tr>
+<tr><td><b>It writes code safely</b></td><td>Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can even drive Claude Code or Codex for you while keeping review and budgets in your hands.</td></tr>
+<tr><td><b>Your daily briefings</b></td><td>Schedule digests of your inbox, calendar, and spending — delivered to Telegram, email, or a webhook, in your timezone, saying only what actually needs your attention.</td></tr>
+<tr><td><b>Connected to your life</b></td><td>Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it — and asks before doing anything destructive.</td></tr>
+<tr><td><b>Shape your own assistants</b></td><td>Create named agents with their own personality, model, and exactly the tools and knowledge they should have — a digest agent that only reads mail and calendar, a coder that only touches code.</td></tr>
+<tr><td><b>It remembers you</b></td><td>Preferences, projects, and facts you share carry across conversations. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you.</td></tr>
+<tr><td><b>Your documents, searchable</b></td><td>Drop in files or URLs and Timothy files them into topic collections and uses them to answer questions — your own knowledge base, on your own disk.</td></tr>
+<tr><td><b>Nothing gets lost</b></td><td>Conversations survive restarts, crashes, and upgrades — pick up any session exactly where it left off.</td></tr>
+<tr><td><b>You control the spend</b></td><td>Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models.</td></tr>
+<tr><td><b>Private by design</b></td><td>Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager) — never in logs, never in the UI.</td></tr>
+<tr><td><b>Talk to it</b></td><td>Optional voice input with fully local speech-to-text — audio never leaves your machine.</td></tr>
+</table>
 
 ## Architecture
 
@@ -60,14 +65,12 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 
 The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker and the released images.
 
-1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases). While Timothy is alpha, every release is marked prerelease, so GitHub's `/releases/latest` redirect doesn't resolve; look up the newest tag instead:
+1. Make an empty directory and download the installer from the [latest release](https://github.com/timothy-agent/timothy/releases). While Timothy is alpha, every release is marked prerelease, so GitHub's `/releases/latest` redirect doesn't resolve; take the newest entry from the releases list instead:
 
    ```sh
    mkdir timothy && cd timothy
    TAG=$(curl -fsSL https://api.github.com/repos/timothy-agent/timothy/releases \
-     | grep -E '"tag_name"|"published_at"' | paste - - \
-     | sed -E 's/.*"tag_name": "([^"]+)".*"published_at": "([^"]+)".*/\2 \1/' \
-     | sort -r | head -1 | awk '{print $2}')
+     | grep -m1 '"tag_name"' | cut -d'"' -f4)
    curl -fsSLo install.sh "https://github.com/timothy-agent/timothy/releases/download/$TAG/install.sh"
    ```
 
