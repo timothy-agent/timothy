@@ -64,16 +64,16 @@ const (
 // system demands strict JSON. Content must be self-contained: absolute
 // dates, no pronouns that need surrounding context.
 const system = `You extract durable facts from a conversation excerpt for an AI assistant's long-term memory. Reply with ONLY a JSON array — no prose, no markdown fences:
-[{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0}]
-Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic — even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
+[{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
+Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic — even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation — facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss (documentation facts, quiz answers, how a technology works) is false. Skip small talk, transient state, and anything already obvious. Empty array when nothing qualifies.`
 
 // missionSystem is the mission-digest extraction contract. The input
 // is a mission's OutcomeDigest — goal, title, kind, unit statuses —
 // which is a RECORD, not knowledge: everything in its header lines
 // already lives in the missions table. Only deltas qualify.
 const missionSystem = `You extract durable facts from a completed background mission's outcome digest for an AI assistant's long-term memory. Reply with ONLY a JSON array — no prose, no markdown fences:
-[{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0}]
-ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state — those are bookkeeping the system already stores, not knowledge. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
+[{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
+Set changes_behavior true only when knowing the fact would change how the assistant acts in a future conversation. ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state — those are bookkeeping the system already stores, not knowledge. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
 
 // Request is one extraction job: text from a completed turn or from
 // turns about to be compacted away.
@@ -137,6 +137,13 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 	deny := denyText(req)
 	var ids []string
 	for i, f := range facts {
+		if f.ChangesBehavior != nil && !*f.ChangesBehavior {
+			// The model itself judged this fact wouldn't change future
+			// behavior (general knowledge the conversation happened to
+			// touch) — the utility gate drops it before it can queue.
+			e.log.Info("memory dropped by utility gate", "session_id", req.SessionID)
+			continue
+		}
 		if echoesDeny(f.Content, deny) {
 			// The model restated the digest's own goal/title header —
 			// bookkeeping the missions table already records, never a
@@ -258,6 +265,11 @@ type Fact struct {
 	Content    string       `json:"content"`
 	Entities   []FactEntity `json:"entities"`
 	Confidence float32      `json:"confidence"`
+	// ChangesBehavior is the utility gate: the model's own answer to
+	// "would knowing this change a future turn?". Pointer so an older
+	// model reply that omits the field keeps the fact (nil = keep);
+	// only an explicit false drops it.
+	ChangesBehavior *bool `json:"changes_behavior,omitempty"`
 }
 
 type FactEntity struct {

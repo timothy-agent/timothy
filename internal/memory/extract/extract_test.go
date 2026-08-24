@@ -390,3 +390,26 @@ func TestExtractDegradesWithoutEmbeddings(t *testing.T) {
 		t.Fatalf("promoted = %v", st.promoted)
 	}
 }
+
+// The utility gate drops facts the model itself marked as not
+// behavior-changing; absent field (older reply shape) keeps the fact.
+func TestExtractUtilityGateDropsExplicitFalseOnly(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[` +
+		`{"type":"semantic","content":"DynamoDB local secondary indexes are defined at table creation.","entities":[],"confidence":0.9,"changes_behavior":false},` +
+		`{"type":"semantic","content":"The user prefers explanations with code examples.","entities":[],"confidence":0.9,"changes_behavior":true},` +
+		`{"type":"semantic","content":"The user is based in Purmerend.","entities":[],"confidence":0.9}]`}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 2 || len(st.inserted) != 2 {
+		t.Fatalf("want explicit-false dropped, true and absent kept: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	for _, m := range st.inserted {
+		if strings.Contains(m.Content, "DynamoDB") {
+			t.Fatalf("utility-gated fact inserted: %q", m.Content)
+		}
+	}
+}
