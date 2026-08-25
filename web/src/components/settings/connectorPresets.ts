@@ -102,6 +102,13 @@ export const connectorPresets: ConnectorPreset[] = [
     description: 'Any email account via IMAP, optional SMTP sending.',
     brandColor: '#64748B',
   },
+  {
+    id: 'caldav',
+    name: 'CalDAV calendar',
+    kind: 'caldav',
+    description: 'Any calendar via CalDAV, list and create events.',
+    brandColor: '#64748B',
+  },
 ]
 
 // Fallback for connectors that predate a preset removal / don't match

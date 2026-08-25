@@ -162,7 +162,7 @@ function ConnectorCard({
           ? String(connector.config.endpoint ?? '')
           : connector.kind === 'google' || connector.kind === 'microsoft'
             ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
-            : connector.kind === 'imap'
+            : connector.kind === 'imap' || connector.kind === 'caldav'
               ? String(connector.config.username ?? '')
               : 'Identity for mission use, no chat tools'}
       </div>
@@ -200,7 +200,7 @@ function matchesPreset(
     const scopes = JSON.stringify(c.config.scopes ?? '')
     return p.scopes?.every((s) => scopes.includes(s)) ?? false
   }
-  if (c.kind === 'github' || c.kind === 'imap') return true
+  if (c.kind === 'github' || c.kind === 'imap' || c.kind === 'caldav') return true
   const endpoint = String(c.config.endpoint ?? '')
   return !!p.endpoint && endpoint.startsWith(p.endpoint)
 }

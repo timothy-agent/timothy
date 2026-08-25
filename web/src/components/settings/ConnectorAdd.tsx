@@ -51,6 +51,9 @@ export function ConnectorAdd() {
   const [imapSMTPHost, setImapSMTPHost] = useState('')
   const [imapSMTPPort, setImapSMTPPort] = useState('')
   const [imapPassword, setImapPassword] = useState('')
+  const [caldavURL, setCaldavURL] = useState('')
+  const [caldavUsername, setCaldavUsername] = useState('')
+  const [caldavPassword, setCaldavPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
     null,
@@ -82,6 +85,9 @@ export function ConnectorAdd() {
     setImapSMTPHost('')
     setImapSMTPPort('')
     setImapPassword('')
+    setCaldavURL('')
+    setCaldavUsername('')
+    setCaldavPassword('')
     setBusy(false)
     setTest(null)
     setCreatedID(null)
@@ -98,6 +104,7 @@ export function ConnectorAdd() {
   const isOAuth = isGoogle || isMicrosoft
   const isGitHub = preset.kind === 'github'
   const isImap = preset.kind === 'imap'
+  const isCalDAV = preset.kind === 'caldav'
   const slug = slugify(name)
   const refBase = slug.toUpperCase().replace(/-/g, '_')
   const tested = test?.ok === true
@@ -114,7 +121,7 @@ export function ConnectorAdd() {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
-    if (!isGitHub && !isImap && !endpoint.trim()) {
+    if (!isGitHub && !isImap && !isCalDAV && !endpoint.trim()) {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
       return
     }
@@ -122,11 +129,21 @@ export function ConnectorAdd() {
       toast.error('Host and username required', { description: 'An IMAP host and username are required to test this connector.' })
       return
     }
+    if (isCalDAV && (!caldavURL.trim() || !caldavUsername.trim())) {
+      toast.error('Calendar URL and username required', {
+        description: 'A calendar URL and username are required to test this connector.',
+      })
+      return
+    }
     if (isGitHub && !usingExistingToken && !token.trim()) {
       toast.error('Token required', { description: 'A personal access token is required to test this connector.' })
       return
     }
     if (isImap && !usingExistingToken && !imapPassword.trim()) {
+      toast.error('Password required', { description: 'A password is required to test this connector.' })
+      return
+    }
+    if (isCalDAV && !usingExistingToken && !caldavPassword.trim()) {
       toast.error('Password required', { description: 'A password is required to test this connector.' })
       return
     }
@@ -147,10 +164,12 @@ export function ConnectorAdd() {
             : `${refBase}_GITHUB_PAT`
           : isImap
             ? `${refBase}_IMAP_PASSWORD`
-            : refBase.endsWith('_MCP')
-              ? `${refBase}_TOKEN`
-              : `${refBase}_MCP_TOKEN`
-      const secretValue = isImap ? imapPassword : token
+            : isCalDAV
+              ? `${refBase}_CALDAV_PASSWORD`
+              : refBase.endsWith('_MCP')
+                ? `${refBase}_TOKEN`
+                : `${refBase}_MCP_TOKEN`
+      const secretValue = isImap ? imapPassword : isCalDAV ? caldavPassword : token
       if (!usingExistingToken && secretValue) await setSecret(tokenRef, secretValue.trim())
       const id = await createConnector(
         isGitHub
@@ -169,13 +188,21 @@ export function ConnectorAdd() {
                 credential_ref: tokenRef,
                 enabled: false,
               }
-            : {
-                name: slug,
-                kind: 'mcp',
-                config: { endpoint: endpoint.trim() },
-                credential_ref: usingExistingToken || token ? tokenRef : '',
-                enabled: false,
-              },
+            : isCalDAV
+              ? {
+                  name: slug,
+                  kind: 'caldav',
+                  config: { url: caldavURL.trim(), username: caldavUsername.trim() },
+                  credential_ref: tokenRef,
+                  enabled: false,
+                }
+              : {
+                  name: slug,
+                  kind: 'mcp',
+                  config: { endpoint: endpoint.trim() },
+                  credential_ref: usingExistingToken || token ? tokenRef : '',
+                  enabled: false,
+                },
       )
       setCreatedID(id)
       setTest(await testConnector(id))
@@ -247,7 +274,11 @@ export function ConnectorAdd() {
         ? imapHost.trim() !== '' &&
           imapUsername.trim() !== '' &&
           (usingExistingToken ? existingTokenRef !== '' : imapPassword.trim() !== '')
-        : endpoint.trim() !== '')
+        : isCalDAV
+          ? caldavURL.trim() !== '' &&
+            caldavUsername.trim() !== '' &&
+            (usingExistingToken ? existingTokenRef !== '' : caldavPassword.trim() !== '')
+          : endpoint.trim() !== '')
   const canSubmitOAuth =
     slug !== '' &&
     clientID.trim() !== '' &&
@@ -335,7 +366,7 @@ export function ConnectorAdd() {
           </>
         ) : (
           <>
-            {!isGitHub && !isImap && (
+            {!isGitHub && !isImap && !isCalDAV && (
               <>
                 <Field label="Endpoint">
                   <Input
@@ -416,12 +447,38 @@ export function ConnectorAdd() {
                 </div>
               </>
             )}
+            {isCalDAV && (
+              <>
+                <Field label="Calendar URL" hint="the calendar collection URL itself, no discovery">
+                  <Input
+                    value={caldavURL}
+                    onChange={(e) => {
+                      setCaldavURL(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder="https://cal.example.com/dav/calendars/user/personal/"
+                    className="mt-1.5 h-10"
+                  />
+                </Field>
+                <Field label="Username">
+                  <Input
+                    value={caldavUsername}
+                    onChange={(e) => {
+                      setCaldavUsername(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder="me@example.com"
+                    className="mt-1.5 h-10"
+                  />
+                </Field>
+              </>
+            )}
             <div>
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-sm font-medium text-foreground">
                   {isGitHub
                     ? 'Personal access token'
-                    : isImap
+                    : isImap || isCalDAV
                       ? 'Password'
                       : preset.id === 'custom-mcp'
                         ? 'Bearer token (optional)'
@@ -447,17 +504,18 @@ export function ConnectorAdd() {
                 <>
                   <Input
                     type="password"
-                    value={isImap ? imapPassword : token}
+                    value={isImap ? imapPassword : isCalDAV ? caldavPassword : token}
                     onChange={(e) => {
                       if (isImap) setImapPassword(e.target.value)
+                      else if (isCalDAV) setCaldavPassword(e.target.value)
                       else setToken(e.target.value)
                       invalidate()
                     }}
-                    placeholder={isImap ? 'password' : (preset.tokenPlaceholder ?? 'token')}
+                    placeholder={isImap || isCalDAV ? 'password' : (preset.tokenPlaceholder ?? 'token')}
                     className="h-10"
                     autoComplete="off"
                   />
-                  {!isImap && (
+                  {!isImap && !isCalDAV && (
                     <p className="mt-1.5 text-sm text-muted-foreground">
                       {preset.tokenHint}
                       {preset.tokenURL && (
@@ -487,6 +545,11 @@ export function ConnectorAdd() {
                   {isImap && (
                     <p className="mt-1.5 text-sm text-muted-foreground">
                       {secretDestination(defaultBackend, `${refBase}_IMAP_PASSWORD`)}
+                    </p>
+                  )}
+                  {isCalDAV && (
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      {secretDestination(defaultBackend, `${refBase}_CALDAV_PASSWORD`)}
                     </p>
                   )}
                 </>

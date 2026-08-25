@@ -197,7 +197,12 @@ func formatEnvelopeAddresses(addrs []imap.Address) string {
 // fields plus a body preferring text/plain, falling back to stripped
 // text/html, and every attachment's filename/content-type.
 func parseIMAPMessage(buf *imapclient.FetchMessageBuffer) (imapMessage, error) {
-	raw := buf.BodySection[0].Bytes
+	return parseIMAPMessageBytes(buf.BodySection[0].Bytes)
+}
+
+// parseIMAPMessageBytes is parseIMAPMessage's core, taking raw RFC822
+// bytes directly so it can be tested without an imapclient buffer.
+func parseIMAPMessageBytes(raw []byte) (imapMessage, error) {
 	r, err := emmail.CreateReader(bytes.NewReader(raw))
 	if err != nil && r == nil {
 		return imapMessage{}, fmt.Errorf("parse message: %w", err)

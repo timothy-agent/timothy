@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/mail"
 	"strings"
 	"sync"
 	"testing"
@@ -421,5 +422,229 @@ func TestIMAPTestClosesSession(t *testing.T) {
 	}
 	if sess.closeCount != 1 {
 		t.Fatalf("closeCount = %d, want 1", sess.closeCount)
+	}
+}
+
+// rfc822PlainText is a simple text/plain fixture.
+const rfc822PlainText = "From: Alice <alice@x.com>\r\n" +
+	"To: Bob <bob@y.com>\r\n" +
+	"Date: Wed, 22 Jul 2026 10:00:00 +0000\r\n" +
+	"Subject: hello\r\n" +
+	"Content-Type: text/plain; charset=UTF-8\r\n" +
+	"\r\n" +
+	"plain body text\r\n"
+
+// rfc822Alternative is multipart/alternative with both text/plain and
+// text/html parts.
+const rfc822Alternative = "From: Alice <alice@x.com>\r\n" +
+	"To: Bob <bob@y.com>\r\n" +
+	"Subject: alt\r\n" +
+	"Content-Type: multipart/alternative; boundary=\"BOUND\"\r\n" +
+	"\r\n" +
+	"--BOUND\r\n" +
+	"Content-Type: text/plain; charset=UTF-8\r\n" +
+	"\r\n" +
+	"plain alt body\r\n" +
+	"--BOUND\r\n" +
+	"Content-Type: text/html; charset=UTF-8\r\n" +
+	"\r\n" +
+	"<p>html alt body</p>\r\n" +
+	"--BOUND--\r\n"
+
+// rfc822HTMLOnly has only a text/html part, no text/plain.
+const rfc822HTMLOnly = "From: Alice <alice@x.com>\r\n" +
+	"To: Bob <bob@y.com>\r\n" +
+	"Subject: html only\r\n" +
+	"Content-Type: text/html; charset=UTF-8\r\n" +
+	"\r\n" +
+	"<p>only html here</p>\r\n"
+
+// rfc822WithAttachment is multipart/mixed: a text/plain body plus a
+// PDF attachment.
+const rfc822WithAttachment = "From: Alice <alice@x.com>\r\n" +
+	"To: Bob <bob@y.com>\r\n" +
+	"Subject: receipt\r\n" +
+	"Content-Type: multipart/mixed; boundary=\"MIX\"\r\n" +
+	"\r\n" +
+	"--MIX\r\n" +
+	"Content-Type: text/plain; charset=UTF-8\r\n" +
+	"\r\n" +
+	"see attached\r\n" +
+	"--MIX\r\n" +
+	"Content-Type: application/pdf\r\n" +
+	"Content-Disposition: attachment; filename=\"receipt.pdf\"\r\n" +
+	"Content-Transfer-Encoding: base64\r\n" +
+	"\r\n" +
+	"cGRmIGJ5dGVz\r\n" +
+	"--MIX--\r\n"
+
+func TestParseIMAPMessageBytesPlainText(t *testing.T) {
+	t.Parallel()
+	msg, err := parseIMAPMessageBytes([]byte(rfc822PlainText))
+	if err != nil {
+		t.Fatalf("parseIMAPMessageBytes: %v", err)
+	}
+	if !strings.Contains(msg.From, "alice@x.com") {
+		t.Fatalf("From = %q", msg.From)
+	}
+	if !strings.Contains(msg.To, "bob@y.com") {
+		t.Fatalf("To = %q", msg.To)
+	}
+	if msg.Subject != "hello" {
+		t.Fatalf("Subject = %q, want hello", msg.Subject)
+	}
+	if msg.Date == "" {
+		t.Fatal("Date not parsed")
+	}
+	if strings.TrimSpace(msg.Body) != "plain body text" {
+		t.Fatalf("Body = %q, want plain body text", msg.Body)
+	}
+	if len(msg.Attachments) != 0 {
+		t.Fatalf("Attachments = %v, want none", msg.Attachments)
+	}
+}
+
+func TestParseIMAPMessageBytesPrefersPlainOverHTML(t *testing.T) {
+	t.Parallel()
+	msg, err := parseIMAPMessageBytes([]byte(rfc822Alternative))
+	if err != nil {
+		t.Fatalf("parseIMAPMessageBytes: %v", err)
+	}
+	if strings.TrimSpace(msg.Body) != "plain alt body" {
+		t.Fatalf("Body = %q, want the text/plain part", msg.Body)
+	}
+}
+
+func TestParseIMAPMessageBytesFallsBackToHTML(t *testing.T) {
+	t.Parallel()
+	msg, err := parseIMAPMessageBytes([]byte(rfc822HTMLOnly))
+	if err != nil {
+		t.Fatalf("parseIMAPMessageBytes: %v", err)
+	}
+	if !strings.Contains(msg.Body, "only html here") {
+		t.Fatalf("Body = %q, want the html part as fallback", msg.Body)
+	}
+}
+
+func TestParseIMAPMessageBytesListsAttachments(t *testing.T) {
+	t.Parallel()
+	msg, err := parseIMAPMessageBytes([]byte(rfc822WithAttachment))
+	if err != nil {
+		t.Fatalf("parseIMAPMessageBytes: %v", err)
+	}
+	if strings.TrimSpace(msg.Body) != "see attached" {
+		t.Fatalf("Body = %q, want see attached", msg.Body)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("Attachments = %v, want 1", msg.Attachments)
+	}
+	a := msg.Attachments[0]
+	if a.Filename != "receipt.pdf" || a.ContentType != "application/pdf" {
+		t.Fatalf("attachment = %+v, want receipt.pdf/application/pdf", a)
+	}
+}
+
+func TestFindIMAPAttachmentFound(t *testing.T) {
+	t.Parallel()
+	raw, ct, err := findIMAPAttachment([]byte(rfc822WithAttachment), "receipt.pdf")
+	if err != nil {
+		t.Fatalf("findIMAPAttachment: %v", err)
+	}
+	if ct != "application/pdf" {
+		t.Fatalf("content type = %q, want application/pdf", ct)
+	}
+	if string(raw) != "pdf bytes" {
+		t.Fatalf("raw = %q, want %q", raw, "pdf bytes")
+	}
+}
+
+func TestFindIMAPAttachmentMissing(t *testing.T) {
+	t.Parallel()
+	_, _, err := findIMAPAttachment([]byte(rfc822WithAttachment), "nope.pdf")
+	if err == nil || !strings.Contains(err.Error(), "no attachment named") {
+		t.Fatalf("err = %v, want a no attachment named error", err)
+	}
+}
+
+func TestFormatEnvelopeAddresses(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		addrs []imap.Address
+		want  string
+	}{
+		{"with display name", []imap.Address{{Name: "Alice", Mailbox: "alice", Host: "x.com"}}, "Alice <alice@x.com>"},
+		{"without display name", []imap.Address{{Mailbox: "bob", Host: "y.com"}}, "bob@y.com"},
+		{"multiple addresses", []imap.Address{
+			{Name: "Alice", Mailbox: "alice", Host: "x.com"},
+			{Mailbox: "bob", Host: "y.com"},
+		}, "Alice <alice@x.com>, bob@y.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatEnvelopeAddresses(tc.addrs); got != tc.want {
+				t.Fatalf("formatEnvelopeAddresses = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestJoinAddresses(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		hdr  string
+		want string
+	}{
+		{"with display name", "Alice <alice@x.com>", `"Alice" <alice@x.com>`},
+		{"without display name", "bob@y.com", "<bob@y.com>"},
+		{"multiple addresses", "Alice <alice@x.com>, bob@y.com", `"Alice" <alice@x.com>, <bob@y.com>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			addrs, err := mail.ParseAddressList(tc.hdr)
+			if err != nil {
+				t.Fatalf("ParseAddressList(%q): %v", tc.hdr, err)
+			}
+			if got := joinAddresses(addrs); got != tc.want {
+				t.Fatalf("joinAddresses = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIMAPConfigPortDefaults(t *testing.T) {
+	t.Parallel()
+	if got := (IMAPConfig{}).port(); got != imapDefaultPort {
+		t.Fatalf("port() default = %d, want %d", got, imapDefaultPort)
+	}
+	if got := (IMAPConfig{Port: 143}).port(); got != 143 {
+		t.Fatalf("port() explicit = %d, want 143", got)
+	}
+	if got := (IMAPConfig{}).smtpPort(); got != imapDefaultSMTPPort {
+		t.Fatalf("smtpPort() default = %d, want %d", got, imapDefaultSMTPPort)
+	}
+	if got := (IMAPConfig{SMTPPort: 465}).smtpPort(); got != 465 {
+		t.Fatalf("smtpPort() explicit = %d, want 465", got)
+	}
+}
+
+func TestAddressHost(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		addr string
+		want string
+	}{
+		{"has at", "me@example.com", "example.com"},
+		{"no at", "not-an-email", "localhost"},
+		{"trailing at", "me@", "localhost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := addressHost(tc.addr); got != tc.want {
+				t.Fatalf("addressHost(%q) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
 	}
 }

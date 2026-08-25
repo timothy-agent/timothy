@@ -230,6 +230,7 @@ func main() {
 			conns.RegisterBuilder("microsoft", msft.Builder())
 		}
 		conns.RegisterBuilder("imap", connectors.IMAPBuilder(nil, markItDownURL))
+		conns.RegisterBuilder("caldav", connectors.CalDAVBuilder(nil))
 		conns.SetOnReload(func(context.Context) {
 			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
 		})

@@ -87,7 +87,13 @@ export function ConnectorEdit() {
     setSavingToken(true)
     try {
       const suffix =
-        connector.kind === 'github' ? '_GITHUB_PAT' : connector.kind === 'imap' ? '_IMAP_PASSWORD' : '_MCP_TOKEN'
+        connector.kind === 'github'
+          ? '_GITHUB_PAT'
+          : connector.kind === 'imap'
+            ? '_IMAP_PASSWORD'
+            : connector.kind === 'caldav'
+              ? '_CALDAV_PASSWORD'
+              : '_MCP_TOKEN'
       const ref = connector.credential_ref || `${connector.name.toUpperCase().replace(/-/g, '_')}${suffix}`
       await setSecret(ref, token.trim())
       if (!connector.credential_ref) await patchConnector(connector.id, { credential_ref: ref })
@@ -249,6 +255,10 @@ export function ConnectorEdit() {
                     </>
                   )}
                 </>
+              ) : connector.kind === 'caldav' ? (
+                <span className="font-mono">
+                  {String(connector.config.username ?? '')} @ {String(connector.config.url ?? '')}
+                </span>
               ) : (
                 <>
                   Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
@@ -259,7 +269,7 @@ export function ConnectorEdit() {
               label={
                 connector.kind === 'github'
                   ? 'Rotate personal access token'
-                  : connector.kind === 'imap'
+                  : connector.kind === 'imap' || connector.kind === 'caldav'
                     ? 'Rotate password'
                     : 'Rotate bearer token'
               }

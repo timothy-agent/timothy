@@ -12,8 +12,8 @@ import (
 // base description per capability regardless of which account answers
 // it. Provider-specific query syntax belongs in the aggregate's
 // per-kind description blocks (see mailSearchGuidanceByKind), never in
-// a diverging base schema or description. imap is built through its
-// fake dial seam (see testIMAPSource) so this touches no real network.
+// a diverging base schema or description. imap and caldav are built
+// against local httptest/fake servers so this touches no real network.
 func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 	t.Parallel()
 	fg := &fakeGoogle{}
@@ -35,6 +35,9 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 	iSess := &fakeIMAPSession{}
 	iSrc, _ := testIMAPSource(t, imapRow("smtp.example.com"), iSess)
 
+	srv := caldavTestServer(t, nil)
+	cSrc := testCalDAVSource(t, srv.URL)
+
 	type toolShape struct {
 		schema string
 		desc   string
@@ -43,8 +46,9 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 		"google":    {},
 		"microsoft": {},
 		"imap":      {},
+		"caldav":    {},
 	}
-	for name, src := range map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc} {
+	for name, src := range map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc} {
 		for _, tl := range src.Tools() {
 			byKind[name][tl.Name] = toolShape{schema: string(tl.InputSchema), desc: tl.Description}
 		}

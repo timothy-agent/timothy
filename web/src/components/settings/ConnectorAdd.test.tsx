@@ -114,3 +114,35 @@ describe('ConnectorAdd imap flow', () => {
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-imap', { enabled: true }))
   })
 })
+
+describe('ConnectorAdd caldav flow', () => {
+  it('tests then adds a caldav connector with url/username/password', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-caldav')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderPage('caldav')
+
+    fireEvent.change(await screen.findByPlaceholderText('https://cal.example.com/dav/calendars/user/personal/'), {
+      target: { value: 'https://cal.fastmail.com/dav/calendars/user/me@fastmail.com/cal/' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('me@example.com'), {
+      target: { value: 'me@fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'app-password' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      kind: 'caldav',
+      config: {
+        url: 'https://cal.fastmail.com/dav/calendars/user/me@fastmail.com/cal/',
+        username: 'me@fastmail.com',
+      },
+      enabled: false,
+    })
+    expect(setSecret).toHaveBeenCalledWith(expect.stringContaining('_CALDAV_PASSWORD'), 'app-password')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-caldav', { enabled: true }))
+  })
+})
