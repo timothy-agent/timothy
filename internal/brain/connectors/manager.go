@@ -312,6 +312,7 @@ type repoSource interface {
 	CreateRepo(ctx context.Context, name string, private bool) (GitHubRepo, error)
 	GetRepo(ctx context.Context, owner, repo string) (GitHubRepo, error)
 	CreatePR(ctx context.Context, owner, repo, title, head, base, body string) (GitHubPR, error)
+	PRMerged(ctx context.Context, owner, repo string, number int) (bool, error)
 }
 
 // buildRepoSource resolves connector id, builds it fresh (same shape as
@@ -385,4 +386,15 @@ func (m *Manager) CreatePR(ctx context.Context, id, owner, repo, title, head, ba
 	}
 	defer closeFn()
 	return rs.CreatePR(ctx, owner, repo, title, head, base, body)
+}
+
+// PRMerged reports whether owner/repo pull request number has been
+// merged, through the connector's credential.
+func (m *Manager) PRMerged(ctx context.Context, id, owner, repo string, number int) (bool, error) {
+	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	defer closeFn()
+	return rs.PRMerged(ctx, owner, repo, number)
 }

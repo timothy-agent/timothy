@@ -57,6 +57,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
 SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'default',
     '["research-brief", "deep-research", "coding", "email-research"]',
-    '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "missions", "mission_push", "gmail_search", "gmail_read", "calendar_list_events"]',
+    '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "list_missions", "get_mission", "push_mission_branch", "gmail_search", "gmail_read", "calendar_list_events"]',
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');

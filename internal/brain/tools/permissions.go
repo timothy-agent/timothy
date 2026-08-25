@@ -89,11 +89,13 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// there is nothing for a prompt to guard that the tool
 			// doesn't already enforce harder.
 			"write_file": true,
-			// missions is a pure read over the missions store (status
-			// snapshot / list) — zero side effects, same reasoning as
-			// web_search. mission_push is deliberately NOT here: it must
-			// always ask (see MissionPush's doc comment).
-			"missions": true,
+			// list_missions/get_mission are pure reads over the missions
+			// store (list / status snapshot) — zero side effects, same
+			// reasoning as web_search. push_mission_branch is
+			// deliberately NOT here: it must always ask (see
+			// PushMissionBranch's doc comment).
+			"list_missions": true,
+			"get_mission":   true,
 			// kb_search is a pure read scoped to collections bound in Go
 			// at construction (D-060), never model input — same reasoning
 			// as web_search/missions.

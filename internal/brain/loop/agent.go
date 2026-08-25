@@ -258,13 +258,14 @@ type Request struct {
 	// BuiltinsOnly restricts the turn's base tool surface to compiled-in
 	// builtins (calculator, shell, web_search, ...), excluding connector
 	// tools (e.g. a write-capable GitHub MCP token) and the chat-only
-	// mission tools (missions/mission_push). Set by every mission-driven
-	// request (explore/plan/worker/reviewer) — a mission worker must
-	// never side-channel a connector write around the worktree/human-
-	// consented push pipeline, and mission_push is nonsensical inside a
-	// mission turn. Deliberately independent of MissionID (a ledger
-	// attribution tag only) so tool-surface scoping stays an explicit,
-	// intentional choice at each call site rather than inferred.
+	// mission tools (list_missions/get_mission/push_mission_branch). Set by
+	// every mission-driven request (explore/plan/worker/reviewer) — a
+	// mission worker must never side-channel a connector write around
+	// the worktree/human-consented push pipeline, and push_mission_branch
+	// is nonsensical inside a mission turn. Deliberately independent of
+	// MissionID (a ledger attribution tag only) so tool-surface scoping
+	// stays an explicit, intentional choice at each call site rather
+	// than inferred.
 	// ExtraTools still layer on top as normal — missions.nativeRunner's
 	// worker/explore turns use exactly this to add back read-only
 	// connector tools (gmail/calendar reads) that scheduled general

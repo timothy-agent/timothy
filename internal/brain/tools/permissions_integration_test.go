@@ -59,15 +59,15 @@ func TestResolveNoGrantAsks(t *testing.T) {
 	}
 }
 
-// TestResolveMissionPushAsksWithoutGrant proves mission_push (unlike
-// missions, which is exempt) always falls through to "no standing
-// grant" and asks — it is deliberately absent from Permissions.exempt
-// (see NewPermissions) so a chat session's model can never talk its
-// way into an auto-approved push.
-func TestResolveMissionPushAsksWithoutGrant(t *testing.T) {
+// TestResolvePushMissionBranchAsksWithoutGrant proves push_mission_branch
+// (unlike list_missions/get_mission, which are exempt) always falls
+// through to "no standing grant" and asks — it is deliberately absent
+// from Permissions.exempt (see NewPermissions) so a chat session's
+// model can never talk its way into an auto-approved push.
+func TestResolvePushMissionBranchAsksWithoutGrant(t *testing.T) {
 	p, sid := integrationPermissions(t)
 
-	res, err := p.Resolve(t.Context(), sid, "mission_push", json.RawMessage(`{"id":"m1"}`))
+	res, err := p.Resolve(t.Context(), sid, "push_mission_branch", json.RawMessage(`{"id":"m1"}`))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

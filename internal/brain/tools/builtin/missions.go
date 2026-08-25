@@ -49,16 +49,16 @@ type MissionEvent struct {
 	Payload json.RawMessage
 }
 
-// missionLister is the narrow slice of missions access the missions
-// and mission_push tools need — List and Get, kept as an interface so
+// missionLister is the narrow slice of missions access the list/get
+// and push_mission_branch tools need — List and Get, kept as an interface so
 // tests fake it without a real Postgres pool.
 type missionLister interface {
 	ListMissions(ctx context.Context, limit int) ([]MissionRecord, error)
 	GetMission(ctx context.Context, id string) (MissionRecord, error)
 }
 
-// missionEventReader is the narrow slice of missions access the
-// missions tool needs to find a mission's latest PR URL, if any.
+// missionEventReader is the narrow slice of missions access
+// get_mission needs to find a mission's latest PR URL, if any.
 type missionEventReader interface {
 	MissionEvents(ctx context.Context, id string) ([]MissionEvent, error)
 }
@@ -68,10 +68,13 @@ const (
 	missionsListMaxLimit     = 50
 )
 
-type missionsArgs struct {
+type listMissionsArgs struct {
+	Limit int `json:"limit"`
+}
+
+type getMissionArgs struct {
 	Query string `json:"query"`
 	ID    string `json:"id"`
-	Limit int    `json:"limit"`
 }
 
 // missionPROpenedPayload is the shape of a mission.pr_opened event's
@@ -189,58 +192,34 @@ func findMission(ctx context.Context, store missionLister, id, query string) (Mi
 	}
 }
 
-// Missions is a read-only, permission-exempt tool: pure reads over
-// the missions store, no side effects. Answers "is mission X done?"
-// and similar status questions from real harness data (never the
-// worker/reviewer's own claims — same D-0xx discipline as the harness
-// itself). Registered only when store/events are non-nil (missions
-// engine wired, see cmd/brain/main.go's WORKSPACES gate).
-func Missions(store missionLister, events missionEventReader) *tools.Tool {
+// ListMissions is a read-only, permission-exempt tool: pure reads over
+// the missions store, no side effects. Lists recent missions for
+// questions like "what missions have I run recently?". Registered
+// only when store is non-nil (missions engine wired, see
+// cmd/brain/main.go's WORKSPACES gate).
+func ListMissions(store missionLister) *tools.Tool {
 	return &tools.Tool{
-		Name: "missions",
-		Description: `Reads mission status: answers "is mission X done?", "what's the status of my last mission?", and similar questions from the harness's own records — never the worker/reviewer's claims.
+		Name: "list_missions",
+		Description: `Lists recent missions from the harness's own records — never the worker/reviewer's claims.
 
-Arguments (all optional):
-- id (string): exact mission id — returns that mission's full status snapshot.
-- query (string): a name/goal substring to find a mission by; must
-  match exactly one mission, otherwise you get the list of candidates
-  to disambiguate with id.
-- limit (int): with neither id nor query, lists recent missions
-  (default 10, max 50) with id/name/phase/status/updated_at.
+Arguments (optional):
+- limit (int): max missions to list (default 10, max 50).
 
-A snapshot includes: id, name, goal, kind, phase, status, iteration,
-harness, repo_url, branch, created/updated timestamps, unit pass
-counts, pause reason/message if paused, the latest PR url if one was
-opened, and the on_complete setting.
+Each list item has id/name/phase/status/updated_at. Use get_mission
+with the id to read a full status snapshot.
 
-Example: {"query": "invoice pdf export"} → that mission's snapshot, or
-a disambiguation list if more than one mission matches.
 Example: {} → the 10 most recently updated missions.`,
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"id": {"type": "string", "description": "Exact mission id"},
-				"query": {"type": "string", "description": "Name/goal substring to find a mission by"},
-				"limit": {"type": "integer", "description": "Max missions to list when neither id nor query is given (default 10, max 50)"}
+				"limit": {"type": "integer", "description": "Max missions to list (default 10, max 50)"}
 			},
 			"additionalProperties": false
 		}`),
 		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
-			var args missionsArgs
+			var args listMissionsArgs
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if args.ID != "" || args.Query != "" {
-				m, err := findMission(ctx, store, args.ID, args.Query)
-				if err != nil {
-					return "", err
-				}
-				snap := toMissionSnapshot(ctx, events, m)
-				out, err := json.Marshal(snap)
-				if err != nil {
-					return "", fmt.Errorf("encode mission snapshot: %w", err)
-				}
-				return string(out), nil
 			}
 			limit := args.Limit
 			if limit <= 0 {
@@ -266,8 +245,62 @@ Example: {} → the 10 most recently updated missions.`,
 	}
 }
 
+// GetMission is a read-only, permission-exempt tool: pure reads over
+// the missions store, no side effects. Answers "is mission X done?"
+// and similar status questions from real harness data (never the
+// worker/reviewer's own claims — same D-0xx discipline as the harness
+// itself). Registered only when store/events are non-nil (missions
+// engine wired, see cmd/brain/main.go's WORKSPACES gate).
+func GetMission(store missionLister, events missionEventReader) *tools.Tool {
+	return &tools.Tool{
+		Name: "get_mission",
+		Description: `Reads one mission's status: answers "is mission X done?", "what's the status of my last mission?", and similar questions from the harness's own records — never the worker/reviewer's claims.
+
+Arguments (exactly one required):
+- id (string): exact mission id.
+- query (string): a name/goal substring to find a mission by; must
+  match exactly one mission, otherwise you get the list of candidates
+  to disambiguate with id. Use list_missions first if unsure.
+
+Returns a snapshot with: id, name, goal, kind, phase, status,
+iteration, harness, repo_url, branch, created/updated timestamps, unit
+pass counts, pause reason/message if paused, the latest PR url if one
+was opened, and the on_complete setting.
+
+Example: {"query": "invoice pdf export"} → that mission's snapshot, or
+a disambiguation list if more than one mission matches.`,
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"id": {"type": "string", "description": "Exact mission id"},
+				"query": {"type": "string", "description": "Name/goal substring to find a mission by"}
+			},
+			"additionalProperties": false
+		}`),
+		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var args getMissionArgs
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			if args.ID == "" && args.Query == "" {
+				return "", fmt.Errorf("one of id or query is required")
+			}
+			m, err := findMission(ctx, store, args.ID, args.Query)
+			if err != nil {
+				return "", err
+			}
+			snap := toMissionSnapshot(ctx, events, m)
+			out, err := json.Marshal(snap)
+			if err != nil {
+				return "", fmt.Errorf("encode mission snapshot: %w", err)
+			}
+			return string(out), nil
+		},
+	}
+}
+
 // missionCompleter is the narrow slice of *missions.Completer the
-// mission_push tool needs — pushing (and optionally opening a PR)
+// push_mission_branch tool needs — pushing (and optionally opening a PR)
 // through the SAME code path the button/auto-fire paths use, so a
 // chat-triggered push can never diverge in behavior. Takes the
 // mission id rather than a MissionRecord: the adapter (main.go) re-Gets
@@ -290,8 +323,8 @@ type missionPushArgs struct {
 	OpenPR bool   `json:"open_pr"`
 }
 
-// MissionPush is permission-GATED — it is deliberately left out of
-// Permissions' exempt map (see internal/brain/tools/permissions.go)
+// PushMissionBranch is permission-GATED — it is deliberately left out
+// of Permissions' exempt map (see internal/brain/tools/permissions.go)
 // and never appears in any allowlist grant a chat session's model
 // could pre-authorize itself into, so every call parks on an explicit
 // human approval, matching the "pushes stay human" invariant.
@@ -302,9 +335,9 @@ type missionPushArgs struct {
 // tool is technically reachable from a mission's own turns too, not
 // just chat. Do not "fix" that here; it's explicitly out of scope for
 // this slice.
-func MissionPush(store missionLister, completer missionCompleter, resolveToken missionTokenResolver) *tools.Tool {
+func PushMissionBranch(store missionLister, completer missionCompleter, resolveToken missionTokenResolver) *tools.Tool {
 	return &tools.Tool{
-		Name: "mission_push",
+		Name: "push_mission_branch",
 		Description: `Pushes a mission's branch to GitHub, optionally opening a pull request. Requires explicit human approval every time — this tool is never auto-approved.
 
 Only a github-connection coding mission with a completed worktree can
@@ -365,6 +398,89 @@ a PR, returns the PR url.`,
 				return "", fmt.Errorf("push: %w", err)
 			}
 			return fmt.Sprintf("pushed %s to %s", m.Branch, host), nil
+		},
+	}
+}
+
+// missionTerminalPhases mirrors missions.Phase.Terminal()'s set — kept
+// as a local copy (not an import) for the same import-cycle reason
+// MissionRecord is its own struct: missions imports this package.
+var missionTerminalPhases = map[string]bool{"done": true, "failed": true}
+
+// missionFollowUpCreator is the narrow slice of missions access
+// followup_mission needs — *missions.Driver.CreateFollowUp satisfies
+// it via cmd/brain/main.go's adapter.
+type missionFollowUpCreator interface {
+	CreateFollowUpMission(ctx context.Context, parentID, goal string) (string, error)
+}
+
+type missionFollowupArgs struct {
+	Goal  string `json:"goal"`
+	ID    string `json:"id"`
+	Query string `json:"query"`
+}
+
+// FollowupMission is permission-GATED for the same reason PushMissionBranch
+// is — deliberately left out of Permissions' exempt map (see
+// internal/brain/tools/permissions.go) so spawning a new mission
+// against a finished one always parks on an explicit human approval.
+func FollowupMission(store missionLister, creator missionFollowUpCreator) *tools.Tool {
+	return &tools.Tool{
+		Name: "followup_mission",
+		Description: `Spawns a NEW mission continuing a finished one. Requires explicit human approval every time — this tool is never auto-approved.
+
+The parent mission must already be finished (phase done or failed). The
+new mission carries the parent's outcome summary into its own explore/
+plan/work prompts and inherits the parent's agent, routes, kind, and
+repo settings; for a coding mission, its worktree is based on the
+parent's own branch when reachable. It never inherits the parent's
+push-on-complete choice or destinations — those are per-mission human
+decisions, made fresh for the follow-up.
+
+Arguments:
+- goal (string, required): the follow-up mission's own goal.
+- id (string): exact parent mission id.
+- query (string): a name/goal substring to find the parent mission by;
+  must match exactly one mission, otherwise you get the list of
+  candidates to disambiguate with id.
+
+Exactly one of id/query is required.
+
+Example: {"id": "3fa1...", "goal": "now add tests for the new endpoint"}
+→ creates a follow-up mission of 3fa1..., returns its id.`,
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"goal": {"type": "string", "description": "The follow-up mission's own goal"},
+				"id": {"type": "string", "description": "Exact parent mission id"},
+				"query": {"type": "string", "description": "Name/goal substring to find the parent mission by"}
+			},
+			"required": ["goal"],
+			"additionalProperties": false
+		}`),
+		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var args missionFollowupArgs
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			if strings.TrimSpace(args.Goal) == "" {
+				return "", fmt.Errorf("goal is required")
+			}
+			if args.ID == "" && args.Query == "" {
+				return "", fmt.Errorf("one of id or query is required")
+			}
+			parent, err := findMission(ctx, store, args.ID, args.Query)
+			if err != nil {
+				return "", err
+			}
+			if !missionTerminalPhases[parent.Phase] {
+				return "", fmt.Errorf("mission %s is not finished (phase %s); follow-ups need a terminal parent", parent.ID, parent.Phase)
+			}
+			childID, err := creator.CreateFollowUpMission(ctx, parent.ID, args.Goal)
+			if err != nil {
+				return "", fmt.Errorf("create follow-up mission: %w", err)
+			}
+			return fmt.Sprintf("created follow-up mission %s of %s: %s", childID, parent.ID, args.Goal), nil
 		},
 	}
 }

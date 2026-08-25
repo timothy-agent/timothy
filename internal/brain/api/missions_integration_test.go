@@ -880,6 +880,9 @@ func (f *fakeGitHubSource) GetRepo(ctx context.Context, owner, repo string) (con
 func (f *fakeGitHubSource) CreatePR(ctx context.Context, owner, repo, title, head, base, body string) (connectors.GitHubPR, error) {
 	return f.createPRFn(ctx, owner, repo, title, head, base, body)
 }
+func (f *fakeGitHubSource) PRMerged(context.Context, string, string, int) (bool, error) {
+	return false, errors.New("not implemented in fakeGitHubSource")
+}
 
 // testConnectorsManager builds a real *connectors.Manager backed by the
 // same test Postgres pool, with the github builder returning src for

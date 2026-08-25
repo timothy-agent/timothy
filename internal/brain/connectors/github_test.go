@@ -422,6 +422,61 @@ func TestFetchGitHubRepo(t *testing.T) {
 	}
 }
 
+// TestFetchGitHubPRMerged proves GET /repos/{owner}/{repo}/pulls/{number}
+// decodes the merged field, and a non-200 response surfaces as an
+// error.
+func TestFetchGitHubPRMerged(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		want    bool
+		wantErr string
+	}{
+		{
+			name: "merged",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/repos/octocat/hello-world/pulls/42" {
+					t.Fatalf("unexpected path %q", r.URL.Path)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"merged": true})
+			},
+			want: true,
+		},
+		{
+			name: "not merged",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"merged": false})
+			},
+			want: false,
+		},
+		{
+			name: "error status",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+			},
+			wantErr: "status 404",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubFakeServer(t, tc.handler)
+			got, err := fetchGitHubPRMerged(t.Context(), srv.Client(), "test-token", "octocat", "hello-world", 42)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("fetchGitHubPRMerged: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("merged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCreateGitHubPR proves POST /repos/{owner}/{repo}/pulls sends the
 // expected body and decodes the created PR.
 func TestCreateGitHubPR(t *testing.T) {

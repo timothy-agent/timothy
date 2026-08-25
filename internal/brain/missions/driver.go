@@ -364,6 +364,19 @@ func (d *Driver) SetGitBranchPattern(get func(ctx context.Context) string) {
 	d.provision.gitBranchPattern = get
 }
 
+// PRStateResolver resolves whether a github connector's owner/repo pull
+// request number has been merged — connectors.Manager.PRMerged
+// satisfies this. missions has no compile-time dependency on the
+// connectors package, same reasoning as CloneTokenResolver.
+type PRStateResolver func(ctx context.Context, connectorID, owner, repo string, number int) (merged bool, err error)
+
+// SetPRStateResolver wires the resolver followUpBaseRef uses to detect
+// a merged parent PR — a setter (not a NewDriver parameter) for the
+// same reason SetAgentResolver is.
+func (d *Driver) SetPRStateResolver(resolve PRStateResolver) {
+	d.provision.resolvePRState = resolve
+}
+
 // SetGitCommitStyle wires the live settings getter runExecute falls
 // back to when a mission's own CommitStyle is empty — a setter for the
 // same reason SetGitBranchPattern is.

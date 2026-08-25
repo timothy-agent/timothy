@@ -255,6 +255,36 @@ func (s *githubSource) CreatePR(ctx context.Context, owner, repo, title, head, b
 	return *existing, nil
 }
 
+// PRMerged resolves the connector's PAT and reports whether owner/repo
+// pull request number has been merged.
+func (s *githubSource) PRMerged(ctx context.Context, owner, repo string, number int) (bool, error) {
+	token, err := s.resolve(ctx, s.credentialRef)
+	if err != nil {
+		return false, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
+	}
+	return fetchGitHubPRMerged(ctx, s.client, token, owner, repo, number)
+}
+
+// fetchGitHubPRMerged calls GET /repos/{owner}/{repo}/pulls/{number} and
+// returns its merged field.
+func fetchGitHubPRMerged(ctx context.Context, client *http.Client, token, owner, repo string, number int) (bool, error) {
+	resp, err := githubRequest(ctx, client, token, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("get pull request: %w", githubStatusError(resp))
+	}
+	var pr struct {
+		Merged bool `json:"merged"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return false, fmt.Errorf("get pull request: decode response: %w", err)
+	}
+	return pr.Merged, nil
+}
+
 // fetchGitHubRepo calls GET /repos/{owner}/{repo}.
 func fetchGitHubRepo(ctx context.Context, client *http.Client, token, owner, repo string) (GitHubRepo, error) {
 	resp, err := githubRequest(ctx, client, token, fmt.Sprintf("/repos/%s/%s", owner, repo))

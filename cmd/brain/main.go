@@ -319,8 +319,8 @@ func main() {
 	// deliver: chat-facing ad-hoc send to one operator-configured
 	// destination. Registered here, not inside buildAgent, for the same
 	// reason as the mission tools below — destinationStore/Deliverer
-	// don't exist yet at that point. Like missions/mission_push, this
-	// reaches the live tool surface (chat + connector-reload swaps)
+	// don't exist yet at that point. Like list_missions/push_mission_branch,
+	// this reaches the live tool surface (chat + connector-reload swaps)
 	// only, never the BuiltinsOnly base surface a mission worker turn
 	// resolves to: a mission worker must never gain an outward-write
 	// tool the harness itself doesn't grant it (same reasoning as
@@ -340,16 +340,21 @@ func main() {
 	}
 	// Chat-facing mission tools (D-0xx: "is mission X done?" / "push
 	// mission X"): registered here, not inside buildAgent, since both
-	// need missionStore (built above, after buildAgent) and mission_push
-	// additionally needs conns+secrets for its push token resolver.
-	// missionStore nil (WORKSPACES unset) means neither tool is
+	// need missionStore (built above, after buildAgent) and
+	// push_mission_branch additionally needs conns+secrets for its push
+	// token resolver.
+	// missionStore nil (WORKSPACES unset) means none of these tools are
 	// registered at all, matching the nil-gating pattern buildMissions
 	// itself already uses. A recompile+swap applies them to the live
 	// agent immediately rather than waiting for the next connector
 	// reload (which may never come if no connectors are configured).
 	if missionStore != nil {
 		missionAdapter := missionToolStore{missionStore}
-		newTools := []*tools.Tool{builtin.Missions(missionAdapter, missionAdapter)}
+		newTools := []*tools.Tool{
+			builtin.ListMissions(missionAdapter),
+			builtin.GetMission(missionAdapter, missionAdapter),
+			builtin.FollowupMission(missionAdapter, missionFollowUpCreatorAdapter{missionDriver}),
+		}
 		if conns != nil && secrets != nil {
 			resolvePushToken := func(ctx context.Context, connectorID string) (string, error) {
 				c, err := conns.Store().Get(ctx, connectorID)
@@ -359,7 +364,7 @@ func main() {
 				return secrets.Resolve(ctx, c.CredentialRef)
 			}
 			completer := missionCompleterAdapter{missionStore, missions.NewCompleter(missionWorkspace, missionStore, nil, connsPRSource{conns})}
-			newTools = append(newTools, builtin.MissionPush(missionAdapter, completer, resolvePushToken))
+			newTools = append(newTools, builtin.PushMissionBranch(missionAdapter, completer, resolvePushToken))
 		}
 		current := builtinSet.add(newTools...)
 		if conns != nil {
@@ -980,6 +985,14 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 			return result, nil
 		})
 	}
+	if conns != nil {
+		// A follow-up mission's worktree base: detect whether the parent's
+		// PR (if any) was already merged, so the base doesn't point at a
+		// branch GitHub may since have deleted (see followUpBaseRef).
+		driver.SetPRStateResolver(func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
+			return conns.PRMerged(ctx, connectorID, owner, repo, number)
+		})
+	}
 	if conns != nil && secrets != nil {
 		// The auto-fire-on-done hook's push token: resolve connector_id
 		// straight to its credential_ref's secret value, same as the
@@ -1065,10 +1078,10 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 }
 
 // missionToolStore adapts *missions.Store to the builtin package's
-// missions/mission_push tool interfaces (missionLister,
-// missionEventReader) — a thin translation layer since builtin cannot
-// import missions.Mission/missions.Event directly (import cycle, see
-// MissionRecord's doc comment).
+// list_missions/get_mission/push_mission_branch tool interfaces
+// (missionLister, missionEventReader) — a thin translation layer since
+// builtin cannot import missions.Mission/missions.Event directly
+// (import cycle, see MissionRecord's doc comment).
 type missionToolStore struct {
 	store *missions.Store
 }
@@ -1106,12 +1119,12 @@ func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]built
 }
 
 // missionCompleterAdapter adapts *missions.Completer to the builtin
-// package's missionCompleter interface — mission_push's push/PR calls
-// go through the exact same Completer the button/auto-fire paths use.
-// It re-Gets the mission by id from the real store before calling
-// Completer, so Completer always acts on the authoritative
-// missions.Mission (worktree, full spec for PRBody, ...) rather than a
-// partial copy shuttled through builtin.MissionRecord.
+// package's missionCompleter interface — push_mission_branch's
+// push/PR calls go through the exact same Completer the button/
+// auto-fire paths use. It re-Gets the mission by id from the real
+// store before calling Completer, so Completer always acts on the
+// authoritative missions.Mission (worktree, full spec for PRBody,
+// ...) rather than a partial copy shuttled through builtin.MissionRecord.
 type missionCompleterAdapter struct {
 	store     *missions.Store
 	completer *missions.Completer
@@ -1131,6 +1144,18 @@ func (a missionCompleterAdapter) OpenMissionPR(ctx context.Context, id, token st
 		return "", 0, fmt.Errorf("no mission found with id %q", id)
 	}
 	return a.completer.OpenPR(ctx, m, token)
+}
+
+// missionFollowUpCreatorAdapter adapts *missions.Driver to the builtin
+// package's missionFollowUpCreator interface — followup_mission's
+// create call goes through the exact same Driver.CreateFollowUp the
+// mission-create API's own ParentMissionID branch uses.
+type missionFollowUpCreatorAdapter struct {
+	driver *missions.Driver
+}
+
+func (a missionFollowUpCreatorAdapter) CreateFollowUpMission(ctx context.Context, parentID, goal string) (string, error) {
+	return a.driver.CreateFollowUp(ctx, parentID, goal)
 }
 
 // credResolveTimeout bounds one credential_ref resolution the delegated

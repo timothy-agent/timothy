@@ -7,6 +7,7 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -51,6 +52,15 @@ type provisioner struct {
 	// unset falls straight through to Provision's own DefaultBranchPattern
 	// fallback, same as before this setting existed.
 	gitBranchPattern func(ctx context.Context) string
+
+	// resolvePRState resolves whether a github PR has been merged (see
+	// SetPRStateResolver) — consulted by followUpBaseRef when the parent
+	// mission opened a PR, so a follow-up whose parent's branch was
+	// already merged bases on the repo's default branch instead of a
+	// branch GitHub may since have deleted. nil-safe: unset (or any
+	// resolve error) falls straight through to the parent-branch base,
+	// same as before this existed.
+	resolvePRState PRStateResolver
 }
 
 // ensureProvisioned gives a mission everything Create used to set up
@@ -152,7 +162,10 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 // general mission, or one cloning a different repo, has no
 // meaningful base to hand Provision. Any failure (parent gone, no
 // branch) degrades to "" (Provision's own default-branch behavior),
-// never fails provisioning.
+// never fails provisioning. When the parent opened a PR and the
+// resolver reports it merged, the parent's branch may already be
+// deleted on the remote — this bases on the repo's default branch
+// instead, same degrade-to-"" path.
 func (p *provisioner) followUpBaseRef(ctx context.Context, m Mission) string {
 	if m.ParentMissionID == "" {
 		return ""
@@ -165,7 +178,59 @@ func (p *provisioner) followUpBaseRef(ctx context.Context, m Mission) string {
 	if parent.Branch == "" || parent.RepoURL != m.RepoURL {
 		return ""
 	}
+	if p.resolvePRState != nil {
+		if merged := p.parentPRMerged(ctx, m, parent); merged {
+			return ""
+		}
+	}
 	return parent.Branch
+}
+
+// followUpPROpenedPayload is the shape of a mission.pr_opened event's
+// payload this package needs — a local struct (not an import of
+// builtin.missionPROpenedPayload) since missions cannot import the
+// builtin package (import cycle, see MissionRecord's doc comment in
+// builtin/missions.go).
+type followUpPROpenedPayload struct {
+	Number int `json:"number"`
+}
+
+// parentPRMerged reports whether the parent mission's latest opened PR
+// has been merged, via resolvePRState — false on any missing event,
+// unparseable repo URL, or resolver error, degrading to the existing
+// parent-branch behavior in every such case.
+func (p *provisioner) parentPRMerged(ctx context.Context, m, parent Mission) bool {
+	events, err := p.store.Events(ctx, parent.ID)
+	if err != nil {
+		p.log.Debug("driver: follow-up base ref: parent events lookup failed", "mission_id", m.ID, "parent_id", parent.ID, "error", err)
+		return false
+	}
+	var number int
+	found := false
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != "mission.pr_opened" {
+			continue
+		}
+		var payload followUpPROpenedPayload
+		if err := json.Unmarshal(events[i].Payload, &payload); err == nil {
+			number = payload.Number
+			found = true
+		}
+		break
+	}
+	if !found || number == 0 {
+		return false
+	}
+	owner, repo, ok := ParseGitHubRepoURL(parent.RepoURL)
+	if !ok {
+		return false
+	}
+	merged, err := p.resolvePRState(ctx, parent.ConnectorID, owner, repo, number)
+	if err != nil {
+		p.log.Debug("driver: follow-up base ref: pr state resolve failed", "mission_id", m.ID, "parent_id", parent.ID, "error", err)
+		return false
+	}
+	return merged
 }
 
 // grantSessionDefaults pre-authorizes a freshly created hidden session:

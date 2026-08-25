@@ -1642,7 +1642,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 // every loop.Request the native runner builds — worker, explorer,
 // reviewer, planner — must set BuiltinsOnly, so a mission turn's base
 // tool surface never includes connector tools (e.g. a write-capable
-// GitHub MCP token) or the chat-only mission/mission_push tools. A
+// GitHub MCP token) or the chat-only mission list/get/push tools. A
 // missed phase here would silently reopen the side-channel the fix
 // closes.
 func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
