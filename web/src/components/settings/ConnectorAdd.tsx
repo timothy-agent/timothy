@@ -82,6 +82,8 @@ export function ConnectorAdd() {
 
   if (!preset) return <Navigate to="/settings/connectors" replace />
   const isGoogle = preset.kind === 'google'
+  const isMicrosoft = preset.kind === 'microsoft'
+  const isOAuth = isGoogle || isMicrosoft
   const isGitHub = preset.kind === 'github'
   const slug = slugify(name)
   const refBase = slug.toUpperCase().replace(/-/g, '_')
@@ -170,25 +172,29 @@ export function ConnectorAdd() {
 
   const usingExistingClientSecret = clientSecretCredMode === 'existing'
 
-  const submitGoogle = async () => {
+  const oauthProviderLabel = isMicrosoft ? 'Microsoft' : 'Google'
+  const oauthSecretSuffix = isMicrosoft ? '_MICROSOFT_CLIENT_SECRET' : '_GOOGLE_CLIENT_SECRET'
+  const oauthTokenSuffix = isMicrosoft ? '_MICROSOFT_OAUTH' : '_GOOGLE_OAUTH'
+
+  const submitOAuth = async () => {
     setBusy(true)
     try {
-      const secretRef = usingExistingClientSecret ? existingClientSecretRef : `${refBase}_GOOGLE_CLIENT_SECRET`
+      const secretRef = usingExistingClientSecret ? existingClientSecretRef : `${refBase}${oauthSecretSuffix}`
       if (!usingExistingClientSecret) await setSecret(secretRef, clientSecret)
       const id = await createConnector({
         name: slug,
-        kind: 'google',
+        kind: isMicrosoft ? 'microsoft' : 'google',
         config: {
           client_id: clientID.trim(),
           client_secret_ref: secretRef,
           scopes: preset.scopes,
         },
-        credential_ref: `${refBase}_GOOGLE_OAUTH`,
+        credential_ref: `${refBase}${oauthTokenSuffix}`,
         enabled: false,
       })
       window.location.assign(await connectorOAuthStart(id))
     } catch (err) {
-      toast.error('Could not connect Google account', { description: errText(err) })
+      toast.error(`Could not connect ${oauthProviderLabel} account`, { description: errText(err) })
       setBusy(false)
     }
   }
@@ -196,7 +202,7 @@ export function ConnectorAdd() {
   const canTest =
     slug !== '' &&
     (isGitHub ? (usingExistingToken ? existingTokenRef !== '' : token.trim() !== '') : endpoint.trim() !== '')
-  const canSubmitGoogle =
+  const canSubmitOAuth =
     slug !== '' &&
     clientID.trim() !== '' &&
     (usingExistingClientSecret ? existingClientSecretRef !== '' : clientSecret !== '')
@@ -232,13 +238,13 @@ export function ConnectorAdd() {
           />
         </Field>
 
-        {isGoogle ? (
+        {isOAuth ? (
           <>
             <Field label="OAuth client ID">
               <Input
                 value={clientID}
                 onChange={(e) => setClientID(e.target.value)}
-                placeholder="….apps.googleusercontent.com"
+                placeholder={isMicrosoft ? 'application (client) ID' : '….apps.googleusercontent.com'}
                 className="mt-1.5 h-10"
               />
             </Field>
@@ -257,25 +263,27 @@ export function ConnectorAdd() {
                   type="password"
                   value={clientSecret}
                   onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder="GOCSPX-…"
+                  placeholder={isMicrosoft ? 'client secret value' : 'GOCSPX-…'}
                   className="h-10"
                   autoComplete="off"
                 />
               )}
             </div>
             <p className="text-sm text-muted-foreground">
-              From a Google Cloud OAuth client (Web application). Add{' '}
+              {isMicrosoft
+                ? 'From an Azure AD app registration (multitenant, "Accounts in any organizational directory and personal Microsoft accounts"). Add'
+                : 'From a Google Cloud OAuth client (Web application). Add'}{' '}
               <span className="font-mono">{window.location.origin}/v1/connectors/oauth/callback</span>{' '}
-              to its authorized redirect URIs. Scopes:{' '}
-              {preset.scopes?.map((s) => s.split('/').pop()).join(', ')}. Saving redirects you to
-              Google to consent.
+              to its {isMicrosoft ? 'redirect URIs (Web platform)' : 'authorized redirect URIs'}. Scopes:{' '}
+              {preset.scopes?.map((s) => s.split('/').pop()).join(', ')}. Saving redirects you to{' '}
+              {oauthProviderLabel} to consent.
             </p>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/connectors')}>
                 Cancel
               </Button>
-              <Button disabled={!canSubmitGoogle || busy} onClick={() => void submitGoogle()}>
-                {busy ? 'Redirecting…' : 'Save & connect Google'}
+              <Button disabled={!canSubmitOAuth || busy} onClick={() => void submitOAuth()}>
+                {busy ? 'Redirecting…' : `Save & connect ${oauthProviderLabel}`}
               </Button>
             </div>
           </>

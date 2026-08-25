@@ -157,7 +157,7 @@ function ConnectorCard({
       <div className="truncate text-xs text-muted-foreground">
         {connector.kind === 'mcp'
           ? String(connector.config.endpoint ?? '')
-          : connector.kind === 'google'
+          : connector.kind === 'google' || connector.kind === 'microsoft'
             ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
             : 'Identity for mission use, no chat tools'}
       </div>
@@ -188,10 +188,10 @@ function ConnectorCard({
 
 function matchesPreset(
   c: AdminConnector,
-  p: { kind: 'mcp' | 'google' | 'github'; scopes?: string[]; endpoint?: string },
+  p: { kind: 'mcp' | 'google' | 'github' | 'microsoft'; scopes?: string[]; endpoint?: string },
 ) {
   if (p.kind !== c.kind) return false
-  if (c.kind === 'google') {
+  if (c.kind === 'google' || c.kind === 'microsoft') {
     const scopes = JSON.stringify(c.config.scopes ?? '')
     return p.scopes?.every((s) => scopes.includes(s)) ?? false
   }

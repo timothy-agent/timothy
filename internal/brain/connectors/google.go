@@ -160,6 +160,17 @@ func (g *Google) StartAuth(ctx context.Context, connectorID string) (string, err
 	return g.AuthURL + "?" + q.Encode(), nil
 }
 
+// HasState reports whether state is a live (unconsumed, unexpired)
+// OAuth state this Google instance started — lets the callback route
+// (shared with Microsoft's) pick which engine's HandleCallback to call
+// without consuming the state itself.
+func (g *Google) HasState(state string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	st, ok := g.states[state]
+	return ok && time.Now().Before(st.expires)
+}
+
 // HandleCallback finishes the dance: validates state, exchanges the
 // code, and stores the token bundle at the connector's credential_ref.
 // Returns the connector name for the UI redirect.

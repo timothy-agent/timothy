@@ -6,10 +6,11 @@
 CREATE TABLE IF NOT EXISTS connectors (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text UNIQUE NOT NULL,
-    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github')),
+    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft')),
     -- kind-specific settings: mcp → {transport, endpoint, headers},
-    -- google → {scopes}. OAuth tokens NEVER live here; they go to the
-    -- secrets table under credential_ref.
+    -- google/microsoft → {client_id, client_secret_ref, scopes}. OAuth
+    -- tokens NEVER live here; they go to the secrets table under
+    -- credential_ref.
     config         jsonb NOT NULL DEFAULT '{}',
     credential_ref text NOT NULL DEFAULT '',
     enabled        boolean NOT NULL DEFAULT false,

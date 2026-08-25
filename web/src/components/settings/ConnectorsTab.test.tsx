@@ -323,4 +323,38 @@ describe('Connectors tab', () => {
     )
     expect(connectorOAuthStart).toHaveBeenCalledWith('c4')
   })
+
+  it('adds an Outlook connector and hands off to Microsoft consent', async () => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createConnector).mockResolvedValue('c5')
+    vi.mocked(connectorOAuthStart).mockResolvedValue(
+      'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?x=1',
+    )
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: /Outlook/ }))
+    fireEvent.change(await screen.findByPlaceholderText('application (client) ID'), {
+      target: { value: 'msft-client-id' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('client secret value'), { target: { value: 'msft-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect Microsoft' }))
+
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://login.microsoftonline.com/common/oauth2/v2.0/authorize?x=1'),
+    )
+    expect(setSecret).toHaveBeenCalledWith('OUTLOOK_MICROSOFT_CLIENT_SECRET', 'msft-secret')
+    expect(createConnector).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'outlook',
+        kind: 'microsoft',
+        credential_ref: 'OUTLOOK_MICROSOFT_OAUTH',
+        config: expect.objectContaining({
+          client_id: 'msft-client-id',
+          client_secret_ref: 'OUTLOOK_MICROSOFT_CLIENT_SECRET',
+          scopes: ['Mail.Read', 'Mail.Send', 'Calendars.Read', 'offline_access', 'User.Read'],
+        }),
+      }),
+    )
+    expect(connectorOAuthStart).toHaveBeenCalledWith('c5')
+  })
 })

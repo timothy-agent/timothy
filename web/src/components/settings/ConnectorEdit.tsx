@@ -26,6 +26,12 @@ import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Field, Toggle } from './shared'
 import { errText, isTimothyAuthError } from './util'
 
+// oauthProviderLabel names the OAuth provider for a connector kind —
+// both google and microsoft share the same reconnect/test UI shape.
+function oauthProviderLabel(kind: string): string {
+  return kind === 'microsoft' ? 'Microsoft' : 'Google'
+}
+
 export function ConnectorEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -121,13 +127,13 @@ export function ConnectorEdit() {
     toast.success('Public key copied')
   }
 
-  const reconnectGoogle = async () => {
+  const reconnectOAuth = async () => {
     if (!connector) return
     setOAuthBusy(true)
     try {
       window.location.assign(await connectorOAuthStart(connector.id))
     } catch (err) {
-      toast.error('Could not start Google re-connect', { description: errText(err) })
+      toast.error(`Could not start ${oauthProviderLabel(connector.kind)} re-connect`, { description: errText(err) })
       setOAuthBusy(false)
     }
   }
@@ -136,6 +142,7 @@ export function ConnectorEdit() {
   if (connector === undefined) return null
 
   const preset = connectorPresets.find((p) => p.kind === connector.kind) ?? unknownPreset
+  const isOAuth = connector.kind === 'google' || connector.kind === 'microsoft'
 
   return (
     <div className="mt-6 w-full space-y-6">
@@ -191,15 +198,15 @@ export function ConnectorEdit() {
             {testing
               ? 'Testing connection…'
               : test?.ok
-                ? connector.kind === 'github' && test.identity
+                ? (connector.kind === 'github' || connector.kind === 'microsoft') && test.identity
                   ? `Connected as ${test.identity.login} (${test.identity.email}), ${test.identity.scopes}.`
                   : 'Connection OK, tools are servable.'
                 : test && !test.ok
                   ? `Failed: ${test.error}`
                   : 'Not tested yet.'}
           </span>
-          {test && !test.ok && connector.kind === 'google' ? (
-            <Button size="sm" variant="outline" disabled={oauthBusy} onClick={() => void reconnectGoogle()}>
+          {test && !test.ok && isOAuth ? (
+            <Button size="sm" variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
               {oauthBusy ? 'Redirecting…' : 'Reconnect'}
             </Button>
           ) : (
@@ -215,13 +222,13 @@ export function ConnectorEdit() {
           </p>
         )}
 
-        {connector.kind === 'google' ? (
+        {isOAuth ? (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
               Scopes: {(connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')}
             </p>
-            <Button variant="outline" disabled={oauthBusy} onClick={() => void reconnectGoogle()}>
-              {oauthBusy ? 'Redirecting…' : 'Reconnect Google account'}
+            <Button variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
+              {oauthBusy ? 'Redirecting…' : `Reconnect ${oauthProviderLabel(connector.kind)} account`}
             </Button>
           </div>
         ) : (

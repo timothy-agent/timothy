@@ -219,12 +219,15 @@ func main() {
 		resolveSecret = secrets.Resolve
 	}
 
-	conns, goog := buildConnectors(app.DB, secrets, app.Log)
+	conns, goog, msft := buildConnectors(app.DB, secrets, app.Log)
 	if conns != nil {
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil))
 		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
+		}
+		if msft != nil {
+			conns.RegisterBuilder("microsoft", msft.Builder())
 		}
 		conns.SetOnReload(func(context.Context) {
 			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
@@ -580,7 +583,7 @@ func main() {
 	}
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
-		agentReg, conns, goog, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
+		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), destinationStore, destinationTest, workflowStore, workflowEngine)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -644,10 +647,10 @@ func buildAttachments(db *pgpool.Pool, log *slog.Logger) *attachments.Store {
 // instead of here. The Google half additionally needs
 // TIMOTHY_PUBLIC_URL for the OAuth redirect; without it google
 // connectors are configured but cannot connect.
-func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logger) (*connectors.Manager, *connectors.Google) {
+func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logger) (*connectors.Manager, *connectors.Google, *connectors.Microsoft) {
 	if secrets == nil {
 		log.Warn("connectors disabled: no secret store")
-		return nil, nil
+		return nil, nil, nil
 	}
 	resolve := func(ctx context.Context, ref string) (string, error) {
 		return secrets.Resolve(ctx, ref)
@@ -657,15 +660,17 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 
 	publicURL := os.Getenv("TIMOTHY_PUBLIC_URL")
 	if publicURL == "" {
-		log.Warn("TIMOTHY_PUBLIC_URL not set; google connectors cannot run their OAuth flow")
+		log.Warn("TIMOTHY_PUBLIC_URL not set; google/microsoft connectors cannot run their OAuth flow")
 	}
 	goog := connectors.NewGoogle(secrets, store, publicURL, log)
+	msft := connectors.NewMicrosoft(secrets, store, publicURL, log)
 	if markItDownURL := os.Getenv("MARKITDOWN_URL"); markItDownURL != "" {
 		goog.MarkItDownURL = markItDownURL
+		msft.MarkItDownURL = markItDownURL
 	} else {
-		log.Warn("MARKITDOWN_URL not set; gmail_read falls back to a snippet for HTML-only mail, and gmail_read_attachment is unavailable")
+		log.Warn("MARKITDOWN_URL not set; gmail_read/mail_read fall back to a snippet or are unavailable for attachments")
 	}
-	return mgr, goog
+	return mgr, goog, msft
 }
 
 // buildDestinations wires the destinations control plane (store +

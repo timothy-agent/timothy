@@ -261,16 +261,20 @@ func (m *Manager) Test(ctx context.Context, id string) error {
 }
 
 // identifier is the optional Source capability that reports who a
-// credential authenticates as (github-kind today). Type-asserted so
-// kinds without an identity concept (mcp, google) are untouched.
+// credential authenticates as (github- and microsoft-kind today).
+// Type-asserted so kinds without an identity concept (mcp) are
+// untouched. microsoftSource reuses GitHubIdentity's shape rather than
+// a parallel type (see its Identity method).
 type identifier interface {
 	Identity(ctx context.Context) (GitHubIdentity, error)
 }
 
-// TestIdentity is Test plus, for a kind that can report one (github),
-// the resolved identity — the evidence a working credential was
-// configured, since the connector serves no tools to prove itself
-// with otherwise. identity is nil for kinds with no identity concept.
+// TestIdentity is Test plus, for a kind that can report one (github,
+// microsoft), the resolved identity — the evidence a working
+// credential was configured, since a github connector serves no tools
+// to prove itself with otherwise (microsoft's tools require a scope
+// the operator may not have granted, so the identity check is useful
+// there too). identity is nil for kinds with no identity concept.
 func (m *Manager) TestIdentity(ctx context.Context, id string) (*GitHubIdentity, error) {
 	c, err := m.rows.Get(ctx, id)
 	if err != nil {

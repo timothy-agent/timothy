@@ -2,16 +2,18 @@ import gmailLogo from '../../assets/connectors/gmail.png'
 import googleCalendarLogo from '../../assets/connectors/google-calendar.png'
 import googleDocsLogo from '../../assets/connectors/google-docs.png'
 import googleDriveLogo from '../../assets/connectors/google-drive.png'
+import outlookLogo from '../../assets/connectors/outlook.png'
 import type { ConnectorPreset } from './connectorPresets'
 
-// Official Google product marks (2026 branding, full color), rendered
-// at native size on a neutral tile — the marks already carry their own
-// color, unlike the monochrome github symbol below.
-const googleLogos: Record<string, string> = {
+// Official product marks (full color), rendered at native size on a
+// neutral tile: the marks already carry their own color, unlike the
+// monochrome github symbol below.
+const pngLogos: Record<string, string> = {
   gmail: gmailLogo,
   googlecalendar: googleCalendarLogo,
   googledocs: googleDocsLogo,
   googledrive: googleDriveLogo,
+  outlook: outlookLogo,
 }
 
 // github's mark (simple-icons, monochrome), rendered white on the
@@ -46,7 +48,7 @@ export function ConnectorLogo({
       </span>
     )
   }
-  const pngLogo = googleLogos[preset.logo]
+  const pngLogo = pngLogos[preset.logo]
   if (pngLogo) {
     return (
       <span className={`${className} grid shrink-0 place-items-center rounded-lg bg-muted/40`} aria-hidden="true">

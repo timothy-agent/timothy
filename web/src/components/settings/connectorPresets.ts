@@ -4,7 +4,7 @@
 export interface ConnectorPreset {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft'
   description: string
   logo?: string
   brandColor: string
@@ -16,7 +16,7 @@ export interface ConnectorPreset {
   tokenHint?: string
   // github: link rendered after tokenHint (e.g. "Create one on GitHub")
   tokenURL?: string
-  // google: OAuth scopes this preset requests
+  // google, microsoft: OAuth scopes this preset requests
   scopes?: string[]
 }
 
@@ -24,6 +24,7 @@ export const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
 export const calendarScope = 'https://www.googleapis.com/auth/calendar'
 export const driveScope = 'https://www.googleapis.com/auth/drive.readonly'
 export const docsScopes = ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive.file']
+export const outlookScopes = ['Mail.Read', 'Mail.Send', 'Calendars.Read', 'offline_access', 'User.Read']
 
 export const connectorPresets: ConnectorPreset[] = [
   {
@@ -61,6 +62,15 @@ export const connectorPresets: ConnectorPreset[] = [
     logo: 'googledocs',
     brandColor: '#4285F4',
     scopes: docsScopes,
+  },
+  {
+    id: 'outlook',
+    name: 'Outlook',
+    kind: 'microsoft',
+    description: 'Read, search, and send mail; list calendar events',
+    logo: 'outlook',
+    brandColor: '#0078D4',
+    scopes: outlookScopes,
   },
   {
     id: 'github',

@@ -914,15 +914,15 @@ export interface Notification {
 }
 
 // AdminConnector is one third-party integration the agent can call as
-// tools (MCP server or Google account), or — for kind 'github' — an
-// identity/credential connector with no tools of its own (mission
-// flows and Settings resolve a GitHub identity from its PAT; chat
-// tools stay on the MCP-based GitHub connector). config is
-// kind-specific; the credential_ref names where its secret/tokens live.
+// tools (MCP server, Google account, or Microsoft account), or — for
+// kind 'github' — an identity/credential connector with no tools of
+// its own (mission flows and Settings resolve a GitHub identity from
+// its PAT; chat tools stay on the MCP-based GitHub connector). config
+// is kind-specific; the credential_ref names where its secret/tokens live.
 export interface AdminConnector {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean

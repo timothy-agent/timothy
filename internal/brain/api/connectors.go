@@ -19,11 +19,11 @@ import (
 // secrets, when nil, just skips signing-key generation on a
 // sign_commits create/patch — same as any other secret-store-gated
 // feature elsewhere in brain.
-func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store) {
+func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store) {
 	if mgr == nil {
 		return
 	}
-	h := &connectorAPI{mgr: mgr, goog: goog, secrets: secrets}
+	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, secrets: secrets}
 	handle("GET /v1/admin/connectors", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/connectors", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -31,10 +31,10 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 	handle("POST /v1/admin/connectors/{id}/test", a.auth(http.HandlerFunc(h.test)))
 	handle("GET /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.listRepos)))
 	handle("POST /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.createRepo)))
-	if goog != nil {
+	if goog != nil || msft != nil {
 		handle("POST /v1/admin/connectors/{id}/oauth/start", a.auth(http.HandlerFunc(h.oauthStart)))
-		// The callback is Google redirecting the user's browser — no
-		// bearer possible; the single-use expiring state token is the
+		// The callback is Google/Microsoft redirecting the user's browser —
+		// no bearer possible; the single-use expiring state token is the
 		// auth. It writes nothing an attacker chooses: a forged call
 		// without a live state is rejected.
 		handle("GET /v1/connectors/oauth/callback", http.HandlerFunc(h.oauthCallback))
@@ -44,13 +44,28 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 type connectorAPI struct {
 	mgr     *connectors.Manager
 	goog    *connectors.Google
+	msft    *connectors.Microsoft
 	secrets *secretstore.Store
 }
 
 // oauthStart begins the OAuth dance and returns the URL the browser
-// should visit.
+// should visit, dispatching to Google or Microsoft by the connector's
+// own kind.
 func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
-	authURL, err := h.goog.StartAuth(r.Context(), r.PathValue("id"))
+	c, err := h.mgr.Store().Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failConnector(w, err)
+		return
+	}
+	var authURL string
+	switch c.Kind {
+	case "google":
+		authURL, err = h.goog.StartAuth(r.Context(), c.ID)
+	case "microsoft":
+		authURL, err = h.msft.StartAuth(r.Context(), c.ID)
+	default:
+		err = fmt.Errorf("connector kind %s has no oauth dance: %w", c.Kind, connectors.ErrUnsupported)
+	}
 	if err != nil {
 		failConnector(w, err)
 		return
@@ -59,14 +74,27 @@ func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // oauthCallback finishes the dance and bounces the browser back to
-// Settings with the outcome in the query.
+// Settings with the outcome in the query. Google and Microsoft share
+// this one redirect route (both registered against the same publicURL
+// at signup), so the live (unconsumed) state tells us which engine
+// started it, via HasState.
 func (h *connectorAPI) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if errCode := q.Get("error"); errCode != "" {
 		http.Redirect(w, r, "/settings/connectors?oauth_error="+url.QueryEscape(errCode), http.StatusFound)
 		return
 	}
-	name, err := h.goog.HandleCallback(r.Context(), q.Get("state"), q.Get("code"))
+	state := q.Get("state")
+	var name string
+	var err error
+	switch {
+	case h.goog != nil && h.goog.HasState(state):
+		name, err = h.goog.HandleCallback(r.Context(), state, q.Get("code"))
+	case h.msft != nil && h.msft.HasState(state):
+		name, err = h.msft.HandleCallback(r.Context(), state, q.Get("code"))
+	default:
+		err = fmt.Errorf("unknown or expired oauth state; restart the connection from Settings")
+	}
 	if err != nil {
 		http.Redirect(w, r, "/settings/connectors?oauth_error="+url.QueryEscape(err.Error()), http.StatusFound)
 		return
