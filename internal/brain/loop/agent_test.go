@@ -1307,6 +1307,7 @@ func TestForceRouteByConnectorSwitchesRouteAfterMatchingTool(t *testing.T) {
 	a.SetForceRouteByConnector(
 		func(context.Context) []string { return []string{"gmail"} },
 		func(context.Context) string { return "local" },
+		nil,
 	)
 
 	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
@@ -1350,6 +1351,7 @@ func TestForceRouteByConnectorIgnoresUnlistedConnector(t *testing.T) {
 	a.SetForceRouteByConnector(
 		func(context.Context) []string { return []string{"gmail"} },
 		func(context.Context) string { return "local" },
+		nil,
 	)
 
 	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
@@ -1363,6 +1365,55 @@ func TestForceRouteByConnectorIgnoresUnlistedConnector(t *testing.T) {
 		if req.Route != "default" {
 			t.Fatalf("request %d route = %q, want default (gmailbox_search must not prefix-match \"gmail\")", i, req.Route)
 		}
+	}
+}
+
+// TestForceRouteByConnectorMatchesUnifiedToolViaAccountConnector pins
+// the unified-tool path: a call to a name carrying no connector prefix
+// (e.g. mail_search) still pins the route once accountConnector
+// resolves the call to a name in the sensitive list: the account the
+// call actually routed to, not the tool's own name, decides the flip.
+func TestForceRouteByConnectorMatchesUnifiedToolViaAccountConnector(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"mail_search", `{"account":"work-outlook"}`}),
+		finalStep("done"),
+	}}
+	search := &tools.Tool{
+		Name:        "mail_search",
+		Description: "searches connected mail",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"account":{"type":"string"}},"additionalProperties":false}`),
+		Execute: func(context.Context, json.RawMessage) (string, error) {
+			return "search results", nil
+		},
+	}
+	a, _, _, _ := testAgent(t, gw, search)
+	a.SetForceRouteByConnector(
+		func(context.Context) []string { return []string{"work-outlook"} },
+		func(context.Context) string { return "local" },
+		func(_ context.Context, toolName string, args json.RawMessage) string {
+			if toolName == "mail_search" && strings.Contains(string(args), "work-outlook") {
+				return "work-outlook"
+			}
+			return ""
+		},
+	)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "default",
+		Messages: []provider.Message{{Role: "user", Content: "search my email"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(gw.requests))
+	}
+	if gw.requests[0].Route != "default" {
+		t.Fatalf("step 1 route = %q, want default (before the sensitive account's tool ran)", gw.requests[0].Route)
+	}
+	if gw.requests[1].Route != "local" {
+		t.Fatalf("step 2 route = %q, want local (forced after mail_search resolved to work-outlook)", gw.requests[1].Route)
 	}
 }
 

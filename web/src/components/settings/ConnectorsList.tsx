@@ -50,9 +50,12 @@ export function ConnectorsList() {
           {connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Integrations the agent can use as tools, each connector&apos;s tools appear to the
-          model as <span className="font-mono text-xs">name_tool</span> and go through the same
-          permission prompts as everything else.
+          Integrations the agent can use as tools. Mail/calendar tools appear to the model once
+          per capability (e.g. <span className="font-mono text-xs">mail_search</span>) with an{' '}
+          <span className="font-mono text-xs">account</span> argument routing to the right
+          connected account; MCP connectors&apos; tools still appear as{' '}
+          <span className="font-mono text-xs">name_tool</span>. Either way, tool calls go through
+          the same permission prompts as everything else.
         </p>
         {connectors.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">

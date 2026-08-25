@@ -2,13 +2,14 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
 func TestSensitiveToolsMatchesNilReceiver(t *testing.T) {
 	t.Parallel()
 	var s *SensitiveTools
-	if s.Matches(context.Background(), "gmail_read") {
+	if s.Matches(context.Background(), "gmail_read", nil) {
 		t.Fatal("nil SensitiveTools matched a tool, want false (feature off)")
 	}
 }
@@ -37,7 +38,7 @@ func TestSensitiveToolsMatchesConnectorPrefix(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := s.Matches(context.Background(), tc.tool); got != tc.want {
+			if got := s.Matches(context.Background(), tc.tool, nil); got != tc.want {
 				t.Fatalf("Matches(%q) = %v, want %v", tc.tool, got, tc.want)
 			}
 		})
@@ -51,8 +52,47 @@ func TestSensitiveToolsMatchesConnectorNamesNil(t *testing.T) {
 	s := &SensitiveTools{
 		Route: func(context.Context) string { return "local" },
 	}
-	if s.Matches(context.Background(), "slack_read_channel") {
+	if s.Matches(context.Background(), "slack_read_channel", nil) {
 		t.Fatal("Matches true with nil ConnectorNames, want false")
+	}
+}
+
+// TestSensitiveToolsMatchesAccountConnector pins the unified-tool path:
+// a call to a name carrying no connector prefix (e.g. "mail_search")
+// still matches once AccountConnector resolves it to a name in
+// ConnectorNames: the account the call actually routed to, not the
+// tool's own name, decides sensitivity here.
+func TestSensitiveToolsMatchesAccountConnector(t *testing.T) {
+	t.Parallel()
+	s := &SensitiveTools{
+		ConnectorNames: func(context.Context) []string { return []string{"work-outlook"} },
+		AccountConnector: func(_ context.Context, toolName string, args json.RawMessage) string {
+			if toolName == "mail_search" && string(args) == `{"account":"work-outlook"}` {
+				return "work-outlook"
+			}
+			return "personal-gmail"
+		},
+		Route: func(context.Context) string { return "local" },
+	}
+	if !s.Matches(context.Background(), "mail_search", json.RawMessage(`{"account":"work-outlook"}`)) {
+		t.Fatal("Matches false for a call AccountConnector resolves to a sensitive connector, want true")
+	}
+	if s.Matches(context.Background(), "mail_search", json.RawMessage(`{"account":"other"}`)) {
+		t.Fatal("Matches true for a call resolving to a non-sensitive connector, want false")
+	}
+}
+
+// TestSensitiveToolsMatchesAccountConnectorNil pins that a nil
+// AccountConnector (not every caller wires it) never panics and simply
+// falls back to the prefix rule alone.
+func TestSensitiveToolsMatchesAccountConnectorNil(t *testing.T) {
+	t.Parallel()
+	s := &SensitiveTools{
+		ConnectorNames: func(context.Context) []string { return []string{"work-outlook"} },
+		Route:          func(context.Context) string { return "local" },
+	}
+	if s.Matches(context.Background(), "mail_search", json.RawMessage(`{"account":"work-outlook"}`)) {
+		t.Fatal("Matches true with nil AccountConnector, want false (no prefix match either)")
 	}
 }
 
@@ -75,12 +115,12 @@ func TestSensitiveToolsMatchesDynamicConnectorNames(t *testing.T) {
 		Route: func(context.Context) string { return "local" },
 	}
 
-	if s.Matches(context.Background(), "slack_read_channel") {
+	if s.Matches(context.Background(), "slack_read_channel", nil) {
 		t.Fatal("Matches true before connector marked sensitive, want false")
 	}
 
 	sensitiveConnector = true
-	if !s.Matches(context.Background(), "slack_read_channel") {
+	if !s.Matches(context.Background(), "slack_read_channel", nil) {
 		t.Fatal("Matches false after connector marked sensitive, want true")
 	}
 

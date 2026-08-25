@@ -7,7 +7,7 @@ description: Searches, reads, and aggregates Gmail content, finding bookings, co
 
 ## Rules
 
-- Gmail query operators, used correctly:
+- Gmail query operators (mail_search's Google accounts; a Microsoft/Outlook account takes a plain keyword query instead: see the tool's own description for which accounts are connected), used correctly:
   - Quote multi-word phrases: `subject:"booking confirmation"`, not `subject:booking confirmation` (the latter only matches the first word as the operator's argument).
   - `from:`/`to:` take an address or domain: `from:noreply@airline.com`, `from:airline.com`.
   - OR grouping: `{from:a@x.com from:b@x.com}` or `(from:a@x.com OR from:b@x.com)`; bare `OR` between terms with no parens/braces is parsed unreliably, always group it explicitly.
@@ -15,7 +15,7 @@ description: Searches, reads, and aggregates Gmail content, finding bookings, co
   - `has:attachment`, `label:`, `category:`, `is:unread`, `is:read`.
 - Date bounds MUST be derived from the current date in the system prompt, never a guessed or recalled year. If a search built from a "today" you assumed returns nothing, re-derive the bound from the actual system-prompt date before concluding the mail isn't there.
 - Pipeline discipline: start broad (wide date range, no subject/keyword narrowing), then narrow iteratively; a `from:` combined with subject/keyword terms narrows twice and a near-miss becomes a zero-result search.
-- A `gmail_search` result (subjects, senders, snippets) is a digest, not content. Before citing or aggregating what is "in" any message, `gmail_read` it: snippets truncate and routinely omit the amount, date, or detail you need.
+- A `mail_search` result (subjects, senders, snippets) is a digest, not content. Before citing or aggregating what is "in" any message, `mail_read` it: snippets truncate and routinely omit the amount, date, or detail you need.
 - Extract every amount together with its currency (`$42.50`, `€19`, `12.00 USD`): a bare number is not usable in a total.
 - All arithmetic (sums, counts, averages) goes through the `calculate` tool; never add or estimate in your head. Show the expression you evaluated.
 - Any total or aggregate figure shows its per-item breakdown (each item's amount and source email) alongside the total, not the total alone.
@@ -30,25 +30,25 @@ description: Searches, reads, and aggregates Gmail content, finding bookings, co
 
 | Excuse                                                        | Rebuttal                                                                                  |
 |---------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| "The snippet already shows the amount"                        | Snippets truncate; gmail_read the message before citing a figure from it.                 |
+| "The snippet already shows the amount"                        | Snippets truncate; mail_read the message before citing a figure from it.                 |
 | "I can add these three numbers myself"                        | Mental arithmetic on amounts you'll report as fact goes through calculate, no exceptions. |
 | "Combining $40 and €40 into one total is close enough"        | Different currencies are different totals; report each separately.                        |
 | "It's from the same sender as the confirmation, so it counts" | Marketing and reminders from that domain are not the transaction; label them separately.  |
 | "The user's message implies this year"                        | Never guess a year: read it from the system prompt's current date.                        |
-| "No Gmail tool is available, but I probably know the answer"  | Say "email not connected"; never answer from assumption when the tool is simply missing.  |
+| "No mail tool is available, but I probably know the answer"   | Say "email not connected"; never answer from assumption when the tool is simply missing.  |
 
 ## Red flags: stop and re-check
 
 - An amount is being reported without its currency.
 - A total appears with no per-item breakdown, or was computed without calculate.
 - A date bound (`after:`/`before:`) was written without checking the system prompt's current date first.
-- A claim about a message's content is being made from a search snippet alone, with no gmail_read call this turn.
+- A claim about a message's content is being made from a search snippet alone, with no mail_read call this turn.
 - Two different currencies are being added into a single total.
-- A privacy refusal ("I can't access your email") is about to be given while gmail tools are present in this turn's tool list.
+- A privacy refusal ("I can't access your email") is about to be given while mail tools are present in this turn's tool list.
 
 ## Evidence required
 
-- Every cited message actually opened with gmail_read this turn (or gmail_read_attachment, for attachment content).
+- Every cited message actually opened with mail_read this turn (or mail_read_attachment, for attachment content).
 - Every amount paired with its currency and its source message.
 - Every total accompanied by the calculate expression used and the per-item breakdown it was built from.
 - Confirmations distinguished from marketing/reminders explicitly, not merged by sender domain alone.

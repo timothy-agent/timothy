@@ -420,7 +420,7 @@ func TestOutlookMailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testi
 	}
 
 	out, err = microsoftToolByName(t, src, "mail_read_attachment").Execute(t.Context(),
-		json.RawMessage(`{"message_id":"m2","name":"receipt.pdf"}`))
+		json.RawMessage(`{"message_id":"m2","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("read_attachment: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestOutlookMailReadAttachmentRejectsUnknownName(t *testing.T) {
 	src, _ := connectedMicrosoftSource(t, f)
 
 	_, err := microsoftToolByName(t, src, "mail_read_attachment").Execute(t.Context(),
-		json.RawMessage(`{"message_id":"m2","name":"nope.pdf"}`))
+		json.RawMessage(`{"message_id":"m2","filename":"nope.pdf"}`))
 	if err == nil {
 		t.Fatal("expected an error for an unknown attachment name")
 	}

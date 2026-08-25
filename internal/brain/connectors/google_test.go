@@ -483,10 +483,10 @@ func TestGoogleReadOnlyToolsPinned(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"gmail_search":          true,
-		"gmail_read":            true,
-		"gmail_read_attachment": true,
-		"calendar_list_events":  true,
+		"mail_search":          true,
+		"mail_read":            true,
+		"mail_read_attachment": true,
+		"calendar_list_events": true,
 	}
 	got := map[string]bool{}
 	for _, tl := range src.Tools() {
@@ -552,15 +552,15 @@ func TestGmailToolsRoundTrip(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "gmail_search").Execute(t.Context(), json.RawMessage(`{"query":"is:unread"}`))
+	out, err := toolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"is:unread"}`))
 	if err != nil || !strings.Contains(out, "subject: hi") {
 		t.Fatalf("search = (%q, %v)", out, err)
 	}
-	out, err = toolByName(t, src, "gmail_read").Execute(t.Context(), json.RawMessage(`{"id":"m1"}`))
+	out, err = toolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m1"}`))
 	if err != nil || !strings.Contains(out, "hello body") {
 		t.Fatalf("read = (%q, %v)", out, err)
 	}
-	out, err = toolByName(t, src, "gmail_send").Execute(t.Context(),
+	out, err = toolByName(t, src, "mail_send").Execute(t.Context(),
 		json.RawMessage(`{"to":"b@y","subject":"re: hi","body":"on my way"}`))
 	if err != nil || !strings.Contains(out, "sent-1") {
 		t.Fatalf("send = (%q, %v)", out, err)
@@ -704,7 +704,7 @@ func TestGmailSearchZeroResultsSuggestsBroadening(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "gmail_search").Execute(t.Context(),
+	out, err := toolByName(t, src, "mail_search").Execute(t.Context(),
 		json.RawMessage(`{"query":"from:nowhere.invalid"}`))
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -725,7 +725,7 @@ func TestGmailReadFallsBackToMarkItDownForHTMLOnlyBody(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "gmail_read").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
+	out, err := toolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -751,7 +751,7 @@ func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) 
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "gmail_read").Execute(t.Context(), json.RawMessage(`{"id":"m3"}`))
+	out, err := toolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m3"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) 
 		t.Fatalf("read = %q, want the raw attachment id kept out of what the model sees", out)
 	}
 
-	out, err = toolByName(t, src, "gmail_read_attachment").Execute(t.Context(),
+	out, err = toolByName(t, src, "mail_read_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("read_attachment: %v", err)
@@ -777,7 +777,7 @@ func TestGmailReadAttachmentRejectsUnknownFilename(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	_, err := toolByName(t, src, "gmail_read_attachment").Execute(t.Context(),
+	_, err := toolByName(t, src, "mail_read_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"m3","filename":"nope.pdf"}`))
 	if err == nil {
 		t.Fatal("expected an error for an unknown attachment filename")

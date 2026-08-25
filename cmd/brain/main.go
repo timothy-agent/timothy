@@ -406,6 +406,19 @@ func main() {
 		return names
 	}
 
+	// sensitiveAccountConnector resolves a unified aggregate tool call
+	// (e.g. mail_search) to the connector name its account actually
+	// routed to: the unified surface's counterpart to
+	// sensitiveConnectorNames' MCP-prefix matching, since an aggregate
+	// tool's own name carries no connector name to prefix-match against.
+	// conns nil (connector surface disabled) means every call resolves
+	// to "", never sensitive, same degrade as sensitiveConnectorNames.
+	sensitiveAccountConnector := func(_ context.Context, toolName string, args json.RawMessage) string {
+		if conns == nil {
+			return ""
+		}
+		return conns.AccountConnector(toolName, args)
+	}
 	// Single source of truth for "this turn/session executed a sensitive
 	// tool": a connector's own "sensitive" flag (set from the connectors
 	// settings UI) and the same sensitiveRoute resolver drive both the
@@ -416,8 +429,9 @@ func main() {
 	// resolving to "" at call time means the feature is currently off,
 	// same as before, but now editable at runtime from the settings UI.
 	sensitiveTools := &session.SensitiveTools{
-		ConnectorNames: sensitiveConnectorNames,
-		Route:          sensitiveRoute,
+		ConnectorNames:   sensitiveConnectorNames,
+		AccountConnector: sensitiveAccountConnector,
+		Route:            sensitiveRoute,
 	}
 	// Connector-level sensitivity's in-turn counterpart: a whole
 	// connector flagged sensitive must pin the SAME turn that calls its
@@ -427,7 +441,7 @@ func main() {
 	// session is sensitive, one turn too late for whatever content that
 	// tool just pulled into context. Wired here, after conns exists,
 	// rather than inside buildAgent (which runs before conns is built).
-	agent.SetForceRouteByConnector(sensitiveConnectorNames, sensitiveRoute)
+	agent.SetForceRouteByConnector(sensitiveConnectorNames, sensitiveRoute, sensitiveAccountConnector)
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
@@ -807,10 +821,12 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // missions.ConnectorReadsResolver: an agent's Tools allowlist
 // intersected with every built connector's ReadOnly-marked, non-MCP
 // tools (connectors.Manager.ReadOnlyTools already excludes MCP and
-// non-read-only tools). tools.ToolMatches is the same suffix rule
-// filterDefs/matchGrant use, so an allowlist entry authored before any
-// connector name is known (e.g. "gmail_search") still matches the
-// namespaced tool at resolve time.
+// non-read-only tools, and aggregates the rest into one unified tool
+// per capability, e.g. "mail_search" regardless of how many accounts
+// serve it. tools.ToolMatches is the same rule filterDefs/matchGrant
+// use: its exact-match branch is what actually fires here, since an
+// allowlist entry like "mail_search" IS the aggregated tool's own name,
+// with no connector-prefix suffix to resolve.
 func missionConnectorReadsResolver(agentReg *agents.Store, conns *connectors.Manager) missions.ConnectorReadsResolver {
 	return func(ctx context.Context, agentID string) []*tools.Tool {
 		a, ok := agentReg.ResolveByID(ctx, agentID)

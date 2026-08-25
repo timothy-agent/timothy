@@ -44,19 +44,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 -- listed tool schema rides every turn's prompt.
 --
 -- Tool names are the compiled-in builtins' exact registered names
--- (internal/brain/tools/builtin/*.go) plus connector tools by their
--- bare, connector-unprefixed name ("gmail_search", not "gmail_
--- gmail_search") — matchGrant's/filterDefs' suffix rule (D-036,
--- internal/brain/tools/permissions.go) matches these against the
--- runtime-namespaced tool name a connector actually registers, so
--- this works regardless of which connector serves gmail/calendar.
--- gmail_send is deliberately left off: sending mail is a deliberate
--- per-agent opt-in, not a default. Guarded both ways for is_default:
--- if any default agent already exists, this seed must not attempt to
--- set is_default=true.
+-- (internal/brain/tools/builtin/*.go) plus the unified connector
+-- capability names (connectors.Manager.Tools aggregates every
+-- connected account behind one name per capability, e.g. "mail_search"
+-- covers every connected google/microsoft mail account); an allowlist
+-- entry here is agent-authored before any connector even exists, and
+-- covers every current and future account serving that capability.
+-- Guarded both ways for is_default: if any default agent already
+-- exists, this seed must not attempt to set is_default=true.
 INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
 SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'default',
     '["research-brief", "deep-research", "coding", "email-research"]',
-    '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "list_missions", "get_mission", "push_mission_branch", "gmail_search", "gmail_read", "calendar_list_events"]',
+    '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "list_missions", "get_mission", "push_mission_branch", "followup_mission", "mail_search", "mail_read", "mail_read_attachment", "mail_send", "calendar_list_events", "calendar_create_event"]',
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');

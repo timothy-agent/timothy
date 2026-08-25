@@ -56,6 +56,11 @@ type ToolResultEvent struct {
 	Status     string `json:"status"`
 	Digest     string `json:"digest,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
+	// Args is the call's own input, brain-internal only (json:"-": never
+	// reaches the client wire); chat's sensitivity check needs it to
+	// resolve which account a unified aggregate tool call (e.g.
+	// mail_search) actually routed to (session.SensitiveTools.Matches).
+	Args json.RawMessage `json:"-"`
 }
 
 // PermissionRequestEvent tells the client the turn parked waiting for

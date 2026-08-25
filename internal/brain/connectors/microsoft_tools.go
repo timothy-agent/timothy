@@ -64,6 +64,12 @@ func (s *microsoftSource) Test(ctx context.Context) error {
 
 func (s *microsoftSource) Close() error { return nil }
 
+// AccountInfo reports this source's kind and connected account email,
+// same role as googleSource.AccountInfo.
+func (s *microsoftSource) AccountInfo() (kind, email string) {
+	return "microsoft", s.cfg.AccountEmail
+}
+
 // hasScope reports whether one of the connector's granted scopes is
 // exactly want. Graph scopes never share substrings the way Google's
 // drive.readonly/drive.file do, so an exact match is enough (unlike
@@ -206,12 +212,12 @@ func (s *microsoftSource) mailSearch() *tools.Tool {
 	return &tools.Tool{
 		Name:     "mail_search",
 		ReadOnly: true,
-		Description: `Search the connected Outlook mailbox. query matches subject, body,
-and sender across messages (Graph's $search). Returns up to
-max_results (default 10) messages as id, date, from, subject,
-bodyPreview. Use mail_read with an id for the full body.`,
+		Description: `Search a connected mail account. Returns up to max_results
+(default 10) messages as id, date, from, subject, snippet. Use
+mail_read with an id for the full body. See the tool description's
+Connected accounts list for this account's query syntax.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"query":{"type":"string","description":"search text"},
+			"query":{"type":"string","description":"search query"},
 			"max_results":{"type":"integer","minimum":1,"maximum":25}
 		},"required":["query"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -254,9 +260,9 @@ func (s *microsoftSource) mailRead() *tools.Tool {
 	return &tools.Tool{
 		Name:        "mail_read",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from mail_search). Returns headers and the plain-text body. Reports whether the message has attachments; use mail_read_attachment with the message id and an attachment name to read one.",
+		Description: "Read one email's full content by message id (from mail_search). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use mail_read_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"id":{"type":"string","description":"Outlook message id"}
+			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
@@ -327,15 +333,15 @@ func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 	return &tools.Tool{
 		Name:        "mail_read_attachment",
 		ReadOnly:    true,
-		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's name (both from mail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
+		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from mail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"message_id":{"type":"string","description":"Outlook message id"},
-			"name":{"type":"string","description":"Attachment name from mail_read's attachments list"}
-		},"required":["message_id","name"],"additionalProperties":false}`),
+			"message_id":{"type":"string","description":"message id"},
+			"filename":{"type":"string","description":"Attachment filename from mail_read's attachments list"}
+		},"required":["message_id","filename"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				MessageID string `json:"message_id"`
-				Name      string `json:"name"`
+				Filename  string `json:"filename"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", err
@@ -346,13 +352,13 @@ func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 			}
 			var attachmentID, contentType string
 			for _, a := range atts {
-				if a.Name == in.Name {
+				if a.Name == in.Filename {
 					attachmentID, contentType = a.ID, a.ContentType
 					break
 				}
 			}
 			if attachmentID == "" {
-				return "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", in.Name)
+				return "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", in.Filename)
 			}
 			var full outlookAttachment
 			if err := s.api(ctx, http.MethodGet,
@@ -364,7 +370,7 @@ func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 			if err != nil {
 				return "", fmt.Errorf("decode attachment: %w", err)
 			}
-			return markitdown.Convert(ctx, s.m.Client, s.m.MarkItDownURL, in.Name, contentType, raw)
+			return markitdown.Convert(ctx, s.m.Client, s.m.MarkItDownURL, in.Filename, contentType, raw)
 		},
 	}
 }
@@ -372,38 +378,33 @@ func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 func (s *microsoftSource) mailSend() *tools.Tool {
 	return &tools.Tool{
 		Name:        "mail_send",
-		Description: "Send an email from the connected Outlook account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
+		Description: "Send an email from a connected mail account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"to":{"type":"string","description":"recipient address(es), comma-separated"},
 			"subject":{"type":"string"},
-			"body":{"type":"string","description":"plain-text message body"}
+			"body":{"type":"string","description":"plain-text message body"},
+			"cc":{"type":"string","description":"optional cc address(es), comma-separated"}
 		},"required":["to","subject","body"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
-				To, Subject, Body string
+				To, Subject, Body, CC string
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", err
 			}
-			var toRecipients []map[string]any
-			for _, addr := range strings.Split(in.To, ",") {
-				addr = strings.TrimSpace(addr)
-				if addr == "" {
-					continue
-				}
-				toRecipients = append(toRecipients, map[string]any{
-					"emailAddress": map[string]string{"address": addr},
-				})
+			message := map[string]any{
+				"subject": in.Subject,
+				"body": map[string]string{
+					"contentType": "Text",
+					"content":     in.Body,
+				},
+				"toRecipients": outlookRecipientList(in.To),
+			}
+			if cc := outlookRecipientList(in.CC); cc != nil {
+				message["ccRecipients"] = cc
 			}
 			payload := map[string]any{
-				"message": map[string]any{
-					"subject": in.Subject,
-					"body": map[string]string{
-						"contentType": "Text",
-						"content":     in.Body,
-					},
-					"toRecipients": toRecipients,
-				},
+				"message":         message,
 				"saveToSentItems": true,
 			}
 			if err := s.api(ctx, http.MethodPost, s.m.GraphBase+"/me/sendMail", payload, nil); err != nil {
@@ -412,6 +413,23 @@ func (s *microsoftSource) mailSend() *tools.Tool {
 			return "sent", nil
 		},
 	}
+}
+
+// outlookRecipientList splits a comma-separated address list into
+// Graph's recipient shape; empty input yields nil so an omitted cc
+// list is left off the payload's ccRecipients rather than sent empty.
+func outlookRecipientList(addrs string) []map[string]any {
+	var out []map[string]any
+	for _, addr := range strings.Split(addrs, ",") {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"emailAddress": map[string]string{"address": addr},
+		})
+	}
+	return out
 }
 
 // --- Calendar ---
@@ -438,30 +456,36 @@ func (s *microsoftSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
 		Name:        "calendar_list_events",
 		ReadOnly:    true,
-		Description: "List events from the connected Outlook calendar in a time window. Omit start_time/end_time for the default window — the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, subject, location, and organizer per event.",
+		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"start_time":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
-			"end_time":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"}
+			"time_min":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
+			"time_max":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
+			"max_results":{"type":"integer","minimum":1,"maximum":50}
 		},"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
-				StartTime string `json:"start_time"`
-				EndTime   string `json:"end_time"`
+				TimeMin    string `json:"time_min"`
+				TimeMax    string `json:"time_max"`
+				MaxResults int    `json:"max_results"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", err
 			}
-			if in.StartTime == "" {
-				in.StartTime = time.Now().Format("2006-01-02T15:04:05Z07:00")
+			if in.TimeMin == "" {
+				in.TimeMin = time.Now().Format("2006-01-02T15:04:05Z07:00")
 			}
-			if in.EndTime == "" {
-				in.EndTime = time.Now().AddDate(0, 0, 7).Format("2006-01-02T15:04:05Z07:00")
+			if in.TimeMax == "" {
+				in.TimeMax = time.Now().AddDate(0, 0, 7).Format("2006-01-02T15:04:05Z07:00")
+			}
+			if in.MaxResults <= 0 {
+				in.MaxResults = 20
 			}
 			q := url.Values{
-				"startDateTime": {in.StartTime},
-				"endDateTime":   {in.EndTime},
+				"startDateTime": {in.TimeMin},
+				"endDateTime":   {in.TimeMax},
 				"$orderby":      {"start/dateTime"},
 				"$select":       {"subject,start,end,location,organizer"},
+				"$top":          {fmt.Sprint(in.MaxResults)},
 			}
 			var res struct {
 				Value []outlookEvent `json:"value"`

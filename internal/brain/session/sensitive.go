@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 )
 
@@ -14,26 +15,47 @@ import (
 // same floor the in-turn steps already honor and ship raw sensitive
 // content (e.g. email text) to a cloud model. ConnectorNames is the
 // user-controlled input (a connector's own "sensitive" flag, set from
-// the connectors settings UI): connectors are namespaced
-// "<connector-name>_<tool-name>" (connectors.Manager.Tools), so a
-// connector's own name is the PREFIX of every tool it serves. Both
-// ConnectorNames and Route are funcs, not static values, so toggling a
-// connector's sensitive flag (or the configured route) applies to the
-// next side-call without a restart; an empty Route result means the
-// feature is currently off (callers keep their own default route).
+// the connectors settings UI). Two ways a tool call can be covered:
+// suffix+"_" prefix against an MCP-style namespaced name
+// ("<connector-name>_<tool-name>", connectors.Manager.Tools' MCP
+// passthrough), or, for a unified aggregate tool (connectors.Manager's
+// mail_search etc., which carries no connector name in its own name),
+// AccountConnector resolving the call's actual account to a sensitive
+// connector. AccountConnector is nil-safe (not every caller wires it,
+// and non-connector tools never resolve). All three funcs re-resolve on
+// every call, not cached, so toggling a connector's sensitive flag (or
+// the configured route) applies to the next side-call without a
+// restart; an empty Route result means the feature is currently off
+// (callers keep their own default route).
 type SensitiveTools struct {
-	ConnectorNames func(context.Context) []string
-	Route          func(context.Context) string
+	ConnectorNames   func(context.Context) []string
+	AccountConnector func(ctx context.Context, toolName string, args json.RawMessage) string
+	Route            func(context.Context) string
 }
 
-// Matches reports whether toolName is covered: suffix+"_" prefix (a
-// whole connector's namespace) against ConnectorNames.
-func (s *SensitiveTools) Matches(ctx context.Context, toolName string) bool {
+// Matches reports whether a call to toolName (with args, for unified
+// aggregate tools' account resolution) is covered: suffix+"_" prefix
+// against ConnectorNames, or AccountConnector resolving the call to a
+// name in ConnectorNames.
+func (s *SensitiveTools) Matches(ctx context.Context, toolName string, args json.RawMessage) bool {
 	if s == nil || s.ConnectorNames == nil {
 		return false
 	}
-	for _, name := range s.ConnectorNames(ctx) {
+	names := s.ConnectorNames(ctx)
+	for _, name := range names {
 		if strings.HasPrefix(toolName, name+"_") {
+			return true
+		}
+	}
+	if s.AccountConnector == nil {
+		return false
+	}
+	connector := s.AccountConnector(ctx, toolName, args)
+	if connector == "" {
+		return false
+	}
+	for _, name := range names {
+		if name == connector {
 			return true
 		}
 	}
@@ -60,7 +82,7 @@ func (s *SensitiveTools) SessionSensitive(ctx context.Context, events []Event) b
 		if decode(ev, &te) != nil {
 			continue
 		}
-		if s.Matches(ctx, te.Name) {
+		if s.Matches(ctx, te.Name, json.RawMessage(te.Args)) {
 			return true
 		}
 	}

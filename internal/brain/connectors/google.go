@@ -24,6 +24,12 @@ type GoogleConfig struct {
 	ClientID        string   `json:"client_id"`
 	ClientSecretRef string   `json:"client_secret_ref"`
 	Scopes          []string `json:"scopes"`
+	// AccountEmail is the connected account's email, resolved and
+	// persisted once at connect time (see HandleCallback), read back
+	// by Manager's aggregation for account matching/descriptions
+	// without an API call per Tools(). Empty until resolved or if
+	// resolution failed; that never fails the connect.
+	AccountEmail string `json:"account_email,omitempty"`
 }
 
 // tokenBundle is what the OAuth dance stores at the connector's
@@ -205,7 +211,45 @@ func (g *Google) HandleCallback(ctx context.Context, state, code string) (string
 	if err := g.storeBundle(ctx, c.CredentialRef, bundle); err != nil {
 		return "", err
 	}
+	g.persistAccountEmail(ctx, c, cfg)
 	return c.Name, nil
+}
+
+// rowPatcher is the optional Rows capability that lets HandleCallback
+// persist the resolved account email into config.account_email: a
+// bare rowSource (as tests pass) has no Patch, so persistence is
+// skipped there rather than required.
+type rowPatcher interface {
+	Patch(ctx context.Context, id string, patch Patch) error
+}
+
+// persistAccountEmail resolves the just-connected account's email and
+// writes it to config.account_email so Manager's aggregation can build
+// account-matching and descriptions without an API call per Tools().
+// Best-effort: identity resolution or the patch failing only logs;
+// the connect itself already succeeded, and the email simply stays
+// unknown until the next successful resolution (e.g. a later Test).
+func (g *Google) persistAccountEmail(ctx context.Context, c Connector, cfg GoogleConfig) {
+	patcher, ok := g.Rows.(rowPatcher)
+	if !ok {
+		return
+	}
+	src := &googleSource{g: g, cfg: cfg, ref: c.CredentialRef}
+	identity, err := src.Identity(ctx)
+	if err != nil || identity.Email == "" {
+		g.Log.Warn("could not resolve google account email at connect", "connector", c.Name, "error", err)
+		return
+	}
+	cfg.AccountEmail = identity.Email
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		g.Log.Warn("could not encode google config with account email", "connector", c.Name, "error", err)
+		return
+	}
+	rawMsg := json.RawMessage(raw)
+	if err := patcher.Patch(ctx, c.ID, Patch{Config: &rawMsg}); err != nil {
+		g.Log.Warn("could not persist google account email", "connector", c.Name, "error", err)
+	}
 }
 
 // exchange posts to the token endpoint with client credentials and

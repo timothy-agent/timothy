@@ -38,22 +38,26 @@ type Connector struct {
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
-	// Sensitive marks the WHOLE connector as sensitive: every tool it
-	// serves is namespaced "<name>_<tool>" (see Manager.Tools), so the
-	// connector's own name is a PREFIX of every tool it serves —
-	// session.SensitiveTools.Matches checks this prefix in addition to
-	// its existing per-tool suffix rule (D-036), catching all of a
-	// sensitive connector's tools via its name alone.
+	// Sensitive marks the WHOLE connector as sensitive: an MCP
+	// connector's tools are namespaced "<name>_<tool>" (see
+	// Manager.Tools), so its own name is a PREFIX of every tool it
+	// serves, and session.SensitiveTools.Matches checks this prefix. A
+	// non-MCP connector's tools instead aggregate into unified,
+	// un-namespaced tools (mail_search etc.); Matches catches those via
+	// AccountConnector resolving a call's account back to this
+	// connector's name.
 	Sensitive bool `json:"sensitive"`
 }
 
-// namePattern keeps connector names usable as tool-name prefixes
-// (tools surface as "<name>_<tool>"): lowercase slug, no spaces.
+// namePattern keeps connector names usable both as MCP tool-name
+// prefixes ("<name>_<tool>") and as a unified aggregate tool's
+// "account" argument value (see Manager.aggregateTools): lowercase
+// slug, no spaces.
 var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
 
 func validate(c Connector) error {
 	if !namePattern.MatchString(c.Name) {
-		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _), it prefixes the connector's tool names")
+		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _), it prefixes MCP tool names and is used as an account argument")
 	}
 	if !kinds[c.Kind] {
 		return fmt.Errorf("unknown kind %q", c.Kind)

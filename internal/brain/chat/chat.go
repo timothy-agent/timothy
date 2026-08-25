@@ -1293,7 +1293,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 				return
 			}
 			ranTool = true
-			if s.sensitive.Matches(reqCtx, ev.ToolResult.Name) {
+			if s.sensitive.Matches(reqCtx, ev.ToolResult.Name, ev.ToolResult.Args) {
 				turnSensitive = true
 			}
 		}

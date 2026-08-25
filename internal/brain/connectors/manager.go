@@ -2,9 +2,12 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,57 +145,349 @@ func (m *Manager) Reload(ctx context.Context) error {
 // toolNameSanitizer strips characters providers reject in tool names.
 var toolNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
-// Tools returns every built connector's tools, each renamed to
-// "<connector>_<tool>" so names never collide across connectors or
-// with the builtin set. The clones share the source's Execute.
+// Tools returns the agent's whole non-MCP tool surface aggregated one
+// tool per raw name (see aggregateTools), plus every MCP source's
+// tools individually namespaced "<connector>_<tool>" as before: MCP
+// servers are external, their names can't be unified.
 func (m *Manager) Tools() []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []*tools.Tool
+	out := aggregateTools(m.sources, false)
 	for name, src := range m.sources {
-		for _, t := range src.Tools() {
-			full := toolNameSanitizer.ReplaceAllString(name+"_"+t.Name, "_")
-			if len(full) > 128 {
-				full = full[:128]
-			}
-			clone := *t
-			clone.Name = full
-			out = append(out, &clone)
+		mcp, isMCP := src.(*mcpSource)
+		if !isMCP {
+			continue
 		}
+		out = append(out, namespacedTools(name, mcp.Tools())...)
 	}
 	return out
 }
 
-// ReadOnlyTools returns every built connector's ReadOnly-marked tools,
-// namespaced exactly like Tools — for mission turns, which must see
-// connector reads (gmail search, calendar list) despite BuiltinsOnly
-// but never connector writes (see missions.nativeRunner's connector
-// reads resolver). MCP sources are excluded unconditionally, marker or
-// not: a remote MCP server's tool can change behavior between builds,
-// and nothing here can verify a "read-only" claim actually holds —
-// unlike google's tool constructors, which are Timothy's own code.
+// ReadOnlyTools returns the aggregated ReadOnly-marked non-MCP tool
+// surface, for mission turns, which must see connector reads (mail
+// search, calendar list) despite BuiltinsOnly but never connector
+// writes (see missions.nativeRunner's connector reads resolver). MCP
+// sources are excluded unconditionally, marker or not: a remote MCP
+// server's tool can change behavior between builds, and nothing here
+// can verify a "read-only" claim actually holds, unlike google/
+// microsoft's tool constructors, which are Timothy's own code.
 func (m *Manager) ReadOnlyTools() []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []*tools.Tool
+	return aggregateTools(m.sources, true)
+}
+
+// AccountConnector resolves which connector name a unified tool call
+// (toolName plus its args) would actually route to: the same account
+// resolution aggregateTool's Execute applies, exposed standalone so
+// callers that only need to know WHICH connector a call touches (e.g.
+// connector-level sensitivity, session.SensitiveTools) don't have to
+// re-run the call to find out. Returns "" when toolName isn't a
+// currently aggregated non-MCP tool, or when args' account doesn't
+// resolve (missing-but-required, or unknown); callers fall back to
+// their own default in that case, same as any non-connector tool call.
+func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	byName := map[string][]toolAccount{}
 	for name, src := range m.sources {
 		if _, isMCP := src.(*mcpSource); isMCP {
 			continue
 		}
+		var kind, email string
+		if info, ok := src.(accountInfo); ok {
+			kind, email = info.AccountInfo()
+		}
 		for _, t := range src.Tools() {
-			if !t.ReadOnly {
+			if t.Name != toolName {
 				continue
 			}
-			full := toolNameSanitizer.ReplaceAllString(name+"_"+t.Name, "_")
-			if len(full) > 128 {
-				full = full[:128]
-			}
-			clone := *t
-			clone.Name = full
-			out = append(out, &clone)
+			byName[t.Name] = append(byName[t.Name], toolAccount{connector: name, kind: kind, email: email, tool: t})
 		}
 	}
+	accounts, ok := byName[toolName]
+	if !ok {
+		return ""
+	}
+	acc, _, err := resolveAccount(accounts, args)
+	if err != nil {
+		return ""
+	}
+	return acc.connector
+}
+
+// namespacedTools clones ts renamed "<name>_<tool>", sanitized and
+// length-capped: MCP's tool-naming scheme, unchanged by unification.
+func namespacedTools(name string, ts []*tools.Tool) []*tools.Tool {
+	out := make([]*tools.Tool, 0, len(ts))
+	for _, t := range ts {
+		full := toolNameSanitizer.ReplaceAllString(name+"_"+t.Name, "_")
+		if len(full) > 128 {
+			full = full[:128]
+		}
+		clone := *t
+		clone.Name = full
+		out = append(out, &clone)
+	}
 	return out
+}
+
+// accountInfo is the optional Source capability that reports the
+// source's kind and connected account email (google-, microsoft-kind
+// today): the input aggregateTools groups tools around. A source that
+// doesn't implement it (mcp) is never aggregated; Tools/ReadOnlyTools
+// handle mcp separately.
+type accountInfo interface {
+	AccountInfo() (kind, email string)
+}
+
+// toolAccount is one accountInfo-capable source's contribution to an
+// aggregated tool: its connector name/kind/email (for account matching
+// and the description's connected-accounts list) plus its own
+// (un-namespaced) tool.
+type toolAccount struct {
+	connector string
+	kind      string
+	email     string
+	tool      *tools.Tool
+}
+
+// aggregateTools groups every non-MCP source's tools by their RAW
+// (un-namespaced) name and returns one aggregate tool per name, giving
+// the unified mail surface: "mail_search" once, regardless of how many
+// accounts or connector kinds serve it. A future connector kind joins
+// this surface automatically just by giving its tools the same raw
+// names; accountInfo is read opportunistically for kind/email metadata
+// (empty when a source doesn't implement it) and never gates whether a
+// source's tools aggregate. readOnlyOnly mirrors the old ReadOnlyTools'
+// filter: a WHOLE aggregate is dropped unless every contributing
+// account's tool is ReadOnly. Contributing accounts on one capability
+// should always agree (see aggregateTool's ReadOnly), so this only ever
+// matters if that invariant is somehow violated, in which case the
+// safer behavior is to withhold the capability entirely rather than
+// silently narrow it to a subset of accounts.
+func aggregateTools(sources map[string]Source, readOnlyOnly bool) []*tools.Tool {
+	byName := map[string][]toolAccount{}
+	var order []string
+	for name, src := range sources {
+		if _, isMCP := src.(*mcpSource); isMCP {
+			continue
+		}
+		var kind, email string
+		if info, ok := src.(accountInfo); ok {
+			kind, email = info.AccountInfo()
+		}
+		for _, t := range src.Tools() {
+			if _, seen := byName[t.Name]; !seen {
+				order = append(order, t.Name)
+			}
+			byName[t.Name] = append(byName[t.Name], toolAccount{connector: name, kind: kind, email: email, tool: t})
+		}
+	}
+	sort.Strings(order)
+	out := make([]*tools.Tool, 0, len(order))
+	for _, name := range order {
+		accounts := byName[name]
+		sort.Slice(accounts, func(i, j int) bool { return accounts[i].connector < accounts[j].connector })
+		agg := aggregateTool(name, accounts)
+		if readOnlyOnly && !agg.ReadOnly {
+			continue
+		}
+		out = append(out, agg)
+	}
+	return out
+}
+
+// aggregateTool builds one aggregated tool from every account serving
+// raw name: the model sees exactly this shape regardless of which or
+// how many connectors/kinds contribute.
+func aggregateTool(name string, accounts []toolAccount) *tools.Tool {
+	readOnly := true
+	for _, a := range accounts {
+		if !a.tool.ReadOnly {
+			readOnly = false
+			break
+		}
+	}
+	return &tools.Tool{
+		Name:        name,
+		ReadOnly:    readOnly,
+		Description: aggregateDescription(accounts),
+		InputSchema: injectAccountProperty(accounts[0].tool.InputSchema, len(accounts) > 1),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			acc, stripped, err := resolveAccount(accounts, args)
+			if err != nil {
+				return "", err
+			}
+			return acc.tool.Execute(ctx, stripped)
+		},
+	}
+}
+
+// aggregateDescription is the shared tool's own description (every
+// account's copy is schema-identical by construction, see
+// TestGoogleMicrosoftSharedToolSchemasMatch) plus a connected-accounts
+// list naming which account argument reaches which connector, its
+// kind, its email when known, and, for mail_search specifically, the
+// provider's query syntax, since that's where google and microsoft
+// diverge and the shared schema has nowhere else to say so.
+func aggregateDescription(accounts []toolAccount) string {
+	var b strings.Builder
+	b.WriteString(accounts[0].tool.Description)
+	b.WriteString("\n\nConnected accounts:\n")
+	for _, a := range accounts {
+		fmt.Fprintf(&b, "- %s", a.connector)
+		if a.email != "" {
+			fmt.Fprintf(&b, " (%s)", a.email)
+		}
+		fmt.Fprintf(&b, ": %s\n", a.kind)
+	}
+	if len(accounts) == 1 {
+		fmt.Fprintf(&b, "\naccount is optional here, omit it to use %s.", accounts[0].connector)
+	} else {
+		b.WriteString("\naccount is required: pass one of the connector names or emails above.")
+	}
+	if accounts[0].tool.Name == "mail_search" {
+		b.WriteString(mailSearchKindGuidance(accounts))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// mailSearchGuidanceByKind holds mail_search's per-provider query
+// syntax guidance, rendered by mailSearchKindGuidance only for kinds
+// actually contributing an account. Keyed by accountInfo's kind
+// string. The google entry keeps the zero-result broaden-retry
+// heuristics: they are valuable operational guidance, scoped here to
+// the accounts they actually apply to instead of living in the base,
+// provider-neutral tool description.
+var mailSearchGuidanceByKind = map[string]string{
+	"google": `
+For google accounts: query uses Gmail search syntax (from:, subject:,
+is:unread, newer_than:7d, after:YYYY/MM/DD, ...).
+
+A zero-result search does NOT mean the email doesn't exist: Gmail's
+from: matching is stricter than it looks, and a query combining from:
+with keyword/subject terms narrows twice, compounding a near-miss into
+zero. If a targeted search returns nothing, retry BROADER before
+concluding the email isn't there:
+1. Drop keyword/subject filters, keep only from: and a date range.
+2. If from: with a bare domain (e.g. from:example.com) misses, try
+   the FULL sender address you're looking for, or a shorter substring
+   of the domain, or just the company name as a plain keyword with no
+   from: operator at all.
+3. Widen the date range (after:/before:/newer_than:), a mistaken
+   assumption about when an email arrived is a common miss.
+4. Try in:anywhere if you suspect it's archived or in another label.`,
+	"microsoft": `
+For microsoft accounts: query matches subject, body, and sender across
+messages (Graph's $search); plain keywords, no operator syntax.`,
+}
+
+// mailSearchKindGuidance renders one guidance block per KIND actually
+// contributing an account to accounts, in a fixed order (google, then
+// microsoft) so the description is stable regardless of map iteration
+// or account sort order.
+func mailSearchKindGuidance(accounts []toolAccount) string {
+	seen := map[string]bool{}
+	for _, a := range accounts {
+		seen[a.kind] = true
+	}
+	var b strings.Builder
+	for _, kind := range []string{"google", "microsoft"} {
+		if !seen[kind] {
+			continue
+		}
+		b.WriteString("\n")
+		b.WriteString(mailSearchGuidanceByKind[kind])
+	}
+	return b.String()
+}
+
+// injectAccountProperty adds an "account" string property to base (a
+// tool's InputSchema, always {"type":"object","properties":{...},
+// "required":[...],"additionalProperties":false} by construction, see
+// tools.Tool's builtin/connector constructors); required only when
+// several accounts serve the capability, since a lone account has an
+// unambiguous default.
+func injectAccountProperty(base json.RawMessage, accountRequired bool) json.RawMessage {
+	var schema map[string]any
+	// The base schema is always valid JSON built by our own tool
+	// constructors; a decode failure here would be a programming error,
+	// not a runtime condition to recover from gracefully. Fall back to
+	// returning base unmodified rather than panicking.
+	if err := json.Unmarshal(base, &schema); err != nil {
+		return base
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if props == nil {
+		props = map[string]any{}
+	}
+	props["account"] = map[string]any{
+		"type":        "string",
+		"description": "which connected account to use: a connector name or its email (see the tool description's Connected accounts list)",
+	}
+	schema["properties"] = props
+	if accountRequired {
+		req, _ := schema["required"].([]any)
+		schema["required"] = append(req, "account")
+	}
+	out, err := json.Marshal(schema)
+	if err != nil {
+		return base
+	}
+	return out
+}
+
+// resolveAccount picks which account's tool serves one call: args'
+// "account" (connector name or email, case-insensitive) when several
+// accounts are available, or the sole account by default when there's
+// only one. Returns args with "account" stripped, since the underlying
+// tool's own schema never declared that property. An unknown or
+// missing (when required) account errors listing the valid names.
+func resolveAccount(accounts []toolAccount, args json.RawMessage) (toolAccount, json.RawMessage, error) {
+	var in map[string]json.RawMessage
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &in); err != nil {
+			return toolAccount{}, nil, err
+		}
+	}
+	var account string
+	if raw, ok := in["account"]; ok {
+		if err := json.Unmarshal(raw, &account); err != nil {
+			return toolAccount{}, nil, fmt.Errorf("account must be a string")
+		}
+		delete(in, "account")
+	}
+	stripped, err := json.Marshal(in)
+	if err != nil {
+		return toolAccount{}, nil, err
+	}
+	if account == "" {
+		if len(accounts) == 1 {
+			return accounts[0], stripped, nil
+		}
+		return toolAccount{}, nil, fmt.Errorf("account is required (%d connected accounts): %s", len(accounts), accountNames(accounts))
+	}
+	for _, a := range accounts {
+		if strings.EqualFold(a.connector, account) || (a.email != "" && strings.EqualFold(a.email, account)) {
+			return a, stripped, nil
+		}
+	}
+	return toolAccount{}, nil, fmt.Errorf("unknown account %q; valid accounts: %s", account, accountNames(accounts))
+}
+
+// accountNames renders every account's connector name (plus email when
+// known) for an error message's option list.
+func accountNames(accounts []toolAccount) string {
+	names := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		if a.email != "" {
+			names = append(names, fmt.Sprintf("%s (%s)", a.connector, a.email))
+		} else {
+			names = append(names, a.connector)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // SetOnReload registers a hook that fires after every successful
@@ -232,12 +527,14 @@ func (m *Manager) Names() []string {
 }
 
 // SensitiveNames returns the names of every enabled connector marked
-// sensitive — the sole input to session.SensitiveTools.ConnectorNames
-// (D-036): a connector named "gmail" being sensitive means "gmail"
-// joins the set, and Matches' namespace-prefix check catches
-// gmail_search/gmail_read/etc. at once. Reads rows fresh each call (no
-// restart needed for a settings toggle to take effect), same reasoning
-// as sensitiveRoute.
+// sensitive: the input to session.SensitiveTools.ConnectorNames
+// (D-036): a connector named "personal-gmail" being sensitive means
+// "personal-gmail" joins the set, caught either via Matches' namespace-
+// prefix check (an MCP tool actually namespaced that way) or via
+// AccountConnector resolving a unified aggregate call's account (e.g.
+// mail_search) to that same connector name. Reads rows fresh each call
+// (no restart needed for a settings toggle to take effect), same
+// reasoning as sensitiveRoute.
 func (m *Manager) SensitiveNames(ctx context.Context) ([]string, error) {
 	rows, err := m.rows.List(ctx)
 	if err != nil {

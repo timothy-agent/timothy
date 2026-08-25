@@ -34,9 +34,20 @@ type fakeSource struct {
 	tested  bool
 }
 
-func (f *fakeSource) Tools() []*tools.Tool        { return f.tools }
-func (f *fakeSource) Test(context.Context) error  { f.tested = true; return f.testErr }
-func (f *fakeSource) Close() error                { f.closed = true; return nil }
+func (f *fakeSource) Tools() []*tools.Tool       { return f.tools }
+func (f *fakeSource) Test(context.Context) error { f.tested = true; return f.testErr }
+func (f *fakeSource) Close() error               { f.closed = true; return nil }
+
+// fakeAccountSource is a fakeSource that also implements accountInfo:
+// google/microsoft's role in aggregation tests, without the real
+// OAuth/API machinery.
+type fakeAccountSource struct {
+	fakeSource
+	kind  string
+	email string
+}
+
+func (f *fakeAccountSource) AccountInfo() (string, string) { return f.kind, f.email }
 
 func testManager(rows rowSource) *Manager {
 	return &Manager{
@@ -100,6 +111,7 @@ func TestReloadSkipsFailedBuildAndClosesOld(t *testing.T) {
 // filter: only ReadOnly-marked tools, and never from an MCP source —
 // even one whose tool happens to carry ReadOnly, since a remote MCP
 // server's claim can't be verified (see ReadOnlyTools' doc comment).
+// Non-MCP tools aggregate un-namespaced (see aggregateTools).
 func TestReadOnlyToolsExcludesWritesAndMCP(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
@@ -117,8 +129,8 @@ func TestReadOnlyToolsExcludesWritesAndMCP(t *testing.T) {
 	for _, t := range m.ReadOnlyTools() {
 		got[t.Name] = true
 	}
-	want := map[string]bool{"gmail_search": true}
-	if len(got) != len(want) || !got["gmail_search"] {
+	want := map[string]bool{"search": true}
+	if len(got) != len(want) || !got["search"] {
 		t.Fatalf("ReadOnlyTools = %v, want %v", got, want)
 	}
 }

@@ -248,11 +248,15 @@ func TestMCPStatusErrorNeverLeaksRawJSON(t *testing.T) {
 	}
 }
 
-func TestManagerNamespacesTools(t *testing.T) {
+// TestManagerNamespacesMCPTools pins that only MCP sources still get
+// the "<connector>_<tool>" prefix (external names can't be unified);
+// a real *mcpSource is used since Manager's MCP exclusion in
+// aggregateTools type-asserts against it specifically.
+func TestManagerNamespacesMCPTools(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
-		"github": &fakeSource{tools: []*tools.Tool{
+		"github": &mcpSource{name: "github", toolList: []*tools.Tool{
 			{Name: "create_issue"},
 			{Name: "search code"}, // space sanitized
 		}},

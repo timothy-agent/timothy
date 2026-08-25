@@ -66,6 +66,14 @@ func (s *googleSource) Test(ctx context.Context) error {
 
 func (s *googleSource) Close() error { return nil }
 
+// AccountInfo reports this source's kind and connected account email
+// (the accountInfo capability, see manager.go's aggregation); email is
+// whatever HandleCallback persisted at connect time, empty if
+// resolution failed or the connector predates it.
+func (s *googleSource) AccountInfo() (kind, email string) {
+	return "google", s.cfg.AccountEmail
+}
+
 // Identity resolves the connected account's email — the panel's
 // evidence a working credential was configured, same role as
 // githubSource.Identity and microsoftSource.Identity. Reuses
@@ -285,28 +293,14 @@ func htmlPart(parts []gmailPart) []byte {
 
 func (s *googleSource) gmailSearch() *tools.Tool {
 	return &tools.Tool{
-		Name:     "gmail_search",
+		Name:     "mail_search",
 		ReadOnly: true,
-		Description: `Search the connected Gmail account. query uses Gmail search syntax
-(from:, subject:, is:unread, newer_than:7d, after:YYYY/MM/DD, ...).
-Returns up to max_results (default 10) messages as id, date, from,
-subject, snippet. Use gmail_read with an id for the full body.
-
-A zero-result search does NOT mean the email doesn't exist — Gmail's
-from: matching is stricter than it looks, and a query combining from:
-with keyword/subject terms narrows twice, compounding a near-miss into
-zero. If a targeted search returns nothing, retry BROADER before
-concluding the email isn't there:
-1. Drop keyword/subject filters, keep only from: and a date range.
-2. If from: with a bare domain (e.g. from:example.com) misses, try
-   the FULL sender address you're looking for, or a shorter substring
-   of the domain, or just the company name as a plain keyword with no
-   from: operator at all.
-3. Widen the date range (after:/before:/newer_than:) — a mistaken
-   assumption about when an email arrived is a common miss.
-4. Try in:anywhere if you suspect it's archived or in another label.`,
+		Description: `Search a connected mail account. Returns up to max_results
+(default 10) messages as id, date, from, subject, snippet. Use
+mail_read with an id for the full body. See the tool description's
+Connected accounts list for this account's query syntax.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"query":{"type":"string","description":"Gmail search query"},
+			"query":{"type":"string","description":"search query"},
 			"max_results":{"type":"integer","minimum":1,"maximum":25}
 		},"required":["query"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -392,11 +386,11 @@ func findAttachment(parts []gmailPart, filename string) (string, bool) {
 
 func (s *googleSource) gmailRead() *tools.Tool {
 	return &tools.Tool{
-		Name:        "gmail_read",
+		Name:        "mail_read",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from gmail_search). Returns headers and the body — plain text when available, otherwise the HTML body rendered to readable text (common for booking confirmations and receipts) — plus a list of attachment filenames, if any. Use gmail_read_attachment with the message id and a filename from that list to read an attachment's content.",
+		Description: "Read one email's full content by message id (from mail_search). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use mail_read_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"id":{"type":"string","description":"Gmail message id"}
+			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
@@ -439,12 +433,12 @@ func (s *googleSource) gmailRead() *tools.Tool {
 
 func (s *googleSource) gmailReadAttachment() *tools.Tool {
 	return &tools.Tool{
-		Name:        "gmail_read_attachment",
+		Name:        "mail_read_attachment",
 		ReadOnly:    true,
-		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from gmail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
+		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from mail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"message_id":{"type":"string","description":"Gmail message id"},
-			"filename":{"type":"string","description":"Attachment filename from gmail_read's attachments list"}
+			"message_id":{"type":"string","description":"message id"},
+			"filename":{"type":"string","description":"Attachment filename from mail_read's attachments list"}
 		},"required":["message_id","filename"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
@@ -465,7 +459,7 @@ func (s *googleSource) gmailReadAttachment() *tools.Tool {
 			}
 			attachmentID, ok := findAttachment(msg.Payload.Parts, in.Filename)
 			if !ok {
-				return "", fmt.Errorf("no attachment named %q on this message; check gmail_read's attachments list", in.Filename)
+				return "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", in.Filename)
 			}
 			var att gmailBody
 			if err := s.api(ctx, http.MethodGet,
@@ -484,8 +478,8 @@ func (s *googleSource) gmailReadAttachment() *tools.Tool {
 
 func (s *googleSource) gmailSend() *tools.Tool {
 	return &tools.Tool{
-		Name:        "gmail_send",
-		Description: "Send an email from the connected Gmail account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
+		Name:        "mail_send",
+		Description: "Send an email from a connected mail account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"to":{"type":"string","description":"recipient address(es), comma-separated"},
 			"subject":{"type":"string"},
@@ -525,7 +519,7 @@ func (s *googleSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
 		Name:        "calendar_list_events",
 		ReadOnly:    true,
-		Description: "List events from the connected Google Calendar (primary calendar). Omit time_min/time_max for the default window — the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, summary, and location per event.",
+		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"time_min":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
 			"time_max":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},

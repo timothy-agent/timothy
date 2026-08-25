@@ -23,6 +23,10 @@ type MicrosoftConfig struct {
 	ClientID        string   `json:"client_id"`
 	ClientSecretRef string   `json:"client_secret_ref"`
 	Scopes          []string `json:"scopes"`
+	// AccountEmail is the connected account's email, resolved and
+	// persisted once at connect time (see HandleCallback), same role as
+	// GoogleConfig.AccountEmail.
+	AccountEmail string `json:"account_email,omitempty"`
 }
 
 const (
@@ -175,7 +179,36 @@ func (m *Microsoft) HandleCallback(ctx context.Context, state, code string) (str
 	if err := m.storeBundle(ctx, c.CredentialRef, bundle); err != nil {
 		return "", err
 	}
+	m.persistAccountEmail(ctx, c, cfg)
 	return c.Name, nil
+}
+
+// persistAccountEmail resolves the just-connected account's email and
+// writes it to config.account_email, same role as
+// Google.persistAccountEmail, same best-effort semantics (identity
+// resolution or the patch failing only logs; the connect already
+// succeeded).
+func (m *Microsoft) persistAccountEmail(ctx context.Context, c Connector, cfg MicrosoftConfig) {
+	patcher, ok := m.Rows.(rowPatcher)
+	if !ok {
+		return
+	}
+	src := &microsoftSource{m: m, cfg: cfg, ref: c.CredentialRef}
+	identity, err := src.Identity(ctx)
+	if err != nil || identity.Email == "" {
+		m.Log.Warn("could not resolve microsoft account email at connect", "connector", c.Name, "error", err)
+		return
+	}
+	cfg.AccountEmail = identity.Email
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		m.Log.Warn("could not encode microsoft config with account email", "connector", c.Name, "error", err)
+		return
+	}
+	rawMsg := json.RawMessage(raw)
+	if err := patcher.Patch(ctx, c.ID, Patch{Config: &rawMsg}); err != nil {
+		m.Log.Warn("could not persist microsoft account email", "connector", c.Name, "error", err)
+	}
 }
 
 // exchange posts to the token endpoint with client credentials and
