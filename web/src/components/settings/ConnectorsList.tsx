@@ -7,7 +7,7 @@ import { Button } from '../ui/button'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Toggle } from './shared'
-import { errText, isTimothyAuthError } from './util'
+import { connectedAs, errText, isTimothyAuthError } from './util'
 
 export function ConnectorsList() {
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
@@ -30,7 +30,7 @@ export function ConnectorsList() {
     <div className="mt-6 space-y-8">
       {oauthConnected && (
         <div className="flex items-center gap-3 rounded-xl border border-good/30 bg-good-soft p-3 text-sm text-good">
-          <span>Google account connected to “{oauthConnected}”. Enable it below to serve tools.</span>
+          <span>Account connected to “{oauthConnected}”. Enable it below to serve tools.</span>
           <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
             dismiss
           </button>
@@ -38,7 +38,7 @@ export function ConnectorsList() {
       )}
       {oauthError && (
         <div className="flex items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          <span>Google connection failed: {oauthError}</span>
+          <span>Connection failed: {oauthError}</span>
           <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
             dismiss
           </button>
@@ -168,7 +168,7 @@ function ConnectorCard({
         >
           {test.ok
             ? test.identity
-              ? `Connected as ${test.identity.login} (${test.identity.email})`
+              ? connectedAs(test.identity)
               : 'Connection OK'
             : `Failed: ${test.error}`}
         </div>

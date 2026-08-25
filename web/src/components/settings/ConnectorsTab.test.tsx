@@ -209,11 +209,11 @@ describe('Connectors tab', () => {
 
   it('shows the OAuth outcome banners from the callback redirect', async () => {
     renderTab('/settings/connectors?oauth_connected=personal')
-    expect(await screen.findByText(/Google account connected to “personal”/)).toBeTruthy()
+    expect(await screen.findByText(/Account connected to “personal”/)).toBeTruthy()
 
     cleanup()
     renderTab('/settings/connectors?oauth_error=access_denied')
-    expect(await screen.findByText(/Google connection failed: access_denied/)).toBeTruthy()
+    expect(await screen.findByText(/Connection failed: access_denied/)).toBeTruthy()
   })
 
   it('adds an MCP connector: secret, create disabled, test, enable', async () => {

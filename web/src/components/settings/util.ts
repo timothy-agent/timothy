@@ -116,6 +116,16 @@ export function humanizeProbeDetail(detail: string): string {
   return detail
 }
 
+// connectedAs labels a test-connection identity, skipping the email
+// when it repeats the login (google/microsoft report the same address
+// for both).
+export function connectedAs(identity: { login: string; email: string }): string {
+  if (identity.email && identity.email !== identity.login) {
+    return `Connected as ${identity.login} (${identity.email})`
+  }
+  return `Connected as ${identity.login}`
+}
+
 // stripPaste removes whitespace and zero-width characters that ride
 // along when a key is copied out of wrapped text.
 export function stripPaste(v: string): string {

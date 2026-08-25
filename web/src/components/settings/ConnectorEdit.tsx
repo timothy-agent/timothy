@@ -24,7 +24,7 @@ import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Field, Toggle } from './shared'
-import { errText, isTimothyAuthError } from './util'
+import { connectedAs, errText, isTimothyAuthError } from './util'
 
 // oauthProviderLabel names the OAuth provider for a connector kind —
 // both google and microsoft share the same reconnect/test UI shape.
@@ -198,8 +198,8 @@ export function ConnectorEdit() {
             {testing
               ? 'Testing connection…'
               : test?.ok
-                ? (connector.kind === 'github' || connector.kind === 'microsoft') && test.identity
-                  ? `Connected as ${test.identity.login} (${test.identity.email}), ${test.identity.scopes}.`
+                ? test.identity
+                  ? `${connectedAs(test.identity)}, ${test.identity.scopes}.`
                   : 'Connection OK, tools are servable.'
                 : test && !test.ok
                   ? `Failed: ${test.error}`

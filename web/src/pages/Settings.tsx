@@ -23,7 +23,7 @@ export const settingsAreas = [
   {
     key: 'connectors',
     label: 'Connectors',
-    description: 'External services Timothy can act on, like Google or MCP servers.',
+    description: 'External services Timothy can act on, like Google, Outlook, or MCP servers.',
     render: ConnectorsTab,
   },
   {

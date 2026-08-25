@@ -156,6 +156,10 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 		data := base64.URLEncoding.EncodeToString(raw)
 		_, _ = fmt.Fprintf(w, `{"size":%d,"data":%q}`, len(raw), data)
 	})
+	mux.HandleFunc("GET /gmail/v1/users/me/profile", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"emailAddress":"ada@example.com"}`))
+	})
 	mux.HandleFunc("POST /gmail/v1/users/me/messages/send", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		var in struct {
@@ -167,6 +171,10 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 		f.gmailSent = append(f.gmailSent, string(raw))
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{"id":"sent-1"}`))
+	})
+	mux.HandleFunc("GET /calendars/primary", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"id":"ada@example.com"}`))
 	})
 	mux.HandleFunc("GET /calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
@@ -181,6 +189,10 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 		f.events = append(f.events, ev)
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{"id":"ev-1","htmlLink":"https://cal/ev-1"}`))
+	})
+	mux.HandleFunc("GET /about", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"user":{"displayName":"Ada Lovelace","emailAddress":"ada@example.com"}}`))
 	})
 	mux.HandleFunc("GET /files", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
@@ -1021,6 +1033,135 @@ func TestGoogleAPIErrorMapping(t *testing.T) {
 				t.Fatalf("googleAPIError = %q, want %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+// TestGoogleIdentityUsesGmailProfile pins the gmail-scoped path:
+// Identity resolves the account email via Gmail's own profile
+// endpoint, first match wins over drive/calendar.
+func TestGoogleIdentityUsesGmailProfile(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f) // bothScopes: gmail + calendar
+
+	gs, ok := src.(*googleSource)
+	if !ok {
+		t.Fatalf("src is %T, want *googleSource", src)
+	}
+	identity, err := gs.Identity(t.Context())
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	if identity.Login != "ada@example.com" || identity.Email != "ada@example.com" {
+		t.Fatalf("identity = %+v", identity)
+	}
+	if identity.Scopes != strings.Join(gs.cfg.Scopes, ", ") {
+		t.Fatalf("identity.Scopes = %q", identity.Scopes)
+	}
+}
+
+// TestGoogleIdentityUsesDriveAboutForReadonlyScope pins the
+// drive.readonly-only path: Identity falls back to Drive's about
+// endpoint and surfaces the displayName.
+func TestGoogleIdentityUsesDriveAboutForReadonlyScope(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(`["https://www.googleapis.com/auth/drive.readonly"]`)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+	src, err := g.Builder()(t.Context(), row, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	gs := src.(*googleSource)
+	identity, err := gs.Identity(t.Context())
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	if identity.Email != "ada@example.com" || identity.Name != "Ada Lovelace" {
+		t.Fatalf("identity = %+v", identity)
+	}
+}
+
+// TestGoogleIdentityUsesDriveAboutForDocsScopes pins that the docs
+// preset (documents + drive.file, no drive.readonly) also resolves via
+// Drive's about endpoint — proving the drive.file path works, not just
+// drive.readonly.
+func TestGoogleIdentityUsesDriveAboutForDocsScopes(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(`["https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file"]`)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+	src, err := g.Builder()(t.Context(), row, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	gs := src.(*googleSource)
+	identity, err := gs.Identity(t.Context())
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	if identity.Email != "ada@example.com" || identity.Name != "Ada Lovelace" {
+		t.Fatalf("identity = %+v", identity)
+	}
+}
+
+// TestGoogleIdentityUsesCalendarPrimaryID pins the calendar-only path:
+// with no gmail or drive scope, Identity falls back to the primary
+// calendar's id, which for the primary calendar IS the account email.
+func TestGoogleIdentityUsesCalendarPrimaryID(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(`["https://www.googleapis.com/auth/calendar"]`)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+	src, err := g.Builder()(t.Context(), row, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	gs := src.(*googleSource)
+	identity, err := gs.Identity(t.Context())
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	if identity.Login != "ada@example.com" || identity.Email != "ada@example.com" {
+		t.Fatalf("identity = %+v", identity)
+	}
+}
+
+// TestManagerTestIdentityReturnsGoogleIdentity mirrors
+// TestManagerTestIdentityReturnsGitHubIdentity (github_test.go): a
+// google-kind connector resolved through Manager.TestIdentity returns
+// a non-nil identity, proving the identifier type assertion picks up
+// googleSource too.
+func TestManagerTestIdentityReturnsGoogleIdentity(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	row := googleRow(bothScopes)
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	live, _ := json.Marshal(tokenBundle{AccessToken: "at-live", Expiry: time.Now().Add(time.Hour)})
+	_ = secrets.Set(t.Context(), "PERSONAL_GOOGLE_OAUTH", string(live))
+
+	m := testManager(fakeRows{rows: []Connector{row}})
+	m.RegisterBuilder("google", g.Builder())
+
+	identity, err := m.TestIdentity(t.Context(), row.ID)
+	if err != nil {
+		t.Fatalf("TestIdentity: %v", err)
+	}
+	if identity == nil || identity.Email != "ada@example.com" {
+		t.Fatalf("identity = %+v", identity)
 	}
 }
 

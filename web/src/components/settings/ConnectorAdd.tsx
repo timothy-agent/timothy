@@ -18,7 +18,7 @@ import { connectorPresets } from './connectorPresets'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, isTimothyAuthError, secretDestination } from './util'
+import { connectedAs, errText, isTimothyAuthError, secretDestination } from './util'
 
 // slugify turns a display name into a connector name (tool-name
 // prefix): lowercase slug, the backend rejects anything else.
@@ -384,8 +384,8 @@ export function ConnectorAdd() {
                 {busy
                   ? 'Testing connection…'
                   : tested
-                    ? isGitHub && test?.identity
-                      ? `Connected as ${test.identity.login} (${test.identity.email}), ${test.identity.scopes}.`
+                    ? test?.identity
+                      ? `${connectedAs(test.identity)}, ${test.identity.scopes}.`
                       : 'Connection OK, tools are servable.'
                     : test && !test.ok
                       ? `Connection failed: ${test.error}. The connector was saved disabled, fix and retry.`

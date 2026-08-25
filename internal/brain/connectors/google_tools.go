@@ -66,6 +66,63 @@ func (s *googleSource) Test(ctx context.Context) error {
 
 func (s *googleSource) Close() error { return nil }
 
+// Identity resolves the connected account's email — the panel's
+// evidence a working credential was configured, same role as
+// githubSource.Identity and microsoftSource.Identity. Reuses
+// GitHubIdentity's shape rather than adding a parallel one. Tries
+// whichever consented scope can report an email, cheapest/most direct
+// first: Gmail's own profile, then Drive's about endpoint (reachable
+// with either drive.readonly or the narrower drive.file scope Docs
+// grants), then the primary Calendar's id (which for the primary
+// calendar IS the account email).
+func (s *googleSource) Identity(ctx context.Context) (GitHubIdentity, error) {
+	scopes := strings.Join(s.cfg.Scopes, ", ")
+	switch {
+	case s.hasScope("gmail"):
+		var profile struct {
+			EmailAddress string `json:"emailAddress"`
+		}
+		if err := s.api(ctx, http.MethodGet,
+			s.g.GmailBase+"/gmail/v1/users/me/profile", nil, &profile); err != nil {
+			return GitHubIdentity{}, err
+		}
+		return GitHubIdentity{Login: profile.EmailAddress, Email: profile.EmailAddress, Scopes: scopes}, nil
+	case s.hasScope("drive"):
+		var about struct {
+			User struct {
+				DisplayName  string `json:"displayName"`
+				EmailAddress string `json:"emailAddress"`
+			} `json:"user"`
+		}
+		if err := s.api(ctx, http.MethodGet,
+			s.g.DriveBase+"/about?fields=user", nil, &about); err != nil {
+			return GitHubIdentity{}, err
+		}
+		return GitHubIdentity{
+			Login: about.User.EmailAddress, Name: about.User.DisplayName,
+			Email: about.User.EmailAddress, Scopes: scopes,
+		}, nil
+	case s.hasScope("calendar"):
+		var cal struct {
+			ID string `json:"id"`
+		}
+		if err := s.api(ctx, http.MethodGet,
+			s.g.CalendarBase+"/calendars/primary", nil, &cal); err != nil {
+			return GitHubIdentity{}, err
+		}
+		return GitHubIdentity{Login: cal.ID, Email: cal.ID, Scopes: scopes}, nil
+	default:
+		// Defensive: the builder rejects a connector with no known
+		// scopes, so every built googleSource has at least one of the
+		// above. Fall back to Test's connectivity check with a zero
+		// identity so the caller still learns whether the credential works.
+		if err := s.Test(ctx); err != nil {
+			return GitHubIdentity{}, err
+		}
+		return GitHubIdentity{}, fmt.Errorf("google connector has no identity-capable scope (gmail, drive, or calendar)")
+	}
+}
+
 func (s *googleSource) hasScope(service string) bool {
 	for _, sc := range s.cfg.Scopes {
 		if strings.Contains(sc, service) {
