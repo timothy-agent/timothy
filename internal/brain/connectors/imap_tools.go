@@ -3,14 +3,18 @@ package connectors
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/quotedprintable"
 	"net/mail"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -25,9 +29,6 @@ import (
 const (
 	imapSearchDefault = 10
 	imapSearchMax     = 25
-	// imapSnippetBytes bounds the opportunistic partial body fetch used
-	// for mail_search's snippet: small enough to be cheap per message.
-	imapSnippetBytes = 256
 )
 
 // imapMessageSummary is one mail_search result: envelope plus a best-
@@ -92,7 +93,7 @@ func (s *imapConn) Search(ctx context.Context, words []string, max int) ([]imapM
 		return nil, nil
 	}
 
-	fetchOptions := &imap.FetchOptions{Envelope: true, InternalDate: true}
+	fetchOptions := &imap.FetchOptions{Envelope: true, InternalDate: true, BodyStructure: &imap.FetchItemBodyStructure{}}
 	msgs, err := s.client.Fetch(imap.UIDSetNum(uids...), fetchOptions).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("imap fetch envelopes: %w", err)
@@ -108,35 +109,122 @@ func (s *imapConn) Search(ctx context.Context, words []string, max int) ([]imapM
 		if !ok {
 			continue
 		}
-		sum := imapMessageSummary{UID: uid, Date: m.InternalDate.Format(time.RFC3339)}
-		if m.Envelope != nil {
-			sum.Date = m.Envelope.Date.Format(time.RFC3339)
-			sum.Subject = m.Envelope.Subject
-			sum.From = formatEnvelopeAddresses(m.Envelope.From)
-		}
-		sum.Snippet = s.snippet(ctx, uid)
+		sum := buildSummary(uid, m.InternalDate, m.Envelope)
+		sum.Snippet = s.snippet(ctx, uid, m.BodyStructure)
 		out = append(out, sum)
 	}
 	return out, nil
 }
 
-// snippet opportunistically fetches a small partial of the first text
-// part; a fetch failure is tolerated with an empty snippet rather than
-// failing the whole search.
-func (s *imapConn) snippet(_ context.Context, uid imap.UID) string {
+// buildSummary builds one mail_search result's envelope fields from a
+// fetched message's UID/INTERNALDATE/ENVELOPE, pure so it's testable
+// without a live IMAP session. Date defaults to internalDate and is
+// only overwritten by the envelope's own Date when that's non-zero: a
+// server that omits or can't parse a message's Date header returns a
+// zero envelope Date, and clobbering internalDate with that would
+// regress to the zero time rather than keep the still-useful fallback.
+func buildSummary(uid imap.UID, internalDate time.Time, envelope *imap.Envelope) imapMessageSummary {
+	sum := imapMessageSummary{UID: uid, Date: internalDate.Format(time.RFC3339)}
+	if envelope == nil {
+		return sum
+	}
+	if !envelope.Date.IsZero() {
+		sum.Date = envelope.Date.Format(time.RFC3339)
+	}
+	sum.Subject = envelope.Subject
+	sum.From = formatEnvelopeAddresses(envelope.From)
+	return sum
+}
+
+// findSnippetTextPart walks structure (DFS pre-order, same order the
+// server numbers parts) for the first text/plain part, falling back to
+// the first text/* part; ok is false when structure is nil or has no
+// text part at all (e.g. an attachment-only or non-MIME message).
+func findSnippetTextPart(structure imap.BodyStructure) (part *imap.BodyStructureSinglePart, path []int, ok bool) {
+	if structure == nil {
+		return nil, nil, false
+	}
+	var fallback *imap.BodyStructureSinglePart
+	var fallbackPath []int
+	structure.Walk(func(p []int, bs imap.BodyStructure) bool {
+		sp, isSingle := bs.(*imap.BodyStructureSinglePart)
+		if !isSingle || sp.Type != "text" {
+			return true
+		}
+		if sp.Subtype == "plain" && part == nil {
+			part, path = sp, p
+		}
+		if fallback == nil {
+			fallback, fallbackPath = sp, p
+		}
+		return true
+	})
+	if part != nil {
+		return part, path, true
+	}
+	if fallback != nil {
+		return fallback, fallbackPath, true
+	}
+	return nil, nil, false
+}
+
+// imapSnippetPartialBytes bounds the partial fetch used for a
+// snippet's first text part: larger than imapSnippetBytes so a base64-
+// encoded part still yields a useful amount of decoded text (base64
+// inflates size by ~4/3).
+const imapSnippetPartialBytes = 512
+
+// snippet opportunistically fetches and decodes a small partial of the
+// message's first text part (see findSnippetTextPart), tolerating any
+// failure with an empty snippet rather than failing the whole search:
+// no text part, an unfetchable partial, or an undecodable encoding all
+// return "".
+func (s *imapConn) snippet(_ context.Context, uid imap.UID, structure imap.BodyStructure) string {
+	textPart, path, ok := findSnippetTextPart(structure)
+	if !ok {
+		return ""
+	}
 	fetchOptions := &imap.FetchOptions{
 		BodySection: []*imap.FetchItemBodySection{{
-			Part:    []int{1},
+			Part:    path,
 			Peek:    true,
-			Partial: &imap.SectionPartial{Offset: 0, Size: imapSnippetBytes},
+			Partial: &imap.SectionPartial{Offset: 0, Size: imapSnippetPartialBytes},
 		}},
 	}
 	msgs, err := s.client.Fetch(imap.UIDSetNum(uid), fetchOptions).Collect()
 	if err != nil || len(msgs) == 0 || len(msgs[0].BodySection) == 0 {
 		return ""
 	}
-	text := strings.TrimSpace(string(msgs[0].BodySection[0].Bytes))
+	decoded := decodeSnippetBytes(msgs[0].BodySection[0].Bytes, textPart.Encoding)
+	text := strings.TrimSpace(decoded)
 	return strings.Join(strings.Fields(text), " ")
+}
+
+// decodeSnippetBytes decodes a partial text-part fetch per its
+// Content-Transfer-Encoding: base64 (trimmed to a full 4-byte quantum
+// before decoding, since a partial fetch can cut mid-group) or
+// quoted-printable; any other encoding (7bit/8bit/binary/unknown) needs
+// no decoding. A decode failure returns the raw bytes as text rather
+// than an empty string: partial, possibly-truncated input is expected
+// to sometimes fail to decode cleanly.
+func decodeSnippetBytes(raw []byte, encoding string) string {
+	switch strings.ToLower(encoding) {
+	case "base64":
+		raw = raw[:len(raw)-len(raw)%4]
+		decoded, err := base64.StdEncoding.DecodeString(string(raw))
+		if err != nil {
+			return string(raw)
+		}
+		return string(decoded)
+	case "quoted-printable":
+		decoded, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(raw)))
+		if err != nil && len(decoded) == 0 {
+			return string(raw)
+		}
+		return string(decoded)
+	default:
+		return string(raw)
+	}
 }
 
 func (s *imapConn) FetchMessage(_ context.Context, uid imap.UID) (imapMessage, error) {
@@ -460,17 +548,26 @@ func (s *imapSource) mailSend() *tools.Tool {
 				return "", err
 			}
 
-			toAddrs := splitAddresses(in.To)
-			ccAddrs := splitAddresses(in.CC)
+			toAddrs, err := parseAddressList(in.To)
+			if err != nil {
+				return "", fmt.Errorf("to: %w", err)
+			}
 			if len(toAddrs) == 0 {
 				return "", fmt.Errorf("to must contain at least one address")
+			}
+			ccAddrs, err := parseAddressList(in.CC)
+			if err != nil {
+				return "", fmt.Errorf("cc: %w", err)
 			}
 
 			msg, err := buildRFC822Message(s.cfg.email(), toAddrs, ccAddrs, in.Subject, in.Body)
 			if err != nil {
 				return "", err
 			}
-			recipients := append(append([]string{}, toAddrs...), ccAddrs...)
+			recipients := make([]string, 0, len(toAddrs)+len(ccAddrs))
+			for _, a := range append(toAddrs, ccAddrs...) {
+				recipients = append(recipients, a.Address)
+			}
 			if err := s.send(ctx, s.cfg, pw, recipients, msg); err != nil {
 				return "", err
 			}
@@ -488,17 +585,21 @@ func parseIMAPUID(id string) (imap.UID, error) {
 	return imap.UID(n), nil
 }
 
-// splitAddresses splits a comma-separated address list, trimming
-// whitespace and dropping empty entries.
-func splitAddresses(addrs string) []string {
-	var out []string
-	for _, a := range strings.Split(addrs, ",") {
-		a = strings.TrimSpace(a)
-		if a != "" {
-			out = append(out, a)
-		}
+// parseAddressList parses a comma-separated address list (optionally
+// with display names, including a quoted display name containing a
+// comma) via net/mail; empty input returns an empty, non-nil slice
+// rather than erroring, so an omitted cc list is fine. Any unparseable
+// entry errors clearly instead of silently sending to a mangled
+// address.
+func parseAddressList(addrs string) ([]*mail.Address, error) {
+	if strings.TrimSpace(addrs) == "" {
+		return nil, nil
 	}
-	return out
+	list, err := mail.ParseAddressList(addrs)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address list %q: %w", addrs, err)
+	}
+	return list, nil
 }
 
 // rejectHeaderInjection refuses any header-bound field carrying a raw
@@ -514,15 +615,18 @@ func rejectHeaderInjection(fields ...string) error {
 }
 
 // buildRFC822Message assembles a plain-text RFC822 message: From, To,
-// Cc (when present), Subject, Date, Message-ID, then the body.
-func buildRFC822Message(from string, to, cc []string, subject, body string) ([]byte, error) {
+// Cc (when present), Subject, Date, Message-ID, then the body. To/Cc
+// headers use each address's full "Name <addr>" form (mail.Address.
+// String); the SMTP envelope's RCPT TO list is built separately from
+// the bare addresses (see mailSend's Execute).
+func buildRFC822Message(from string, to, cc []*mail.Address, subject, body string) ([]byte, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(to, ", "))
+	fmt.Fprintf(&b, "To: %s\r\n", joinAddresses(to))
 	if len(cc) > 0 {
-		fmt.Fprintf(&b, "Cc: %s\r\n", strings.Join(cc, ", "))
+		fmt.Fprintf(&b, "Cc: %s\r\n", joinAddresses(cc))
 	}
-	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&b, "Subject: %s\r\n", encodeSubject(subject))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	fmt.Fprintf(&b, "Message-Id: <%d.timothy@%s>\r\n", time.Now().UnixNano(), addressHost(from))
 	b.WriteString("MIME-Version: 1.0\r\n")
@@ -530,6 +634,18 @@ func buildRFC822Message(from string, to, cc []string, subject, body string) ([]b
 	b.WriteString("\r\n")
 	b.WriteString(body)
 	return []byte(b.String()), nil
+}
+
+// encodeSubject RFC 2047-encodes subject when it carries any non-ASCII
+// rune, so a header stays a single well-formed line; a pure-ASCII
+// subject is left as-is.
+func encodeSubject(subject string) string {
+	for _, r := range subject {
+		if r > unicode.MaxASCII {
+			return mime.QEncoding.Encode("utf-8", subject)
+		}
+	}
+	return subject
 }
 
 // addressHost extracts the domain part of an email address for the

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -40,7 +42,34 @@ func caldavConfig(c Connector) (CalDAVConfig, error) {
 	if cfg.URL == "" || cfg.Username == "" {
 		return cfg, fmt.Errorf("caldav %s: config.url and config.username are required", c.Name)
 	}
+	if !isSecureCalDAVURL(cfg.URL) {
+		return cfg, fmt.Errorf("caldav %s: config.url must be https (basic auth over cleartext)", c.Name)
+	}
 	return cfg, nil
+}
+
+// isSecureCalDAVURL reports whether url is safe to send basic auth
+// credentials to: https always, or plain http only when the host is a
+// loopback address (127.0.0.0/8, ::1, "localhost"): cleartext basic
+// auth never leaves the machine there, and it keeps httptest fixtures
+// working without weakening the check for a real deployment.
+func isSecureCalDAVURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // CalDAVBuilder returns the Builder for kind='caldav'. client is used

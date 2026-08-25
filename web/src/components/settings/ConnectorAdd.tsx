@@ -29,6 +29,19 @@ function slugify(v: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+// isValidPort reports whether an (optional) port field's text is a
+// valid TCP port: empty (field left blank) or digits only, 1-65535.
+// Number('143a') is NaN, but Number('') is 0 and Number(' 5 ') trims,
+// so this checks the raw digits pattern first rather than trusting
+// Number() alone.
+function isValidPort(v: string): boolean {
+  const trimmed = v.trim()
+  if (trimmed === '') return true
+  if (!/^\d+$/.test(trimmed)) return false
+  const n = Number(trimmed)
+  return n >= 1 && n <= 65535
+}
+
 // ConnectorAdd is preset-aware and its own page: MCP and github presets
 // are created, tested, and enabled in one go with Add gated on a
 // passing test (same contract as adding a provider); Google presets
@@ -127,6 +140,10 @@ export function ConnectorAdd() {
     }
     if (isImap && (!imapHost.trim() || !imapUsername.trim())) {
       toast.error('Host and username required', { description: 'An IMAP host and username are required to test this connector.' })
+      return
+    }
+    if (isImap && (!isValidPort(imapPort) || !isValidPort(imapSMTPPort))) {
+      toast.error('Invalid port', { description: 'Port must be a number between 1 and 65535.' })
       return
     }
     if (isCalDAV && (!caldavURL.trim() || !caldavUsername.trim())) {

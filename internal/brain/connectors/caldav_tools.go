@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-ical"
+	"github.com/teambition/rrule-go"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
@@ -51,18 +52,24 @@ func (s *caldavSource) calendarListEvents() *tools.Tool {
 			if in.MaxResults <= 0 {
 				in.MaxResults = caldavListDefault
 			}
-			if in.TimeMin == "" {
-				in.TimeMin = time.Now().UTC().Format(caldavTimeFormat)
-			} else {
-				in.TimeMin = reformatCalDAVTime(in.TimeMin)
+			var err error
+			windowStart := time.Now().UTC()
+			windowEnd := windowStart.AddDate(0, 0, 7)
+			timeMin, timeMax := windowStart.Format(caldavTimeFormat), windowEnd.Format(caldavTimeFormat)
+			if in.TimeMin != "" {
+				windowStart, timeMin, err = reformatCalDAVTime(in.TimeMin)
+				if err != nil {
+					return "", fmt.Errorf("time_min must be RFC3339, e.g. 2026-07-22T15:00:00Z: %w", err)
+				}
 			}
-			if in.TimeMax == "" {
-				in.TimeMax = time.Now().UTC().AddDate(0, 0, 7).Format(caldavTimeFormat)
-			} else {
-				in.TimeMax = reformatCalDAVTime(in.TimeMax)
+			if in.TimeMax != "" {
+				windowEnd, timeMax, err = reformatCalDAVTime(in.TimeMax)
+				if err != nil {
+					return "", fmt.Errorf("time_max must be RFC3339, e.g. 2026-07-22T15:00:00Z: %w", err)
+				}
 			}
 
-			events, err := s.queryEvents(ctx, in.TimeMin, in.TimeMax)
+			events, err := s.queryEvents(ctx, timeMin, timeMax, windowStart, windowEnd)
 			if err != nil {
 				return "", err
 			}
@@ -90,15 +97,17 @@ func (s *caldavSource) calendarListEvents() *tools.Tool {
 // format (RFC5545 UTC form).
 const caldavTimeFormat = "20060102T150405Z"
 
-// reformatCalDAVTime converts an RFC3339 UTC timestamp (the tool's
-// input format) to the CalDAV wire format; an unparseable value is
-// passed through unchanged rather than erroring the whole call.
-func reformatCalDAVTime(rfc3339 string) string {
+// reformatCalDAVTime parses an RFC3339 timestamp (the tool's input
+// format) and returns it as both a time.Time and the CalDAV REPORT
+// wire format; an unparseable value errors rather than being
+// interpolated into the REPORT's XML body unescaped.
+func reformatCalDAVTime(rfc3339 string) (time.Time, string, error) {
 	t, err := time.Parse(time.RFC3339, rfc3339)
 	if err != nil {
-		return rfc3339
+		return time.Time{}, "", err
 	}
-	return t.UTC().Format(caldavTimeFormat)
+	t = t.UTC()
+	return t, t.Format(caldavTimeFormat), nil
 }
 
 // caldavReportBody is a REPORT calendar-query for VEVENTs whose time
@@ -140,13 +149,18 @@ type caldavMultistatus struct {
 
 // queryEvents runs the REPORT calendar-query with server-side expand,
 // retrying without expand if the server rejects it (some CalDAV
-// servers 400 on CALDAV:expand).
-func (s *caldavSource) queryEvents(ctx context.Context, start, end string) ([]caldavEvent, error) {
+// servers 400 on CALDAV:expand). Without server-side expand, a
+// recurring event's master VEVENT carries its original DTSTART (often
+// far outside the window) and an RRULE; parseCalDAVMultistatus expands
+// that client-side when expanded is false, using windowStart/windowEnd.
+func (s *caldavSource) queryEvents(ctx context.Context, start, end string, windowStart, windowEnd time.Time) ([]caldavEvent, error) {
 	status, body, err := s.report(ctx, start, end, true)
 	if err != nil {
 		return nil, err
 	}
+	expanded := true
 	if status == http.StatusBadRequest {
+		expanded = false
 		status, body, err = s.report(ctx, start, end, false)
 		if err != nil {
 			return nil, err
@@ -155,7 +169,7 @@ func (s *caldavSource) queryEvents(ctx context.Context, start, end string) ([]ca
 	if status != http.StatusMultiStatus {
 		return nil, caldavStatusError(status, body)
 	}
-	return parseCalDAVMultistatus(body)
+	return parseCalDAVMultistatus(body, expanded, windowStart, windowEnd)
 }
 
 func (s *caldavSource) report(ctx context.Context, start, end string, expand bool) (int, []byte, error) {
@@ -166,8 +180,10 @@ func (s *caldavSource) report(ctx context.Context, start, end string, expand boo
 }
 
 // parseCalDAVMultistatus decodes a REPORT response's XML envelope and
-// parses each calendar-data payload's VEVENTs.
-func parseCalDAVMultistatus(body []byte) ([]caldavEvent, error) {
+// parses each calendar-data payload's VEVENTs. expanded/windowStart/
+// windowEnd are parseVEVENTs' RRULE-expansion inputs, only used when
+// expanded is false (see queryEvents).
+func parseCalDAVMultistatus(body []byte, expanded bool, windowStart, windowEnd time.Time) ([]caldavEvent, error) {
 	var ms caldavMultistatus
 	if err := xml.Unmarshal(body, &ms); err != nil {
 		return nil, fmt.Errorf("parse multistatus: %w", err)
@@ -178,43 +194,134 @@ func parseCalDAVMultistatus(body []byte) ([]caldavEvent, error) {
 			if ps.Prop.CalendarData == "" {
 				continue
 			}
-			out = append(out, parseVEVENTs(ps.Prop.CalendarData)...)
+			out = append(out, parseVEVENTs(ps.Prop.CalendarData, expanded, windowStart, windowEnd)...)
 		}
 	}
 	return out, nil
 }
 
+// caldavRRuleOccurrenceCap bounds how many occurrences one recurring
+// master expands to, so a long-running or unbounded RRULE (FREQ=DAILY
+// with no COUNT/UNTIL) can't make one search unbounded.
+const caldavRRuleOccurrenceCap = 100
+
 // parseVEVENTs parses one iCalendar payload's VEVENTs into caldavEvent,
 // skipping any that fail to parse rather than failing the whole call.
-func parseVEVENTs(data string) []caldavEvent {
+// When expanded is true (server-side CALDAV:expand succeeded), each
+// VEVENT is already one concrete occurrence and is emitted as-is. When
+// false (the no-expand fallback), a VEVENT carrying an RRULE is a
+// recurring master whose own DTSTART may be far outside
+// [windowStart, windowEnd); its occurrences within that window are
+// computed client-side instead (capped at caldavRRuleOccurrenceCap), and
+// a non-recurring VEVENT entirely outside the window is dropped.
+func parseVEVENTs(data string, expanded bool, windowStart, windowEnd time.Time) []caldavEvent {
 	cal, err := ical.NewDecoder(strings.NewReader(data)).Decode()
 	if err != nil {
 		return nil
 	}
 	var out []caldavEvent
 	for _, ev := range cal.Events() {
-		e := caldavEvent{}
+		summary, location := "", ""
 		if p := ev.Props.Get(ical.PropSummary); p != nil {
-			e.Summary = p.Value
+			summary = p.Value
 		}
 		if p := ev.Props.Get(ical.PropLocation); p != nil {
-			e.Location = p.Value
+			location = p.Value
 		}
-		if p := ev.Props.Get(ical.PropDateTimeStart); p != nil {
-			e.Start = rfc3339FromICal(p.Value)
+		startProp := ev.Props.Get(ical.PropDateTimeStart)
+		endProp := ev.Props.Get(ical.PropDateTimeEnd)
+
+		if expanded {
+			e := caldavEvent{Summary: summary, Location: location}
+			if startProp != nil {
+				e.Start = rfc3339FromICal(startProp.Value)
+			}
+			if endProp != nil {
+				e.End = rfc3339FromICal(endProp.Value)
+			}
+			out = append(out, e)
+			continue
 		}
-		if p := ev.Props.Get(ical.PropDateTimeEnd); p != nil {
-			e.End = rfc3339FromICal(p.Value)
+
+		roption, rerr := ev.Props.RecurrenceRule()
+		if rerr != nil || roption == nil || startProp == nil {
+			// Non-recurring: keep only if it overlaps the window.
+			start, sok := parseICalTime(startProp)
+			end, eok := parseICalTime(endProp)
+			if sok && eok && (end.Before(windowStart) || start.After(windowEnd)) {
+				continue
+			}
+			e := caldavEvent{Summary: summary, Location: location}
+			if startProp != nil {
+				e.Start = rfc3339FromICal(startProp.Value)
+			}
+			if endProp != nil {
+				e.End = rfc3339FromICal(endProp.Value)
+			}
+			out = append(out, e)
+			continue
 		}
-		out = append(out, e)
+
+		masterStart, sok := parseICalTime(startProp)
+		masterEnd, eok := parseICalTime(endProp)
+		if !sok {
+			continue
+		}
+		duration := time.Hour
+		if eok {
+			duration = masterEnd.Sub(masterStart)
+		}
+		roption.Dtstart = masterStart
+		rule, err := rrule.NewRRule(*roption)
+		if err != nil {
+			continue
+		}
+		occurrences := rule.Between(windowStart, windowEnd, true)
+		if len(occurrences) > caldavRRuleOccurrenceCap {
+			occurrences = occurrences[:caldavRRuleOccurrenceCap]
+		}
+		for _, occStart := range occurrences {
+			out = append(out, caldavEvent{
+				Start:    occStart.Format(time.RFC3339),
+				End:      occStart.Add(duration).Format(time.RFC3339),
+				Summary:  summary,
+				Location: location,
+			})
+		}
 	}
 	return out
 }
 
-// rfc3339FromICal converts an iCalendar date or date-time value to
-// RFC3339, the format google/microsoft's calendar tools output, so the
-// aggregate reads consistently across kinds. Unrecognized values pass
-// through unchanged (e.g. floating times with a TZID param).
+// parseICalTime parses prop's iCalendar value (UTC wire form, floating
+// local form, or date-only) into a time.Time; ok is false when prop is
+// nil or its value doesn't match any recognized form.
+func parseICalTime(prop *ical.Prop) (t time.Time, ok bool) {
+	if prop == nil {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(caldavTimeFormat, prop.Value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(caldavFloatingFormat, prop.Value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse("20060102", prop.Value); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+// caldavFloatingFormat is a DTSTART/DTEND value with no "Z" suffix and
+// no TZID param: a floating local time, RFC5545 section 3.3.5.
+const caldavFloatingFormat = "20060102T150405"
+
+// rfc3339FromICal converts an iCalendar date, date-time, or floating
+// date-time value to RFC3339 (or its no-offset prefix for a floating
+// time), the format google/microsoft's calendar tools output, so the
+// aggregate reads consistently across kinds and sorts lexicographically
+// alongside real RFC3339 strings. Unrecognized values pass through
+// unchanged (e.g. a floating time carrying a TZID param this package
+// doesn't resolve).
 func rfc3339FromICal(v string) string {
 	if t, err := time.Parse(caldavTimeFormat, v); err == nil {
 		return t.Format(time.RFC3339)
@@ -222,13 +329,16 @@ func rfc3339FromICal(v string) string {
 	if t, err := time.Parse("20060102", v); err == nil {
 		return t.Format("2006-01-02")
 	}
+	if t, err := time.Parse(caldavFloatingFormat, v); err == nil {
+		return t.Format("2006-01-02T15:04:05")
+	}
 	return v
 }
 
 func (s *caldavSource) calendarCreateEvent() *tools.Tool {
 	return &tools.Tool{
 		Name:        "calendar_create_event",
-		Description: "Create an event on the connected account's primary calendar. start and end are RFC3339 timestamps with offset, e.g. 2026-07-22T15:00:00+02:00. Use only when the user asked for an event; attendees receive invitations immediately.",
+		Description: "Create an event on the connected account's primary calendar. start and end are RFC3339 timestamps with offset, e.g. 2026-07-22T15:00:00+02:00. Use only when the user asked for an event; depending on the provider, attendees may be notified immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"summary":{"type":"string","description":"event title"},
 			"start":{"type":"string","description":"RFC3339 start"},

@@ -37,7 +37,10 @@ const (
 	imapDefaultSMTPPort = 587
 	imapImplicitTLSSMTP = 465
 	imapDialTimeout     = 30 * time.Second
-	imapIOTimeout       = 30 * time.Second
+	// imapIOTimeout bounds a whole IMAP session (dial through logout),
+	// set as an absolute deadline on the raw conn so every command the
+	// session issues is covered, not just the initial connect.
+	imapIOTimeout = 60 * time.Second
 )
 
 // email returns the connected account's email: AccountEmail when set,
@@ -177,23 +180,41 @@ func (s *imapSource) password(ctx context.Context) (string, error) {
 
 // realDial opens a real IMAP connection, authenticates, and SELECTs
 // INBOX read-only: implicit TLS on the configured port (default 993),
-// or STARTTLS when the port is 143. Never pooled, callers close it
-// after one operation.
+// or STARTTLS when the port is 143. The raw conn is dialed with ctx and
+// given an absolute imapIOTimeout deadline (shortened to ctx's deadline
+// if that comes sooner) covering the whole session, dial through
+// logout, not just the connect: imapclient's own Dialer.Timeout only
+// bounds the initial TCP handshake, so a server that accepts the
+// connection then stalls mid-command would otherwise hang forever.
+// Never pooled, callers close it after one operation.
 func (s *imapSource) realDial(ctx context.Context) (imapSession, error) {
 	pw, err := s.password(ctx)
 	if err != nil {
 		return nil, err
 	}
 	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.port())
-	options := &imapclient.Options{Dialer: &net.Dialer{Timeout: imapDialTimeout}}
+	dialer := &net.Dialer{Timeout: imapDialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("imap dial %s: %w", addr, err)
+	}
+	deadline := time.Now().Add(imapIOTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("imap set deadline: %w", err)
+	}
 
 	var client *imapclient.Client
 	if s.cfg.port() == imapSTARTTLSPort {
-		client, err = imapclient.DialStartTLS(addr, options)
+		client, err = imapclient.NewStartTLS(conn, nil)
 	} else {
-		client, err = imapclient.DialTLS(addr, options)
+		client = imapclient.New(tls.Client(conn, &tls.Config{ServerName: s.cfg.Host}), nil)
 	}
 	if err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("imap dial %s: %w", addr, err)
 	}
 	if err := client.Login(s.cfg.Username, pw).Wait(); err != nil {

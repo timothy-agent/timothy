@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 
@@ -323,7 +325,7 @@ func TestIMAPMailSendAssemblesMessage(t *testing.T) {
 	}
 	m := (*sent)[0]
 	msg := string(m.msg)
-	for _, want := range []string{"To: b@y.com", "Cc: c@z.com", "Subject: hi there", "the body", "From: me@example.com"} {
+	for _, want := range []string{"To: <b@y.com>", "Cc: <c@z.com>", "Subject: hi there", "the body", "From: me@example.com"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message = %q, want it to contain %q", msg, want)
 		}
@@ -333,6 +335,75 @@ func TestIMAPMailSendAssemblesMessage(t *testing.T) {
 	}
 	if m.password != "secret-pw" {
 		t.Fatalf("password = %q", m.password)
+	}
+}
+
+func TestIMAPMailSendDisplayNameRecipient(t *testing.T) {
+	t.Parallel()
+	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
+
+	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+		json.RawMessage(`{"to":"Bob Jones <b@y.com>","subject":"hi","body":"b"}`))
+	if err != nil || out != "sent" {
+		t.Fatalf("Execute = (%q, %v)", out, err)
+	}
+	m := (*sent)[0]
+	if !strings.Contains(string(m.msg), `To: "Bob Jones" <b@y.com>`) {
+		t.Fatalf("message = %q, want the header to keep the display name", m.msg)
+	}
+	// RCPT TO (the SMTP envelope) gets the bare address only.
+	if len(m.recipients) != 1 || m.recipients[0] != "b@y.com" {
+		t.Fatalf("recipients = %v, want [b@y.com]", m.recipients)
+	}
+}
+
+func TestIMAPMailSendQuotedDisplayNameWithComma(t *testing.T) {
+	t.Parallel()
+	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
+
+	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+		json.RawMessage(`{"to":"\"Jones, Bob\" <b@y.com>","subject":"hi","body":"b"}`))
+	if err != nil || out != "sent" {
+		t.Fatalf("Execute = (%q, %v)", out, err)
+	}
+	m := (*sent)[0]
+	// The comma inside the quoted display name must not split it into
+	// two recipients.
+	if len(m.recipients) != 1 || m.recipients[0] != "b@y.com" {
+		t.Fatalf("recipients = %v, want a single b@y.com (quoted comma not split)", m.recipients)
+	}
+}
+
+func TestIMAPMailSendUnparseableAddressErrors(t *testing.T) {
+	t.Parallel()
+	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
+
+	_, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+		json.RawMessage(`{"to":"not an address","subject":"hi","body":"b"}`))
+	if err == nil {
+		t.Fatal("expected an error for an unparseable to address")
+	}
+	if len(*sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0", len(*sent))
+	}
+}
+
+func TestIMAPMailSendEncodesNonASCIISubject(t *testing.T) {
+	t.Parallel()
+	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
+
+	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+		json.RawMessage(`{"to":"b@y.com","subject":"héllo","body":"b"}`))
+	if err != nil || out != "sent" {
+		t.Fatalf("Execute = (%q, %v)", out, err)
+	}
+	m := (*sent)[0]
+	msg := string(m.msg)
+	if strings.Contains(msg, "Subject: héllo") {
+		t.Fatalf("message = %q, want the non-ASCII subject RFC 2047-encoded, not raw", msg)
+	}
+	if !strings.Contains(msg, "Subject: =?utf-8?") {
+		t.Fatalf("message = %q, want an RFC 2047 encoded-word subject", msg)
 	}
 }
 
@@ -647,4 +718,147 @@ func TestAddressHost(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIMAPConfigEmail(t *testing.T) {
+	t.Parallel()
+	if got := (IMAPConfig{Username: "me@x.com", AccountEmail: "other@x.com"}).email(); got != "other@x.com" {
+		t.Fatalf("email() with account_email set = %q, want other@x.com", got)
+	}
+	if got := (IMAPConfig{Username: "me@x.com"}).email(); got != "me@x.com" {
+		t.Fatalf("email() falls back to username = %q, want me@x.com", got)
+	}
+}
+
+func TestIMAPConfigInvalidJSON(t *testing.T) {
+	t.Parallel()
+	row := Connector{Name: "imapbox", Kind: "imap", Config: json.RawMessage(`not json`)}
+	if _, err := imapConfig(row); err == nil {
+		t.Fatal("expected an error for invalid config JSON")
+	}
+}
+
+func TestBuildSummary(t *testing.T) {
+	t.Parallel()
+	internalDate := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
+
+	t.Run("nil envelope falls back to internal date", func(t *testing.T) {
+		t.Parallel()
+		sum := buildSummary(5, internalDate, nil)
+		if sum.UID != 5 || sum.Date != internalDate.Format(time.RFC3339) {
+			t.Fatalf("summary = %+v", sum)
+		}
+	})
+
+	t.Run("envelope with a real date overwrites internal date", func(t *testing.T) {
+		t.Parallel()
+		envDate := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+		env := &imap.Envelope{Date: envDate, Subject: "hi", From: []imap.Address{{Mailbox: "a", Host: "x.com"}}}
+		sum := buildSummary(5, internalDate, env)
+		if sum.Date != envDate.Format(time.RFC3339) {
+			t.Fatalf("Date = %q, want the envelope date", sum.Date)
+		}
+		if sum.Subject != "hi" || sum.From != "a@x.com" {
+			t.Fatalf("summary = %+v", sum)
+		}
+	})
+
+	t.Run("envelope with a zero date does not clobber internal date", func(t *testing.T) {
+		t.Parallel()
+		env := &imap.Envelope{Subject: "no date header"}
+		sum := buildSummary(5, internalDate, env)
+		if sum.Date != internalDate.Format(time.RFC3339) {
+			t.Fatalf("Date = %q, want internalDate kept (envelope Date is zero)", sum.Date)
+		}
+		if sum.Subject != "no date header" {
+			t.Fatalf("Subject = %q", sum.Subject)
+		}
+	})
+}
+
+func TestFindSnippetTextPart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil structure", func(t *testing.T) {
+		t.Parallel()
+		if _, _, ok := findSnippetTextPart(nil); ok {
+			t.Fatal("expected no text part for a nil structure")
+		}
+	})
+
+	t.Run("prefers text/plain over text/html", func(t *testing.T) {
+		t.Parallel()
+		structure := &imap.BodyStructureMultiPart{
+			Subtype: "alternative",
+			Children: []imap.BodyStructure{
+				&imap.BodyStructureSinglePart{Type: "text", Subtype: "html", Encoding: "quoted-printable"},
+				&imap.BodyStructureSinglePart{Type: "text", Subtype: "plain", Encoding: "base64"},
+			},
+		}
+		part, path, ok := findSnippetTextPart(structure)
+		if !ok || part.Subtype != "plain" {
+			t.Fatalf("part = %+v, ok = %v, want text/plain", part, ok)
+		}
+		if len(path) == 0 {
+			t.Fatalf("path = %v, want a non-empty part path", path)
+		}
+	})
+
+	t.Run("falls back to text/html when no text/plain exists", func(t *testing.T) {
+		t.Parallel()
+		structure := &imap.BodyStructureMultiPart{
+			Subtype: "mixed",
+			Children: []imap.BodyStructure{
+				&imap.BodyStructureSinglePart{Type: "text", Subtype: "html"},
+				&imap.BodyStructureSinglePart{Type: "application", Subtype: "pdf"},
+			},
+		}
+		part, _, ok := findSnippetTextPart(structure)
+		if !ok || part.Subtype != "html" {
+			t.Fatalf("part = %+v, ok = %v, want the text/html fallback", part, ok)
+		}
+	})
+
+	t.Run("no text part at all", func(t *testing.T) {
+		t.Parallel()
+		structure := &imap.BodyStructureSinglePart{Type: "application", Subtype: "pdf"}
+		if _, _, ok := findSnippetTextPart(structure); ok {
+			t.Fatal("expected no text part for an attachment-only message")
+		}
+	})
+}
+
+func TestDecodeSnippetBytes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		raw      []byte
+		encoding string
+		want     string
+	}{
+		{"plain 7bit passes through", []byte("hello world"), "7bit", "hello world"},
+		{"unspecified encoding passes through", []byte("hello world"), "", "hello world"},
+		{"base64 decodes", []byte(base64.StdEncoding.EncodeToString([]byte("hello base64 body"))), "base64", "hello base64 body"},
+		{"quoted-printable decodes", []byte("hello=20quoted=2Dprintable"), "quoted-printable", "hello quoted-printable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := decodeSnippetBytes(tc.raw, tc.encoding); got != tc.want {
+				t.Fatalf("decodeSnippetBytes(%q, %q) = %q, want %q", tc.raw, tc.encoding, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("base64 partial trimmed to full quantum before decoding", func(t *testing.T) {
+		t.Parallel()
+		// "hello base64 partial cut mid-message" base64-encoded, then cut
+		// mid-quantum (not a multiple of 4 bytes) to simulate a partial
+		// fetch landing inside a base64 group.
+		full := base64.StdEncoding.EncodeToString([]byte("hello base64 partial cut mid-message"))
+		cut := full[:len(full)-2] // drop a partial trailing quantum
+		got := decodeSnippetBytes([]byte(cut), "base64")
+		if !strings.HasPrefix("hello base64 partial cut mid-message", got) || got == "" {
+			t.Fatalf("decodeSnippetBytes(partial base64) = %q, want a valid prefix of the original text", got)
+		}
+	})
 }

@@ -12,6 +12,7 @@ vi.mock('../../api/client', () => ({
   setSecret: vi.fn(),
   testConnector: vi.fn(),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import {
   createConnector,
@@ -21,6 +22,7 @@ import {
   setSecret,
   testConnector,
 } from '../../api/client'
+import { toast } from 'sonner'
 
 function renderPage(presetId: string) {
   return render(
@@ -112,6 +114,23 @@ describe('ConnectorAdd imap flow', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-imap', { enabled: true }))
+  })
+
+  it('rejects an invalid port and does not create a connector', async () => {
+    renderPage('imap')
+
+    fireEvent.change(await screen.findByPlaceholderText('imap.example.com'), {
+      target: { value: 'imap.fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('me@example.com'), {
+      target: { value: 'me@fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'app-password' } })
+    fireEvent.change(screen.getByPlaceholderText('993'), { target: { value: '143a' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Invalid port', expect.anything()))
+    expect(createConnector).not.toHaveBeenCalled()
   })
 })
 

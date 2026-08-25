@@ -589,7 +589,7 @@ func (s *googleSource) calendarListEvents() *tools.Tool {
 func (s *googleSource) calendarCreateEvent() *tools.Tool {
 	return &tools.Tool{
 		Name:        "calendar_create_event",
-		Description: "Create an event on the connected account's primary calendar. start and end are RFC3339 timestamps with offset, e.g. 2026-07-22T15:00:00+02:00. Use only when the user asked for an event; attendees receive invitations immediately.",
+		Description: "Create an event on the connected account's primary calendar. start and end are RFC3339 timestamps with offset, e.g. 2026-07-22T15:00:00+02:00. Use only when the user asked for an event; depending on the provider, attendees may be notified immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"summary":{"type":"string","description":"event title"},
 			"start":{"type":"string","description":"RFC3339 start"},
