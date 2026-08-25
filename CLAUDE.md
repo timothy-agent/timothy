@@ -58,7 +58,11 @@ First run: `cp deploy/env.example deploy/.env` and set
   `session`, `agents`, `missions` (agent harness), `workflows`
   (orchestration above missions: steps + outcome-driven edges, env-gated
   `WORKFLOWS_ENABLED`), `connectors`
-  (Google/MCP), `destinations` (mission result delivery: email/webhook/
+  (google/microsoft/github/mcp/imap/caldav, unified capability tools:
+  `mail_search`, `mail_read`, `mail_send`, `calendar_list_events`,
+  `calendar_create_event` route to the right connector/account via an
+  `account` parameter — see `manager.go`'s `aggregateTools`),
+  `destinations` (mission result delivery: email/webhook/
   telegram), `kb` (knowledge-base collections/documents), `attachments`,
   `gwclient`, `memclient`, `sandboxclient`, `settings`, `skills`.
 - `internal/gateway/`: `provider` (wire adapters only), `router`,
