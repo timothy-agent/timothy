@@ -171,6 +171,32 @@ func TestAggregateDescriptionKindGuidanceOnlyForContributingKinds(t *testing.T) 
 	}
 }
 
+// TestAggregateIMAPContributesToMailSearch pins that an imap-kind
+// fakeAccountSource joins the unified mail_search surface exactly like
+// google/microsoft, and that its mail_search guidance block only
+// renders when an imap account actually contributes — mirroring
+// TestAggregateDescriptionKindGuidanceOnlyForContributingKinds.
+func TestAggregateIMAPContributesToMailSearch(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"mailbox": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("mailbox", true)}}, kind: "imap"},
+	}
+
+	desc := toolNamed(t, m.Tools(), "mail_search").Description
+	if !strings.Contains(desc, "For imap accounts") {
+		t.Fatalf("description = %q, want the imap guidance block", desc)
+	}
+	if strings.Contains(desc, "For google accounts") || strings.Contains(desc, "For microsoft accounts") {
+		t.Fatalf("description = %q, must not contain google/microsoft guidance with no such account connected", desc)
+	}
+
+	out, err := toolNamed(t, m.Tools(), "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"x"}`))
+	if err != nil || out != "ran on mailbox" {
+		t.Fatalf("Execute = (%q, %v), want ran on mailbox", out, err)
+	}
+}
+
 // TestAggregateReadOnlyRequiresAllAccountsReadOnly pins the ReadOnly
 // AND-across-accounts rule: one account's write-marked tool makes the
 // aggregate not ReadOnly, even though the other account's tool is.

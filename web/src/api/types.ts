@@ -922,7 +922,7 @@ export interface Notification {
 export interface AdminConnector {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean

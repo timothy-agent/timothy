@@ -4,7 +4,7 @@
 export interface ConnectorPreset {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav'
   description: string
   logo?: string
   brandColor: string
@@ -94,6 +94,13 @@ export const connectorPresets: ConnectorPreset[] = [
     tokenHint:
       'Fine-grained personal access token — grant Contents (read and write) and Pull requests on the repositories Timothy may work with.',
     tokenURL: 'https://github.com/settings/personal-access-tokens/new',
+  },
+  {
+    id: 'imap',
+    name: 'IMAP mailbox',
+    kind: 'imap',
+    description: 'Any email account via IMAP, optional SMTP sending.',
+    brandColor: '#64748B',
   },
 ]
 

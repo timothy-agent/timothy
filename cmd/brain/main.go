@@ -219,7 +219,7 @@ func main() {
 		resolveSecret = secrets.Resolve
 	}
 
-	conns, goog, msft := buildConnectors(app.DB, secrets, app.Log)
+	conns, goog, msft, markItDownURL := buildConnectors(app.DB, secrets, app.Log)
 	if conns != nil {
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil))
 		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
@@ -229,6 +229,7 @@ func main() {
 		if msft != nil {
 			conns.RegisterBuilder("microsoft", msft.Builder())
 		}
+		conns.RegisterBuilder("imap", connectors.IMAPBuilder(nil, markItDownURL))
 		conns.SetOnReload(func(context.Context) {
 			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
 		})
@@ -666,10 +667,10 @@ func buildAttachments(db *pgpool.Pool, log *slog.Logger) *attachments.Store {
 // instead of here. The Google half additionally needs
 // TIMOTHY_PUBLIC_URL for the OAuth redirect; without it google
 // connectors are configured but cannot connect.
-func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logger) (*connectors.Manager, *connectors.Google, *connectors.Microsoft) {
+func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logger) (*connectors.Manager, *connectors.Google, *connectors.Microsoft, string) {
 	if secrets == nil {
 		log.Warn("connectors disabled: no secret store")
-		return nil, nil, nil
+		return nil, nil, nil, ""
 	}
 	resolve := func(ctx context.Context, ref string) (string, error) {
 		return secrets.Resolve(ctx, ref)
@@ -683,13 +684,14 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 	}
 	goog := connectors.NewGoogle(secrets, store, publicURL, log)
 	msft := connectors.NewMicrosoft(secrets, store, publicURL, log)
-	if markItDownURL := os.Getenv("MARKITDOWN_URL"); markItDownURL != "" {
+	markItDownURL := os.Getenv("MARKITDOWN_URL")
+	if markItDownURL != "" {
 		goog.MarkItDownURL = markItDownURL
 		msft.MarkItDownURL = markItDownURL
 	} else {
 		log.Warn("MARKITDOWN_URL not set; gmail_read/mail_read fall back to a snippet or are unavailable for attachments")
 	}
-	return mgr, goog, msft
+	return mgr, goog, msft, markItDownURL
 }
 
 // buildDestinations wires the destinations control plane (store +

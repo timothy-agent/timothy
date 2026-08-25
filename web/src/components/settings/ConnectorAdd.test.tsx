@@ -85,3 +85,32 @@ describe('ConnectorAdd existing-credential picker (github MCP token)', () => {
     expect(option).toHaveAttribute('aria-disabled', 'true')
   })
 })
+
+describe('ConnectorAdd imap flow', () => {
+  it('tests then adds an imap connector with host/username/password', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-imap')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderPage('imap')
+
+    fireEvent.change(await screen.findByPlaceholderText('imap.example.com'), {
+      target: { value: 'imap.fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('me@example.com'), {
+      target: { value: 'me@fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'app-password' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      kind: 'imap',
+      config: { host: 'imap.fastmail.com', username: 'me@fastmail.com' },
+      enabled: false,
+    })
+    expect(setSecret).toHaveBeenCalledWith(expect.stringContaining('_IMAP_PASSWORD'), 'app-password')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-imap', { enabled: true }))
+  })
+})

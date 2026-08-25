@@ -381,19 +381,25 @@ concluding the email isn't there:
 	"microsoft": `
 For microsoft accounts: query matches subject, body, and sender across
 messages (Graph's $search); plain keywords, no operator syntax.`,
+	"imap": `
+For imap accounts: query is plain keywords only, ANDed server-side
+against message text, no Gmail/Graph operator syntax (from:, subject:,
+$search, etc. are not understood). Keep queries to 1-3 significant
+words; if a search returns nothing, broaden by dropping a word rather
+than adding more.`,
 }
 
 // mailSearchKindGuidance renders one guidance block per KIND actually
-// contributing an account to accounts, in a fixed order (google, then
-// microsoft) so the description is stable regardless of map iteration
-// or account sort order.
+// contributing an account to accounts, in a fixed order (google,
+// microsoft, imap) so the description is stable regardless of map
+// iteration or account sort order.
 func mailSearchKindGuidance(accounts []toolAccount) string {
 	seen := map[string]bool{}
 	for _, a := range accounts {
 		seen[a.kind] = true
 	}
 	var b strings.Builder
-	for _, kind := range []string{"google", "microsoft"} {
+	for _, kind := range []string{"google", "microsoft", "imap"} {
 		if !seen[kind] {
 			continue
 		}

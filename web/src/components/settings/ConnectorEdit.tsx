@@ -86,7 +86,8 @@ export function ConnectorEdit() {
     if (!connector || !token) return
     setSavingToken(true)
     try {
-      const suffix = connector.kind === 'github' ? '_GITHUB_PAT' : '_MCP_TOKEN'
+      const suffix =
+        connector.kind === 'github' ? '_GITHUB_PAT' : connector.kind === 'imap' ? '_IMAP_PASSWORD' : '_MCP_TOKEN'
       const ref = connector.credential_ref || `${connector.name.toUpperCase().replace(/-/g, '_')}${suffix}`
       await setSecret(ref, token.trim())
       if (!connector.credential_ref) await patchConnector(connector.id, { credential_ref: ref })
@@ -236,13 +237,33 @@ export function ConnectorEdit() {
             <p className="text-sm text-muted-foreground">
               {connector.kind === 'github' ? (
                 'Identity for mission clone/push/PR use, no chat tools.'
+              ) : connector.kind === 'imap' ? (
+                <>
+                  <span className="font-mono">
+                    {String(connector.config.username ?? '')} @ {String(connector.config.host ?? '')}
+                  </span>
+                  {typeof connector.config.smtp_host === 'string' && connector.config.smtp_host && (
+                    <>
+                      {' '}
+                      · SMTP: <span className="font-mono">{connector.config.smtp_host}</span>
+                    </>
+                  )}
+                </>
               ) : (
                 <>
                   Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
                 </>
               )}
             </p>
-            <Field label={connector.kind === 'github' ? 'Rotate personal access token' : 'Rotate bearer token'}>
+            <Field
+              label={
+                connector.kind === 'github'
+                  ? 'Rotate personal access token'
+                  : connector.kind === 'imap'
+                    ? 'Rotate password'
+                    : 'Rotate bearer token'
+              }
+            >
               <div className="mt-1.5 flex gap-2">
                 <Input
                   type="password"
