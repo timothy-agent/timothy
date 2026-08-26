@@ -288,3 +288,45 @@ func TestProbeTimeout(t *testing.T) {
 		t.Fatalf("probeTimeout(invalid) = %v, want default %v", got, testTimeout)
 	}
 }
+
+// TestValidatePricesByModel covers the admin-write guard on
+// operator-declared prices (D-079). These numbers are recorded as real
+// spend, so a malformed or nonsensical rate must fail the write that
+// introduced it rather than surfacing later as a failed config reload.
+func TestValidatePricesByModel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "absent is fine"},
+		{name: "empty is fine", value: ""},
+		{
+			name:  "a real price set passes",
+			value: `{"glm-5.3":{"input_per_mtok":1.4,"output_per_mtok":4.4,"cache_read_per_mtok":0.26}}`,
+		},
+		{name: "zero is legal", value: `{"free-model":{"input_per_mtok":0,"output_per_mtok":0}}`},
+		{name: "malformed json fails", value: `not json`, wantErr: true},
+		{name: "a bare number is not an object", value: `42`, wantErr: true},
+		{name: "negative input fails", value: `{"m":{"input_per_mtok":-1}}`, wantErr: true},
+		{name: "negative output fails", value: `{"m":{"output_per_mtok":-0.5}}`, wantErr: true},
+		{name: "negative cache read fails", value: `{"m":{"cache_read_per_mtok":-2}}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := map[string]string{}
+			if tt.value != "" {
+				opts["prices_by_model"] = tt.value
+			}
+			err := validatePricesByModel(opts)
+			if tt.wantErr && err == nil {
+				t.Fatalf("validatePricesByModel(%q): want error, got nil", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validatePricesByModel(%q): %v", tt.value, err)
+			}
+		})
+	}
+}

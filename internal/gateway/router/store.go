@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -170,8 +171,9 @@ func (s *Store) Load(ctx context.Context) error {
 
 // applyProviderOptions decodes a providers row's options jsonb into row.
 // Only reasoning_effort, reasoning_effort_by_model, request_timeout,
-// region, anthropic_base_url, and openai_responses are recognized today
-// (D-040, D-041, D-048, D-051); unknown keys are ignored silently. An unparseable
+// region, anthropic_base_url, openai_responses, litellm_provider, and
+// prices_by_model are recognized today
+// (D-040, D-041, D-048, D-051, D-079); unknown keys are ignored silently. An unparseable
 // request_timeout fails the load outright — config honesty, never a
 // silent fallback to the driver default. region gets no such
 // validation beyond being present: AWS region ids change over time, so
@@ -184,7 +186,35 @@ func (s *Store) Load(ctx context.Context) error {
 // (e.g. `"{\"gpt-5.6-luna\":\"none\"}"`), not a nested object — options
 // stays map[string]string end to end through the admin write path
 // (ProviderPatch), so a per-model override rides inside a flat string
-// value instead of widening that type.
+// value instead of widening that type. prices_by_model is encoded the
+// same way (e.g. `"{\"glm-5.3\":{\"input_per_mtok\":1.4}}"`), and its
+// numbers are validated on load: a negative or non-finite rate fails
+// outright rather than silently producing wrong costs, since these
+// prices are recorded as real spend (D-079).
+// validateModelPrices rejects an operator-declared price that could
+// only corrupt cost records: a negative rate, or a NaN/Inf that would
+// propagate through every cost sum touching it. Zero is legitimate
+// (genuinely free models exist, e.g. glm-4.7-flash).
+func validateModelPrices(p ModelPrices) error {
+	for _, f := range []struct {
+		name string
+		val  float64
+	}{
+		{"input_per_mtok", p.InputPerMTok},
+		{"output_per_mtok", p.OutputPerMTok},
+		{"cache_read_per_mtok", p.CacheReadPerMTok},
+		{"cache_write_per_mtok", p.CacheWritePerMTok},
+	} {
+		if math.IsNaN(f.val) || math.IsInf(f.val, 0) {
+			return fmt.Errorf("%s is not a finite number", f.name)
+		}
+		if f.val < 0 {
+			return fmt.Errorf("%s is negative (%v)", f.name, f.val)
+		}
+	}
+	return nil
+}
+
 func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	var opts struct {
 		ReasoningEffort        string `json:"reasoning_effort"`
@@ -194,6 +224,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 		AnthropicBaseURL       string `json:"anthropic_base_url"`
 		OpenAIResponses        string `json:"openai_responses"`
 		LitellmProvider        string `json:"litellm_provider"`
+		PricesByModel          string `json:"prices_by_model"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
@@ -207,6 +238,16 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	row.Region = opts.Region
 	row.AnthropicBaseURL = opts.AnthropicBaseURL
 	row.LitellmProvider = opts.LitellmProvider
+	if opts.PricesByModel != "" {
+		if err := json.Unmarshal([]byte(opts.PricesByModel), &row.PricesByModel); err != nil {
+			return fmt.Errorf("prices_by_model: %w", err)
+		}
+		for model, p := range row.PricesByModel {
+			if err := validateModelPrices(p); err != nil {
+				return fmt.Errorf("prices_by_model %q: %w", model, err)
+			}
+		}
+	}
 	if opts.RequestTimeout != "" {
 		d, err := time.ParseDuration(opts.RequestTimeout)
 		if err != nil {

@@ -1620,3 +1620,41 @@ func TestResolveRouteSelfPairedMultipleRowsSortedByName(t *testing.T) {
 		t.Fatalf("entries not sorted by provider name: %+v", entries)
 	}
 }
+
+// TestPricesOperatorOverride covers D-079: an operator-declared price
+// fills a catalog gap, and wins over the catalog when both have one.
+// Precedence matters because the catalog is a synced third-party
+// snapshot while an override is a deliberate statement about this row
+// — including a correction of a wrong catalog entry.
+func TestPricesOperatorOverride(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{
+			ID: "p1", Name: "anthropic", Kind: "api", Driver: "anthropic",
+			DefaultModel: "sonnet", CredentialRef: "A_KEY", Enabled: true,
+			PricesByModel: map[string]ModelPrices{
+				// "sonnet" has no catalog entry: the gap-filling case.
+				"sonnet": {InputPerMTok: 3, OutputPerMTok: 15},
+				// "opus" IS in the catalog at 15/75: the correction case.
+				"opus": {InputPerMTok: 1, OutputPerMTok: 2},
+			},
+		},
+	}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("opus", "chat", fp(15))}}
+	cat.pool[0].OutputPerMTok = fp(75)
+	snap, _ := BuildSnapshot(provRows, nil, func(string) string { return "sk-a" }, cat)
+
+	p := snap.Prices("anthropic", "sonnet")
+	if p == nil || p.InputPerMTok != 3 || p.OutputPerMTok != 15 {
+		t.Fatalf("Prices(anthropic, sonnet) = %+v, want the override 3/15 filling the catalog gap", p)
+	}
+
+	p = snap.Prices("anthropic", "opus")
+	if p == nil || p.InputPerMTok != 1 || p.OutputPerMTok != 2 {
+		t.Fatalf("Prices(anthropic, opus) = %+v, want the override 1/2 to beat the catalog's 15/75", p)
+	}
+
+	if p := snap.Prices("anthropic", "haiku"); p != nil {
+		t.Fatalf("Prices(anthropic, haiku) = %+v, want nil (no override, no catalog entry)", p)
+	}
+}

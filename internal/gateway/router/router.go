@@ -81,6 +81,17 @@ type ProviderRow struct {
 	// same provider row have no such restriction — a single scalar
 	// override can't express that.
 	ReasoningEffortByModel map[string]string
+	// PricesByModel comes from options.prices_by_model — operator-declared
+	// per-model prices for models the synced catalog has no entry for.
+	// LiteLLM's per-vendor buckets lag: a vendor that does not upstream
+	// its own pricing leaves its newest models unpriced indefinitely,
+	// and cost honesty (D-013) then records NULL rather than a guess,
+	// which makes real spend invisible. An operator transcribing the
+	// vendor's published rate is not a guess, so these are treated as
+	// real prices. They win over the catalog (D-079) so a wrong catalog
+	// entry can be corrected, which also means a stale override outlives
+	// a later-correct catalog price until someone removes it.
+	PricesByModel map[string]ModelPrices
 }
 
 // reasoningEffortFor resolves model's effective reasoning_effort
@@ -989,6 +1000,12 @@ func (s *Snapshot) Prices(providerName, model string) *ModelPrices {
 	row, ok := s.byName[providerName]
 	if !ok {
 		return nil
+	}
+	// Operator-declared prices win over the catalog (D-079): the catalog
+	// is a synced third-party snapshot, an override is a deliberate
+	// statement about this row.
+	if p, ok := row.PricesByModel[model]; ok {
+		return &p
 	}
 	m, ok := s.catalogModel(row, model)
 	if !ok || (m.InputPerMTok == nil && m.OutputPerMTok == nil) {

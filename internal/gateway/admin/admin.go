@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -404,15 +405,15 @@ func (a *Admin) PatchBudget(ctx context.Context, patch map[string]*ledger.Budget
 // NAME (env var / Vault path / AWS profile) — secret values are never
 // stored or returned anywhere in this system.
 type Provider struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	Kind          string             `json:"kind"`
-	Driver        string             `json:"driver"`
-	BaseURL       string             `json:"base_url"`
-	DefaultModel  string             `json:"default_model"`
-	CredentialRef string             `json:"credential_ref"`
-	Headers       map[string]string  `json:"headers"`
-	Enabled       bool               `json:"enabled"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Kind          string            `json:"kind"`
+	Driver        string            `json:"driver"`
+	BaseURL       string            `json:"base_url"`
+	DefaultModel  string            `json:"default_model"`
+	CredentialRef string            `json:"credential_ref"`
+	Headers       map[string]string `json:"headers"`
+	Enabled       bool              `json:"enabled"`
 	// ExcludeFromBootstrap opts this provider out of auto-fallback fill
 	// on the shared default/summarize/embedding routes — for local/dev
 	// providers (e.g. Ollama) that should never silently serve
@@ -534,6 +535,40 @@ func validateLitellmProvider(opts map[string]string) error {
 	}
 	if !litellmProviderPattern.MatchString(raw) {
 		return fmt.Errorf("options.litellm_provider %q must be a non-empty printable token", raw)
+	}
+	return nil
+}
+
+// validatePricesByModel rejects an operator-declared price map that
+// would corrupt cost records (D-079). Checked here as well as at config
+// load so a bad value fails the admin write that introduced it, rather
+// than surfacing later as a failed reload far from the operator.
+func validatePricesByModel(opts map[string]string) error {
+	raw, ok := opts["prices_by_model"]
+	if !ok || raw == "" {
+		return nil
+	}
+	var prices map[string]router.ModelPrices
+	if err := json.Unmarshal([]byte(raw), &prices); err != nil {
+		return fmt.Errorf("options.prices_by_model must be a JSON object of model -> prices: %w", err)
+	}
+	for model, p := range prices {
+		for _, f := range []struct {
+			name string
+			val  float64
+		}{
+			{"input_per_mtok", p.InputPerMTok},
+			{"output_per_mtok", p.OutputPerMTok},
+			{"cache_read_per_mtok", p.CacheReadPerMTok},
+			{"cache_write_per_mtok", p.CacheWritePerMTok},
+		} {
+			if math.IsNaN(f.val) || math.IsInf(f.val, 0) {
+				return fmt.Errorf("options.prices_by_model %q: %s is not a finite number", model, f.name)
+			}
+			if f.val < 0 {
+				return fmt.Errorf("options.prices_by_model %q: %s is negative (%v)", model, f.name, f.val)
+			}
+		}
 	}
 	return nil
 }
@@ -737,6 +772,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 			return err
 		}
 		if err := validateLitellmProvider(*patch.Options); err != nil {
+			return err
+		}
+		if err := validatePricesByModel(*patch.Options); err != nil {
 			return err
 		}
 		if err := validateOpenAIResponses(*patch.Options); err != nil {

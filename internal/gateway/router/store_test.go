@@ -122,3 +122,73 @@ func TestApplyProviderOptionsOpenAIResponses(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// TestApplyProviderOptionsPricesByModel covers operator-declared prices
+// (D-079): the value is a JSON-encoded object string like its
+// reasoning_effort_by_model sibling, and every rate is validated on
+// load because these numbers are recorded as real spend. Zero stays
+// legal — genuinely free models exist.
+func TestApplyProviderOptionsPricesByModel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		options string
+		wantErr bool
+		check   func(*testing.T, ProviderRow)
+	}{
+		{
+			name:    "full price set decodes",
+			options: `{"prices_by_model": "{\"glm-5.3\":{\"input_per_mtok\":1.4,\"output_per_mtok\":4.4,\"cache_read_per_mtok\":0.26}}"}`,
+			check: func(t *testing.T, row ProviderRow) {
+				p, ok := row.PricesByModel["glm-5.3"]
+				if !ok {
+					t.Fatal("glm-5.3 missing from PricesByModel")
+				}
+				if p.InputPerMTok != 1.4 || p.OutputPerMTok != 4.4 || p.CacheReadPerMTok != 0.26 {
+					t.Fatalf("prices = %+v, want 1.4/4.4/0.26", p)
+				}
+			},
+		},
+		{
+			name:    "zero is a legal price",
+			options: `{"prices_by_model": "{\"glm-4.7-flash\":{\"input_per_mtok\":0,\"output_per_mtok\":0}}"}`,
+			check: func(t *testing.T, row ProviderRow) {
+				if _, ok := row.PricesByModel["glm-4.7-flash"]; !ok {
+					t.Fatal("glm-4.7-flash missing from PricesByModel")
+				}
+			},
+		},
+		{
+			name:    "absent leaves the map nil",
+			options: `{"reasoning_effort": "low"}`,
+			check: func(t *testing.T, row ProviderRow) {
+				if row.PricesByModel != nil {
+					t.Fatalf("PricesByModel = %v, want nil when unset", row.PricesByModel)
+				}
+			},
+		},
+		{name: "malformed json fails", options: `{"prices_by_model": "not json"}`, wantErr: true},
+		{
+			name:    "negative price fails",
+			options: `{"prices_by_model": "{\"m\":{\"input_per_mtok\":-1}}"}`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var row ProviderRow
+			err := applyProviderOptions(&row, []byte(tt.options))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("applyProviderOptions: want error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("applyProviderOptions: %v", err)
+			}
+			tt.check(t, row)
+		})
+	}
+}
