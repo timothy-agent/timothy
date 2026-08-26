@@ -119,6 +119,45 @@ func TestValidateCreate(t *testing.T) {
 			m.Route = ""
 			return m
 		}, ValidateDeps{}, true},
+		{"empty model pins accepted", func(m Mission) Mission {
+			return m
+		}, ValidateDeps{}, false},
+		{"well-formed route_model accepted", func(m Mission) Mission {
+			m.RouteModel = "OpenAI/gpt-5-mini"
+			return m
+		}, ValidateDeps{}, false},
+		{"well-formed plan_route_model accepted", func(m Mission) Mission {
+			m.PlanRouteModel = "GLM (Z.ai)/glm-5.3"
+			return m
+		}, ValidateDeps{}, false},
+		{"well-formed review_route_model accepted", func(m Mission) Mission {
+			m.ReviewRouteModel = "Anthropic/claude-sonnet-5"
+			return m
+		}, ValidateDeps{}, false},
+		{"route_model missing a slash is rejected", func(m Mission) Mission {
+			m.RouteModel = "gpt-5-mini"
+			return m
+		}, ValidateDeps{}, true},
+		{"route_model missing the model part is rejected", func(m Mission) Mission {
+			m.RouteModel = "OpenAI/"
+			return m
+		}, ValidateDeps{}, true},
+		{"route_model missing the provider part is rejected", func(m Mission) Mission {
+			m.RouteModel = "/gpt-5-mini"
+			return m
+		}, ValidateDeps{}, true},
+		{"plan_route_model malformed is rejected", func(m Mission) Mission {
+			m.PlanRouteModel = "no-slash-here"
+			return m
+		}, ValidateDeps{}, true},
+		{"review_route_model malformed is rejected", func(m Mission) Mission {
+			m.ReviewRouteModel = "no-slash-here"
+			return m
+		}, ValidateDeps{}, true},
+		{"route_model not checked against a live chain", func(m Mission) Mission {
+			m.RouteModel = "SomeProvider/some-model-not-in-any-chain"
+			return m
+		}, ValidateDeps{}, false},
 		{"destination_ids all enabled", func(m Mission) Mission {
 			m.DestinationIDs = []string{"d1", "d2"}
 			return m

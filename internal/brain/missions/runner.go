@@ -730,6 +730,40 @@ func reviewRoute(m Mission) string {
 	return oversightRoute(m)
 }
 
+// workerModel is workerRoute's model-pin counterpart (D-078): RouteModel
+// pins execute turns to one chain entry in workerRoute(m). Cleared
+// whenever workerRoute has swapped to EscalationRoute — RouteModel names
+// an entry in the BASE route's chain, not the escalation route's, so
+// carrying it over would pin escalation to a model that may not even be
+// in that chain.
+func workerModel(m Mission) string {
+	if m.EscalationRoute != "" && (m.ConsecutiveFailures > 0 || m.StallCount > 0) {
+		return ""
+	}
+	return m.RouteModel
+}
+
+// oversightModel is oversightRoute's model-pin counterpart: PlanRouteModel
+// when set, otherwise RouteModel (mirrors oversightRoute falling back to
+// Route).
+func oversightModel(m Mission) string {
+	if m.PlanRouteModel != "" {
+		return m.PlanRouteModel
+	}
+	return m.RouteModel
+}
+
+// reviewModel is reviewRoute's model-pin counterpart. Precedence tracks
+// reviewRoute exactly: ReviewRouteModel > PlanRouteModel > RouteModel —
+// otherwise a mission with only PlanRouteModel set would run review on
+// the (correctly inherited) plan_route but an unpinned model within it.
+func reviewModel(m Mission) string {
+	if m.ReviewRouteModel != "" {
+		return m.ReviewRouteModel
+	}
+	return oversightModel(m)
+}
+
 // RunWorker seeds a fresh session (packet only, no prior transcript)
 // and enforces the sentinel ladder: a present, well-formed
 // mission_status call is trusted directly; a missing or invalid one
@@ -750,6 +784,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        workerRoute(m),
+		ModelHint:    workerModel(m),
 		Agent:        "mission-worker",
 		MissionID:    m.ID,
 		System:       system,
@@ -883,6 +918,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        oversightRoute(m),
+		ModelHint:    oversightModel(m),
 		Agent:        "mission-explorer",
 		MissionID:    m.ID,
 		System:       system,
@@ -964,6 +1000,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        reviewRoute(m),
+		ModelHint:    reviewModel(m),
 		Agent:        "mission-reviewer",
 		MissionID:    m.ID,
 		System:       system,
@@ -1109,6 +1146,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	req := loop.Request{
 		SessionID: m.SessionID,
 		Route:     oversightRoute(m),
+		ModelHint: oversightModel(m),
 		Agent:     "mission-planner",
 		MissionID: m.ID,
 		System:    system,

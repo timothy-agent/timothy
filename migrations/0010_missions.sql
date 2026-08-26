@@ -40,6 +40,22 @@ CREATE TABLE IF NOT EXISTS missions (
     -- specifically: precedence there is review_route > plan_route >
     -- route (internal/brain/missions/runner.go's reviewRoute).
     plan_route            text NOT NULL DEFAULT '',
+    -- RouteModel/PlanRouteModel/ReviewRouteModel (D-078) each pin one
+    -- phase axis to one exact chain entry in the route it would
+    -- otherwise resolve, as "provider name/model" (router.go's
+    -- splitProviderModelHint) -- '' means today's first-usable walk.
+    -- Precedence mirrors the route helpers exactly: route_model backs
+    -- execute (workerRoute), plan_route_model backs explore/plan
+    -- (oversightRoute), review_route_model falls back review_route_model
+    -- > plan_route_model > route_model (runner.go's reviewRouteModel).
+    -- Escalation is never pinned: it is a failure-path fallback and a
+    -- stuck pin would defeat its purpose (workerRoute clears route_model
+    -- when it swaps to escalation_route). A pin naming an entry the
+    -- chain no longer has just fails to match and the normal
+    -- first-usable walk runs -- never validated to exist at write time.
+    route_model           text NOT NULL DEFAULT '',
+    plan_route_model      text NOT NULL DEFAULT '',
+    review_route_model    text NOT NULL DEFAULT '',
     pending_permission    text,
     schedule_id           uuid,
     -- ParentMissionID names the terminal mission this one follows up

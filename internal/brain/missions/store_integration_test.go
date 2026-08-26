@@ -384,6 +384,47 @@ func TestMissionHarnessRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionModelPinsRoundTrip covers route_model/plan_route_model/
+// review_route_model (D-078) — same shape as TestMissionHarnessRoundTrips:
+// set on create, read back verbatim; unset stays empty.
+func TestMissionModelPinsRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "model-pins", Kind: "coding", Route: "default",
+		RouteModel: "OpenAI/gpt-5-mini", PlanRouteModel: "GLM (Z.ai)/glm-5.3", ReviewRouteModel: "Anthropic/claude-sonnet-5",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.RouteModel != "OpenAI/gpt-5-mini" {
+		t.Fatalf("RouteModel = %q, want OpenAI/gpt-5-mini", m.RouteModel)
+	}
+	if m.PlanRouteModel != "GLM (Z.ai)/glm-5.3" {
+		t.Fatalf("PlanRouteModel = %q, want GLM (Z.ai)/glm-5.3", m.PlanRouteModel)
+	}
+	if m.ReviewRouteModel != "Anthropic/claude-sonnet-5" {
+		t.Fatalf("ReviewRouteModel = %q, want Anthropic/claude-sonnet-5", m.ReviewRouteModel)
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-model-pins", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.RouteModel != "" || m2.PlanRouteModel != "" || m2.ReviewRouteModel != "" {
+		t.Fatalf("model pins = %q/%q/%q, want all empty when not set", m2.RouteModel, m2.PlanRouteModel, m2.ReviewRouteModel)
+	}
+}
+
 // TestMissionLightAndFinalOutputRoundTrip covers light (D-069, born
 // phase=execute) and SetFinalOutput — same shape as
 // TestMissionHarnessRoundTrips above, plus the setter mission state

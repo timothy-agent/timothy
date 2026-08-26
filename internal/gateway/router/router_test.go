@@ -169,6 +169,66 @@ func TestResolveHintExactModel(t *testing.T) {
 	}
 }
 
+// TestResolveHintProviderModelComposite covers the D-078 mission
+// model-pin format ("provider name/model"): it must pick the EXACT
+// named provider's row, not just any provider serving that model id.
+func TestResolveHintProviderModelComposite(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys())
+
+	attempts, err := snap.Resolve("coding", "grok/grok-4", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if attempts[0].ProviderName != "grok" || attempts[0].Model != "grok-4" {
+		t.Fatalf("first attempt = %s/%s, want grok/grok-4", attempts[0].ProviderName, attempts[0].Model)
+	}
+}
+
+// TestResolveHintProviderModelDisambiguatesSameModelOnTwoProviders is
+// the exact ambiguity a bare model-id hint cannot resolve: two provider
+// rows serving the identical model id. The composite hint must pick the
+// named row deterministically, unlike findModel's provider-name-sorted
+// pick of the first match.
+func TestResolveHintProviderModelDisambiguatesSameModelOnTwoProviders(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "OpenAI", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.example/v1", DefaultModel: "gpt-5-mini", CredentialRef: "K", Enabled: true},
+		{ID: "p2", Name: "OpenAI Responses", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.example/v1/responses", DefaultModel: "gpt-5-mini", CredentialRef: "K", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "coding", Chain: []ChainEntry{
+			{ProviderID: "p1", Model: "gpt-5-mini"},
+			{ProviderID: "p2", Model: "gpt-5-mini"},
+		}, Enabled: true},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string { return "key" }, &fakeCatalog{})
+
+	attempts, err := snap.Resolve("coding", "OpenAI Responses/gpt-5-mini", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if attempts[0].ProviderName != "OpenAI Responses" {
+		t.Fatalf("first attempt provider = %q, want the exact pinned row OpenAI Responses", attempts[0].ProviderName)
+	}
+}
+
+// TestResolveHintProviderModelUnknownProviderFallsToChain: a pin naming
+// a provider that doesn't exist behaves like any other hint miss —
+// skipped, falls through to the chain — never an error.
+func TestResolveHintProviderModelUnknownProviderFallsToChain(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys())
+
+	attempts, err := snap.Resolve("coding", "no-such-provider/sonnet", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := attemptNames(attempts); got != "anthropic/sonnet,grok/grok-4" {
+		t.Fatalf("attempts = %s", got)
+	}
+}
+
 func TestResolveHintMissFallsToChain(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, allKeys())

@@ -343,9 +343,19 @@ type createMissionRequest struct {
 	// EscalationRoute, when set, is where worker turns move after a
 	// failure or rework. Empty keeps escalation off — never defaulted,
 	// so a route change is always an explicit choice.
-	EscalationRoute string   `json:"escalation_route"`
-	MaxIterations   int      `json:"max_iterations"`
-	BudgetAmount    *float64 `json:"budget_amount"`
+	EscalationRoute string `json:"escalation_route"`
+	// RouteModel/PlanRouteModel/ReviewRouteModel (D-078) pin one phase
+	// axis to one exact chain entry ("provider name/model") in the route
+	// it would otherwise resolve — "" (the default) keeps the
+	// first-usable walk. Precedence mirrors the route fields exactly:
+	// see missions.Mission.RouteModel. Never validated against the live
+	// chain here — a chain can change after create and the runtime
+	// already falls back to first-usable when a pin doesn't match.
+	RouteModel       string   `json:"route_model"`
+	PlanRouteModel   string   `json:"plan_route_model"`
+	ReviewRouteModel string   `json:"review_route_model"`
+	MaxIterations    int      `json:"max_iterations"`
+	BudgetAmount     *float64 `json:"budget_amount"`
 	// BudgetCurrency is optional; an omitted value defaults to "USD"
 	// directly in create() below. The web UI, not this handler, is
 	// responsible for sending the settings page's configured default
@@ -575,6 +585,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
+		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
@@ -937,9 +948,14 @@ func (h *missionAPI) resolveHarness(ctx context.Context, kind, explicitHarness, 
 // the phase table's entry list. A resolve error or an empty route
 // yields no entries, with the failure reason returned for the phase's
 // skip_reason — never a failed request, matching executorOptions' own
-// degrade-on-resolve-error behavior. selected marks the first usable
-// entry only.
-func (h *missionAPI) resolveEntries(ctx context.Context, route, harness string) ([]executionPlanEntry, string) {
+// degrade-on-resolve-error behavior. modelPin ("provider name/model",
+// D-078), when it names a USABLE entry, marks that entry selected
+// instead of the first-usable one; when the pin names no entry, or an
+// unusable one, the first-usable entry keeps Selected and the pin's own
+// entry (if present) keeps its Usable/SkipReason as-is so the UI can
+// show why the pin will not apply — resolveEntries never fails a
+// request over a pin that doesn't currently resolve.
+func (h *missionAPI) resolveEntries(ctx context.Context, route, harness, modelPin string) ([]executionPlanEntry, string) {
 	if route == "" {
 		return nil, ""
 	}
@@ -954,7 +970,8 @@ func (h *missionAPI) resolveEntries(ctx context.Context, route, harness string) 
 		return nil, ""
 	}
 	entries := make([]executionPlanEntry, len(resolved.Entries))
-	selected := false
+	pinIdx := -1
+	firstUsable := -1
 	for i, e := range resolved.Entries {
 		entries[i] = executionPlanEntry{
 			ProviderName: e.ProviderName,
@@ -963,10 +980,18 @@ func (h *missionAPI) resolveEntries(ctx context.Context, route, harness string) 
 			SkipReason:   e.SkipReason,
 			Prices:       e.Prices,
 		}
-		if e.Usable && !selected {
-			entries[i].Selected = true
-			selected = true
+		if firstUsable == -1 && e.Usable {
+			firstUsable = i
 		}
+		if modelPin != "" && pinIdx == -1 && modelPin == e.ProviderName+"/"+e.Model {
+			pinIdx = i
+		}
+	}
+	switch {
+	case pinIdx != -1 && entries[pinIdx].Usable:
+		entries[pinIdx].Selected = true
+	case firstUsable != -1:
+		entries[firstUsable].Selected = true
 	}
 	return entries, ""
 }
@@ -998,6 +1023,21 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 	reviewRoute := q.Get("review_route")
 	escalationRoute := q.Get("escalation_route")
 	light := q.Get("light") == "true"
+	// Model pins (D-078) mirror runner.go's own precedence: routeModel
+	// backs execute, planRouteModel backs explore/plan, reviewModel
+	// falls back reviewRouteModel > planRouteModel > routeModel — see
+	// oversightModel/reviewModel.
+	routeModel := q.Get("route_model")
+	planRouteModel := q.Get("plan_route_model")
+	reviewRouteModel := q.Get("review_route_model")
+	oversightModel := routeModel
+	if planRouteModel != "" {
+		oversightModel = planRouteModel
+	}
+	reviewModel := oversightModel
+	if reviewRouteModel != "" {
+		reviewModel = reviewRouteModel
+	}
 
 	ctx := r.Context()
 	base, baseSource := h.baseRoute(ctx, kind, route, agentID)
@@ -1032,21 +1072,21 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 
 	phases := make([]executionPlanPhase, 0, 5)
 
-	exploreEntries, exploreErr := h.resolveEntries(ctx, oversight, "")
+	exploreEntries, exploreErr := h.resolveEntries(ctx, oversight, "", oversightModel)
 	phases = append(phases, executionPlanPhase{
 		Phase: "explore", Route: oversight, RouteSource: oversightSource, Axis: "native",
 		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, exploreErr),
 		Entries: emptyEntries(exploreEntries),
 	})
 
-	planEntries, planErr := h.resolveEntries(ctx, oversight, "")
+	planEntries, planErr := h.resolveEntries(ctx, oversight, "", oversightModel)
 	phases = append(phases, executionPlanPhase{
 		Phase: "plan", Route: oversight, RouteSource: oversightSource, Axis: "native",
 		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, planErr),
 		Entries: emptyEntries(planEntries),
 	})
 
-	executeEntries, executeErr := h.resolveEntries(ctx, base, harness)
+	executeEntries, executeErr := h.resolveEntries(ctx, base, harness, routeModel)
 	phases = append(phases, executionPlanPhase{
 		Phase: "execute", Route: base, RouteSource: baseSource, Axis: executeAxis,
 		Harness: harness, HarnessSource: harnessSource,
@@ -1054,7 +1094,7 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 		Entries:    emptyEntries(executeEntries),
 	})
 
-	reviewEntries, reviewErr := h.resolveEntries(ctx, review, "")
+	reviewEntries, reviewErr := h.resolveEntries(ctx, review, "", reviewModel)
 	phases = append(phases, executionPlanPhase{
 		Phase: "review", Route: review, RouteSource: reviewSource, Axis: "native",
 		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, reviewErr),
@@ -1062,7 +1102,7 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if escalationRoute != "" {
-		escalateEntries, escalateErr := h.resolveEntries(ctx, escalationRoute, "")
+		escalateEntries, escalateErr := h.resolveEntries(ctx, escalationRoute, "", "")
 		phases = append(phases, executionPlanPhase{
 			Phase: "escalate", Route: escalationRoute, RouteSource: "explicit", Axis: "native",
 			SkipReason: escalateErr,

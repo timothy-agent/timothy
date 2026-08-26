@@ -396,7 +396,24 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 	}
 
 	if hint != "" {
-		if row, ok := s.byName[hint]; ok && row.DefaultModel != "" {
+		// "provider name/model" (D-078 mission model pins) names one
+		// exact chain entry, splitting on the LAST '/'. Checked before
+		// the bare-hint forms below so a pin can never be misresolved to
+		// the wrong provider when the same model id is served by more
+		// than one row (this is the whole reason the pin format exists -
+		// see mission route_model/plan_route_model/review_route_model).
+		// A model id that itself contains '/' (some catalog buckets
+		// publish those) cannot be pinned: the split hands the leading
+		// segment to the provider lookup, which misses, and the hint is
+		// reported as matching nothing rather than resolving to the
+		// wrong row. No configured provider name or model uses one.
+		if providerName, model, ok := splitProviderModelHint(hint); ok {
+			if row, ok := s.byName[providerName]; ok {
+				add(row, model, "hint")
+			} else {
+				skipped = append(skipped, fmt.Sprintf("hint %q matched nothing", hint))
+			}
+		} else if row, ok := s.byName[hint]; ok && row.DefaultModel != "" {
 			add(row, row.DefaultModel, "hint")
 		} else if row, model, ok := s.findModel(hint); ok {
 			add(row, model, "hint")
@@ -916,6 +933,18 @@ func hasCapability(p provider.Provider, want provider.Capability) bool {
 		}
 	}
 	return false
+}
+
+// splitProviderModelHint splits a "provider name/model" hint on its
+// last '/', returning ok=false for a hint with no '/' (a bare
+// provider-or-model hint, handled by the existing byName/findModel
+// paths).
+func splitProviderModelHint(hint string) (providerName, model string, ok bool) {
+	i := strings.LastIndex(hint, "/")
+	if i < 0 {
+		return "", "", false
+	}
+	return hint[:i], hint[i+1:], true
 }
 
 // findModel locates the first provider whose catalog entry has the

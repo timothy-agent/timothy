@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -1384,6 +1385,96 @@ func TestExecutionPlanSelectedFirstUsable(t *testing.T) {
 		if e.Selected {
 			t.Fatalf("entries[%d] selected = true, want false (no entry is usable)", i)
 		}
+	}
+}
+
+// TestExecutionPlanRouteModelPinSelectsPinnedEntry confirms a well-
+// formed ?route_model= that names a usable entry marks THAT entry
+// selected instead of the first-usable one.
+func TestExecutionPlanRouteModelPinSelectsPinnedEntry(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"mixed": {Route: "mixed", Entries: []gwclient.ResolvedRouteEntry{
+				usableEntry("B", "b"),
+				usableEntry("C", "c"),
+			}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&route=mixed&route_model="+url.QueryEscape("C/c"))
+	entries := byPhase["execute"].Entries
+	if entries[0].Selected {
+		t.Fatalf("entries[0] (B/b, unpinned) selected = true, want false")
+	}
+	if !entries[1].Selected {
+		t.Fatalf("entries[1] (C/c, pinned) selected = false, want true")
+	}
+}
+
+// TestExecutionPlanRouteModelPinUnusableDegradesToFirstUsable confirms
+// a pin naming an entry that IS present but not usable leaves selected
+// on the first usable entry — the pinned entry keeps its own
+// Usable/SkipReason unchanged so the UI can explain why the pin will
+// not apply.
+func TestExecutionPlanRouteModelPinUnusableDegradesToFirstUsable(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"mixed": {Route: "mixed", Entries: []gwclient.ResolvedRouteEntry{
+				unusableEntry("A", "a", "cooling down"),
+				usableEntry("B", "b"),
+			}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&route=mixed&route_model="+url.QueryEscape("A/a"))
+	entries := byPhase["execute"].Entries
+	if entries[0].Selected {
+		t.Fatalf("entries[0] (A/a, pinned but unusable) selected = true, want false")
+	}
+	if entries[0].Usable || entries[0].SkipReason != "cooling down" {
+		t.Fatalf("entries[0] usable/skip_reason = %v/%q, want unchanged (false/cooling down)", entries[0].Usable, entries[0].SkipReason)
+	}
+	if !entries[1].Selected {
+		t.Fatalf("entries[1] (B/b, first usable) selected = false, want true (fallback when the pin can't apply)")
+	}
+}
+
+// TestExecutionPlanReviewModelPinFallback confirms review's model pin
+// mirrors reviewModel's own three-level precedence: review_route_model
+// wins, else plan_route_model, else route_model.
+func TestExecutionPlanReviewModelPinFallback(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base": {Route: "base", Entries: []gwclient.ResolvedRouteEntry{
+				usableEntry("A", "a"), usableEntry("B", "b"),
+			}},
+		}),
+	}
+	// Only route_model set: review inherits it (execute's route, no
+	// plan_route/review_route set at all so review's route is "base" too).
+	byPhase := getExecutionPlan(t, h, "kind=general&route=base&route_model="+url.QueryEscape("B/b"))
+	reviewEntries := byPhase["review"].Entries
+	if !reviewEntries[1].Selected {
+		t.Fatalf("review entries[1] (B/b) selected = false, want true (route_model inherited)")
+	}
+
+	// plan_route_model set without review_route_model: review_route_model
+	// > plan_route_model, plan_route_model wins here.
+	byPhase2 := getExecutionPlan(t, h, "kind=general&route=base&route_model="+url.QueryEscape("B/b")+"&plan_route_model="+url.QueryEscape("A/a"))
+	reviewEntries2 := byPhase2["review"].Entries
+	if !reviewEntries2[0].Selected {
+		t.Fatalf("review entries[0] (A/a) selected = false, want true (plan_route_model beats route_model)")
+	}
+
+	// review_route_model set: wins over both.
+	byPhase3 := getExecutionPlan(t, h, "kind=general&route=base&route_model="+url.QueryEscape("B/b")+"&plan_route_model="+url.QueryEscape("A/a")+"&review_route_model="+url.QueryEscape("B/b"))
+	reviewEntries3 := byPhase3["review"].Entries
+	if !reviewEntries3[1].Selected {
+		t.Fatalf("review entries[1] (B/b) selected = false, want true (review_route_model wins over plan_route_model)")
 	}
 }
 

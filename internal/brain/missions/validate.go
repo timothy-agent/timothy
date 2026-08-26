@@ -40,6 +40,20 @@ type ValidateDeps struct {
 	DestinationEnabled func(ctx context.Context, id string) (bool, error)
 }
 
+// validModelPin reports whether pin is well-formed "provider name/model"
+// (D-078) — a non-empty provider part and a non-empty model part
+// separated by the LAST '/', matching router.go's splitProviderModelHint.
+// Never checks the pin against a live chain: a chain can change after
+// create, and the runtime already falls back to first-usable when a
+// wellformed pin names no current entry.
+func validModelPin(pin string) bool {
+	i := strings.LastIndex(pin, "/")
+	if i <= 0 || i == len(pin)-1 {
+		return false
+	}
+	return true
+}
+
 // ValidateCreate enforces the domain rules a mission row must satisfy
 // regardless of which caller is creating it — the HTTP create handler
 // and the workflows engine's spawnStep both call into Driver.Create,
@@ -109,6 +123,14 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	}
 	if m.Route == "" {
 		return fmt.Errorf("%w: route is required", ErrInvalidMission)
+	}
+	switch {
+	case m.RouteModel != "" && !validModelPin(m.RouteModel):
+		return fmt.Errorf(`%w: route_model must be "provider name/model"`, ErrInvalidMission)
+	case m.PlanRouteModel != "" && !validModelPin(m.PlanRouteModel):
+		return fmt.Errorf(`%w: plan_route_model must be "provider name/model"`, ErrInvalidMission)
+	case m.ReviewRouteModel != "" && !validModelPin(m.ReviewRouteModel):
+		return fmt.Errorf(`%w: review_route_model must be "provider name/model"`, ErrInvalidMission)
 	}
 	if deps.DestinationEnabled != nil && len(m.DestinationIDs) > 0 {
 		var invalid []string

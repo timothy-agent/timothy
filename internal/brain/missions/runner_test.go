@@ -1117,6 +1117,76 @@ func TestReviewRoute(t *testing.T) {
 	}
 }
 
+// TestWorkerModel pins route_model's precedence: it backs execute
+// exactly like Route, but must NOT carry over once workerRoute has
+// swapped to EscalationRoute — it names an entry in the base route's
+// chain, not the escalation route's.
+func TestWorkerModel(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"no pin set", Mission{Route: "mini"}, ""},
+		{"pin applies on the base route", Mission{Route: "mini", RouteModel: "OpenAI/gpt-5-mini"}, "OpenAI/gpt-5-mini"},
+		{"pin cleared once escalated on failure", Mission{Route: "mini", RouteModel: "OpenAI/gpt-5-mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, ""},
+		{"pin cleared once escalated on stall", Mission{Route: "mini", RouteModel: "OpenAI/gpt-5-mini", EscalationRoute: "coding", StallCount: 1}, ""},
+		{"pin survives when escalation route is configured but not triggered", Mission{Route: "mini", RouteModel: "OpenAI/gpt-5-mini", EscalationRoute: "coding"}, "OpenAI/gpt-5-mini"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workerModel(tc.m); got != tc.want {
+				t.Fatalf("workerModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOversightModel pins explore/plan's model-pin precedence: mirrors
+// oversightRoute exactly (plan_route_model wins when set, else
+// route_model).
+func TestOversightModel(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"empty plan_route_model falls back to route_model", Mission{RouteModel: "GLM/glm-5.3"}, "GLM/glm-5.3"},
+		{"plan_route_model wins when set", Mission{RouteModel: "GLM/glm-5.3", PlanRouteModel: "Anthropic/claude-sonnet-5"}, "Anthropic/claude-sonnet-5"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := oversightModel(tc.m); got != tc.want {
+				t.Fatalf("oversightModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReviewModel pins review's three-level model precedence:
+// review_route_model > plan_route_model > route_model, tracking
+// reviewRoute's own route precedence exactly.
+func TestReviewModel(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"no overrides falls back to route_model", Mission{RouteModel: "GLM/glm-5.3"}, "GLM/glm-5.3"},
+		{"plan_route_model wins over route_model", Mission{RouteModel: "GLM/glm-5.3", PlanRouteModel: "Anthropic/claude-sonnet-5"}, "Anthropic/claude-sonnet-5"},
+		{"review_route_model wins over plan_route_model", Mission{RouteModel: "GLM/glm-5.3", PlanRouteModel: "Anthropic/claude-sonnet-5", ReviewRouteModel: "OpenAI/gpt-5-mini"}, "OpenAI/gpt-5-mini"},
+		{"review_route_model wins over route_model alone", Mission{RouteModel: "GLM/glm-5.3", ReviewRouteModel: "OpenAI/gpt-5-mini"}, "OpenAI/gpt-5-mini"},
+		{"only plan pin set: a mission with only plan_route_model must not leak an unpinned review model", Mission{PlanRouteModel: "Anthropic/claude-sonnet-5"}, "Anthropic/claude-sonnet-5"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reviewModel(tc.m); got != tc.want {
+				t.Fatalf("reviewModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunWorkerUsesEscalatedRoute(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
@@ -1129,6 +1199,25 @@ func TestRunWorkerUsesEscalatedRoute(t *testing.T) {
 	}
 	if got := agent.requests[0].Route; got != "coding" {
 		t.Fatalf("worker request route = %q, want the escalation route", got)
+	}
+	if got := agent.requests[0].ModelHint; got != "" {
+		t.Fatalf("worker request model hint = %q, want empty once escalated (pin names the base route's chain, not the escalation route's)", got)
+	}
+}
+
+// TestRunWorkerAppliesRouteModelPin confirms RouteModel reaches the
+// loop request as ModelHint on a clean (non-escalated) run.
+func TestRunWorkerAppliesRouteModelPin(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "mini", RouteModel: "OpenAI/gpt-5-mini", Workspace: "/workspace/missions/m1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if got := agent.requests[0].ModelHint; got != "OpenAI/gpt-5-mini" {
+		t.Fatalf("worker request model hint = %q, want the route_model pin", got)
 	}
 }
 

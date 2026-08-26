@@ -338,6 +338,9 @@ export function MissionForm({
   const [reviewRoute, setReviewRoute] = useState(initial?.review_route ?? '')
   const [planRoute, setPlanRoute] = useState(initial?.plan_route ?? '')
   const [escalationRoute, setEscalationRoute] = useState(initial?.escalation_route ?? '')
+  const [routeModel, setRouteModel] = useState(initial?.route_model ?? '')
+  const [planRouteModel, setPlanRouteModel] = useState(initial?.plan_route_model ?? '')
+  const [reviewRouteModel, setReviewRouteModel] = useState(initial?.review_route_model ?? '')
   const [budget, setBudget] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('USD')
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
@@ -459,11 +462,26 @@ export function MissionForm({
       plan_route: planRoute || undefined,
       review_route: reviewRoute || undefined,
       escalation_route: escalationRoute || undefined,
+      route_model: routeModel || undefined,
+      plan_route_model: planRouteModel || undefined,
+      review_route_model: reviewRouteModel || undefined,
       light: kind === 'general' ? light : undefined,
     })
       .then(setExecutionPlan)
       .catch(() => setExecutionPlan(null))
-  }, [kind, agentID, harness, route, planRoute, reviewRoute, escalationRoute, light])
+  }, [
+    kind,
+    agentID,
+    harness,
+    route,
+    planRoute,
+    reviewRoute,
+    escalationRoute,
+    routeModel,
+    planRouteModel,
+    reviewRouteModel,
+    light,
+  ])
 
   // Pre-select the settings page's configured default currency for a
   // fresh create — edit mode below overwrites this with the schedule's
@@ -650,6 +668,9 @@ export function MissionForm({
       review_route: reviewRoute || undefined,
       plan_route: planRoute || undefined,
       escalation_route: escalationRoute || undefined,
+      route_model: routeModel || undefined,
+      plan_route_model: planRouteModel || undefined,
+      review_route_model: reviewRouteModel || undefined,
       budget_amount: budget ? Number(budget) : undefined,
       budget_currency: budget ? budgetCurrency : undefined,
       auto_approve_safe: autoApproveSafe,
@@ -1288,7 +1309,15 @@ export function MissionForm({
           </div>
         )}
 
-        <MissionExecutionPlan plan={executionPlan} />
+        <MissionExecutionPlan
+          plan={executionPlan}
+          routeModel={routeModel}
+          onRouteModelChange={setRouteModel}
+          planRouteModel={planRouteModel}
+          onPlanRouteModelChange={setPlanRouteModel}
+          reviewRouteModel={reviewRouteModel}
+          onReviewRouteModelChange={setReviewRouteModel}
+        />
 
         <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
           <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">

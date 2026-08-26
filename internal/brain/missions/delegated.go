@@ -213,6 +213,35 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
+	// route_model pin (D-078): prefer the exact chain entry it names over
+	// the first-usable walk below. Absent, unusable, or cooled falls
+	// through to that walk rather than failing — the pin names an entry
+	// in this route's chain, and a chain can drift out from under it
+	// after create, so today's fallback behavior stays the floor.
+	if pin := workerModel(m); pin != "" {
+		for i, entry := range route.Entries {
+			if pin != entry.ProviderName+"/"+entry.Model {
+				continue
+			}
+			if !entry.Usable {
+				r.recordSkipped(ctx, m.ID, m.Harness, "pin_unusable", map[string]any{
+					"pin": pin, "skip_reason": entry.SkipReason,
+				})
+				break
+			}
+			if exp, cooled := r.cooledUntil(m.Harness, entry); cooled {
+				r.recordSkipped(ctx, m.ID, m.Harness, "pin_cooldown", map[string]any{
+					"pin": pin, "until": exp.UTC().Format(time.RFC3339),
+				})
+				break
+			}
+			return r.runDelegated(ctx, m, packet, route.Entries[i], adapter)
+		}
+		if !pinInChain(route.Entries, pin) {
+			r.recordSkipped(ctx, m.ID, m.Harness, "pin_absent", map[string]any{"pin": pin})
+		}
+	}
+
 	var skipReasons []string
 	var cooledEntry *gwclient.ResolvedRouteEntry
 	var cooledUntil time.Time
@@ -241,6 +270,19 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		r.recordSkipped(ctx, m.ID, m.Harness, "no_usable_entry", map[string]any{"skip_reasons": boundStrings(skipReasons, 5)})
 	}
 	return r.native.RunWorker(ctx, m, packet)
+}
+
+// pinInChain reports whether pin ("provider name/model") names any entry
+// in entries, usable or not — distinguishes "pin present but unusable/
+// cooled" (already recorded inside the walk above) from "pin absent"
+// (recorded here) so recordSkipped never double-reports the same miss.
+func pinInChain(entries []gwclient.ResolvedRouteEntry, pin string) bool {
+	for _, entry := range entries {
+		if pin == entry.ProviderName+"/"+entry.Model {
+			return true
+		}
+	}
+	return false
 }
 
 // boundStrings caps a []string to at most n elements — skip_reasons is

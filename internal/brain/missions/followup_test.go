@@ -53,6 +53,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		ID: "parent", Goal: "fix the login bug", Kind: "coding", Phase: PhaseDone, Status: StatusDone,
 		AgentID: "agent-1", Route: "route-a", ReviewRoute: "route-b", PlanRoute: "route-c",
 		EscalationRoute: "route-d", MaxIterations: 12, BudgetCurrency: "USD",
+		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
 		AutoApproveSafe: true, PromptOverlay: "be terse", Knowledge: []string{"kb1"},
 		Harness: "claude-cli", Environment: "node", RepoURL: "https://github.com/o/r.git",
 		ConnectorID: "conn1", BranchPattern: "custom/{slug}", CommitStyle: "conventional",
@@ -75,7 +76,8 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		child.ReviewRoute != "route-b" || child.PlanRoute != "route-c" || child.EscalationRoute != "route-d" ||
 		child.MaxIterations != 12 || child.AutoApproveSafe != true || child.PromptOverlay != "be terse" ||
 		child.Harness != "claude-cli" || child.Environment != "node" || child.RepoURL != "https://github.com/o/r.git" ||
-		child.ConnectorID != "conn1" || child.BranchPattern != "custom/{slug}" || child.CommitStyle != "conventional" {
+		child.ConnectorID != "conn1" || child.BranchPattern != "custom/{slug}" || child.CommitStyle != "conventional" ||
+		child.RouteModel != "P/m-a" || child.PlanRouteModel != "P/m-c" || child.ReviewRouteModel != "P/m-b" {
 		t.Fatalf("child did not inherit parent settings: %+v", child)
 	}
 	if len(child.Knowledge) != 1 || child.Knowledge[0] != "kb1" {

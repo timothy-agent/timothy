@@ -789,6 +789,125 @@ func TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative(t *testing.T
 	}
 }
 
+// --- scenario 6b: route_model pin (D-078) ---------------------------------
+
+// pinnedHarnessEntry is harnessEntry with a distinct provider/model so
+// pin tests can tell which entry actually dispatched.
+func pinnedHarnessEntry(providerName, model, credRef string) gwclient.ResolvedRouteEntry {
+	return gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-" + providerName, ProviderName: providerName, Driver: "anthropic",
+		Model: model, CredentialRef: credRef, Usable: true,
+	}
+}
+
+// TestDelegatedRunWorker_RouteModelPin_PrefersPinnedEntryOverFirstUsable
+// confirms a route_model pin dispatches its named entry even though an
+// earlier, also-usable entry sits ahead of it in the chain.
+func TestDelegatedRunWorker_RouteModelPin_PrefersPinnedEntryOverFirstUsable(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	first := pinnedHarnessEntry("anthropic", "claude-sonnet-5", "subscription")
+	pinned := pinnedHarnessEntry("glm", "glm-5.3", "subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{first, pinned}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.RouteModel = "glm/glm-5.3"
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	spawned, ok := events.last("executor.spawned")
+	if !ok {
+		t.Fatal("no executor.spawned event")
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(spawned.Payload, &payload)
+	if payload["provider"] != "glm" || payload["model"] != "glm-5.3" {
+		t.Fatalf("spawned provider/model = %v/%v, want the pinned glm/glm-5.3, not the first-in-chain entry", payload["provider"], payload["model"])
+	}
+	if events.count("executor.skipped") != 0 {
+		t.Fatalf("executor.skipped count = %d, want 0 (the pin applied cleanly)", events.count("executor.skipped"))
+	}
+}
+
+// TestDelegatedRunWorker_RouteModelPin_UnusableFallsBackToWalk covers a
+// pin naming an entry that IS in the chain but not usable: the walk
+// must still fall back to the first usable entry (never fail outright),
+// and record why the pin didn't apply.
+func TestDelegatedRunWorker_RouteModelPin_UnusableFallsBackToWalk(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	unusablePin := gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-glm", ProviderName: "glm", Driver: "anthropic",
+		Model: "glm-5.3", Usable: false, SkipReason: "disabled",
+	}
+	fallback := pinnedHarnessEntry("anthropic", "claude-sonnet-5", "subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{unusablePin, fallback}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.RouteModel = "glm/glm-5.3"
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	spawned, ok := events.last("executor.spawned")
+	if !ok {
+		t.Fatal("no executor.spawned event")
+	}
+	var spawnedPayload map[string]any
+	_ = json.Unmarshal(spawned.Payload, &spawnedPayload)
+	if spawnedPayload["provider"] != "anthropic" {
+		t.Fatalf("spawned provider = %v, want fallback to the first usable entry", spawnedPayload["provider"])
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1 (the pin miss must be recorded)", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "pin_unusable" {
+		t.Fatalf("executor.skipped reason = %v, want pin_unusable", skippedPayload["reason"])
+	}
+	if skippedPayload["pin"] != "glm/glm-5.3" {
+		t.Fatalf("executor.skipped pin = %v, want glm/glm-5.3", skippedPayload["pin"])
+	}
+}
+
+// TestDelegatedRunWorker_RouteModelPin_AbsentFallsBackToWalk covers a
+// pin naming an entry that isn't in the chain at all — never a failure,
+// falls straight to the first-usable walk with its own reason recorded.
+func TestDelegatedRunWorker_RouteModelPin_AbsentFallsBackToWalk(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.RouteModel = "no-such-provider/no-such-model"
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "pin_absent" {
+		t.Fatalf("executor.skipped reason = %v, want pin_absent", skippedPayload["reason"])
+	}
+}
+
 // --- scenario 7: api-key mode ---------------------------------------------
 
 func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {

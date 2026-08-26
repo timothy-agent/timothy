@@ -705,6 +705,15 @@ export interface Mission {
   // on instead of route — "" means route covers everything.
   plan_route?: string
   escalation_route?: string
+  // route_model/plan_route_model/review_route_model pin one phase axis
+  // to one exact chain entry ("provider name/model") in the route it
+  // would otherwise resolve — "" or absent keeps the first-usable walk.
+  // Precedence mirrors the route fields: route_model backs execute,
+  // plan_route_model backs explore/plan, review_route_model falls back
+  // review_route_model > plan_route_model > route_model.
+  route_model?: string
+  plan_route_model?: string
+  review_route_model?: string
   pending_permission?: string
   pending_permission_tool?: string
   pending_permission_args?: string

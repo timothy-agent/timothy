@@ -106,6 +106,18 @@ type Mission struct {
 	// iterations on a model that already proved too weak for the unit.
 	// Empty disables escalation.
 	EscalationRoute string `json:"escalation_route,omitempty"`
+	// RouteModel/PlanRouteModel/ReviewRouteModel (D-078) pin one phase
+	// axis to one exact chain entry in the route it would otherwise
+	// resolve, as "provider name/model" — empty keeps the first-usable
+	// walk. Precedence mirrors the route helpers: RouteModel backs
+	// execute, PlanRouteModel backs explore/plan, ReviewRouteModel falls
+	// back ReviewRouteModel > PlanRouteModel > RouteModel (runner.go's
+	// reviewRouteModel). Never validated to name a chain entry that
+	// exists — the chain can change after create and the runtime already
+	// falls back to first-usable when a pin doesn't match.
+	RouteModel       string `json:"route_model,omitempty"`
+	PlanRouteModel   string `json:"plan_route_model,omitempty"`
+	ReviewRouteModel string `json:"review_route_model,omitempty"`
 	// Harness is the execution strategy for this mission's worker turns,
 	// snapshotted at create time (D-051): "" is native in-process
 	// dispatch, "claude-cli" (etc) names a registered delegated executor

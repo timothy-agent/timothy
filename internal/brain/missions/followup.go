@@ -28,7 +28,12 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID, goal string) (str
 		Goal: goal, Kind: parent.Kind, AgentID: parent.AgentID,
 		Route: parent.Route, ReviewRoute: parent.ReviewRoute, PlanRoute: parent.PlanRoute,
 		EscalationRoute: parent.EscalationRoute, MaxIterations: parent.MaxIterations,
-		BudgetAmount: parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
+		// Pins name an entry inside a route, so they carry over with the
+		// routes above; dropping them would silently demote a follow-up
+		// to the chain's first usable entry.
+		RouteModel: parent.RouteModel, PlanRouteModel: parent.PlanRouteModel,
+		ReviewRouteModel: parent.ReviewRouteModel,
+		BudgetAmount:     parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
 		AutoApproveSafe: parent.AutoApproveSafe, PromptOverlay: parent.PromptOverlay,
 		Knowledge: parent.Knowledge, Harness: parent.Harness, Environment: parent.Environment,
 		RepoURL: parent.RepoURL, ConnectorID: parent.ConnectorID,

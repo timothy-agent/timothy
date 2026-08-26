@@ -1315,8 +1315,15 @@ describe('MissionForm — execution plan', () => {
 
     expect(await screen.findByText('This mission will run')).toBeInTheDocument()
     expect(screen.getByText('Claude Code')).toBeInTheDocument()
-    expect(screen.getByText(/GLM \(Z\.ai\) glm-5\.3/)).toBeInTheDocument()
-    expect(screen.getByText(/Anthropic sonnet-5/)).toBeInTheDocument()
+    // No pin set on either phase: the select shows "Auto (first usable)"
+    // regardless of which entry the server marked selected.
+    expect(screen.getByLabelText('Explore model')).toHaveTextContent('Auto (first usable)')
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Auto (first usable)')
+    fireEvent.click(screen.getByLabelText('Explore model'))
+    expect(await screen.findByRole('option', { name: 'GLM (Z.ai) glm-5.3' })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Explore model'))
+    fireEvent.click(screen.getByLabelText('Execute model'))
+    expect(await screen.findByRole('option', { name: 'Anthropic sonnet-5' })).toBeInTheDocument()
     expect(screen.getByText('$0.60/$2.20 per Mtok')).toBeInTheDocument()
     expect(screen.getByText('Naming and memory extraction use the summarize route.')).toBeInTheDocument()
   })
@@ -1333,7 +1340,7 @@ describe('MissionForm — execution plan', () => {
     expect(await screen.findByText('Skipped - light mission')).toBeInTheDocument()
   })
 
-  it('shows an unusable-entries warning when nothing is selected', async () => {
+  it('shows Auto with the unusable entry disabled when nothing is selected', async () => {
     const plan = fivePhases.map((p) =>
       p.phase === 'explore'
         ? {
@@ -1355,7 +1362,10 @@ describe('MissionForm — execution plan', () => {
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
 
-    expect(await screen.findByText('1 unusable - cooling down')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Explore model')).toHaveTextContent('Auto (first usable)')
+    fireEvent.click(screen.getByLabelText('Explore model'))
+    const option = await screen.findByRole('option', { name: /OpenAI gpt-5-mini - cooling down/ })
+    expect(option).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('renders no price text when the selected entry has no prices', async () => {
@@ -1371,6 +1381,56 @@ describe('MissionForm — execution plan', () => {
 
     await screen.findByText('This mission will run')
     expect(screen.queryByText(/per Mtok/)).not.toBeInTheDocument()
+  })
+
+  it('picking an entry in the execute model select submits route_model, and Auto omits it', async () => {
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm-pin' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    await screen.findByLabelText('Execute model')
+
+    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Anthropic sonnet-5' }))
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Anthropic sonnet-5')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ route_model: 'Anthropic/sonnet-5' }),
+      ),
+    )
+  })
+
+  it('omits route_model from the create payload when left on Auto', async () => {
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm-pin-2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    await screen.findByLabelText('Execute model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ route_model: undefined })),
+    )
+  })
+
+  it('picking an entry then switching back to Auto clears the pin', async () => {
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    await screen.findByLabelText('Execute model')
+
+    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Anthropic sonnet-5' }))
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Anthropic sonnet-5')
+
+    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Auto (first usable)' }))
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Auto (first usable)')
   })
 
   it('shows live default labels for plan, review, and escalation route selects', async () => {
