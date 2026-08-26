@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -41,6 +43,13 @@ type Entry struct {
 	// a subscription/oauth-billed delegated executor run — a real
 	// figure, but not actual marginal spend.
 	Unbilled bool
+	// Local marks the provider's endpoint as a private/loopback address
+	// (e.g. host Ollama), where no catalog price is ever expected.
+	Local bool
+	// ProviderRequestID is the provider's own id for this request, distinct
+	// from ID (Timothy's row id) — lets a row be reconciled against the
+	// provider's own usage export.
+	ProviderRequestID string
 }
 
 // Recorder is what the API layer depends on; tests supply an in-memory
@@ -51,18 +60,29 @@ type Recorder interface {
 
 // Ledger writes entries to cost_ledger.
 type Ledger struct {
-	db  *pgpool.Pool
-	log *slog.Logger
+	db            *pgpool.Pool
+	log           *slog.Logger
+	unpricedUsage prometheus.Counter // nil-safe: may be unset in tests
 }
 
-func New(db *pgpool.Pool, log *slog.Logger) *Ledger {
-	return &Ledger{db: db, log: log}
+func New(db *pgpool.Pool, log *slog.Logger, unpricedUsage prometheus.Counter) *Ledger {
+	return &Ledger{db: db, log: log, unpricedUsage: unpricedUsage}
 }
 
 // Record inserts the entry. Failures are logged, never propagated —
 // accounting must not break serving (a degraded database already shows
 // in /health).
 func (l *Ledger) Record(ctx context.Context, e Entry) {
+	if e.Cost == nil && e.Status == "ok" && !e.Unbilled && !e.Local && billableUsage(e.Usage) {
+		l.log.Warn("unpriced usage recorded; model has no catalog price",
+			"provider", e.Provider, "model", e.Model, "route", e.Route,
+			"input_tokens", e.Usage.InputTokens, "output_tokens", e.Usage.OutputTokens,
+			"cache_read_tokens", e.Usage.CacheReadTokens, "cache_write_tokens", e.Usage.CacheWriteTokens)
+		if l.unpricedUsage != nil {
+			l.unpricedUsage.Inc()
+		}
+	}
+
 	db, err := l.db.Get()
 	if err != nil {
 		l.log.Warn("ledger write skipped", "error", err, "provider", e.Provider, "status", e.Status)
@@ -71,9 +91,9 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()
 
-	var in, out, cr, cw *int
+	var in, out, cr, cw, rt *int
 	if e.Usage != nil {
-		in, out, cr, cw = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens
+		in, out, cr, cw, rt = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens, &e.Usage.ReasoningTokens
 	}
 	currency := e.Currency
 	if currency == "" {
@@ -81,12 +101,12 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	}
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
 		(id, provider, model, route, agent, purpose, session_id, mission_id,
-		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-		 latency_ms, status, error_code, cost, currency, unbilled)
+		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+		 latency_ms, status, error_code, cost, currency, unbilled, provider_request_id)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
-		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18)`,
+		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''))`,
 		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
-		in, out, cr, cw, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled)
+		in, out, cr, cw, rt, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled, e.ProviderRequestID)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
 	}
@@ -117,6 +137,12 @@ func (l *Ledger) LastSuccess(ctx context.Context, sessionID, route string) (prov
 		return "", "", false
 	}
 	return providerName, model, true
+}
+
+// billableUsage reports whether u carries any tokens that would have
+// been priced had the catalog known this model.
+func billableUsage(u *stream.Usage) bool {
+	return u != nil && u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0
 }
 
 // NewID returns a random UUIDv4 for pre-assigning ledger rows.

@@ -57,7 +57,7 @@ func testUsageAPI(t *testing.T) (*usageAPI, *ledger.Ledger) {
 	})
 
 	return &usageAPI{agg: ledger.NewAggregator(pool), budgets: ledger.NewBudgetStore(pool)},
-		ledger.New(pool, log)
+		ledger.New(pool, log, nil)
 }
 
 func usd(v float64) *float64 { return &v }

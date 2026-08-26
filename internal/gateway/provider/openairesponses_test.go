@@ -322,7 +322,7 @@ func TestOpenAIResponsesRelayFullTurn(t *testing.T) {
 		orsWrite(w, "response.function_call_arguments.delta", `{"output_index":0,"delta":"{\"city"}`)
 		orsWrite(w, "response.function_call_arguments.delta", `{"output_index":0,"delta":"\":\"SF\"}"}`)
 		orsWrite(w, "response.output_item.done", `{"output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"get_weather"}}`)
-		orsWrite(w, "response.completed", `{"response":{"id":"resp_9","status":"completed","usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":40}}}}`)
+		orsWrite(w, "response.completed", `{"response":{"id":"resp_9","status":"completed","usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":40},"output_tokens_details":{"reasoning_tokens":7}}}}`)
 	})
 
 	ch, err := p.Stream(t.Context(), CompletionRequest{Model: "gpt-5.4", Messages: []Message{{Role: "user", Content: "hi"}}})
@@ -350,7 +350,7 @@ func TestOpenAIResponsesRelayFullTurn(t *testing.T) {
 		t.Fatalf("usage events = %d, want 1", len(usages))
 	}
 	u := usages[0].Usage
-	if u.InputTokens != 60 || u.OutputTokens != 10 || u.CacheReadTokens != 40 {
+	if u.InputTokens != 60 || u.OutputTokens != 10 || u.CacheReadTokens != 40 || u.ReasoningTokens != 7 {
 		t.Fatalf("usage = %+v", u)
 	}
 
@@ -360,6 +360,9 @@ func TestOpenAIResponsesRelayFullTurn(t *testing.T) {
 	}
 	if done.Meta == nil || len(done.Meta.ProviderState) == 0 {
 		t.Fatalf("done Meta.ProviderState missing: %+v", done.Meta)
+	}
+	if done.Meta.ProviderRequestID != "resp_9" {
+		t.Fatalf("done Meta.ProviderRequestID = %q, want resp_9", done.Meta.ProviderRequestID)
 	}
 	var state orsState
 	if err := json.Unmarshal(done.Meta.ProviderState, &state); err != nil {

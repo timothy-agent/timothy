@@ -192,6 +192,7 @@ type oaiRequest struct {
 // wire types (stream chunks; only the fields we read)
 
 type oaiChunk struct {
+	ID      string `json:"id"`
 	Choices []struct {
 		Delta struct {
 			Content          string `json:"content"`
@@ -214,6 +215,9 @@ type oaiChunk struct {
 		PromptTokensDetails struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
+		CompletionTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
@@ -450,6 +454,7 @@ func (o *OpenAICompat) buildRequest(req CompletionRequest) oaiRequest {
 func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 	tools := newToolAccumulator()
 	var usage *stream.Usage
+	var requestID string
 	finished := false
 	truncated := false
 
@@ -467,7 +472,11 @@ func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stre
 			if truncated && !emit(ctx, ch, stream.StreamEvent{Type: stream.EventIncomplete, Text: "finish_reason=length"}) {
 				return false
 			}
-			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone})
+			var meta *stream.Meta
+			if requestID != "" {
+				meta = &stream.Meta{ProviderRequestID: requestID}
+			}
+			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone, Meta: meta})
 			return false
 		}
 
@@ -486,6 +495,9 @@ func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stre
 			}})
 			return false
 		}
+		if c.ID != "" {
+			requestID = c.ID
+		}
 		if c.Usage != nil {
 			// OpenAI-style prompt_tokens INCLUDES cached tokens;
 			// normalize to the Anthropic-style split (InputTokens
@@ -495,6 +507,7 @@ func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stre
 				InputTokens:     max(c.Usage.PromptTokens-cached, 0),
 				OutputTokens:    c.Usage.CompletionTokens,
 				CacheReadTokens: cached,
+				ReasoningTokens: c.Usage.CompletionTokensDetails.ReasoningTokens,
 			}
 		}
 		if len(c.Choices) == 0 {

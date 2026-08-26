@@ -173,6 +173,7 @@ type anthropicStreamPayload struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message struct {
+		ID    string         `json:"id"`
 		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
 	ContentBlock struct {
@@ -262,6 +263,7 @@ func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
 func (a *Anthropic) relay(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
 	tools := newToolAccumulator()
 	usage := &stream.Usage{}
+	var requestID string
 	finished := false
 
 	err := sse.Read(body, func(ev sse.Event) bool {
@@ -279,6 +281,7 @@ func (a *Anthropic) relay(ctx context.Context, body io.Reader, ch chan<- stream.
 			usage.InputTokens = p.Message.Usage.InputTokens
 			usage.CacheReadTokens = p.Message.Usage.CacheReadInputTokens
 			usage.CacheWriteTokens = p.Message.Usage.CacheCreationInputTokens
+			requestID = p.Message.ID
 		case "content_block_start":
 			if p.ContentBlock.Type == "tool_use" {
 				return emit(ctx, ch, tools.start(p.Index, p.ContentBlock.ID, p.ContentBlock.Name))
@@ -305,7 +308,11 @@ func (a *Anthropic) relay(ctx context.Context, body io.Reader, ch chan<- stream.
 			if !emit(ctx, ch, stream.StreamEvent{Type: stream.EventUsage, Usage: usage}) {
 				return false
 			}
-			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone})
+			var meta *stream.Meta
+			if requestID != "" {
+				meta = &stream.Meta{ProviderRequestID: requestID}
+			}
+			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone, Meta: meta})
 			return false
 		case "error":
 			finished = true

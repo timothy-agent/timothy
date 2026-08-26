@@ -1,11 +1,18 @@
 package ledger
 
 import (
+	"bytes"
+	"log/slog"
 	"math"
+	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
 func TestCost(t *testing.T) {
@@ -63,3 +70,103 @@ func TestCost(t *testing.T) {
 }
 
 func f(v float64) *float64 { return &v }
+
+func TestRecordUnpricedUsageWarning(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		entry   Entry
+		wantLog bool
+	}{
+		{
+			name:    "billable usage with nil cost warns",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "ok", Usage: &stream.Usage{InputTokens: 10, OutputTokens: 5}},
+			wantLog: true,
+		},
+		{
+			name:    "zero tokens does not warn",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "ok", Usage: &stream.Usage{}},
+			wantLog: false,
+		},
+		{
+			name:    "nil usage does not warn",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "ok"},
+			wantLog: false,
+		},
+		{
+			name:    "errored status does not warn",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "error", Usage: &stream.Usage{InputTokens: 10}},
+			wantLog: false,
+		},
+		{
+			name:    "incomplete status does not warn",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "incomplete", Usage: &stream.Usage{InputTokens: 10}},
+			wantLog: false,
+		},
+		{
+			name:    "non-nil cost does not warn",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "ok", Usage: &stream.Usage{InputTokens: 10}, Cost: f(0.01)},
+			wantLog: false,
+		},
+		{
+			name:    "unbilled entry does not warn",
+			entry:   Entry{Provider: "claude-cli", Model: "opus", Status: "ok", Usage: &stream.Usage{InputTokens: 10}, Unbilled: true},
+			wantLog: false,
+		},
+		{
+			name:    "local provider does not warn",
+			entry:   Entry{Provider: "ollama", Model: "qwen3:4b", Status: "ok", Usage: &stream.Usage{InputTokens: 10}, Local: true},
+			wantLog: false,
+		},
+		{
+			name:    "remote provider still warns",
+			entry:   Entry{Provider: "openai", Model: "gpt-5.2", Status: "ok", Usage: &stream.Usage{InputTokens: 10}, Local: false},
+			wantLog: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_unpriced_usage_total"})
+			l := New(degradedPool(t), log, counter)
+
+			l.Record(t.Context(), tt.entry)
+
+			gotLog := strings.Contains(buf.String(), "unpriced usage recorded")
+			if gotLog != tt.wantLog {
+				t.Fatalf("log contains warning = %v, want %v (log: %s)", gotLog, tt.wantLog, buf.String())
+			}
+			wantCount := 0.0
+			if tt.wantLog {
+				wantCount = 1
+			}
+			if got := testutil.ToFloat64(counter); got != wantCount {
+				t.Fatalf("counter = %v, want %v", got, wantCount)
+			}
+		})
+	}
+}
+
+func TestRecordUnpricedUsageNilCounterDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	l := New(degradedPool(t), log, nil)
+
+	l.Record(t.Context(), Entry{Provider: "openai", Model: "gpt-5.2", Status: "ok", Usage: &stream.Usage{InputTokens: 10}})
+
+	if !strings.Contains(buf.String(), "unpriced usage recorded") {
+		t.Fatalf("expected warning log, got: %s", buf.String())
+	}
+}
+
+// degradedPool returns a pool with no DSN — permanently degraded, so
+// Record's DB write fails fast without touching the network.
+func degradedPool(t *testing.T) *pgpool.Pool {
+	t.Helper()
+	return pgpool.New(t.Context(), "", slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+}

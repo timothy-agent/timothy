@@ -44,15 +44,15 @@ func TestRecordWritesRows(t *testing.T) {
 		}
 	}()
 
-	l := New(pool, log)
+	l := New(pool, log, nil)
 	cost := 0.001234
 
 	// Success with usage and cost.
 	l.Record(ctx, Entry{
 		Provider: "itest-provider", Model: "m1", Route: "coding",
 		SessionID: "sess-1",
-		Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10},
-		LatencyMS: 321, Status: "ok", Cost: &cost,
+		Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10, ReasoningTokens: 20},
+		LatencyMS: 321, Status: "ok", Cost: &cost, ProviderRequestID: "resp_itest_1",
 	})
 	// Failure without usage: cost, tokens, session all NULL.
 	l.Record(ctx, Entry{
@@ -70,6 +70,7 @@ func TestRecordWritesRows(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
 		WHERE provider = 'itest-provider' AND status = 'ok'
 		AND input_tokens = 100 AND output_tokens = 50 AND cache_read_tokens = 10
+		AND reasoning_tokens = 20 AND provider_request_id = 'resp_itest_1'
 		AND session_id = 'sess-1' AND cost = 0.001234 AND currency = 'USD'`).Scan(&okCount); err != nil {
 		t.Fatalf("query ok row: %v", err)
 	}
@@ -78,7 +79,8 @@ func TestRecordWritesRows(t *testing.T) {
 	}
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM cost_ledger
 		WHERE provider = 'itest-provider' AND status = 'error' AND error_code = 'timeout'
-		AND input_tokens IS NULL AND cost IS NULL AND session_id IS NULL`).Scan(&nullUsage); err != nil {
+		AND input_tokens IS NULL AND cost IS NULL AND session_id IS NULL
+		AND reasoning_tokens IS NULL AND provider_request_id IS NULL`).Scan(&nullUsage); err != nil {
 		t.Fatalf("query error row: %v", err)
 	}
 	if nullUsage != 1 {
@@ -140,7 +142,7 @@ func TestLastSuccessIgnoresStaleRouteEdit(t *testing.T) {
 		t.Fatalf("insert route: %v", err)
 	}
 
-	l := New(pool, log)
+	l := New(pool, log, nil)
 	l.Record(ctx, Entry{
 		Provider: "itest-sticky-provider", Model: "m1", Route: routeName,
 		SessionID: "sess-sticky", LatencyMS: 10, Status: "ok",

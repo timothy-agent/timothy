@@ -35,10 +35,10 @@ func TestOpenAICompatHappyPath(t *testing.T) {
 	var gotAuth string
 	p := oaiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		oaiWrite(w, `{"choices":[{"delta":{"content":"Hel"}}]}`)
+		oaiWrite(w, `{"id":"chatcmpl-abc123","choices":[{"delta":{"content":"Hel"}}]}`)
 		oaiWrite(w, `{"choices":[{"delta":{"content":"lo"}}]}`)
 		oaiWrite(w, `{"choices":[{"delta":{},"finish_reason":"stop"}]}`)
-		oaiWrite(w, `{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":6}}}`)
+		oaiWrite(w, `{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":6},"completion_tokens_details":{"reasoning_tokens":3}}}`)
 		oaiWrite(w, "[DONE]")
 	})
 
@@ -60,11 +60,15 @@ func TestOpenAICompatHappyPath(t *testing.T) {
 	}
 	u := usages[0].Usage
 	// prompt_tokens=12 includes cached_tokens=6: normalized input is 6.
-	if u.InputTokens != 6 || u.OutputTokens != 4 || u.CacheReadTokens != 6 {
+	if u.InputTokens != 6 || u.OutputTokens != 4 || u.CacheReadTokens != 6 || u.ReasoningTokens != 3 {
 		t.Fatalf("usage = %+v", u)
 	}
-	if lastType(t, events) != stream.EventDone {
-		t.Fatalf("last = %v, want done", lastType(t, events))
+	done := events[len(events)-1]
+	if done.Type != stream.EventDone {
+		t.Fatalf("last = %v, want done", done.Type)
+	}
+	if done.Meta == nil || done.Meta.ProviderRequestID != "chatcmpl-abc123" {
+		t.Fatalf("done Meta.ProviderRequestID = %+v, want chatcmpl-abc123", done.Meta)
 	}
 }
 

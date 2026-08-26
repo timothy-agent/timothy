@@ -55,6 +55,7 @@ type Summary struct {
 	OutputTokens         int64   `json:"output_tokens"`
 	CacheReadTokens      int64   `json:"cache_read_tokens"`
 	CacheWriteTokens     int64   `json:"cache_write_tokens"`
+	ReasoningTokens      int64   `json:"reasoning_tokens"`
 	Requests             int64   `json:"requests"`
 	Errors               int64   `json:"errors"`
 	UnpricedRequests     int64   `json:"unpriced_requests"`
@@ -74,6 +75,7 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 			COALESCE(SUM(cost) FILTER (WHERE unbilled), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
 			COUNT(*) FILTER (WHERE cost IS NULL),
 			COALESCE(SUM(input_tokens) FILTER (WHERE cost IS NULL), 0),
@@ -90,7 +92,7 @@ func (a *Aggregator) SummaryByCurrency(ctx context.Context, from, to time.Time) 
 	for rows.Next() {
 		var s Summary
 		if err := rows.Scan(&s.Currency, &s.Cost, &s.UnbilledCost, &s.InputTokens, &s.OutputTokens,
-			&s.CacheReadTokens, &s.CacheWriteTokens, &s.Requests, &s.Errors,
+			&s.CacheReadTokens, &s.CacheWriteTokens, &s.ReasoningTokens, &s.Requests, &s.Errors,
 			&s.UnpricedRequests, &s.UnpricedInputTokens, &s.UnpricedOutputTokens); err != nil {
 			return nil, fmt.Errorf("usage summary: %w", err)
 		}

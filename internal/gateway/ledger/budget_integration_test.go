@@ -84,7 +84,7 @@ func TestBudgetRoundTripAndStatus(t *testing.T) {
 	// Status: spend today crosses the day limit but not the huge
 	// month limit. Other tests' rows can only add spend, which keeps
 	// both assertions stable.
-	l := New(pool, log)
+	l := New(pool, log, nil)
 	cost := 0.5
 	for range 2 {
 		l.Record(ctx, Entry{
@@ -180,7 +180,7 @@ func TestBudgetStatusIgnoresOtherCurrencySpend(t *testing.T) {
 		t.Fatalf("set day: %v", err)
 	}
 
-	l := New(pool, log)
+	l := New(pool, log, nil)
 	cost := 500.0
 	l.Record(ctx, Entry{
 		Provider: "itest-budget-eur", Model: "m1", Route: "coding",

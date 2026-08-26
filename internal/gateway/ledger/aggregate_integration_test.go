@@ -59,7 +59,7 @@ func testAggregator(t *testing.T) (*Aggregator, *Ledger) {
 			t.Errorf("cleanup agg rows: %v", err)
 		}
 	})
-	return NewAggregator(pool), New(pool, log)
+	return NewAggregator(pool), New(pool, log, nil)
 }
 
 func usd(v float64) *float64 { return &v }

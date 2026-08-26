@@ -1207,3 +1207,27 @@ func TestReload(t *testing.T) {
 		t.Fatalf("reload failure: code = %d", w.Code)
 	}
 }
+
+func TestIsLocalBaseURL(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		baseURL string
+		want    bool
+	}{
+		{"", true},
+		{"http://localhost:11434", true},
+		{"http://host.docker.internal:11434", true},
+		{"http://127.0.0.1:11434", true},
+		{"http://192.168.1.5:11434", true},
+		{"https://api.openai.com/v1", false},
+		{"https://api.anthropic.com", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.baseURL, func(t *testing.T) {
+			t.Parallel()
+			if got := isLocalBaseURL(tt.baseURL); got != tt.want {
+				t.Fatalf("isLocalBaseURL(%q) = %v, want %v", tt.baseURL, got, tt.want)
+			}
+		})
+	}
+}

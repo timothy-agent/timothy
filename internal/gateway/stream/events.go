@@ -100,6 +100,10 @@ type Meta struct {
 	DurationMs int64    `json:"duration_ms,omitempty"`
 	Cost       *float64 `json:"cost,omitempty"`
 	Currency   string   `json:"currency,omitempty"`
+	// ProviderRequestID is the provider's own id for this request (e.g.
+	// OpenAI resp_.../chatcmpl-..., Anthropic msg_...), for reconciling a
+	// ledger row against the provider's own usage export.
+	ProviderRequestID string `json:"provider_request_id,omitempty"`
 	// ProviderState is opaque driver continuation state (D-067) — e.g.
 	// the openai-responses driver's previous_response_id — echoed back
 	// by the caller on the next CompletionRequest.ProviderState so the
@@ -124,6 +128,10 @@ type Usage struct {
 	OutputTokens     int `json:"output_tokens"`
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// ReasoningTokens is already included in OutputTokens and billed as
+	// output (D-013 unaffected); it exists purely so an operator can see
+	// how much output spend went to invisible reasoning.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 // StreamError describes a terminal stream failure.

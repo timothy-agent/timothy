@@ -442,7 +442,10 @@ type orsUsage struct {
 	InputTokensDetails struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"input_tokens_details"`
-	OutputTokens int `json:"output_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 }
 
 type orsResponse struct {
@@ -529,6 +532,7 @@ func (o *OpenAIResponses) relay(ctx context.Context, body io.Reader, ch chan<- s
 				}
 			}
 			var state *orsState
+			var requestID string
 			if p.Response != nil {
 				if p.Response.Usage != nil {
 					cached := p.Response.Usage.InputTokensDetails.CachedTokens
@@ -536,17 +540,19 @@ func (o *OpenAIResponses) relay(ctx context.Context, body io.Reader, ch chan<- s
 						InputTokens:     max(p.Response.Usage.InputTokens-cached, 0),
 						OutputTokens:    p.Response.Usage.OutputTokens,
 						CacheReadTokens: cached,
+						ReasoningTokens: p.Response.Usage.OutputTokensDetails.ReasoningTokens,
 					}
 					if !emit(ctx, ch, stream.StreamEvent{Type: stream.EventUsage, Usage: u}) {
 						return false
 					}
 				}
 				state = &orsState{Driver: orsDriverTag, PreviousResponseID: p.Response.ID}
+				requestID = p.Response.ID
 			}
 			var meta *stream.Meta
 			if state != nil {
 				if raw, err := json.Marshal(state); err == nil {
-					meta = &stream.Meta{ProviderState: raw}
+					meta = &stream.Meta{ProviderState: raw, ProviderRequestID: requestID}
 				}
 			}
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone, Meta: meta})

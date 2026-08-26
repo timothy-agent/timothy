@@ -950,6 +950,12 @@ func (s *Snapshot) Provider(name string) (provider.Provider, bool) {
 	return s.registry.Get(name)
 }
 
+// ProviderRow looks up a provider row by name.
+func (s *Snapshot) ProviderRow(providerName string) (ProviderRow, bool) {
+	row, ok := s.byName[providerName]
+	return row, ok
+}
+
 func (s *Snapshot) Prices(providerName, model string) *ModelPrices {
 	row, ok := s.byName[providerName]
 	if !ok {

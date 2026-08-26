@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     output_tokens      integer,
     cache_read_tokens  integer,
     cache_write_tokens integer,
+    -- Subset of output_tokens already included and billed there (OpenAI
+    -- reasoning models); stored separately for spend visibility only.
+    reasoning_tokens   integer,
     latency_ms         integer NOT NULL,
     status             text NOT NULL,
     error_code         text,
@@ -79,7 +82,11 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     -- subscription/oauth-billed delegated executor run: a real figure,
     -- but not actual marginal spend (D-013 amended by operator
     -- decision — tracked so subscription runs aren't budget-invisible).
-    unbilled           boolean NOT NULL DEFAULT false
+    unbilled           boolean NOT NULL DEFAULT false,
+    -- Provider's own id for this request (OpenAI resp_.../chatcmpl-...,
+    -- Anthropic msg_...), distinct from id above: lets a row be
+    -- reconciled against the provider's own usage export.
+    provider_request_id text
 );
 
 CREATE INDEX IF NOT EXISTS cost_ledger_ts_idx ON cost_ledger (ts);

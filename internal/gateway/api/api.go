@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 	"github.com/SumonMSelim/timothy/internal/platform/metrics"
+	"github.com/SumonMSelim/timothy/internal/platform/netguard"
 )
 
 // ConfigSource supplies routing snapshots and reloads; router.Store
@@ -150,6 +153,27 @@ func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": msg})
 }
 
+// isLocalBaseURL reports whether baseURL points at a private/loopback
+// endpoint (e.g. host Ollama) that never carries a catalog price. No
+// DNS lookup: a bare hostname is checked by name only.
+func isLocalBaseURL(baseURL string) bool {
+	if baseURL == "" {
+		return true
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "host.docker.internal" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return netguard.BlockedIP(ip) != ""
+	}
+	return false
+}
+
 // handleStream resolves the route and relays the first successful
 // provider's normalized events as SSE. Failover happens only when an
 // attempt fails before producing any content — a stream that already
@@ -258,11 +282,15 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		// earlier entries fail fast so the chain can advance.
 		completion.FinalAttempt = i == len(attempts)-1
 		prices := snap.Prices(att.ProviderName, att.Model)
+		local := false
+		if row, ok := snap.ProviderRow(att.ProviderName); ok {
+			local = isLocalBaseURL(row.BaseURL)
+		}
 		res := streamAttempt(r.Context(), att, completion, ledger.Entry{
 			ID:       ledger.NewID(),
 			Provider: att.ProviderName, Model: att.Model,
 			Route: req.Route, Agent: req.Agent, Purpose: req.Purpose,
-			SessionID: req.SessionID, MissionID: req.MissionID,
+			SessionID: req.SessionID, MissionID: req.MissionID, Local: local,
 		}, prices, send)
 
 		if res.failedOver() {
@@ -453,14 +481,16 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			var providerState json.RawMessage
 			if ev.Meta != nil {
 				providerState = ev.Meta.ProviderState
+				res.entry.ProviderRequestID = ev.Meta.ProviderRequestID
 			}
 			ev.Meta = &stream.Meta{
-				Provider:      att.ProviderName,
-				Model:         att.Model,
-				LedgerID:      entry.ID,
-				Cost:          res.entry.Cost,
-				Currency:      currency,
-				ProviderState: providerState,
+				Provider:          att.ProviderName,
+				Model:             att.Model,
+				LedgerID:          entry.ID,
+				Cost:              res.entry.Cost,
+				Currency:          currency,
+				ProviderState:     providerState,
+				ProviderRequestID: res.entry.ProviderRequestID,
 			}
 			send(ev)
 		default:
@@ -565,9 +595,13 @@ func (a *API) handleEmbed(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		start := time.Now()
+		local := false
+		if row, ok := snap.ProviderRow(att.ProviderName); ok {
+			local = isLocalBaseURL(row.BaseURL)
+		}
 		entry := ledger.Entry{
 			Provider: att.ProviderName, Model: att.Model,
-			Route: embeddingRoute, Purpose: req.Purpose, SessionID: req.SessionID,
+			Route: embeddingRoute, Purpose: req.Purpose, SessionID: req.SessionID, Local: local,
 		}
 
 		vecs, usage, err := emb.Embed(r.Context(), att.Model, req.Texts)

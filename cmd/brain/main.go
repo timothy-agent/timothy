@@ -1209,7 +1209,7 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 			return secrets.Resolve(rctx, ref)
 		}
 	}
-	led := ledger.New(db, log)
+	led := ledger.New(db, log, nil)
 	return missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, log)
 }
 

@@ -146,7 +146,7 @@ func testAdminWithCatalog(t *testing.T, cat *catalog.Store) (*Admin, *router.Sto
 	if err != nil {
 		t.Fatalf("secretstore.New: %v", err)
 	}
-	return New(pool, store, ledger.New(pool, log), ledger.NewBudgetStore(pool), secrets, cat, log), store, pool
+	return New(pool, store, ledger.New(pool, log, nil), ledger.NewBudgetStore(pool), secrets, cat, log), store, pool
 }
 
 // waitSnapshot retries reload until the provider reaches the

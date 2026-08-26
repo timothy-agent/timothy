@@ -66,7 +66,9 @@ func main() {
 	go runCatalogSweep(ctx, cat, app.Log)
 	store := router.NewStore(app.DB, credentialLookup(secrets, app.Log), cat, app.Log)
 	go store.Run(ctx)
-	led := ledger.New(app.DB, app.Log)
+	unpricedUsage := app.Metrics.NewCounter("gateway_unpriced_usage_total",
+		"Billable calls recorded with no catalog price (cost = NULL).")
+	led := ledger.New(app.DB, app.Log, unpricedUsage)
 	agg := ledger.NewAggregator(app.DB)
 	budgets := ledger.NewBudgetStore(app.DB)
 	// GATEWAY_FAILURE_CAPTURE_DIR: opt-in local diagnostics, off by
