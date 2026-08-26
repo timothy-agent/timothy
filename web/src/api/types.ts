@@ -1003,3 +1003,43 @@ export interface Schedule {
   last_skipped_at?: string
   skip_reason?: string
 }
+
+// ExecutionPlanPrices mirrors CatalogPrice's price shape for one
+// execution plan entry's model. Absent entirely when unpriced -
+// never a guessed number.
+export interface ExecutionPlanPrices {
+  input_per_mtok?: number
+  output_per_mtok?: number
+  cache_read_per_mtok?: number
+  cache_write_per_mtok?: number
+}
+
+// ExecutionPlanEntry is one chain entry's resolution within a phase -
+// the full ordered list, not just the winner (GET
+// /v1/missions/execution-plan). selected is true on the first usable
+// entry only; nothing is selected if none are usable.
+export interface ExecutionPlanEntry {
+  provider_name: string
+  model: string
+  usable: boolean
+  skip_reason: string
+  selected: boolean
+  prices?: ExecutionPlanPrices
+}
+
+// ExecutionPlanPhase is one of the five fixed mission phases (explore,
+// plan, execute, review, escalate) resolved server-side. axis is
+// 'native' or 'harness' - only execute is ever 'harness'.
+// route_source/harness_source name provenance for the phase table's
+// "(from agent)" style annotations.
+export interface ExecutionPlanPhase {
+  phase: string
+  route: string
+  route_source: string
+  axis: string
+  harness: string
+  harness_source: string
+  skipped: boolean
+  skip_reason: string
+  entries: ExecutionPlanEntry[]
+}

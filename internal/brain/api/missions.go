@@ -20,6 +20,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
@@ -47,10 +48,12 @@ type missionAttachmentStore interface {
 // route means "the default chain," but the gateway's /v1/stream
 // requires a real, non-empty route name. codingExecutorDefault
 // resolves the settings-configured harness default for a coding
-// mission whose request omits one (D-051). resolveExecutorOptions
-// backs GET /v1/missions/executor-options — a thin proxy over
-// gwclient.ResolveRoute so the web UI can preview provider/model
-// pairing before create without duplicating gateway resolve logic.
+// mission whose request omits one (D-051). resolveRoute is
+// gwclient.Client.ResolveRoute itself — backs GET
+// /v1/missions/executor-options (preview provider/model pairing per
+// harness before create) and GET /v1/missions/execution-plan (the
+// full per-phase resolution preview) so the web UI never duplicates
+// gateway resolve logic.
 // nameMission generates a mission's short display name from its goal
 // (chat.TitleOverGateway, the same mechanism a chat session's title
 // uses) — nil (no gateway wiring) leaves every mission unnamed, same
@@ -64,15 +67,29 @@ type missionAttachmentStore interface {
 // (not *attachments.Store) so the caller's own nil-box guard (a nil
 // *attachments.Store boxed here would be a non-nil interface value)
 // happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string) {
 	if store == nil {
 		return
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveExecutorOptions: resolveExecutorOptions, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
+	var resolveAgentRoute func(context.Context, string) (string, bool)
+	if agentReg != nil {
+		resolveAgentRoute = func(ctx context.Context, id string) (string, bool) {
+			if id == "" {
+				return "", false
+			}
+			a, ok := agentReg.ResolveByID(ctx, id)
+			if !ok || a.Route == "" {
+				return "", false
+			}
+			return a.Route, true
+		}
+	}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
 	handle("GET /v1/missions/executor-options", a.auth(http.HandlerFunc(h.executorOptions)))
+	handle("GET /v1/missions/execution-plan", a.auth(http.HandlerFunc(h.executionPlan)))
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
 	handle("DELETE /v1/missions/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("GET /v1/missions/{id}/events", a.auth(http.HandlerFunc(h.events)))
@@ -94,6 +111,12 @@ type missionAPI struct {
 	driver   *missions.Driver
 	notifier *missions.Notifier
 	agentReg *agents.Store
+	// resolveAgentRoute resolves an agent id to its own Route field
+	// (agentReg.ResolveByID's Route, ok — ok=false on an unknown id or
+	// no agentReg wired), the executionPlan handler's seam for the base
+	// route's "agent" provenance. Kept separate from agentReg itself so
+	// executionPlan is unit-testable without a live agents table.
+	resolveAgentRoute func(context.Context, string) (string, bool)
 	// workspace performs mission-directory git operations (Push,
 	// Teardown for delete) outside the normal Drive loop.
 	workspace *missions.Workspace
@@ -113,9 +136,10 @@ type missionAPI struct {
 	// coding mission's create request that omits harness; nil (no
 	// settings wiring) leaves it native.
 	codingExecutorDefault func(context.Context) string
-	// resolveExecutorOptions backs GET /v1/missions/executor-options;
-	// nil (no gateway wiring) makes the endpoint 404.
-	resolveExecutorOptions func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
+	// resolveRoute is gwclient.Client.ResolveRoute: backs GET
+	// /v1/missions/executor-options and GET /v1/missions/execution-plan;
+	// nil (no gateway wiring) makes either endpoint 404.
+	resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
 	// nameMission generates a mission's short display name from its
 	// goal, fired async after create; nil (no gateway wiring) leaves
 	// every mission unnamed, same as any generation failure.
@@ -162,7 +186,7 @@ type destinationLookup interface {
 }
 
 // routeExists reports whether name resolves to a real route via
-// resolveExecutorOptions (gwclient.ResolveRoute's own existence check —
+// resolveRoute (gwclient.ResolveRoute's own existence check —
 // a 404/not-found error means no such route) — the seam
 // DefaultCodingRoute uses to prefer the operator's "coding" route over
 // "default" only when it's actually configured. false, never an error,
@@ -170,10 +194,10 @@ type destinationLookup interface {
 // route): a missing preferred route must degrade silently, never 500
 // mission creation.
 func (h *missionAPI) routeExists(ctx context.Context, name string) bool {
-	if h.resolveExecutorOptions == nil {
+	if h.resolveRoute == nil {
 		return false
 	}
-	_, err := h.resolveExecutorOptions(ctx, name, "")
+	_, err := h.resolveRoute(ctx, name, "")
 	return err == nil
 }
 
@@ -779,7 +803,7 @@ type executorOption struct {
 // an incompatible choice before create. route defaults to the
 // "default" system role's route, same fallback create() itself applies.
 func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
-	if h.resolveExecutorOptions == nil {
+	if h.resolveRoute == nil {
 		jsonError(w, http.StatusNotFound, "not_found", "executor options are not enabled")
 		return
 	}
@@ -791,7 +815,7 @@ func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
 	options := make([]executorOption, 0, len(harnesses))
 	for _, harness := range harnesses {
 		opt := executorOption{Harness: harness}
-		resolved, err := h.resolveExecutorOptions(r.Context(), route, harness)
+		resolved, err := h.resolveRoute(r.Context(), route, harness)
 		switch {
 		case err != nil:
 			opt.Reason = err.Error()
@@ -818,6 +842,250 @@ func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
 		options = append(options, opt)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"options": options})
+}
+
+// executionPlanEntry is one resolved chain entry for a phase's route,
+// mirroring gwclient.ResolvedRouteEntry but trimmed to what the phase
+// table needs — Selected marks the one entry the runner/dispatcher
+// would actually pick (the first Usable entry; none set when no entry
+// is usable).
+type executionPlanEntry struct {
+	ProviderName string              `json:"provider_name"`
+	Model        string              `json:"model"`
+	Usable       bool                `json:"usable"`
+	SkipReason   string              `json:"skip_reason"`
+	Selected     bool                `json:"selected"`
+	Prices       *router.ModelPrices `json:"prices,omitempty"`
+}
+
+// executionPlanPhase is one phase's resolved route/axis/entries for
+// GET /v1/missions/execution-plan.
+type executionPlanPhase struct {
+	Phase         string               `json:"phase"`
+	Route         string               `json:"route"`
+	RouteSource   string               `json:"route_source"`
+	Axis          string               `json:"axis"`
+	Harness       string               `json:"harness"`
+	HarnessSource string               `json:"harness_source"`
+	Skipped       bool                 `json:"skipped"`
+	SkipReason    string               `json:"skip_reason"`
+	Entries       []executionPlanEntry `json:"entries"`
+}
+
+// baseRoute resolves the route explicit/agent/named-coding/default-role
+// precedence chain a mission's Route field itself follows at create
+// time (create()'s own req.Route resolution, missions.DefaultCodingRoute)
+// — mirrored here rather than reused because create()'s version is
+// entangled with the request/agent-defaulting flow, not a standalone
+// function. Returns "" with source "none" when nothing resolves.
+func (h *missionAPI) baseRoute(ctx context.Context, kind, explicitRoute, agentID string) (route, source string) {
+	if explicitRoute != "" {
+		return explicitRoute, "explicit"
+	}
+	if h.resolveAgentRoute != nil {
+		if r, ok := h.resolveAgentRoute(ctx, agentID); ok {
+			return r, "agent"
+		}
+	}
+	if kind == missions.KindCoding && h.routeExists(ctx, "coding") {
+		return "coding", "named-coding"
+	}
+	if h.routeForRole != nil {
+		if r := h.routeForRole(ctx, "default"); r != "" {
+			return r, "default-role"
+		}
+	}
+	return "", "none"
+}
+
+// resolveHarness resolves the execute phase's harness the same way
+// create() does: explicit query param first, else the settings
+// default; "native" is a stored sentinel for "off" and normalizes to
+// "" same as create() does with req.Harness. Only kind=coding can ever
+// delegate (mirrors policy.go's canDelegate) — any other kind always
+// stays native regardless of what resolves.
+func (h *missionAPI) resolveHarness(ctx context.Context, kind, explicitHarness string) (harness, source string) {
+	if kind != missions.KindCoding {
+		return "", ""
+	}
+	if explicitHarness != "" {
+		harness, source = explicitHarness, "explicit"
+	} else if h.codingExecutorDefault != nil {
+		harness, source = h.codingExecutorDefault(ctx), "settings"
+	}
+	if harness == "native" {
+		harness = ""
+	}
+	if harness == "" {
+		return "", ""
+	}
+	return harness, source
+}
+
+// resolveEntries calls resolveRoute for route on the given axis
+// (harness == "" is the chat/native axis) and shapes the result into
+// the phase table's entry list. A resolve error or an empty route
+// yields no entries, with the failure reason returned for the phase's
+// skip_reason — never a failed request, matching executorOptions' own
+// degrade-on-resolve-error behavior. selected marks the first usable
+// entry only.
+func (h *missionAPI) resolveEntries(ctx context.Context, route, harness string) ([]executionPlanEntry, string) {
+	if route == "" {
+		return nil, ""
+	}
+	if h.resolveRoute == nil {
+		return nil, ""
+	}
+	resolved, err := h.resolveRoute(ctx, route, harness)
+	if err != nil {
+		return nil, err.Error()
+	}
+	if resolved == nil {
+		return nil, ""
+	}
+	entries := make([]executionPlanEntry, len(resolved.Entries))
+	selected := false
+	for i, e := range resolved.Entries {
+		entries[i] = executionPlanEntry{
+			ProviderName: e.ProviderName,
+			Model:        e.Model,
+			Usable:       e.Usable,
+			SkipReason:   e.SkipReason,
+			Prices:       e.Prices,
+		}
+		if e.Usable && !selected {
+			entries[i].Selected = true
+			selected = true
+		}
+	}
+	return entries, ""
+}
+
+const (
+	lightSkipReason   = "light missions run execute only"
+	escalateOffReason = "no escalation route set; failures retry on the execute route"
+)
+
+// executionPlan serves GET /v1/missions/execution-plan, resolving
+// every phase (explore, plan, execute, review, escalate) server-side
+// so the web UI never recomputes route/harness precedence itself
+// (docs/2026-08-26-mission-execution-plan.md, slice 1). Query params
+// mirror createMissionRequest's own route fields; all are optional.
+func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
+	if h.resolveRoute == nil {
+		jsonError(w, http.StatusNotFound, "not_found", "execution plan preview is not enabled")
+		return
+	}
+	q := r.URL.Query()
+	kind := q.Get("kind")
+	if kind == "" {
+		kind = missions.KindGeneral
+	}
+	agentID := q.Get("agent")
+	explicitHarness := q.Get("harness")
+	route := q.Get("route")
+	planRoute := q.Get("plan_route")
+	reviewRoute := q.Get("review_route")
+	escalationRoute := q.Get("escalation_route")
+	light := q.Get("light") == "true"
+
+	ctx := r.Context()
+	base, baseSource := h.baseRoute(ctx, kind, route, agentID)
+
+	// oversightRoute mirrors runner.go's own helper: plan_route when
+	// set, else the base route.
+	oversight, oversightSource := base, baseSource
+	if planRoute != "" {
+		oversight, oversightSource = planRoute, "explicit"
+	}
+
+	harness, harnessSource := h.resolveHarness(ctx, kind, explicitHarness)
+	executeAxis := "native"
+	if harness != "" {
+		executeAxis = "harness"
+	}
+
+	// reviewRoute mirrors runner.go's own helper: review_route, else
+	// plan_route (as "inherited-from-plan"), else the base route (as
+	// "inherited-from-execute"). oversight already equals planRoute
+	// when planRoute is set (see above), so that's the discriminator —
+	// oversightSource itself may also read "explicit" when it fell
+	// through to an explicit base route, which must not be confused
+	// with plan_route actually being set.
+	review, reviewSource := oversight, "inherited-from-execute"
+	if planRoute != "" {
+		reviewSource = "inherited-from-plan"
+	}
+	if reviewRoute != "" {
+		review, reviewSource = reviewRoute, "explicit"
+	}
+
+	phases := make([]executionPlanPhase, 0, 5)
+
+	exploreEntries, exploreErr := h.resolveEntries(ctx, oversight, "")
+	phases = append(phases, executionPlanPhase{
+		Phase: "explore", Route: oversight, RouteSource: oversightSource, Axis: "native",
+		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, exploreErr),
+		Entries: emptyEntries(exploreEntries),
+	})
+
+	planEntries, planErr := h.resolveEntries(ctx, oversight, "")
+	phases = append(phases, executionPlanPhase{
+		Phase: "plan", Route: oversight, RouteSource: oversightSource, Axis: "native",
+		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, planErr),
+		Entries: emptyEntries(planEntries),
+	})
+
+	executeEntries, executeErr := h.resolveEntries(ctx, base, harness)
+	phases = append(phases, executionPlanPhase{
+		Phase: "execute", Route: base, RouteSource: baseSource, Axis: executeAxis,
+		Harness: harness, HarnessSource: harnessSource,
+		SkipReason: executeErr,
+		Entries:    emptyEntries(executeEntries),
+	})
+
+	reviewEntries, reviewErr := h.resolveEntries(ctx, review, "")
+	phases = append(phases, executionPlanPhase{
+		Phase: "review", Route: review, RouteSource: reviewSource, Axis: "native",
+		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, reviewErr),
+		Entries: emptyEntries(reviewEntries),
+	})
+
+	if escalationRoute != "" {
+		escalateEntries, escalateErr := h.resolveEntries(ctx, escalationRoute, "")
+		phases = append(phases, executionPlanPhase{
+			Phase: "escalate", Route: escalationRoute, RouteSource: "explicit", Axis: "native",
+			SkipReason: escalateErr,
+			Entries:    emptyEntries(escalateEntries),
+		})
+	} else {
+		phases = append(phases, executionPlanPhase{
+			Phase: "escalate", Route: "", RouteSource: "off", Axis: "native",
+			Skipped: true, SkipReason: escalateOffReason,
+			Entries: []executionPlanEntry{},
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"phases": phases})
+}
+
+// skipReasonIf returns lightReason when skipped is true, else
+// resolveErr (a resolve failure's own message) — a skipped phase's
+// reason always wins since the resolve was never load-bearing for it.
+func skipReasonIf(skipped bool, lightReason, resolveErr string) string {
+	if skipped {
+		return lightReason
+	}
+	return resolveErr
+}
+
+// emptyEntries normalizes a nil entry slice to an empty one so the
+// JSON response always carries "entries": [] rather than null.
+func emptyEntries(entries []executionPlanEntry) []executionPlanEntry {
+	if entries == nil {
+		return []executionPlanEntry{}
+	}
+	return entries
 }
 
 func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {

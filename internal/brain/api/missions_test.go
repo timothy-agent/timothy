@@ -16,6 +16,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -855,7 +856,7 @@ func TestMissionsDecorateTopModels(t *testing.T) {
 func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 	t.Parallel()
 
-	h := &missionAPI{log: discard(), resolveExecutorOptions: func(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+	h := &missionAPI{log: discard(), resolveRoute: func(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
 		switch harness {
 		case "codex-cli":
 			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
@@ -979,5 +980,464 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 	m.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("POST pr against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
+	}
+}
+
+// stubResolveRoute returns a resolveRoute func whose ResolvedRoute per
+// route name is fixed by the routes map; a route name absent from the
+// map resolves as if the gateway returned "not found" (err != nil),
+// matching gwclient.ResolveRoute's own behavior for an unknown route.
+// harness is accepted but ignored — none of the execution-plan tests
+// need axis-dependent chain content.
+func stubResolveRoute(routes map[string]*gwclient.ResolvedRoute) func(context.Context, string, string) (*gwclient.ResolvedRoute, error) {
+	return func(_ context.Context, name, _ string) (*gwclient.ResolvedRoute, error) {
+		r, ok := routes[name]
+		if !ok {
+			return nil, errors.New("route not found")
+		}
+		return r, nil
+	}
+}
+
+// usableEntry/unusableEntry build a ResolvedRoute chain entry for the
+// execution-plan tests below — model/provider names are arbitrary,
+// chosen only to be distinguishable in assertions.
+func usableEntry(provider, model string) gwclient.ResolvedRouteEntry {
+	return gwclient.ResolvedRouteEntry{ProviderName: provider, Model: model, Usable: true}
+}
+
+func unusableEntry(provider, model, reason string) gwclient.ResolvedRouteEntry {
+	return gwclient.ResolvedRouteEntry{ProviderName: provider, Model: model, Usable: false, SkipReason: reason}
+}
+
+func getExecutionPlan(t *testing.T, h *missionAPI, query string) map[string]executionPlanPhase {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/v1/missions/execution-plan?"+query, nil)
+	w := httptest.NewRecorder()
+	h.executionPlan(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("execution-plan status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Phases []executionPlanPhase `json:"phases"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Phases) != 5 {
+		t.Fatalf("phases = %d, want 5", len(body.Phases))
+	}
+	byPhase := map[string]executionPlanPhase{}
+	for _, p := range body.Phases {
+		byPhase[p.Phase] = p
+	}
+	wantOrder := []string{"explore", "plan", "execute", "review", "escalate"}
+	for i, p := range body.Phases {
+		if p.Phase != wantOrder[i] {
+			t.Fatalf("phase[%d] = %q, want %q (phases must always appear in this order)", i, p.Phase, wantOrder[i])
+		}
+	}
+	return byPhase
+}
+
+func TestExecutionPlanNotFoundWhenResolveRouteNil(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{log: discard()}
+	req := httptest.NewRequest("GET", "/v1/missions/execution-plan", nil)
+	w := httptest.NewRecorder()
+	h.executionPlan(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+// TestExecutionPlanRouteSourceExplicit confirms an explicit ?route=
+// wins the base route and propagates unchanged to explore/plan (no
+// plan_route override) and execute; review carries the same route
+// value but its own provenance label is "inherited-from-execute"
+// (review never itself set), not "explicit".
+func TestExecutionPlanRouteSourceExplicit(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"mine": {Route: "mine", Entries: []gwclient.ResolvedRouteEntry{usableEntry("Anthropic", "claude-sonnet-5")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&route=mine")
+
+	for _, phase := range []string{"explore", "plan", "execute"} {
+		p := byPhase[phase]
+		if p.Route != "mine" || p.RouteSource != "explicit" {
+			t.Fatalf("%s = route %q source %q, want mine/explicit", phase, p.Route, p.RouteSource)
+		}
+	}
+	if p := byPhase["review"]; p.Route != "mine" || p.RouteSource != "inherited-from-execute" {
+		t.Fatalf("review = route %q source %q, want mine/inherited-from-execute", p.Route, p.RouteSource)
+	}
+}
+
+// TestExecutionPlanRouteSourceAgent confirms an agent's own Route wins
+// the base route when no explicit ?route= is given.
+func TestExecutionPlanRouteSourceAgent(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveAgentRoute: func(_ context.Context, id string) (string, bool) {
+			if id == "coder" {
+				return "agent-route", true
+			}
+			return "", false
+		},
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"agent-route": {Route: "agent-route", Entries: []gwclient.ResolvedRouteEntry{usableEntry("GLM", "glm-5.3")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&agent=coder")
+	if p := byPhase["execute"]; p.Route != "agent-route" || p.RouteSource != "agent" {
+		t.Fatalf("execute = route %q source %q, want agent-route/agent", p.Route, p.RouteSource)
+	}
+}
+
+// TestExecutionPlanRouteSourceNamedCoding confirms kind=coding prefers
+// a route literally named "coding" over the default-role route, only
+// when it actually exists (routeExists's own contract).
+func TestExecutionPlanRouteSourceNamedCoding(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log:          discard(),
+		routeForRole: func(_ context.Context, _ string) string { return "default" },
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"coding":  {Route: "coding", Entries: []gwclient.ResolvedRouteEntry{usableEntry("GLM", "glm-5.3")}},
+			"default": {Route: "default", Entries: []gwclient.ResolvedRouteEntry{usableEntry("OpenAI", "gpt-5-mini")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=coding")
+	if p := byPhase["execute"]; p.Route != "coding" || p.RouteSource != "named-coding" {
+		t.Fatalf("execute = route %q source %q, want coding/named-coding", p.Route, p.RouteSource)
+	}
+}
+
+// TestExecutionPlanRouteSourceDefaultRole confirms kind=general (or a
+// coding route that doesn't exist) falls back to the default-role
+// route.
+func TestExecutionPlanRouteSourceDefaultRole(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log:          discard(),
+		routeForRole: func(_ context.Context, role string) string { return "default" },
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"default": {Route: "default", Entries: []gwclient.ResolvedRouteEntry{usableEntry("OpenAI", "gpt-5-mini")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general")
+	if p := byPhase["execute"]; p.Route != "default" || p.RouteSource != "default-role" {
+		t.Fatalf("execute = route %q source %q, want default/default-role", p.Route, p.RouteSource)
+	}
+
+	// kind=coding but no "coding" route exists (absent from the stub
+	// map, so resolveRoute errors on it) must also fall back here.
+	byPhaseCoding := getExecutionPlan(t, h, "kind=coding")
+	if p := byPhaseCoding["execute"]; p.Route != "default" || p.RouteSource != "default-role" {
+		t.Fatalf("execute (coding, no coding route) = route %q source %q, want default/default-role", p.Route, p.RouteSource)
+	}
+}
+
+// TestExecutionPlanRouteSourceNone confirms nothing configured
+// resolves to an empty route with source "none" and no entries.
+func TestExecutionPlanRouteSourceNone(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log:          discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general")
+	p := byPhase["execute"]
+	if p.Route != "" || p.RouteSource != "none" {
+		t.Fatalf("execute = route %q source %q, want \"\"/none", p.Route, p.RouteSource)
+	}
+	if len(p.Entries) != 0 {
+		t.Fatalf("execute entries = %+v, want empty (route never resolved)", p.Entries)
+	}
+}
+
+// TestExecutionPlanOversightRoutes confirms plan_route, when set,
+// covers explore/plan/review (oversight phases) while execute stays on
+// the base route, and review_route independently overrides review
+// alone (precedence: review_route > plan_route > route).
+func TestExecutionPlanOversightRoutes(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base":   {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+			"strong": {Route: "strong", Entries: []gwclient.ResolvedRouteEntry{usableEntry("B", "b")}},
+			"judge":  {Route: "judge", Entries: []gwclient.ResolvedRouteEntry{usableEntry("C", "c")}},
+		}),
+	}
+
+	// plan_route alone covers explore/plan/review's route value, execute
+	// keeps base. explore/plan carry plan_route's own "explicit"
+	// provenance; review's value matches but its provenance is
+	// "inherited-from-plan" (review never itself set plan_route).
+	byPhase := getExecutionPlan(t, h, "kind=general&route=base&plan_route=strong")
+	for _, phase := range []string{"explore", "plan"} {
+		p := byPhase[phase]
+		if p.Route != "strong" || p.RouteSource != "explicit" {
+			t.Fatalf("%s = route %q source %q, want strong/explicit", phase, p.Route, p.RouteSource)
+		}
+	}
+	if p := byPhase["review"]; p.Route != "strong" || p.RouteSource != "inherited-from-plan" {
+		t.Fatalf("review = route %q source %q, want strong/inherited-from-plan", p.Route, p.RouteSource)
+	}
+	if p := byPhase["execute"]; p.Route != "base" {
+		t.Fatalf("execute = route %q, want base (unaffected by plan_route)", p.Route)
+	}
+
+	// review_route wins over plan_route for review alone.
+	byPhase2 := getExecutionPlan(t, h, "kind=general&route=base&plan_route=strong&review_route=judge")
+	if p := byPhase2["review"]; p.Route != "judge" || p.RouteSource != "explicit" {
+		t.Fatalf("review = route %q source %q, want judge/explicit", p.Route, p.RouteSource)
+	}
+	if p := byPhase2["plan"]; p.Route != "strong" {
+		t.Fatalf("plan = route %q, want strong (review_route must not affect plan)", p.Route)
+	}
+
+	// review_route provenance without an explicit plan_route reports
+	// inherited-from-execute, matching runner.go's reviewRoute falling
+	// through oversightRoute straight to Route.
+	byPhase3 := getExecutionPlan(t, h, "kind=general&route=base")
+	if p := byPhase3["review"]; p.Route != "base" || p.RouteSource != "inherited-from-execute" {
+		t.Fatalf("review = route %q source %q, want base/inherited-from-execute", p.Route, p.RouteSource)
+	}
+}
+
+// TestExecutionPlanHarnessAxis confirms kind=coding with a harness set
+// resolves execute on the harness axis, and kind=general with the same
+// harness set never delegates (D-072's canDelegate rule) — execute
+// stays native regardless.
+func TestExecutionPlanHarnessAxis(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base": {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+		}),
+	}
+
+	coding := getExecutionPlan(t, h, "kind=coding&route=base&harness=claude-cli")
+	if p := coding["execute"]; p.Axis != "harness" || p.Harness != "claude-cli" || p.HarnessSource != "explicit" {
+		t.Fatalf("coding execute = axis %q harness %q source %q, want harness/claude-cli/explicit", p.Axis, p.Harness, p.HarnessSource)
+	}
+
+	general := getExecutionPlan(t, h, "kind=general&route=base&harness=claude-cli")
+	if p := general["execute"]; p.Axis != "native" || p.Harness != "" {
+		t.Fatalf("general execute = axis %q harness %q, want native/\"\" (harness ignored for non-coding)", p.Axis, p.Harness)
+	}
+
+	// "native" is the settings sentinel for off: normalizes to axis
+	// native with no harness, same as create()'s own req.Harness == "native".
+	nativeSentinel := getExecutionPlan(t, h, "kind=coding&route=base&harness=native")
+	if p := nativeSentinel["execute"]; p.Axis != "native" || p.Harness != "" {
+		t.Fatalf("coding execute with harness=native = axis %q harness %q, want native/\"\"", p.Axis, p.Harness)
+	}
+}
+
+// TestExecutionPlanHarnessSourceSettings confirms an omitted ?harness=
+// falls back to the settings default (codingExecutorDefault) with
+// source "settings", only for kind=coding.
+func TestExecutionPlanHarnessSourceSettings(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log:                   discard(),
+		codingExecutorDefault: func(_ context.Context) string { return "opencode" },
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base": {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=coding&route=base")
+	if p := byPhase["execute"]; p.Harness != "opencode" || p.HarnessSource != "settings" {
+		t.Fatalf("execute = harness %q source %q, want opencode/settings", p.Harness, p.HarnessSource)
+	}
+}
+
+// TestExecutionPlanLightSkipsOversightOnly confirms light=true skips
+// explore/plan/review with the fixed reason while execute is never
+// skipped.
+func TestExecutionPlanLightSkipsOversightOnly(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base": {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&route=base&light=true")
+	for _, phase := range []string{"explore", "plan", "review"} {
+		p := byPhase[phase]
+		if !p.Skipped || p.SkipReason != lightSkipReason {
+			t.Fatalf("%s = skipped %v reason %q, want true/%q", phase, p.Skipped, p.SkipReason, lightSkipReason)
+		}
+	}
+	if p := byPhase["execute"]; p.Skipped {
+		t.Fatalf("execute = skipped %v, want false (execute never skips)", p.Skipped)
+	}
+}
+
+// TestExecutionPlanEscalateOff confirms escalate reports skipped with
+// the fixed off reason when no escalation_route is set, and resolves
+// normally (not skipped) when one is.
+func TestExecutionPlanEscalateOff(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base":   {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+			"strong": {Route: "strong", Entries: []gwclient.ResolvedRouteEntry{usableEntry("B", "b")}},
+		}),
+	}
+	off := getExecutionPlan(t, h, "kind=general&route=base")
+	p := off["escalate"]
+	if !p.Skipped || p.SkipReason != escalateOffReason || p.Route != "" || p.RouteSource != "off" {
+		t.Fatalf("escalate (off) = %+v, want skipped/off with the fixed reason and no route", p)
+	}
+	if len(p.Entries) != 0 {
+		t.Fatalf("escalate (off) entries = %+v, want empty", p.Entries)
+	}
+
+	on := getExecutionPlan(t, h, "kind=general&route=base&escalation_route=strong")
+	p2 := on["escalate"]
+	if p2.Skipped || p2.Route != "strong" || p2.RouteSource != "explicit" {
+		t.Fatalf("escalate (on) = %+v, want not skipped, route strong/explicit", p2)
+	}
+}
+
+// TestExecutionPlanSelectedFirstUsable confirms selected lands on the
+// first usable entry (not the first entry outright), and that no
+// entry is selected when none are usable.
+func TestExecutionPlanSelectedFirstUsable(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"mixed": {Route: "mixed", Entries: []gwclient.ResolvedRouteEntry{
+				unusableEntry("A", "a", "cooling down"),
+				usableEntry("B", "b"),
+				usableEntry("C", "c"),
+			}},
+			"none-usable": {Route: "none-usable", Entries: []gwclient.ResolvedRouteEntry{
+				unusableEntry("A", "a", "cooling down"),
+				unusableEntry("B", "b", "no credential"),
+			}},
+		}),
+	}
+
+	mixed := getExecutionPlan(t, h, "kind=general&route=mixed")
+	entries := mixed["execute"].Entries
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(entries))
+	}
+	if entries[0].Selected {
+		t.Fatalf("entries[0] (unusable) selected = true, want false")
+	}
+	if !entries[1].Selected {
+		t.Fatalf("entries[1] (first usable) selected = false, want true")
+	}
+	if entries[2].Selected {
+		t.Fatalf("entries[2] (second usable) selected = true, want false (only the first usable entry is selected)")
+	}
+
+	noneUsable := getExecutionPlan(t, h, "kind=general&route=none-usable")
+	for i, e := range noneUsable["execute"].Entries {
+		if e.Selected {
+			t.Fatalf("entries[%d] selected = true, want false (no entry is usable)", i)
+		}
+	}
+}
+
+// TestExecutionPlanPricesOmittedWhenNil confirms an entry with no
+// configured prices omits the prices field entirely rather than
+// emitting a zero-valued object, and an entry with prices carries them
+// through unchanged.
+func TestExecutionPlanPricesOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"priced": {Route: "priced", Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "GLM (Z.ai)", Model: "glm-5.3", Usable: true,
+					Prices: &router.ModelPrices{InputPerMTok: 0.6, OutputPerMTok: 2.2}},
+				{ProviderName: "NoPrice", Model: "mystery", Usable: true},
+			}},
+		}),
+	}
+	req := httptest.NewRequest("GET", "/v1/missions/execution-plan?kind=general&route=priced", nil)
+	w := httptest.NewRecorder()
+	h.executionPlan(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"glm-5.3"`) || !strings.Contains(body, `"input_per_mtok":0.6`) {
+		t.Fatalf("priced entry missing expected fields: %s", body)
+	}
+	// The unpriced entry's own JSON object must not carry a "prices" key
+	// at all. Decode into raw entries to check per-object rather than a
+	// whole-body substring search (which could false-positive/negative
+	// depending on ordering).
+	var decoded struct {
+		Phases []struct {
+			Phase   string           `json:"phase"`
+			Entries []map[string]any `json:"entries"`
+		} `json:"phases"`
+	}
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, p := range decoded.Phases {
+		if p.Phase != "execute" {
+			continue
+		}
+		for _, e := range p.Entries {
+			model := e["model"]
+			_, hasPrices := e["prices"]
+			if model == "glm-5.3" && !hasPrices {
+				t.Fatalf("glm-5.3 entry missing prices key: %+v", e)
+			}
+			if model == "mystery" && hasPrices {
+				t.Fatalf("mystery entry has a prices key though Prices is nil: %+v", e)
+			}
+		}
+	}
+}
+
+// TestExecutionPlanResolveErrorIsolatedToOnePhase confirms a phase
+// whose route fails to resolve reports empty entries with the error in
+// skip_reason, while unrelated phases still resolve normally — a
+// single bad route/escalation_route must never fail the whole request.
+func TestExecutionPlanResolveErrorIsolatedToOnePhase(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base": {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&route=base&escalation_route=broken")
+
+	esc := byPhase["escalate"]
+	if len(esc.Entries) != 0 {
+		t.Fatalf("escalate entries = %+v, want empty (route failed to resolve)", esc.Entries)
+	}
+	if esc.SkipReason == "" {
+		t.Fatalf("escalate skip_reason empty, want the resolve error")
+	}
+	if esc.Skipped {
+		t.Fatalf("escalate skipped = true, want false (it wasn't skipped, it failed to resolve)")
+	}
+
+	execute := byPhase["execute"]
+	if len(execute.Entries) != 1 || execute.Entries[0].ProviderName != "A" {
+		t.Fatalf("execute = %+v, want the base route's entry unaffected by escalate's failure", execute)
 	}
 }

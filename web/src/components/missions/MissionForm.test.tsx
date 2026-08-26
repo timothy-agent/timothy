@@ -16,6 +16,7 @@ vi.mock('../../api/client', () => ({
   createConnectorRepo: vi.fn(),
   getSettings: vi.fn(),
   getMissionExecutorOptions: vi.fn(),
+  getMissionExecutionPlan: vi.fn(),
   testConnector: vi.fn().mockResolvedValue({ ok: true }),
   uploadAttachment: vi.fn(),
   listDestinations: vi.fn().mockResolvedValue([]),
@@ -26,6 +27,7 @@ import {
   createConnectorRepo,
   createMission,
   createSchedule,
+  getMissionExecutionPlan,
   getMissionExecutorOptions,
   getSettings,
   listAgents,
@@ -36,7 +38,7 @@ import {
   patchSchedule,
   uploadAttachment,
 } from '../../api/client'
-import type { Destination } from '../../api/types'
+import type { Destination, ExecutionPlanPhase } from '../../api/types'
 
 // renderForm wraps MissionForm in a MemoryRouter — the repository
 // section's "no connectors" hint links to Settings → Connectors, which
@@ -133,6 +135,7 @@ beforeEach(() => {
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
   vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false })
   vi.mocked(getMissionExecutorOptions).mockResolvedValue([])
+  vi.mocked(getMissionExecutionPlan).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([])
 })
 
@@ -1250,6 +1253,144 @@ describe('MissionForm — edit mode', () => {
         's1',
         expect.objectContaining({ expires_at: null }),
       ),
+    )
+  })
+})
+
+function makePhase(overrides: Partial<ExecutionPlanPhase> = {}): ExecutionPlanPhase {
+  return {
+    phase: 'explore',
+    route: 'coding',
+    route_source: 'agent',
+    axis: 'native',
+    harness: '',
+    harness_source: '',
+    skipped: false,
+    skip_reason: '',
+    entries: [],
+    ...overrides,
+  }
+}
+
+const fivePhases: ExecutionPlanPhase[] = [
+  makePhase({
+    phase: 'explore',
+    entries: [
+      {
+        provider_name: 'GLM (Z.ai)',
+        model: 'glm-5.3',
+        usable: true,
+        skip_reason: '',
+        selected: true,
+        prices: { input_per_mtok: 0.6, output_per_mtok: 2.2 },
+      },
+    ],
+  }),
+  makePhase({ phase: 'plan' }),
+  makePhase({
+    phase: 'execute',
+    axis: 'harness',
+    harness: 'claude-cli',
+    harness_source: 'settings',
+    entries: [
+      {
+        provider_name: 'Anthropic',
+        model: 'sonnet-5',
+        usable: true,
+        skip_reason: '',
+        selected: true,
+      },
+    ],
+  }),
+  makePhase({ phase: 'review' }),
+  makePhase({ phase: 'escalate', route: '', route_source: 'off', skipped: true, skip_reason: '' }),
+]
+
+describe('MissionForm — execution plan', () => {
+  it('renders the execution plan table with a harness phase label and prices', async () => {
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+
+    expect(await screen.findByText('This mission will run')).toBeInTheDocument()
+    expect(screen.getByText('Claude Code')).toBeInTheDocument()
+    expect(screen.getByText(/GLM \(Z\.ai\) glm-5\.3/)).toBeInTheDocument()
+    expect(screen.getByText(/Anthropic sonnet-5/)).toBeInTheDocument()
+    expect(screen.getByText('$0.60/$2.20 per Mtok')).toBeInTheDocument()
+    expect(screen.getByText('Naming and memory extraction use the summarize route.')).toBeInTheDocument()
+  })
+
+  it('renders a skipped phase muted with its reason', async () => {
+    const plan = fivePhases.map((p) =>
+      p.phase === 'plan' ? { ...p, skipped: true, skip_reason: 'light mission' } : p,
+    )
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+
+    expect(await screen.findByText('Skipped - light mission')).toBeInTheDocument()
+  })
+
+  it('shows an unusable-entries warning when nothing is selected', async () => {
+    const plan = fivePhases.map((p) =>
+      p.phase === 'explore'
+        ? {
+            ...p,
+            entries: [
+              {
+                provider_name: 'OpenAI',
+                model: 'gpt-5-mini',
+                usable: false,
+                skip_reason: 'cooling down',
+                selected: false,
+              },
+            ],
+          }
+        : p,
+    )
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+
+    expect(await screen.findByText('1 unusable - cooling down')).toBeInTheDocument()
+  })
+
+  it('renders no price text when the selected entry has no prices', async () => {
+    const plan = fivePhases.map((p) =>
+      p.phase === 'explore'
+        ? { ...p, entries: [{ ...p.entries[0], prices: undefined }] }
+        : p,
+    )
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+
+    await screen.findByText('This mission will run')
+    expect(screen.queryByText(/per Mtok/)).not.toBeInTheDocument()
+  })
+
+  it('shows live default labels for plan, review, and escalation route selects', async () => {
+    const plan = fivePhases.map((p) => {
+      if (p.phase === 'plan') return { ...p, route: 'coding', route_source: 'inherited-from-execute' }
+      if (p.phase === 'review') return { ...p, route: 'coding', route_source: 'inherited-from-plan' }
+      return p
+    })
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    await screen.findByText('This mission will run')
+    fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
+    await screen.findByLabelText('Review route')
+
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as execute route (coding)')
+    expect(screen.getByLabelText('Review route')).toHaveTextContent('Same as plan route (coding)')
+    expect(screen.getByLabelText('Escalation route')).toHaveTextContent(
+      'Off (no escalation on failure)',
     )
   })
 })

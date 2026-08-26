@@ -8,6 +8,7 @@ import {
   createMission,
   createSchedule,
   type ExecutorOption,
+  getMissionExecutionPlan,
   getMissionExecutorOptions,
   getSettings,
   listConnectorRepos,
@@ -21,6 +22,7 @@ import type {
   AdminConnector,
   AdminRoute,
   Destination,
+  ExecutionPlanPhase,
   GitHubIdentity,
   GitHubRepo,
   Schedule,
@@ -43,6 +45,7 @@ import { errText } from '../settings/util'
 import { envIcon } from '../icons/EnvIcons'
 import { type PendingAttachment } from '../Composer'
 import { MissionAttachments } from './MissionAttachments'
+import { MissionExecutionPlan } from './MissionExecutionPlan'
 
 type RepoSource = 'none' | 'github'
 
@@ -150,8 +153,9 @@ function resolvedDefaultRoute(
 const EXECUTOR_DEFAULT = '__default__'
 
 // executorChoices maps a harness Select value to its label — easy to
-// extend as more harnesses register.
-const executorChoices: { value: string; label: string }[] = [
+// extend as more harnesses register. Exported so MissionExecutionPlan
+// can reuse the same harness->label mapping for the axis column.
+export const executorChoices: { value: string; label: string }[] = [
   { value: EXECUTOR_DEFAULT, label: 'Default (from settings)' },
   { value: 'native', label: 'Native' },
   { value: 'claude-cli', label: 'Claude Code' },
@@ -171,6 +175,33 @@ function defaultHarnessLabel(defaultHarnessName: string): string {
   if (!defaultHarnessName) return 'Default (from settings)'
   const known = executorChoices.find((c) => c.value === defaultHarnessName)
   return `Default (${known?.label ?? defaultHarnessName})`
+}
+
+// defaultPlanRouteLabel names what leaving Plan route on "Default"
+// resolves to, read from the execution plan response's plan phase —
+// never recomputed client-side. Falls back to the plain hardcoded
+// string before the plan has loaded.
+function defaultPlanRouteLabel(plan: ExecutionPlanPhase[] | null): string {
+  const phase = plan?.find((p) => p.phase === 'plan')
+  if (!phase?.route) return 'Same as execute route'
+  return `Same as execute route (${phase.route})`
+}
+
+// defaultReviewRouteLabel names what leaving Review route on
+// "Default" resolves to — either the plan or the execute route,
+// whichever the review phase actually inherited from.
+function defaultReviewRouteLabel(plan: ExecutionPlanPhase[] | null): string {
+  const phase = plan?.find((p) => p.phase === 'review')
+  if (!phase?.route) return 'Default (same as plan/execute route)'
+  const from = phase.route_source === 'inherited-from-execute' ? 'execute' : 'plan'
+  return `Same as ${from} route (${phase.route})`
+}
+
+// defaultEscalationRouteLabel names the Escalation route select's
+// "Off" choice with the trigger condition, always the same text since
+// escalation only ever resolves to a route when one is set explicitly.
+function defaultEscalationRouteLabel(): string {
+  return 'Off (no escalation on failure)'
 }
 
 // Sentinel for the environment Select's "auto-detect" choice — wire
@@ -313,6 +344,7 @@ export function MissionForm({
   const [branchPattern, setBranchPattern] = useState(initial?.branch_pattern ?? '')
   const [commitStyle, setCommitStyle] = useState(initial?.commit_style ?? '')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
+  const [executionPlan, setExecutionPlan] = useState<ExecutionPlanPhase[] | null>(null)
   // defaultHarnessName is settings' coding_executor value (the harness
   // a create actually runs when the Harness select is left on
   // "Default") — fetched once so that choice can say what it resolves
@@ -411,6 +443,25 @@ export function MissionForm({
       .then(setExecutorOptions)
       .catch(() => setExecutorOptions(null))
   }, [kind, route, agentID, agents, routes])
+
+  // Live execution plan: the server-resolved read-out of what each
+  // phase actually runs, keyed on every field that affects resolution.
+  // Best-effort — a failed fetch just hides the table, the server is
+  // still the source of truth at create time.
+  useEffect(() => {
+    getMissionExecutionPlan({
+      kind,
+      agent: agentID || undefined,
+      harness: harness || undefined,
+      route: route || undefined,
+      plan_route: planRoute || undefined,
+      review_route: reviewRoute || undefined,
+      escalation_route: escalationRoute || undefined,
+      light: kind === 'general' ? light : undefined,
+    })
+      .then(setExecutionPlan)
+      .catch(() => setExecutionPlan(null))
+  }, [kind, agentID, harness, route, planRoute, reviewRoute, escalationRoute, light])
 
   // Pre-select the settings page's configured default currency for a
   // fresh create — edit mode below overwrites this with the schedule's
@@ -1140,19 +1191,6 @@ export function MissionForm({
                 })}
               </SelectContent>
             </Select>
-            {(() => {
-              // executorOptions is keyed by real registered harness
-              // names only — "Default"/"Native" never have a match,
-              // so the preview only ever renders for a concretely
-              // selected harness (e.g. "claude-cli").
-              const selected = executorOptions?.find((o) => o.harness === harness)
-              if (!selected?.usable) return null
-              return (
-                <p className="text-xs text-muted-foreground">
-                  runs via {selected.provider_name}/{selected.model}
-                </p>
-              )
-            })()}
           </div>
         )}
 
@@ -1248,6 +1286,8 @@ export function MissionForm({
           </div>
         )}
 
+        <MissionExecutionPlan plan={executionPlan} />
+
         <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
           <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
             {showAdvanced ? 'Hide advanced options' : 'Show advanced options'}
@@ -1302,7 +1342,7 @@ export function MissionForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={ROUTE_DEFAULT}>Default (same as plan/execute route)</SelectItem>
+                      <SelectItem value={ROUTE_DEFAULT}>{defaultReviewRouteLabel(executionPlan)}</SelectItem>
                       {enabledRoutes.map((r) => (
                         <SelectItem key={r.name} value={r.name}>
                           {r.name}
@@ -1330,7 +1370,7 @@ export function MissionForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={ROUTE_DEFAULT}>Same as execute route</SelectItem>
+                      <SelectItem value={ROUTE_DEFAULT}>{defaultPlanRouteLabel(executionPlan)}</SelectItem>
                       {enabledRoutes.map((r) => (
                         <SelectItem key={r.name} value={r.name}>
                           {r.name}
@@ -1363,7 +1403,7 @@ export function MissionForm({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={ROUTE_DEFAULT}>Off</SelectItem>
+                        <SelectItem value={ROUTE_DEFAULT}>{defaultEscalationRouteLabel()}</SelectItem>
                         {enabledRoutes.map((r) => (
                           <SelectItem key={r.name} value={r.name}>
                             {r.name}
