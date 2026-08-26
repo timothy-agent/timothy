@@ -128,6 +128,22 @@ export function defaultRouteLabel(
   return 'Default'
 }
 
+// resolvedDefaultRoute is defaultRouteLabel's same precedence, but
+// returns the route name (or '' when none resolves — matches the
+// server's own '' == "no real route, gateway default chain" case)
+// instead of a display label. Used to fetch executor-options against
+// the route a create would actually use, not always the system
+// default.
+function resolvedDefaultRoute(
+  kind: Kind,
+  agent: AdminAgent | undefined,
+  routes: AdminRoute[] | null,
+): string {
+  if (agent?.route) return agent.route
+  if (kind === 'coding' && routes?.some((r) => r.name === 'coding')) return 'coding'
+  return routes?.find((r) => r.role === 'default')?.name ?? ''
+}
+
 // Sentinel for the executor Select's "apply the settings default"
 // choice — wire value stays '' (omit harness from the create payload)
 // to match the API's own empty-means-default semantics.
@@ -360,18 +376,23 @@ export function MissionForm({
   }, [repos, repoQuery])
 
   // Live executor pairing/usability preview: coding-only, refetched
-  // whenever the kind flips to coding or the route selection changes.
-  // Best-effort — a failed fetch degrades to a plain, fully-enabled
-  // select with no live info, the server validates on submit anyway.
+  // whenever the kind flips to coding or the route selection (explicit
+  // or resolved default) changes. An explicit route override wins;
+  // otherwise this asks about the same route a create would actually
+  // resolve to (resolvedDefaultRoute), not always the system default —
+  // else a "coding" route's own chain never gets previewed. Best-effort
+  // — a failed fetch degrades to a plain, fully-enabled select with no
+  // live info, the server validates on submit anyway.
   useEffect(() => {
     if (kind !== 'coding') {
       setExecutorOptions(null)
       return
     }
-    getMissionExecutorOptions(route || undefined)
+    const effectiveRoute = route || resolvedDefaultRoute(kind, agents.find((a) => a.id === agentID), routes)
+    getMissionExecutorOptions(effectiveRoute || undefined)
       .then(setExecutorOptions)
       .catch(() => setExecutorOptions(null))
-  }, [kind, route])
+  }, [kind, route, agentID, agents, routes])
 
   // Pre-select the settings page's configured default currency for a
   // fresh create — edit mode below overwrites this with the schedule's
