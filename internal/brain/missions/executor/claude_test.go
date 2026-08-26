@@ -216,7 +216,7 @@ func TestClaudeParser_NoiseTolerance(t *testing.T) {
 	if !ok {
 		t.Fatal("valid system/init line failed to parse after noise")
 	}
-	if ev.Kind != KindSystem || ev.Text != "claude-haiku-4-5-20251001" {
+	if ev.Kind != KindSystem || ev.Text != "claude-haiku-4-5-20251001" || ev.Model != "claude-haiku-4-5-20251001" {
 		t.Errorf("unexpected event: %+v", ev)
 	}
 

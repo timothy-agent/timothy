@@ -108,7 +108,13 @@ type ToolActivity struct {
 type Event struct {
 	Kind EventKind
 	Text string
-	Tool *ToolActivity
+	// Model is the model the harness reports it actually ran, set only
+	// on KindSystem and only by harnesses whose init line names one
+	// (claude-cli, cursor-cli). Empty everywhere else: KindSystem's Text
+	// carries a different identifier per harness (thread id, session id,
+	// cwd), so the model needs its own field rather than an overload.
+	Model string
+	Tool  *ToolActivity
 	// Usage and Result are set only on KindResult; Usage may also be set
 	// standalone on KindUsage for harnesses that report it out of band.
 	Usage *Usage

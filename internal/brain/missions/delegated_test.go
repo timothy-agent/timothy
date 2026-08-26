@@ -1634,3 +1634,40 @@ func TestShQuote(t *testing.T) {
 		})
 	}
 }
+
+// TestRecordLedgerPrefersReportedModel proves a ledger row names the
+// model the harness said it ran, falling back to the route entry's
+// model when the harness reports none. The self-paired case is the
+// reason this exists: cursor-cli's provider row carries the literal
+// placeholder "default" as its model, so without the harness's own
+// report every Cursor run books its tokens against a model name that
+// does not exist.
+func TestRecordLedgerPrefersReportedModel(t *testing.T) {
+	cases := []struct {
+		name          string
+		entryModel    string
+		reportedModel string
+		want          string
+	}{
+		{"harness report wins over a self-paired placeholder", "default", "claude-4.5-sonnet", "claude-4.5-sonnet"},
+		{"no report falls back to the route entry", "claude-sonnet-5", "", "claude-sonnet-5"},
+		{"harness report wins over a real entry model too", "claude-sonnet-5", "claude-opus-5", "claude-opus-5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			led := &fakeLedger{}
+			r := &delegatedRunner{ledger: led, log: slog.Default()}
+			entry := gwclient.ResolvedRouteEntry{ProviderName: "Cursor", Model: tc.entryModel}
+
+			r.recordLedger(context.Background(), Mission{ID: "m1"}, entry,
+				executor.AuthSubscription, nil, time.Now(), true, "", tc.reportedModel)
+
+			if len(led.entries) != 1 {
+				t.Fatalf("got %d ledger entries, want 1", len(led.entries))
+			}
+			if got := led.entries[0].Model; got != tc.want {
+				t.Errorf("ledger Model = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

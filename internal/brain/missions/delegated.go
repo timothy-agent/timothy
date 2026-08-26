@@ -587,9 +587,15 @@ type pollState struct {
 	toolCalls    int
 	sawResult    bool
 	resultEvent  executor.Event
-	textBuf      strings.Builder
-	eventCount   int
-	infraRetries int
+	// reportedModel is the model the harness itself said it ran, from
+	// its KindSystem init line. Preferred over the route entry's model
+	// when recording usage: a self-paired harness's provider row carries
+	// a placeholder (cursor-cli's "default"), so entry.Model would book
+	// real tokens against a model name that never ran.
+	reportedModel string
+	textBuf       strings.Builder
+	eventCount    int
+	infraRetries  int
 }
 
 // pollToVerdict polls rdir until the run terminates (exit_code present
@@ -734,6 +740,10 @@ func (r *delegatedRunner) feedLines(parser executor.StreamParser, chunk []byte, 
 			continue
 		}
 		switch ev.Kind {
+		case executor.KindSystem:
+			if ev.Model != "" {
+				st.reportedModel = ev.Model
+			}
 		case executor.KindText:
 			st.textBuf.WriteString(ev.Text)
 			st.turns++
@@ -806,7 +816,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 	// not present the raw CLI number as billed.
 	cliCostTrusted := authMode == executor.AuthAPIKey && entry.Driver == "anthropic" && adapter.Capabilities().ReportsCost
 	r.recordResult(ctx, m.ID, st, start, exitCode, st.resultEvent, parseKind, strings.ToUpper(verdict.Outcome), cliCostTrusted)
-	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "", errorCode)
+	r.recordLedger(ctx, m, entry, authMode, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "", errorCode, st.reportedModel)
 	if authFailed {
 		r.coolDown(m.Harness, entry)
 		r.recordAuthFailed(ctx, m.ID, m.Harness)
@@ -831,13 +841,13 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry g
 	if exitCode != 0 && isAuthFailure(stderrTail) {
 		r.coolDown(m.Harness, entry)
 		r.recordDied(ctx, m.ID, "auth_failed", &exitCode, stderrTail)
-		r.recordLedger(ctx, m, entry, authMode, nil, start, false, errorCodeAuthFailed)
+		r.recordLedger(ctx, m, entry, authMode, nil, start, false, errorCodeAuthFailed, st.reportedModel)
 		r.recordAuthFailed(ctx, m.ID, m.Harness)
 		return WorkerVerdict{}, st.textBuf.String(), fmt.Errorf("%w: %s", ErrExecutorAuth, stderrTail)
 	}
 
 	r.recordDied(ctx, m.ID, "transport_death", &exitCode, stderrTail)
-	r.recordLedger(ctx, m, entry, authMode, nil, start, false, "")
+	r.recordLedger(ctx, m, entry, authMode, nil, start, false, "", st.reportedModel)
 	r.coolDown(m.Harness, entry)
 	return forcedRetryVerdict(reason), st.textBuf.String(), nil
 }
@@ -1047,7 +1057,12 @@ func costSource(entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, u
 // recordLedger writes one cost_ledger row at the run's terminal point
 // (D-055) — see costSource for how Cost/Unbilled are decided.
 // errorCode is optional (e.g. errorCodeAuthFailed); blank on ok=true.
-func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool, errorCode string) {
+// reportedModel is the harness's own KindSystem model name, preferred
+// over entry.Model so a self-paired row's placeholder ("default" on
+// cursor-cli) never stands in for the model that actually ran; blank
+// falls back to entry.Model, which is what every route-resolved
+// harness already agrees on.
+func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwclient.ResolvedRouteEntry, authMode executor.AuthMode, usage *executor.Usage, start time.Time, ok bool, errorCode string, reportedModel string) {
 	if r.ledger == nil {
 		return
 	}
@@ -1055,8 +1070,12 @@ func (r *delegatedRunner) recordLedger(ctx context.Context, m Mission, entry gwc
 	if !ok {
 		status = "error"
 	}
+	model := entry.Model
+	if reportedModel != "" {
+		model = reportedModel
+	}
 	e := ledger.Entry{
-		Provider: entry.ProviderName, Model: entry.Model, Route: workerRoute(m),
+		Provider: entry.ProviderName, Model: model, Route: workerRoute(m),
 		Agent: "mission-worker", Purpose: "executor", MissionID: m.ID,
 		LatencyMS: time.Since(start).Milliseconds(), Status: status, ErrorCode: errorCode,
 	}

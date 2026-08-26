@@ -192,7 +192,7 @@ func TestCursorParser_NoiseTolerance(t *testing.T) {
 	if !ok {
 		t.Fatal("valid system/init line failed to parse after noise")
 	}
-	if ev.Kind != KindSystem || ev.Text != "cursor-model" {
+	if ev.Kind != KindSystem || ev.Text != "cursor-model" || ev.Model != "cursor-model" {
 		t.Errorf("unexpected event: %+v", ev)
 	}
 

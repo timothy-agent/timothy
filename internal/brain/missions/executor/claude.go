@@ -213,7 +213,7 @@ func (p *claudeParser) ParseLine(line []byte) (Event, bool) {
 			return Event{}, false
 		}
 		p.stats.Events++
-		return Event{Kind: KindSystem, Text: sys.Model}, true
+		return Event{Kind: KindSystem, Text: sys.Model, Model: sys.Model}, true
 
 	case "assistant":
 		var a claudeAssistantLine
