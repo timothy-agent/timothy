@@ -55,6 +55,22 @@ type consolidateStore struct {
 	applyMergeErr  error
 	superseded     map[string]string
 	recentEpisodic []store.Memory
+
+	pendingPairs [][2]string
+	rejectErr    error
+	rejected     []string
+}
+
+func (s *consolidateStore) RedundantPendingPairs(context.Context, float64) ([][2]string, error) {
+	return s.pendingPairs, nil
+}
+
+func (s *consolidateStore) Reject(_ context.Context, id string) error {
+	if s.rejectErr != nil {
+		return s.rejectErr
+	}
+	s.rejected = append(s.rejected, id)
+	return nil
 }
 
 func (s *consolidateStore) DemoteUnused(context.Context, time.Time, float64, int) ([]string, error) {
@@ -151,6 +167,42 @@ func TestConsolidateMergesGroup(t *testing.T) {
 	mergedID := "mem-1"
 	if len(st.superseded) != 2 || st.superseded["m1"] != mergedID || st.superseded["m2"] != mergedID {
 		t.Fatalf("superseded = %v", st.superseded)
+	}
+}
+
+func TestConsolidateDedupesPendingPairs(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{}
+	st := &consolidateStore{
+		pendingPairs: [][2]string{{"p1", "p2"}},
+	}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.PendingDeduped != 1 {
+		t.Fatalf("summary.PendingDeduped = %d, want 1", summary.PendingDeduped)
+	}
+	if len(st.rejected) != 1 || st.rejected[0] != "p2" {
+		t.Fatalf("rejected = %v, want [p2] (the newer half kept, p1 untouched)", st.rejected)
+	}
+}
+
+func TestConsolidateDedupesPendingPairsSkipsRejectError(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{}
+	st := &consolidateStore{
+		pendingPairs: [][2]string{{"p1", "p2"}},
+		rejectErr:    errors.New("already confirmed"),
+	}
+	c := NewConsolidator(gw, st, testLog(), Metrics{})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.PendingDeduped != 0 {
+		t.Fatalf("summary.PendingDeduped = %d, want 0 (reject failed, queue left as-is)", summary.PendingDeduped)
 	}
 }
 

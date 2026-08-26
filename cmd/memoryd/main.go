@@ -62,6 +62,8 @@ func main() {
 		Archived: app.Metrics.NewCounter("memory_archived_total", "Stale episodic memories archived."),
 		Decayed:  app.Metrics.NewCounter("memory_decayed_total", "Stale semantic facts decayed and queued for reconfirmation."),
 		Demoted:  app.Metrics.NewCounter("memory_demoted_total", "Unused pending memories demoted by the usage-driven decay pass."),
+		PendingDeduped: app.Metrics.NewCounter("memory_pending_deduped_total",
+			"Pending memories rejected as a near-duplicate of another still-pending proposal."),
 	})
 	consolidator.SetReflector(extractor)
 	kbStore := store.NewKBStore(app.DB)

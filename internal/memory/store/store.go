@@ -273,6 +273,42 @@ func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]strin
 	return pairs, rows.Err()
 }
 
+// RedundantPendingPairs returns every pair of pending embedded
+// memories of the same type whose cosine similarity meets the
+// threshold, older id first: unlike NearDupPairs (active-only, feeds
+// the LLM merge path), this catches two still-unconfirmed proposals
+// restating the same fact in different words before either reaches
+// the confirm queue twice. No LLM merge needed here - neither side is
+// confirmed knowledge yet, so the consolidator just rejects the newer
+// half of each pair outright.
+func (s *Store) RedundantPendingPairs(ctx context.Context, threshold float64) ([][2]string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("redundant pending pairs: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT a.id, b.id
+		FROM memories a
+		JOIN memories b ON a.created_at < b.created_at
+		WHERE a.status = $1 AND b.status = $1
+		  AND a.type = b.type
+		  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+		  AND 1 - (a.embedding <=> b.embedding) >= $2`,
+		StatusPending, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("redundant pending pairs: %w", err)
+	}
+	defer rows.Close()
+	var pairs [][2]string
+	for rows.Next() {
+		var p [2]string
+		if err := rows.Scan(&p[0], &p[1]); err != nil {
+			return nil, fmt.Errorf("redundant pending pairs: %w", err)
+		}
+		pairs = append(pairs, p)
+	}
+	return pairs, rows.Err()
+}
+
 // ApplyMerge inserts the consolidator's merged fact and supersedes
 // every member in a single transaction: a crash mid-sequence can no
 // longer leave the merged row active alongside still-active members

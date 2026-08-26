@@ -161,6 +161,18 @@ const executorChoices: { value: string; label: string }[] = [
   { value: 'cursor-cli', label: 'Cursor CLI' },
 ]
 
+// defaultHarnessLabel names what the Harness select's "Default" choice
+// actually resolves to — mirrors defaultRouteLabel's job for Route —
+// so an operator can tell what runs without opening Settings. Falls
+// back to the plain choice when defaultHarnessName is empty (fetch
+// failed) or names a harness not in executorChoices (native, or one
+// not yet in this list).
+function defaultHarnessLabel(defaultHarnessName: string): string {
+  if (!defaultHarnessName) return 'Default (from settings)'
+  const known = executorChoices.find((c) => c.value === defaultHarnessName)
+  return `Default (${known?.label ?? defaultHarnessName})`
+}
+
 // Sentinel for the environment Select's "auto-detect" choice — wire
 // value stays '' (omit environment from the create payload) to match
 // the API's own empty-means-auto-detect semantics (D-05x).
@@ -301,6 +313,12 @@ export function MissionForm({
   const [branchPattern, setBranchPattern] = useState(initial?.branch_pattern ?? '')
   const [commitStyle, setCommitStyle] = useState(initial?.commit_style ?? '')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
+  // defaultHarnessName is settings' coding_executor value (the harness
+  // a create actually runs when the Harness select is left on
+  // "Default") — fetched once so that choice can say what it resolves
+  // to, the same way the Route select's "Default" already names the
+  // route it resolves to (defaultRouteLabel).
+  const [defaultHarnessName, setDefaultHarnessName] = useState('')
   const [busy, setBusy] = useState(false)
 
   // Repository source: 'none' self-initializes an empty repo (the
@@ -408,6 +426,18 @@ export function MissionForm({
         // Best-effort: falls back to the USD default already set.
       })
   }, [mode])
+
+  // Read-only, both modes: names the harness the settings-page
+  // coding_executor value resolves to, purely for the Harness select's
+  // "Default" label. Best-effort — an empty value just shows the plain
+  // "Default (from settings)" fallback.
+  useEffect(() => {
+    getSettings()
+      .then((s) => setDefaultHarnessName(s.values.coding_executor ?? ''))
+      .catch(() => {
+        // Best-effort: falls back to the plain "Default" label.
+      })
+  }, [])
 
   // Repeat-on-schedule fields — read/submitted whenever repeat is on
   // (create mode) or always (edit mode, which only ever edits a
@@ -1096,6 +1126,7 @@ export function MissionForm({
                 {executorChoices.map((c) => {
                   const opt = executorOptions?.find((o) => o.harness === c.value)
                   const disabled = !!opt && !opt.usable
+                  const label = c.value === EXECUTOR_DEFAULT ? defaultHarnessLabel(defaultHarnessName) : c.label
                   return (
                     <SelectItem
                       key={c.value}
@@ -1103,7 +1134,7 @@ export function MissionForm({
                       disabled={disabled}
                       title={disabled ? opt?.reason : undefined}
                     >
-                      {c.label}
+                      {label}
                     </SelectItem>
                   )
                 })}

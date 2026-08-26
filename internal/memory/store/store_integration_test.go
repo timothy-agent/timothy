@@ -509,6 +509,72 @@ func TestNearDupPairs(t *testing.T) {
 	}
 }
 
+// TestRedundantPendingPairs proves two still-pending near-duplicate
+// proposals surface as a pair, older id first, and that Promoting one
+// (moving it out of pending) drops the pair on the next call.
+func TestRedundantPendingPairs(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	near := func(dim int, delta float32) Vector {
+		v := make(Vector, 1024)
+		v[dim] = 1
+		v[dim+1] = delta
+		return v
+	}
+	older := mem("timezone preference set to Europe/Amsterdam")
+	older.Embedding = near(400, 0)
+	newer := mem("user timezone preference is Europe/Amsterdam")
+	newer.Embedding = near(400, 0.1) // cosine ~0.995 with older
+	unrelated := mem("unrelated pending fact")
+	unrelated.Embedding = near(500, 0)
+
+	olderID, err := s.Insert(ctx, older)
+	if err != nil {
+		t.Fatalf("Insert older: %v", err)
+	}
+	newerID, err := s.Insert(ctx, newer)
+	if err != nil {
+		t.Fatalf("Insert newer: %v", err)
+	}
+	if _, err := s.Insert(ctx, unrelated); err != nil {
+		t.Fatalf("Insert unrelated: %v", err)
+	}
+
+	pairs, err := s.RedundantPendingPairs(ctx, 0.95)
+	if err != nil {
+		t.Fatalf("RedundantPendingPairs: %v", err)
+	}
+	found := false
+	for _, p := range pairs {
+		if p[0] == olderID && p[1] == newerID {
+			found = true
+		}
+		if p[0] == unrelated.ID || p[1] == unrelated.ID {
+			t.Fatalf("unrelated memory in a pair: %v", p)
+		}
+	}
+	if !found {
+		t.Fatalf("redundant pending pair (older, newer) not found in %v", pairs)
+	}
+
+	// Promoting the older half moves it out of pending; the pair must
+	// no longer surface (mirrors NearDupPairs' active-only scope, just
+	// the pending mirror of it).
+	if err := s.Promote(ctx, olderID); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	pairs, err = s.RedundantPendingPairs(ctx, 0.95)
+	if err != nil {
+		t.Fatalf("RedundantPendingPairs after promote: %v", err)
+	}
+	for _, p := range pairs {
+		if p[0] == olderID || p[1] == olderID {
+			t.Fatalf("promoted memory still in a pending pair: %v", p)
+		}
+	}
+}
+
 // TestNearDupPairsCrossTypeExcluded proves a semantic+episodic pair
 // never surfaces as a near-dup edge even at near-identical embeddings
 // — merging across types would silently collapse a durable fact into

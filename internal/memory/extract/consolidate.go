@@ -64,6 +64,8 @@ const mergeSystem = `You merge near-duplicate memory entries into ONE canonical 
 // needs.
 type ConsolidateStore interface {
 	NearDupPairs(ctx context.Context, threshold float64) ([][2]string, error)
+	RedundantPendingPairs(ctx context.Context, threshold float64) ([][2]string, error)
+	Reject(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (store.Memory, error)
 	ApplyMerge(ctx context.Context, m store.Memory, memberIDs []string) (string, error)
 	ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error)
@@ -75,22 +77,24 @@ type ConsolidateStore interface {
 // Metrics counts every consolidation action; any counter may be nil
 // (tests).
 type Metrics struct {
-	Merges   prometheus.Counter
-	Rejects  *prometheus.CounterVec // reason: token_loss|shrink|bloat|conflict|error
-	Archived prometheus.Counter
-	Decayed  prometheus.Counter
-	Demoted  prometheus.Counter
+	Merges         prometheus.Counter
+	Rejects        *prometheus.CounterVec // reason: token_loss|shrink|bloat|conflict|error
+	Archived       prometheus.Counter
+	Decayed        prometheus.Counter
+	Demoted        prometheus.Counter
+	PendingDeduped prometheus.Counter
 }
 
 // Summary counts one Run pass. RunLoop discards it; the manual
 // trigger endpoint returns it.
 type Summary struct {
-	Merged    int `json:"merged"`
-	Rejected  int `json:"rejected"`
-	Archived  int `json:"archived"`
-	Decayed   int `json:"decayed"`
-	Reflected int `json:"reflected"`
-	Demoted   int `json:"demoted"`
+	Merged         int `json:"merged"`
+	Rejected       int `json:"rejected"`
+	Archived       int `json:"archived"`
+	Decayed        int `json:"decayed"`
+	Reflected      int `json:"reflected"`
+	Demoted        int `json:"demoted"`
+	PendingDeduped int `json:"pending_deduped"`
 }
 
 // Consolidator is the daily lifecycle job (D-011): merge near-dup
@@ -156,6 +160,12 @@ func (c *Consolidator) Run(ctx context.Context) (Summary, error) {
 		errs = append(errs, err.Error())
 	}
 
+	pendingDeduped, err := c.dedupePending(ctx)
+	summary.PendingDeduped = pendingDeduped
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+
 	archived, err := c.archiveStale(ctx)
 	summary.Archived = archived
 	if err != nil {
@@ -184,6 +194,41 @@ func (c *Consolidator) Run(ctx context.Context) (Summary, error) {
 		return summary, fmt.Errorf("consolidate: %s", strings.Join(errs, "; "))
 	}
 	return summary, nil
+}
+
+// dedupePending rejects the newer half of every pending-pending
+// near-duplicate pair: two still-unconfirmed proposals restating the
+// same fact in different wording (extraction's own dedup only compares
+// a new candidate against what's already committed, so two proposals
+// from different runs can both queue before either lands). Neither
+// side is confirmed knowledge, so there's nothing to merge - the
+// older proposal is simply kept and the newer one rejected outright.
+// A pair whose older half a concurrent Confirm/Reject already moved
+// out of pending fails Reject's status-guarded transition; that's
+// logged and skipped, never an error - the queue is already correct
+// by the time this pass would have acted.
+func (c *Consolidator) dedupePending(ctx context.Context) (deduped int, err error) {
+	pairs, err := c.store.RedundantPendingPairs(ctx, nearDupSimilarity)
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[string]bool, len(pairs))
+	for _, pair := range pairs {
+		newer := pair[1]
+		if seen[newer] {
+			continue
+		}
+		if err := c.store.Reject(ctx, newer); err != nil {
+			c.log.Warn("pending duplicate reject failed; left in queue", "id", newer, "error", err)
+			continue
+		}
+		seen[newer] = true
+		deduped++
+		if c.metrics.PendingDeduped != nil {
+			c.metrics.PendingDeduped.Inc()
+		}
+	}
+	return deduped, nil
 }
 
 // mergeNearDups groups pairwise near-duplicates (union-find over the
