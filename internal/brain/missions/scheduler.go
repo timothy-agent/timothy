@@ -119,6 +119,12 @@ type AgentDefaults struct {
 	// onto the mission the same way PromptOverlay is (see
 	// missions.Mission.Knowledge).
 	Knowledge []string
+	// Harness is the agent's own harness field, consulted by
+	// resolveTemplateDefaults/ResolveHarness ahead of
+	// settings.coding_executor (mission.harness -> agent.harness ->
+	// settings.coding_executor -> native). Empty means the agent
+	// doesn't override.
+	Harness string
 }
 
 // AgentResolver resolves an agent id to its defaults at FIRE time, not
@@ -527,12 +533,15 @@ func (s *Scheduler) filterDestinationIDs(ctx context.Context, ids []string) []st
 // overlay is returned separately since MissionTemplate itself carries
 // no such field, a coding template's still-empty route prefers the
 // operator's "coding" route over "default" when it exists
-// (DefaultCodingRoute), and a coding template that omits harness gets
-// the settings default (D-051) — mirrors api/missions.go create()'s
-// own precedence so a scheduler-fired mission inherits it too.
+// (DefaultCodingRoute), and a coding template that omits harness
+// resolves through ResolveHarness (mission.harness -> agent.harness ->
+// settings.coding_executor -> native) - mirrors api/missions.go
+// create()'s own precedence so a scheduler-fired mission inherits it
+// too.
 func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string, []string) {
 	promptOverlay := ""
 	var knowledge []string
+	var agentHarness string
 	if resolve != nil {
 		if defaults, ok := resolve(ctx, t.AgentID); ok {
 			if t.Route == "" {
@@ -546,6 +555,7 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			}
 			promptOverlay = defaults.PromptOverlay
 			knowledge = defaults.Knowledge
+			agentHarness = defaults.Harness
 		}
 	}
 	policy := policyFor(t.Kind, t.Light)
@@ -569,8 +579,8 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			t.ReviewRoute = defaultRoute
 		}
 	}
-	if policy.canDelegate && t.Harness == "" && codingExecutorDefault != nil {
-		t.Harness = codingExecutorDefault(ctx)
+	if policy.canDelegate {
+		t.Harness, _ = ResolveHarness(ctx, t.Kind, t.Harness, agentHarness, codingExecutorDefault)
 	}
 	// Environment (D-05x): no settings default (unlike Harness above) —
 	// an omitted template auto-detects from the goal at fire time. No

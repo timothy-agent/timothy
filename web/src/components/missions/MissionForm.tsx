@@ -149,8 +149,10 @@ function resolvedDefaultRoute(
 
 // Sentinel for the executor Select's "apply the settings default"
 // choice — wire value stays '' (omit harness from the create payload)
-// to match the API's own empty-means-default semantics.
-const EXECUTOR_DEFAULT = '__default__'
+// to match the API's own empty-means-default semantics. Exported so
+// AgentForm's Harness select can reuse the same sentinel/choice list
+// for its own "inherit" option.
+export const EXECUTOR_DEFAULT = '__default__'
 
 // executorChoices maps a harness Select value to its label — easy to
 // extend as more harnesses register. Exported so MissionExecutionPlan

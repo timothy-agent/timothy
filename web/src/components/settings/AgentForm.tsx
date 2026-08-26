@@ -12,6 +12,7 @@ import { Field, Toggle } from './shared'
 import { KnowledgePicker } from './KnowledgePicker'
 import { SkillsPicker } from './SkillsPicker'
 import { ToolsPicker } from './ToolsPicker'
+import { EXECUTOR_DEFAULT, executorChoices } from '../missions/MissionForm'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 
 // slugify mirrors the backend's name rule: lowercase slug.
@@ -31,6 +32,7 @@ export interface AgentFormValue {
   tools: string[]
   knowledge: string[]
   memory: boolean
+  harness: string
 }
 
 export function useAgentForm(agent?: AdminAgent) {
@@ -42,6 +44,7 @@ export function useAgentForm(agent?: AdminAgent) {
   const [tools, setTools] = useState<string[]>(agent?.tools ?? [])
   const [knowledge, setKnowledge] = useState<string[]>(agent?.knowledge ?? [])
   const [memory, setMemory] = useState(agent?.memory ?? true)
+  const [harness, setHarness] = useState(agent?.harness ?? '')
 
   // Edit loads its agent asynchronously, after this hook has already
   // mounted with blank defaults — useState's initializer only runs
@@ -56,6 +59,7 @@ export function useAgentForm(agent?: AdminAgent) {
     setTools(agent.tools)
     setKnowledge(agent.knowledge ?? [])
     setMemory(agent.memory)
+    setHarness(agent.harness ?? '')
   }, [agent])
 
   const value: AgentFormValue = {
@@ -67,6 +71,7 @@ export function useAgentForm(agent?: AdminAgent) {
     tools,
     knowledge,
     memory,
+    harness,
   }
 
   return {
@@ -89,6 +94,8 @@ export function useAgentForm(agent?: AdminAgent) {
       setKnowledge,
       memory,
       setMemory,
+      harness,
+      setHarness,
     },
   }
 }
@@ -163,6 +170,23 @@ export function AgentForm({
           </div>
         </Field>
       </div>
+      <Field label="Harness" hint="coding executor this agent's missions delegate to; inherit falls through to settings">
+        <Select
+          value={fields.harness || EXECUTOR_DEFAULT}
+          onValueChange={(v) => fields.setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
+        >
+          <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="agent harness">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {executorChoices.map((c) => (
+              <SelectItem key={c.value} value={c.value}>
+                {c.value === EXECUTOR_DEFAULT ? 'Inherit from settings' : c.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
       <Field label="Skills allowlist" hint="pick from the loaded skill packs; empty = none">
         <SkillsPicker value={fields.skills} onChange={fields.setSkills} />
       </Field>

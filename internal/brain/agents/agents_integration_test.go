@@ -176,23 +176,24 @@ func TestAgentMissionColumns(t *testing.T) {
 	id, err := s.Create(ctx, Agent{
 		Name: name, Route: "default", Enabled: true,
 		ReviewRoute: "research", BudgetUSD: &budget,
-		ApprovalAllowlist: []string{"shell_exec"},
+		ApprovalAllowlist: []string{"shell_exec"}, Harness: "claude-cli",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	a, ok := s.Resolve(ctx, name)
 	if !ok || a.ReviewRoute != "research" || a.BudgetUSD == nil || *a.BudgetUSD != budget ||
-		len(a.ApprovalAllowlist) != 1 || a.ApprovalAllowlist[0] != "shell_exec" {
+		len(a.ApprovalAllowlist) != 1 || a.ApprovalAllowlist[0] != "shell_exec" || a.Harness != "claude-cli" {
 		t.Fatalf("Resolve = %+v ok=%v, want mission columns round-tripped", a, ok)
 	}
 
 	newBudget := 9.0
 	reviewRoute := "default"
-	if err := s.Patch(ctx, id, Patch{ReviewRoute: &reviewRoute, BudgetUSD: &newBudget}); err != nil {
+	newHarness := "codex-cli"
+	if err := s.Patch(ctx, id, Patch{ReviewRoute: &reviewRoute, BudgetUSD: &newBudget, Harness: &newHarness}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
-	if a, _ := s.Resolve(ctx, name); a.ReviewRoute != "default" || a.BudgetUSD == nil || *a.BudgetUSD != newBudget {
+	if a, _ := s.Resolve(ctx, name); a.ReviewRoute != "default" || a.BudgetUSD == nil || *a.BudgetUSD != newBudget || a.Harness != "codex-cli" {
 		t.Fatalf("patched mission columns = %+v (cache must invalidate)", a)
 	}
 
@@ -203,7 +204,24 @@ func TestAgentMissionColumns(t *testing.T) {
 	if _, err := s.Create(ctx, Agent{Name: chatOnly, Enabled: true}); err != nil {
 		t.Fatalf("Create chat-only: %v", err)
 	}
-	if a, _ := s.Resolve(ctx, chatOnly); a.ReviewRoute != "" || a.BudgetUSD != nil || len(a.ApprovalAllowlist) != 0 {
+	if a, _ := s.Resolve(ctx, chatOnly); a.ReviewRoute != "" || a.BudgetUSD != nil || len(a.ApprovalAllowlist) != 0 || a.Harness != "" {
 		t.Fatalf("chat-only agent mission columns = %+v, want all zero", a)
+	}
+
+	// An unregistered harness name is rejected on create and on patch;
+	// empty stays valid (inherit).
+	if _, err := s.Create(ctx, Agent{Name: marker + "bad-harness", Enabled: true, Harness: "not-a-harness"}); err == nil {
+		t.Fatal("Create with unknown harness accepted")
+	}
+	badHarness := "not-a-harness"
+	if err := s.Patch(ctx, id, Patch{Harness: &badHarness}); err == nil {
+		t.Fatal("Patch with unknown harness accepted")
+	}
+	emptyHarness := ""
+	if err := s.Patch(ctx, id, Patch{Harness: &emptyHarness}); err != nil {
+		t.Fatalf("Patch clearing harness to empty: %v", err)
+	}
+	if a, _ := s.Resolve(ctx, name); a.Harness != "" {
+		t.Fatalf("harness after clearing = %q, want empty (inherit)", a.Harness)
 	}
 }

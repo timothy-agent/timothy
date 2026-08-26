@@ -1261,6 +1261,38 @@ func TestExecutionPlanHarnessSourceSettings(t *testing.T) {
 	}
 }
 
+// TestExecutionPlanHarnessSourceAgent confirms the picked agent's own
+// harness wins over the settings default, source "agent" - the same
+// mission.harness -> agent.harness -> settings.coding_executor ->
+// native precedence create() and the scheduler's fire path use
+// (missions.ResolveHarness).
+func TestExecutionPlanHarnessSourceAgent(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log:                   discard(),
+		codingExecutorDefault: func(_ context.Context) string { return "opencode" },
+		resolveAgentHarness: func(_ context.Context, id string) (string, bool) {
+			if id == "coder" {
+				return "pi", true
+			}
+			return "", false
+		},
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"base": {Route: "base", Entries: []gwclient.ResolvedRouteEntry{usableEntry("A", "a")}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=coding&route=base&agent=coder")
+	if p := byPhase["execute"]; p.Harness != "pi" || p.HarnessSource != "agent" {
+		t.Fatalf("execute = harness %q source %q, want pi/agent", p.Harness, p.HarnessSource)
+	}
+
+	// An explicit ?harness= still wins over the agent's own harness.
+	explicit := getExecutionPlan(t, h, "kind=coding&route=base&agent=coder&harness=claude-cli")
+	if p := explicit["execute"]; p.Harness != "claude-cli" || p.HarnessSource != "explicit" {
+		t.Fatalf("execute with explicit harness = harness %q source %q, want claude-cli/explicit", p.Harness, p.HarnessSource)
+	}
+}
+
 // TestExecutionPlanLightSkipsOversightOnly confirms light=true skips
 // explore/plan/review with the fixed reason while execute is never
 // skipped.

@@ -31,6 +31,7 @@ export function AgentAdd() {
         tools: value.tools,
         knowledge: value.knowledge,
         memory: value.memory,
+        harness: value.harness,
         enabled: true,
       })
       toast.success('Agent created', { description: `${slugify(value.name)} is ready to serve sessions.` })

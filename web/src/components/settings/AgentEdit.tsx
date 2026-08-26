@@ -53,6 +53,7 @@ export function AgentEdit() {
         tools: value.tools,
         knowledge: value.knowledge,
         memory: value.memory,
+        harness: value.harness,
       })
       toast.success('Agent saved')
       navigate('/settings/agents')

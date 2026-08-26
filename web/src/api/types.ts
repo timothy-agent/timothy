@@ -581,6 +581,10 @@ export interface AdminAgent {
   review_route?: string
   budget_usd?: number
   approval_allowlist?: string[]
+  // Harness this agent's coding missions delegate to when the mission
+  // itself leaves harness empty (mission.harness -> agent.harness ->
+  // settings.coding_executor -> native). Empty means inherit.
+  harness?: string
 }
 
 // AdminTool is one entry of the live tool surface (builtins +

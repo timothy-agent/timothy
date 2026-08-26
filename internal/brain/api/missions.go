@@ -72,6 +72,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 		return
 	}
 	var resolveAgentRoute func(context.Context, string) (string, bool)
+	var resolveAgentHarness func(context.Context, string) (string, bool)
 	if agentReg != nil {
 		resolveAgentRoute = func(ctx context.Context, id string) (string, bool) {
 			if id == "" {
@@ -83,8 +84,18 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			}
 			return a.Route, true
 		}
+		resolveAgentHarness = func(ctx context.Context, id string) (string, bool) {
+			if id == "" {
+				return "", false
+			}
+			a, ok := agentReg.ResolveByID(ctx, id)
+			if !ok || a.Harness == "" {
+				return "", false
+			}
+			return a.Harness, true
+		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -117,6 +128,11 @@ type missionAPI struct {
 	// route's "agent" provenance. Kept separate from agentReg itself so
 	// executionPlan is unit-testable without a live agents table.
 	resolveAgentRoute func(context.Context, string) (string, bool)
+	// resolveAgentHarness is resolveAgentRoute's counterpart for an
+	// agent's Harness field - the "agent" provenance step in
+	// missions.ResolveHarness (mission.harness -> agent.harness ->
+	// settings.coding_executor -> native).
+	resolveAgentHarness func(context.Context, string) (string, bool)
 	// workspace performs mission-directory git operations (Push,
 	// Teardown for delete) outside the normal Drive loop.
 	workspace *missions.Workspace
@@ -433,10 +449,14 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	// resolution seams (settings lookup, goal-keyword heuristic) with no
 	// place in ValidateCreate's pure struct-shape rules; the resulting
 	// values still pass through ValidateCreate's kind/harness/environment
-	// checks below via Driver.Create.
-	if req.Kind == missions.KindCoding && req.Harness == "" && h.codingExecutorDefault != nil {
-		req.Harness = h.codingExecutorDefault(r.Context())
+	// checks below via Driver.Create. ResolveHarness applies the full
+	// mission.harness -> agent.harness -> settings.coding_executor ->
+	// native precedence (missions.ResolveHarness).
+	var agentHarness string
+	if h.resolveAgentHarness != nil {
+		agentHarness, _ = h.resolveAgentHarness(r.Context(), req.AgentID)
 	}
+	req.Harness, _ = missions.ResolveHarness(r.Context(), req.Kind, req.Harness, agentHarness, h.codingExecutorDefault)
 	if req.Kind == missions.KindCoding && req.Environment == "" {
 		// Auto-detect (D-05x), resolved server-side at create time so
 		// the environment is fixed before the sandbox container is ever
@@ -898,28 +918,18 @@ func (h *missionAPI) baseRoute(ctx context.Context, kind, explicitRoute, agentID
 	return "", "none"
 }
 
-// resolveHarness resolves the execute phase's harness the same way
-// create() does: explicit query param first, else the settings
-// default; "native" is a stored sentinel for "off" and normalizes to
-// "" same as create() does with req.Harness. Only kind=coding can ever
-// delegate (mirrors policy.go's canDelegate) — any other kind always
-// stays native regardless of what resolves.
-func (h *missionAPI) resolveHarness(ctx context.Context, kind, explicitHarness string) (harness, source string) {
-	if kind != missions.KindCoding {
-		return "", ""
+// resolveHarness resolves the execute phase's harness via
+// missions.ResolveHarness, the same precedence chain create() and the
+// scheduler's fire path use: explicit -> agent -> settings -> native.
+// Only kind=coding can ever delegate (mirrors policy.go's
+// canDelegate) - any other kind always stays native regardless of
+// what resolves.
+func (h *missionAPI) resolveHarness(ctx context.Context, kind, explicitHarness, agentID string) (harness, source string) {
+	var agentHarness string
+	if h.resolveAgentHarness != nil {
+		agentHarness, _ = h.resolveAgentHarness(ctx, agentID)
 	}
-	if explicitHarness != "" {
-		harness, source = explicitHarness, "explicit"
-	} else if h.codingExecutorDefault != nil {
-		harness, source = h.codingExecutorDefault(ctx), "settings"
-	}
-	if harness == "native" {
-		harness = ""
-	}
-	if harness == "" {
-		return "", ""
-	}
-	return harness, source
+	return missions.ResolveHarness(ctx, kind, explicitHarness, agentHarness, h.codingExecutorDefault)
 }
 
 // resolveEntries calls resolveRoute for route on the given axis
@@ -999,7 +1009,7 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 		oversight, oversightSource = planRoute, "explicit"
 	}
 
-	harness, harnessSource := h.resolveHarness(ctx, kind, explicitHarness)
+	harness, harnessSource := h.resolveHarness(ctx, kind, explicitHarness, agentID)
 	executeAxis := "native"
 	if harness != "" {
 		executeAxis = "harness"

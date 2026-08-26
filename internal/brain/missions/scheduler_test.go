@@ -177,6 +177,17 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			wantHarness: "",
 		},
 		{
+			name:     "resolved agent's harness applies at fire time, ahead of the settings default",
+			template: MissionTemplate{Goal: "g", Kind: "coding", AgentID: "coder"},
+			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+				return AgentDefaults{Route: "coding", Harness: "pi"}, true
+			},
+			codingExec:  func(context.Context) string { return "claude-cli" },
+			wantRoute:   "coding",
+			wantReview:  "default",
+			wantHarness: "pi",
+		},
+		{
 			name:     "unresolved agent id falls back to the default role's route",
 			template: MissionTemplate{Goal: "g", AgentID: "missing"},
 			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {

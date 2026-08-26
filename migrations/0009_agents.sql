@@ -17,12 +17,16 @@ CREATE TABLE IF NOT EXISTS agents (
     enabled        boolean NOT NULL DEFAULT true,
     -- Missions reuse the agents table (missions.agent_id -> agents.id)
     -- rather than a parallel agent_profiles table: a mission-serving
-    -- agent is still "who serves this," same as chat. These three
+    -- agent is still "who serves this," same as chat. These four
     -- columns are meaningless to a chat-only agent and stay at their
-    -- defaults for one; a mission-capable agent sets all three.
+    -- defaults for one; a mission-capable agent sets what it needs.
+    -- harness is the coding executor a mission delegates to (mission.
+    -- harness -> agent.harness -> settings.coding_executor -> native);
+    -- empty means inherit.
     review_route       text NOT NULL DEFAULT '',
     budget_usd         numeric(12,2),
     approval_allowlist jsonb NOT NULL DEFAULT '[]',
+    harness            text NOT NULL DEFAULT '',
     -- Knowledge collections (kb_collections.name) this agent may search
     -- with kb_search (D-060) — empty means none, same opt-in semantics
     -- as skills/tools: an agent must name a collection explicitly.

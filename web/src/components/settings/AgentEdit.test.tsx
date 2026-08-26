@@ -35,6 +35,7 @@ const coder: AdminAgent = {
 const codingRoute: AdminRoute = { name: 'coding', chain: [], strategy: 'ordered', enabled: true }
 
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listAgents).mockResolvedValue([coder])
   vi.mocked(listRoutes).mockResolvedValue([codingRoute])
@@ -91,6 +92,44 @@ describe('AgentEdit', () => {
       expect(patchAgent).toHaveBeenCalledWith(
         'a1',
         expect.objectContaining({ knowledge: [] }),
+      ),
+    )
+  })
+
+  it('shows the harness select defaulted to inherit from settings when the agent omits it', async () => {
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    expect(screen.getByRole('combobox', { name: 'agent harness' })).toHaveTextContent(
+      'Inherit from settings',
+    )
+  })
+
+  it('submits an empty harness (inherit) by default', async () => {
+    vi.mocked(patchAgent).mockResolvedValue()
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchAgent).toHaveBeenCalledWith('a1', expect.objectContaining({ harness: '' })),
+    )
+  })
+
+  it('submits the picked harness', async () => {
+    vi.mocked(patchAgent).mockResolvedValue()
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.click(screen.getByRole('combobox', { name: 'agent harness' }))
+    fireEvent.click(await screen.findByText('Claude Code'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchAgent).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({ harness: 'claude-cli' }),
       ),
     )
   })
