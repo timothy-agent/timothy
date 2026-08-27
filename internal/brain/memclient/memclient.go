@@ -35,9 +35,11 @@ func New(baseURL string) *Client {
 // and must not fall back to the default side-call route. source names
 // what produced the text ("chat", "mission", "compaction") so memoryd
 // can pick a source-appropriate extraction contract; empty means chat.
-func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64, text, route, source string) ([]string, error) {
+// deny lists system-owned values (e.g. the operator's timezone) a
+// proposed fact must not restate; nil when there is nothing to deny.
+func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64, text, route, source string, deny []string) ([]string, error) {
 	body, err := json.Marshal(map[string]any{
-		"session_id": sessionID, "source_seq": sourceSeq, "text": text, "route": route, "source": source,
+		"session_id": sessionID, "source_seq": sourceSeq, "text": text, "route": route, "source": source, "deny": deny,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("memclient: marshal: %w", err)

@@ -23,7 +23,7 @@ func TestExtractRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ids, err := New(srv.URL).Extract(t.Context(), "s1", 42, "turn text", "", "chat")
+	ids, err := New(srv.URL).Extract(t.Context(), "s1", 42, "turn text", "", "chat", nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -32,6 +32,27 @@ func TestExtractRoundTrip(t *testing.T) {
 	}
 	if got["session_id"] != "s1" || got["source_seq"] != float64(42) || got["text"] != "turn text" {
 		t.Fatalf("request body = %v", got)
+	}
+}
+
+// TestExtractSendsDeny pins the deny pass-through: system-owned values
+// (e.g. the operator's timezone) reach the wire so memoryd can fence
+// them out of proposed facts.
+func TestExtractSendsDeny(t *testing.T) {
+	t.Parallel()
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(map[string]any{"memory_ids": []string{}})
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "chat", []string{"Europe/Amsterdam"}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	deny, _ := got["deny"].([]any)
+	if len(deny) != 1 || deny[0] != "Europe/Amsterdam" {
+		t.Fatalf("request body deny = %v, want [Europe/Amsterdam]", got["deny"])
 	}
 }
 
@@ -47,7 +68,7 @@ func TestExtractSendsRouteOverride(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "local", "chat"); err != nil {
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "local", "chat", nil); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 	if got["route"] != "local" {
@@ -62,7 +83,7 @@ func TestExtractSurfacesHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", ""); err == nil {
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "", nil); err == nil {
 		t.Fatal("Extract succeeded on 502, want error")
 	}
 }

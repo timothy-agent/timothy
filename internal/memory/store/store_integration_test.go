@@ -430,6 +430,35 @@ func TestNearestActive(t *testing.T) {
 	}
 }
 
+// A rejected memory stays visible to NearestActive: rejection is a
+// durable teaching signal, so a matching candidate must find it and
+// get dropped instead of re-proposed forever.
+func TestNearestActiveSeesRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	base := make(Vector, 1024)
+	base[0], base[1] = 0.6, 0.8
+
+	m := mem("rejected target fact")
+	m.Embedding = base
+	id, err := s.Insert(ctx, m)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := s.Reject(ctx, id); err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+
+	gotID, _, status, ok, err := s.NearestActive(ctx, base)
+	if err != nil {
+		t.Fatalf("NearestActive: %v", err)
+	}
+	if !ok || gotID != id || status != StatusRejected {
+		t.Fatalf("NearestActive = (%s, status=%s, ok=%v), want (%s, rejected, true)", gotID, status, ok, id)
+	}
+}
+
 func TestListByStatusFiltersTypes(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

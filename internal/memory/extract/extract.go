@@ -66,7 +66,7 @@ const (
 // dates, no pronouns that need surrounding context.
 const system = `You extract durable facts from a conversation excerpt for an AI assistant's long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
-Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic - even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation - facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss (documentation facts, quiz answers, how a technology works) is false. Skip small talk, transient state, and anything already obvious. Also skip filesystem paths, directory/file permissions and ownership, container or sandbox environment details, UUIDs and other identifiers, and any other machine-state observations - these are transient environment facts, not durable knowledge about the user. Empty array when nothing qualifies.`
+Rules: each content is ONE fact, self-contained (absolute dates, full names, no "he"/"it"/"this project"). type: episodic = something that happened, semantic = a durable fact or preference, procedural = a how-to. Anything phrased as a rule, requirement, standing instruction, or directive is semantic, NEVER episodic - even when it was stated during an event. confidence in [0,1] reflects how certain the excerpt makes the fact. changes_behavior is REQUIRED on every fact: true only when knowing this fact would change how the assistant acts or answers in a FUTURE conversation - facts about the user, their preferences, their projects, their world. General knowledge the excerpt happened to discuss is false - for example, "The capital of the Netherlands is Amsterdam" or "HTTP 429 means rate limiting" are general knowledge, not facts about the user. Skip small talk, transient state, and anything already obvious. Also skip filesystem paths, directory/file permissions and ownership, container or sandbox environment details, UUIDs and other identifiers, and any other machine-state observations - these are transient environment facts, not durable knowledge about the user. Empty array when nothing qualifies.`
 
 // missionSystem is the mission-digest extraction contract. The input
 // is a mission's OutcomeDigest - goal, title, kind, unit statuses -
@@ -74,7 +74,7 @@ Rules: each content is ONE fact, self-contained (absolute dates, full names, no 
 // already lives in the missions table. Only deltas qualify.
 const missionSystem = `You extract durable facts from a completed background mission's outcome digest for an AI assistant's long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
 [{"type":"episodic|semantic|procedural","content":"one atomic self-contained fact","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
-Set changes_behavior true only when knowing the fact would change how the assistant acts in a future conversation. ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state - those are bookkeeping the system already stores, not knowledge. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
+Set changes_behavior true only when knowing the fact would change how the assistant acts in a future conversation. ONLY these qualify: (a) a user preference or standing instruction the mission revealed, (b) a durable fact about the outside world DISCOVERED during execution (an API's behavior, a service's quirk, a deadline that exists), (c) a lesson from a failure worth avoiding next time. NEVER extract the mission's goal, title, kind, unit statuses, artifact names, or terminal state - those are bookkeeping the system already stores, not knowledge. NEVER extract execution-environment observations - installed packages, library or tool availability or versions, filesystem paths, file or directory permissions and ownership, container or sandbox details, absence of files in a repository, or any other machine-state observation; these describe the sandbox, not the world. A summary of what a scan, search, or inbox check found during one run is a transient result, not a durable fact - do not extract it; only a durable fact it revealed (for example a deadline that exists) qualifies, stated on its own with absolute dates. Each content must be self-contained (absolute dates, full names, no pronouns). Anything phrased as a rule or standing instruction is semantic, never episodic. changes_behavior is REQUIRED on every fact. Most digests contain NOTHING worth remembering: an empty array is the expected common answer.`
 
 // reflectionSystem is the consolidation reflection contract: distill
 // recurring patterns across recent episodic memories into rare,
@@ -83,7 +83,7 @@ Set changes_behavior true only when knowing the fact would change how the assist
 // episodics themselves stay; this only proposes what they add up to.
 const reflectionSystem = `You are reviewing an AI assistant's recent episodic memories (things that happened) to distill durable insights for long-term memory. Reply with ONLY a JSON array - no prose, no markdown fences:
 [{"type":"semantic","content":"one atomic self-contained insight","entities":[{"type":"person|project|service|preference|decision|topic|place","name":"..."}],"confidence":0.0,"changes_behavior":true}]
-An insight qualifies ONLY when a RECURRING pattern across several distinct episodes reveals something durable no single episode states: a habit, a recurring problem, a stable preference, a relationship between things the user deals with repeatedly. Propose at most 3 insights per review, each grounded in at least 2 separate episodes. Never restate a single episode, never summarize the list, never propose general knowledge. An empty array is the expected common answer.`
+An insight qualifies ONLY when a RECURRING pattern across several distinct episodes reveals something durable no single episode states: a habit, a recurring problem, a stable preference, a relationship between things the user deals with repeatedly. Propose at most 3 insights per review, each grounded in at least 2 separate episodes. Never restate a single episode, never summarize the list, never propose general knowledge. changes_behavior is REQUIRED on every insight. An empty array is the expected common answer.`
 
 // Request is one extraction job: text from a completed turn or from
 // turns about to be compacted away.
@@ -104,6 +104,11 @@ type Request struct {
 	// lines as "facts", flooding the confirmation queue with
 	// restatements of things the missions table already records.
 	Source string `json:"source,omitempty"`
+	// Deny lists values a fact must not restate: system-owned
+	// knowledge (operator settings like timezone) that the model
+	// otherwise re-extracts as if it were a discovered fact about the
+	// user.
+	Deny []string `json:"deny,omitempty"`
 }
 
 // Extractor runs the pipeline.
@@ -162,6 +167,15 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			e.log.Info("memory dropped as source-header echo", "session_id", req.SessionID)
 			continue
 		}
+		if f.Type != string(store.TypeEpisodic) && boundedWindow(f.Content) {
+			// A semantic or procedural fact phrased as a bounded
+			// observation window ("last 24 hours", "currently") describes
+			// one run's result, not a durable fact. Episodic facts keep -
+			// something that happened IS time-scoped. Code enforces what
+			// the prompt asks for (D-011).
+			e.log.Info("memory dropped as bounded-window observation", "session_id", req.SessionID)
+			continue
+		}
 		emb := store.Vector(vecs[i])
 		if len(emb) > 0 {
 			// Intra-batch dedup: one extraction run can propose the same
@@ -177,6 +191,14 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 				return ids, fmt.Errorf("extract: dedup: %w", err)
 			}
 			if found && sim >= nearDupSimilarity {
+				if status == store.StatusRejected {
+					// The user already rejected this fact once; rejection
+					// is a durable teaching signal, so the candidate is
+					// dropped instead of re-proposed forever.
+					e.log.Info("memory dropped as near-duplicate of rejected fact",
+						"of", dupID, "similarity", sim, "session_id", req.SessionID)
+					continue
+				}
 				if status == store.StatusPending {
 					// A pending row already carries this fact awaiting
 					// confirmation; Confirm's UPDATE is active-only and
@@ -297,9 +319,10 @@ type Fact struct {
 	Entities   []FactEntity `json:"entities"`
 	Confidence float32      `json:"confidence"`
 	// ChangesBehavior is the utility gate: the model's own answer to
-	// "would knowing this change a future turn?". Pointer so an older
-	// model reply that omits the field keeps the fact (nil = keep);
-	// only an explicit false drops it.
+	// "would knowing this change a future turn?". Required on every
+	// fact - ParseFacts rejects a fact where it's nil (missing from the
+	// reply), triggering propose()'s retry instead of silently keeping
+	// an unjudged fact.
 	ChangesBehavior *bool `json:"changes_behavior,omitempty"`
 }
 
@@ -347,6 +370,9 @@ func ParseFacts(raw string) ([]Fact, error) {
 		if f.Confidence < 0 || f.Confidence > 1 {
 			return nil, fmt.Errorf("fact %d: confidence %v out of range", i, f.Confidence)
 		}
+		if f.ChangesBehavior == nil {
+			return nil, fmt.Errorf("fact %d: missing changes_behavior", i)
+		}
 		for j, ent := range f.Entities {
 			if !validEntityTypes[ent.Type] {
 				return nil, fmt.Errorf("fact %d entity %d: invalid type %q", i, j, ent.Type)
@@ -357,6 +383,25 @@ func ParseFacts(raw string) ([]Fact, error) {
 		}
 	}
 	return facts, nil
+}
+
+// boundedWindowPattern catches bounded-time-window phrasing: a
+// semantic or procedural fact phrased this way describes what was
+// true during one observation window, not a durable fact about the
+// world. "as of" is deliberately excluded - the extraction contract
+// demands absolute dates and legitimate facts use exactly that
+// phrasing (e.g. "as of 2026-08-24 the user works at Cielara").
+var boundedWindowPattern = regexp.MustCompile(`(?i)\b(` +
+	`(?:last|past)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|twenty[- ]four)\s+(?:hours?|days?|weeks?|months?)|` +
+	`today|yesterday|tonight|` +
+	`this\s+(?:morning|afternoon|evening|week|month)|` +
+	`currently|right now|at the moment|so far` +
+	`)\b`)
+
+// boundedWindow reports whether content describes a bounded
+// observation window rather than a durable fact.
+func boundedWindow(content string) bool {
+	return boundedWindowPattern.MatchString(content)
 }
 
 // sensitive marks content that must never skip the confirmation queue
@@ -388,22 +433,26 @@ func AutoPromote(f Fact) bool {
 }
 
 // denyText collects the source-record lines a proposed fact must not
-// restate. Only mission digests carry them: OutcomeDigest's "mission
-// goal:" and "mission title:" headers are bookkeeping, not knowledge,
-// and models reliably extract them as "facts" without this fence.
+// restate. Mission digests contribute OutcomeDigest's "mission goal:"
+// and "mission title:" headers - bookkeeping, not knowledge, that
+// models reliably extract as "facts" without this fence. req.Deny
+// contributes system-owned knowledge (operator settings) regardless
+// of source.
 func denyText(req Request) []string {
-	if req.Source != "mission" {
-		return nil
-	}
 	var deny []string
-	for _, line := range strings.Split(req.Text, "\n") {
-		for _, prefix := range []string{"mission goal:", "mission title:"} {
-			if rest, ok := strings.CutPrefix(line, prefix); ok {
-				if v := strings.TrimSpace(rest); v != "" {
-					deny = append(deny, strings.ToLower(v))
+	if req.Source == "mission" {
+		for _, line := range strings.Split(req.Text, "\n") {
+			for _, prefix := range []string{"mission goal:", "mission title:"} {
+				if rest, ok := strings.CutPrefix(line, prefix); ok {
+					if v := strings.TrimSpace(rest); v != "" {
+						deny = append(deny, strings.ToLower(v))
+					}
 				}
 			}
 		}
+	}
+	for _, v := range req.Deny {
+		deny = append(deny, strings.ToLower(v))
 	}
 	return deny
 }

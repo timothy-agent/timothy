@@ -482,13 +482,25 @@ func main() {
 	// visible to that exact chain, not a parallel grant store.
 	svc.SetApprovalGrants(chatPerms)
 	compactor.SetSensitiveTools(sensitiveTools)
+	// extractDeny fetches system-owned values a proposed fact must not
+	// restate (currently just the operator's timezone). Read per-call,
+	// not once at wiring time: settings can change at runtime, and
+	// extraction is already off the hot path, so the extra DB/cache
+	// read is cheap here.
+	extractDeny := func(ctx context.Context) []string {
+		if tz := flags.Value(ctx, settings.ValueTimezone); tz != "" {
+			return []string{tz}
+		}
+		return nil
+	}
 	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
 		}
+		deny := extractDeny(ctx)
 		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 		defer cancel()
-		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat"); err != nil {
+		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat", deny); err != nil {
 			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
 		}
 	})
@@ -502,9 +514,10 @@ func main() {
 			if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 				return
 			}
+			deny := extractDeny(ctx)
 			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 			defer cancel()
-			if _, err := mc.Extract(ectx, sessionID, seq, text, route, "mission"); err != nil {
+			if _, err := mc.Extract(ectx, sessionID, seq, text, route, "mission", deny); err != nil {
 				app.Log.Warn("mission memory extraction failed", "session_id", sessionID, "error", err)
 			}
 		})
@@ -513,11 +526,12 @@ func main() {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return nil
 		}
+		deny := extractDeny(ctx)
 		// Own deadline WITHIN the compaction budget: extraction must
 		// never starve the summarize that follows it.
 		ectx, cancel := context.WithTimeout(ctx, preCompactExtractBudget)
 		defer cancel()
-		ids, err := mc.Extract(ectx, sessionID, seq, text, route, "compaction")
+		ids, err := mc.Extract(ectx, sessionID, seq, text, route, "compaction", deny)
 		if err != nil {
 			app.Log.Warn("pre-compaction extraction failed", "session_id", sessionID, "error", err)
 			return nil

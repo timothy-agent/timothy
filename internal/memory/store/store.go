@@ -210,14 +210,17 @@ func (s *Store) UpsertEntity(ctx context.Context, typ, name string) (string, err
 	return id, nil
 }
 
-// NearestActive returns the closest active-or-pending memory to the
-// embedding by cosine similarity, or ok=false when no such memory has
-// an embedding. Pending rows must be visible too: dedup used to only
-// see active rows, so a fact re-extracted before its first proposal
-// was confirmed or promoted never found its match and near-duplicates
-// piled up in the confirmation queue. status tells the caller which
-// branch applies - only an active match can be Confirmed (Confirm's
-// UPDATE is active-only).
+// NearestActive returns the closest active, pending, or rejected
+// memory to the embedding by cosine similarity, or ok=false when no
+// such memory has an embedding. Pending rows must be visible too:
+// dedup used to only see active rows, so a fact re-extracted before
+// its first proposal was confirmed or promoted never found its match
+// and near-duplicates piled up in the confirmation queue. Rejected
+// rows must be visible for the same reason in the other direction:
+// rejection is a durable teaching signal, so a candidate matching a
+// rejected row is dropped instead of re-proposed forever. status
+// tells the caller which branch applies - only an active match can be
+// Confirmed (Confirm's UPDATE is active-only).
 func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string, similarity float64, status Status, ok bool, err error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -225,9 +228,9 @@ func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string,
 	}
 	err = db.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector), status
 		FROM memories
-		WHERE status IN ($2, $3) AND embedding IS NOT NULL
+		WHERE status IN ($2, $3, $4) AND embedding IS NOT NULL
 		ORDER BY embedding <=> $1::vector
-		LIMIT 1`, embedding.String(), StatusActive, StatusPending).Scan(&id, &similarity, &status)
+		LIMIT 1`, embedding.String(), StatusActive, StatusPending, StatusRejected).Scan(&id, &similarity, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", 0, "", false, nil
 	}

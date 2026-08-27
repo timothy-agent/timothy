@@ -15,7 +15,7 @@ import (
 
 func TestParseFacts(t *testing.T) {
 	t.Parallel()
-	valid := `[{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9}]`
+	valid := `[{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9,"changes_behavior":true}]`
 	tests := []struct {
 		name    string
 		raw     string
@@ -26,13 +26,14 @@ func TestParseFacts(t *testing.T) {
 		{name: "fenced", raw: "```json\n" + valid + "\n```", wantN: 1},
 		{name: "empty array", raw: "[]", wantN: 0},
 		{name: "prose", raw: "Here are the facts: " + valid, wantErr: true},
-		{name: "bad fact type", raw: `[{"type":"opinion","content":"x","entities":[],"confidence":0.5}]`, wantErr: true},
-		{name: "empty content", raw: `[{"type":"semantic","content":"  ","entities":[],"confidence":0.5}]`, wantErr: true},
-		{name: "confidence out of range", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":1.5}]`, wantErr: true},
-		{name: "bad entity type", raw: `[{"type":"semantic","content":"x","entities":[{"type":"animal","name":"cat"}],"confidence":0.5}]`, wantErr: true},
-		{name: "empty entity name", raw: `[{"type":"semantic","content":"x","entities":[{"type":"person","name":""}],"confidence":0.5}]`, wantErr: true},
-		{name: "unknown field", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":0.5,"extra":1}]`, wantErr: true},
+		{name: "bad fact type", raw: `[{"type":"opinion","content":"x","entities":[],"confidence":0.5,"changes_behavior":true}]`, wantErr: true},
+		{name: "empty content", raw: `[{"type":"semantic","content":"  ","entities":[],"confidence":0.5,"changes_behavior":true}]`, wantErr: true},
+		{name: "confidence out of range", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":1.5,"changes_behavior":true}]`, wantErr: true},
+		{name: "bad entity type", raw: `[{"type":"semantic","content":"x","entities":[{"type":"animal","name":"cat"}],"confidence":0.5,"changes_behavior":true}]`, wantErr: true},
+		{name: "empty entity name", raw: `[{"type":"semantic","content":"x","entities":[{"type":"person","name":""}],"confidence":0.5,"changes_behavior":true}]`, wantErr: true},
+		{name: "unknown field", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":0.5,"extra":1,"changes_behavior":true}]`, wantErr: true},
 		{name: "object not array", raw: `{"type":"semantic","content":"x"}`, wantErr: true},
+		{name: "missing changes_behavior", raw: `[{"type":"semantic","content":"x","entities":[],"confidence":0.5}]`, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,7 +57,7 @@ func TestParseFacts(t *testing.T) {
 
 func TestParseFactsCapsCount(t *testing.T) {
 	t.Parallel()
-	one := `{"type":"episodic","content":"fact","entities":[],"confidence":0.9}`
+	one := `{"type":"episodic","content":"fact","entities":[],"confidence":0.9,"changes_behavior":true}`
 	raw := "[" + strings.Repeat(one+",", 30) + one + "]"
 	facts, err := ParseFacts(raw)
 	if err != nil {
@@ -93,6 +94,52 @@ func TestAutoPromote(t *testing.T) {
 				t.Fatalf("AutoPromote(%+v) = %v, want %v", tc.f, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBoundedWindow(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "gmail 24h scan", content: "In the Gmail inbox over the last 24 hours there were no spending emails.", want: true},
+		{name: "absolute deadline", content: "User's AWS Skill Builder renewal of $29 is due on 1 September 2026.", want: false},
+		{name: "as of phrasing kept", content: "As of 2026-08-24 the user works at Cielara.", want: false},
+		{name: "currently phrasing", content: "The user currently prefers dark mode.", want: true},
+		{name: "today bare word", content: "The user finished the report today.", want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := boundedWindow(tc.content); got != tc.want {
+				t.Fatalf("boundedWindow(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+// The bounded-window gate drops semantic facts but keeps episodic ones
+// (something that happened IS time-scoped) and absolute-dated facts.
+func TestExtractDropsBoundedWindowSemanticFacts(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[` +
+		`{"type":"semantic","content":"In the Gmail inbox over the last 24 hours there were no spending emails.","entities":[],"confidence":0.8,"changes_behavior":true},` +
+		`{"type":"semantic","content":"User's AWS Skill Builder renewal of $29 is due on 1 September 2026.","entities":[],"confidence":0.9,"changes_behavior":true},` +
+		`{"type":"episodic","content":"User finished the quarterly report today.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 2 || len(st.inserted) != 2 {
+		t.Fatalf("want bounded-window semantic dropped, absolute-dated semantic and episodic kept: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	for _, m := range st.inserted {
+		if strings.Contains(m.Content, "last 24 hours") {
+			t.Fatalf("bounded-window fact inserted: %q", m.Content)
+		}
 	}
 }
 
@@ -189,8 +236,8 @@ func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, ni
 func TestExtractInsertsAndPromotes(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{`[
-		{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[{"type":"project","name":"v2"}],"confidence":0.9},
-		{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9}
+		{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[{"type":"project","name":"v2"}],"confidence":0.9,"changes_behavior":true},
+		{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9,"changes_behavior":true}
 	]`}}
 	st := &fakeStore{}
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{SessionID: "11111111-1111-1111-1111-111111111111", SourceSeq: 7, Text: "turn text"})
@@ -227,7 +274,7 @@ func TestExtractInsertsAndPromotes(t *testing.T) {
 // pinned a sensitive turn/session to.
 func TestExtractUsesRequestRouteOverride(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9}]`}}
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	_, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x", Route: "local"})
 	if err != nil {
@@ -240,7 +287,7 @@ func TestExtractUsesRequestRouteOverride(t *testing.T) {
 
 func TestExtractDropsExactDuplicate(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9}]`}}
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.ok = "existing", 0.995, true
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
@@ -258,7 +305,7 @@ func TestExtractDropsExactDuplicate(t *testing.T) {
 
 func TestExtractNearDuplicateReinforcesInsteadOfInserting(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.ok = "existing", 0.96, true
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
@@ -278,7 +325,7 @@ func TestExtractNearDuplicateReinforcesInsteadOfInserting(t *testing.T) {
 // silently no-op on a pending row.
 func TestExtractPendingDuplicateSkipsWithoutConfirm(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-pending", 0.96, store.StatusPending, true
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
@@ -297,7 +344,7 @@ func TestExtractPendingDuplicateSkipsWithoutConfirm(t *testing.T) {
 // (unchanged behavior, pinned against the status-branch refactor).
 func TestExtractActiveDuplicateStillConfirms(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9}]`}}
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-active", 0.96, store.StatusActive, true
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
@@ -312,14 +359,33 @@ func TestExtractActiveDuplicateStillConfirms(t *testing.T) {
 	}
 }
 
+// A near-dup match against a rejected row drops the candidate outright:
+// rejection is a durable teaching signal, so no Confirm and no Insert.
+func TestExtractRejectedDuplicateDropped(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-rejected", 0.96, store.StatusRejected, true
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 || len(st.inserted) != 0 {
+		t.Fatalf("rejected dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	if len(st.confirmed) != 0 {
+		t.Fatalf("confirmed = %v, want none (rejection is not reinforced)", st.confirmed)
+	}
+}
+
 // Two near-identical facts proposed in the same run must dedup against
 // each other before either reaches the DB or NearestActive.
 func TestExtractIntraBatchNearDuplicateSkipped(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{
 		replies: []string{`[
-			{"type":"semantic","content":"User timezone preference is Europe/Amsterdam.","entities":[],"confidence":0.9},
-			{"type":"semantic","content":"All times should be interpreted in Europe/Amsterdam.","entities":[],"confidence":0.9}
+			{"type":"semantic","content":"User timezone preference is Europe/Amsterdam.","entities":[],"confidence":0.9,"changes_behavior":true},
+			{"type":"semantic","content":"All times should be interpreted in Europe/Amsterdam.","entities":[],"confidence":0.9,"changes_behavior":true}
 		]`},
 		embeds: [][]float32{{1, 0, 0}, {0.999, 0.001, 0}},
 	}
@@ -338,8 +404,8 @@ func TestExtractIntraBatchNearDuplicateSkipped(t *testing.T) {
 func TestExtractMissionSourceFiltersGoalEchoes(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{`[` +
-		`{"type":"semantic","content":"The user mandated a mission goal to create a file named redirects.md explaining 301 302 and 307 redirects in ten lines.","entities":[],"confidence":0.95},` +
-		`{"type":"semantic","content":"The bKash production API rejects requests without an app key header.","entities":[],"confidence":0.9}]`}}
+		`{"type":"semantic","content":"The user mandated a mission goal to create a file named redirects.md explaining 301 302 and 307 redirects in ten lines.","entities":[],"confidence":0.95,"changes_behavior":true},` +
+		`{"type":"semantic","content":"The bKash production API rejects requests without an app key header.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	digest := "mission goal: Create a file named redirects.md explaining 301, 302, and 307 redirects in ten lines\n" +
 		"mission title: Understanding Redirects\nmission kind: general\n\nterminal state: done\n"
@@ -351,6 +417,27 @@ func TestExtractMissionSourceFiltersGoalEchoes(t *testing.T) {
 		t.Fatalf("want the goal echo dropped and the real fact kept: ids=%v inserted=%d", ids, len(st.inserted))
 	}
 	if !strings.Contains(st.inserted[0].Content, "bKash") {
+		t.Fatalf("kept the wrong fact: %q", st.inserted[0].Content)
+	}
+}
+
+// A Deny value from the operator's settings (e.g. timezone) fences out
+// a fact restating it, regardless of source; an unrelated fact
+// mentioning a similar-looking but distinct token still inserts.
+func TestExtractDenyFencesSettingsValue(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[` +
+		`{"type":"semantic","content":"User timezone preference is Europe/Amsterdam; interpret all times in Europe/Amsterdam.","entities":[],"confidence":0.9,"changes_behavior":true},` +
+		`{"type":"semantic","content":"User is attending a concert in Amsterdam on 5 September 2026.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x", Deny: []string{"Europe/Amsterdam"}})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 || len(st.inserted) != 1 {
+		t.Fatalf("want timezone echo dropped, concert fact kept: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+	if !strings.Contains(st.inserted[0].Content, "concert") {
 		t.Fatalf("kept the wrong fact: %q", st.inserted[0].Content)
 	}
 }
@@ -370,7 +457,7 @@ func TestExtractRetriesOnInvalidJSON(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{
 		"sorry, here are the facts...",
-		`[{"type":"episodic","content":"Fixed the build on 2026-07-11.","entities":[],"confidence":0.9}]`,
+		`[{"type":"episodic","content":"Fixed the build on 2026-07-11.","entities":[],"confidence":0.9,"changes_behavior":true}]`,
 	}}
 	st := &fakeStore{}
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
@@ -443,7 +530,7 @@ func (g *embedlessGateway) Embed(context.Context, []string, string) ([][]float32
 func TestExtractDegradesWithoutEmbeddings(t *testing.T) {
 	t.Parallel()
 	gw := &embedlessGateway{fakeGateway{replies: []string{
-		`[{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[],"confidence":0.9}]`,
+		`[{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[],"confidence":0.9,"changes_behavior":true}]`,
 	}}}
 	st := &fakeStore{}
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
@@ -469,7 +556,7 @@ func TestExtractUtilityGateDropsExplicitFalseOnly(t *testing.T) {
 	gw := &fakeGateway{replies: []string{`[` +
 		`{"type":"semantic","content":"DynamoDB local secondary indexes are defined at table creation.","entities":[],"confidence":0.9,"changes_behavior":false},` +
 		`{"type":"semantic","content":"The user prefers explanations with code examples.","entities":[],"confidence":0.9,"changes_behavior":true},` +
-		`{"type":"semantic","content":"The user is based in Purmerend.","entities":[],"confidence":0.9}]`}}
+		`{"type":"semantic","content":"The user is based in Purmerend.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
