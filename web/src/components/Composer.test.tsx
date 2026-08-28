@@ -282,14 +282,59 @@ describe('Composer attachments', () => {
     render(<Composer {...baseProps()} onAttachments={onAttachments} />)
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    const bogus = makeImageFile('notes.txt', 'text/plain')
+    const bogus = makeImageFile('archive.zip', 'application/zip')
     fireEvent.change(input, { target: { files: [bogus] } })
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('notes.txt: unsupported file type'),
+      expect(toast.error).toHaveBeenCalledWith('archive.zip: unsupported file type'),
     )
     expect(client.uploadAttachment).not.toHaveBeenCalled()
     expect(onAttachments).not.toHaveBeenCalled()
+  })
+
+  it('uploads a selected .txt file and adds a file chip on success', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-txt',
+      mime: 'text/plain',
+      size_bytes: 20,
+    })
+    const onAttachments = vi.fn()
+    const { rerender } = render(
+      <Composer {...baseProps()} attachments={[]} onAttachments={onAttachments} />,
+    )
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const txt = makeImageFile('notes.txt', 'text/plain')
+    fireEvent.change(input, { target: { files: [txt] } })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(txt))
+    await waitFor(() =>
+      expect(onAttachments).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: 'att-txt', mime: 'text/plain', uploading: false }),
+      ]),
+    )
+
+    const [[chips]] = onAttachments.mock.calls.slice(-1)
+    rerender(<Composer {...baseProps()} attachments={chips} onAttachments={onAttachments} />)
+    expect(screen.getByText('notes.txt')).toBeTruthy()
+  })
+
+  it('accepts a .md file with an empty reported type, by extension', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-md',
+      mime: 'text/plain',
+      size_bytes: 20,
+    })
+    const onAttachments = vi.fn()
+    render(<Composer {...baseProps()} attachments={[]} onAttachments={onAttachments} />)
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const md = makeImageFile('README.md', '')
+    fireEvent.change(input, { target: { files: [md] } })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(md))
   })
 
   it('uploads a selected PDF and adds a file chip on success', async () => {

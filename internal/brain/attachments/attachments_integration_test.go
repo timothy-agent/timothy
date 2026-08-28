@@ -71,6 +71,31 @@ func TestStoreSavePDF(t *testing.T) {
 	}
 }
 
+func TestStoreSaveText(t *testing.T) {
+	s := integrationStore(t)
+
+	// http.DetectContentType returns "text/plain; charset=utf-8" for
+	// both .txt and .md content — normalized to the bare "text/plain".
+	att, err := s.Save(t.Context(), bytes.NewReader([]byte("# Notes\n\nplain text content")))
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if att.Mime != "text/plain" {
+		t.Fatalf("Mime = %q, want text/plain", att.Mime)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, att.ID+".txt")); err != nil {
+		t.Fatalf("expected %s.txt on disk: %v", att.ID, err)
+	}
+
+	got, err := s.Get(t.Context(), att.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Mime != "text/plain" {
+		t.Fatalf("stored Mime = %q, want text/plain (parameters stripped)", got.Mime)
+	}
+}
+
 func TestStoreSaveDedup(t *testing.T) {
 	s := integrationStore(t)
 
@@ -105,10 +130,13 @@ func TestStoreSaveDedup(t *testing.T) {
 func TestStoreSaveRejectsFakeExtension(t *testing.T) {
 	s := integrationStore(t)
 
-	// A .png-looking upload that is actually plain text must be rejected
-	// by magic-byte sniffing, not the (absent, since we don't trust it)
-	// client-declared type.
-	_, err := s.Save(t.Context(), bytes.NewReader([]byte("not actually an image, just text")))
+	// A .png-looking upload that is actually a zip must be rejected by
+	// magic-byte sniffing, not the (absent, since we don't trust it)
+	// client-declared type. Plain text now sniffs to the allowed
+	// text/plain, so this uses zip's magic bytes instead to stay
+	// genuinely unsupported.
+	zipBytes := []byte{0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00}
+	_, err := s.Save(t.Context(), bytes.NewReader(zipBytes))
 	if !errors.Is(err, ErrUnsupportedMIME) {
 		t.Fatalf("Save err = %v, want ErrUnsupportedMIME", err)
 	}

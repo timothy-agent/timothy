@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,14 +33,16 @@ var ErrUnsupportedMIME = errors.New("attachments: unsupported mime type")
 // ErrNotFound reports an id with no matching row.
 var ErrNotFound = errors.New("attachments: not found")
 
-// allowedExt maps the sniffed MIME type to its stored file extension.
-// Only these five are accepted; anything else is ErrUnsupportedMIME.
+// allowedExt maps the sniffed MIME type (bare, parameters stripped) to
+// its stored file extension. Only these six are accepted; anything
+// else is ErrUnsupportedMIME.
 var allowedExt = map[string]string{
 	"image/png":       ".png",
 	"image/jpeg":      ".jpg",
 	"image/webp":      ".webp",
 	"image/gif":       ".gif",
 	"application/pdf": ".pdf",
+	"text/plain":      ".txt",
 }
 
 // Attachment is one stored image's metadata.
@@ -92,10 +95,14 @@ func (s *Store) Save(ctx context.Context, r io.Reader) (Attachment, error) {
 		return Attachment{}, fmt.Errorf("attachments: save: close: %w", err)
 	}
 
-	mime := http.DetectContentType(sniffBuf[:sniffed])
-	ext, ok := allowedExt[mime]
+	sniffedMime := http.DetectContentType(sniffBuf[:sniffed])
+	bareMime := sniffedMime
+	if parsed, _, err := mime.ParseMediaType(sniffedMime); err == nil {
+		bareMime = parsed
+	}
+	ext, ok := allowedExt[bareMime]
 	if !ok {
-		return Attachment{}, fmt.Errorf("attachments: save: mime %q: %w", mime, ErrUnsupportedMIME)
+		return Attachment{}, fmt.Errorf("attachments: save: mime %q: %w", sniffedMime, ErrUnsupportedMIME)
 	}
 
 	id := fmt.Sprintf("%x", h.Sum(nil))
@@ -113,7 +120,7 @@ func (s *Store) Save(ctx context.Context, r io.Reader) (Attachment, error) {
 	// likewise a same-content overwrite of itself.
 	if _, err := db.Exec(ctx,
 		"INSERT INTO attachments (id, mime, size_bytes) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
-		id, mime, size,
+		id, bareMime, size,
 	); err != nil {
 		return Attachment{}, fmt.Errorf("attachments: save: insert: %w", err)
 	}
@@ -124,7 +131,7 @@ func (s *Store) Save(ctx context.Context, r io.Reader) (Attachment, error) {
 		return Attachment{}, fmt.Errorf("attachments: save: read back: %w", err)
 	}
 
-	return Attachment{ID: id, Mime: mime, SizeBytes: size, CreatedAt: createdAt}, nil
+	return Attachment{ID: id, Mime: bareMime, SizeBytes: size, CreatedAt: createdAt}, nil
 }
 
 // copyAndSniff copies r into w while hashing every byte and capturing

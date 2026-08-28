@@ -225,6 +225,36 @@ describe('MissionForm — create mode, one-off mission', () => {
     )
   })
 
+  it('attaching a .txt file renders a chip and submits it on the payload', async () => {
+    vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att2', mime: 'text/plain', size_bytes: 20 })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm3' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize the attached notes' } })
+    const file = new File(['some notes'], 'notes.txt', { type: 'text/plain' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await screen.findByText('notes.txt')
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [{ id: 'att2', name: 'notes.txt' }] }),
+      ),
+    )
+  })
+
+  it('rejects an image attachment on the mission form', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const file = new File(['fake'], 'photo.png', { type: 'image/png' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    expect(uploadAttachment).not.toHaveBeenCalled()
+  })
+
   it('disables submit while an attachment is uploading', async () => {
     let resolveUpload: (v: { id: string; mime: string; size_bytes: number }) => void = () => {}
     vi.mocked(uploadAttachment).mockReturnValue(

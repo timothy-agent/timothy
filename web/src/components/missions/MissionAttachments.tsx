@@ -3,14 +3,20 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useRef } from 'react'
 import { toast } from 'sonner'
 import { uploadAttachment } from '../../api/client'
-import { maxAttachmentBytes, maxAttachments, type PendingAttachment } from '../Composer'
+import {
+  isDocumentFile,
+  maxAttachmentBytes,
+  maxAttachments,
+  type PendingAttachment,
+} from '../Composer'
 import { Button } from '../ui/button'
 
-// MissionAttachments is the mission-create form's PDF-only attachment
-// picker: an "Attach PDF" button plus a chip strip (name, uploading
-// spinner, remove button) — a simplified variant of Composer.tsx's
-// uploadFiles/removeAttachment flow with no paste/drag support, since
-// a mission's create form isn't a message box.
+// MissionAttachments is the mission-create form's document attachment
+// picker (PDF, Markdown, text): an "Attach file" button plus a chip
+// strip (name, uploading spinner, remove button) — a simplified
+// variant of Composer.tsx's uploadFiles/removeAttachment flow with no
+// paste/drag support, since a mission's create form isn't a message
+// box.
 export function MissionAttachments({
   attachments,
   onChange,
@@ -22,8 +28,8 @@ export function MissionAttachments({
 
   async function uploadFiles(files: File[]) {
     for (const file of files) {
-      if (file.type !== 'application/pdf') {
-        toast.error(`${file.name || 'file'}: only PDF attachments are supported`)
+      if (!isDocumentFile(file)) {
+        toast.error(`${file.name || 'file'}: only PDF, Markdown, and text attachments are supported`)
         continue
       }
       if (file.size > maxAttachmentBytes) {
@@ -67,7 +73,7 @@ export function MissionAttachments({
       <input
         ref={inputRef}
         type="file"
-        accept="application/pdf"
+        accept="application/pdf,.md,.txt,text/plain,text/markdown"
         multiple
         className="hidden"
         onChange={(e) => {
@@ -78,7 +84,7 @@ export function MissionAttachments({
       />
       <Button type="button" variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
         <HugeiconsIcon icon={Attachment02Icon} className="size-4" />
-        Attach PDF
+        Attach file
       </Button>
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
@@ -88,7 +94,7 @@ export function MissionAttachments({
               className="group relative flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
             >
               <HugeiconsIcon icon={Pdf02Icon} className="size-3.5 text-muted-foreground" />
-              <span className="max-w-40 truncate">{a.name ?? 'PDF'}</span>
+              <span className="max-w-40 truncate">{a.name ?? 'Document'}</span>
               {a.uploading ? (
                 <HugeiconsIcon icon={Loading03Icon} className="size-3 animate-spin text-muted-foreground" />
               ) : (

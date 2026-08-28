@@ -439,8 +439,12 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 		byID: map[string]attachments.Attachment{
 			"doc1": {ID: "doc1", Mime: "application/pdf"},
 			"img1": {ID: "img1", Mime: "image/png"},
+			"txt1": {ID: "txt1", Mime: "text/plain"},
 		},
-		data: map[string][]byte{"doc1": []byte("%PDF-1.4")},
+		data: map[string][]byte{
+			"doc1": []byte("%PDF-1.4"),
+			"txt1": []byte("plain text notes"),
+		},
 	}
 	md := fakeMarkitdownServer(t, "# converted")
 
@@ -496,6 +500,25 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 		code, body := post(t, fa, md.URL, `{"goal":"g","kind":"general","attachments":[{"id":"img1"}]}`)
 		if code != 400 || !strings.Contains(body, "only document attachments are supported") {
 			t.Fatalf("code=%d body=%q, want 400 unsupported-mime", code, body)
+		}
+	})
+
+	// The remaining two cases exercise resolveAttachments past all its
+	// own 400 paths — the fake pool has no live database, so create()
+	// itself then fails past validation; asserting the failure is the
+	// (unrelated) store error, not a resolveAttachments 400, confirms
+	// text/plain cleared validation.
+	t.Run("text/plain attachment accepted with markitdown configured", func(t *testing.T) {
+		code, body := post(t, fa, md.URL, `{"goal":"g","kind":"general","attachments":[{"id":"txt1"}]}`)
+		if code != 400 || !strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a store error (validation passed)", code, body)
+		}
+	})
+
+	t.Run("text-only attachment succeeds with no markitdownURL configured", func(t *testing.T) {
+		code, body := post(t, fa, "", `{"goal":"g","kind":"general","attachments":[{"id":"txt1"}]}`)
+		if code != 400 || !strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a store error (text attachments don't need the sidecar)", code, body)
 		}
 	})
 }

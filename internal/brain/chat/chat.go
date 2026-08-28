@@ -984,6 +984,17 @@ func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]sess
 				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", id, err)
 			}
 			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(md)})
+		case att.Mime == "text/plain":
+			r, _, err := s.attachments.Open(ctx, att.ID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+			}
+			raw, err := io.ReadAll(r)
+			_ = r.Close()
+			if err != nil {
+				return nil, nil, fmt.Errorf("chat: read attachment %q: %w", id, err)
+			}
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(string(raw))})
 		default:
 			return nil, nil, fmt.Errorf("chat: %w: attachment %q: unsupported mime %q", ErrBadRequest, id, att.Mime)
 		}

@@ -619,8 +619,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, sanitizeMission(created))
 }
 
-// resolveAttachments validates and converts a create request's PDF
-// refs into MissionAttachments — writes any error response itself and
+// resolveAttachments validates and converts a create request's PDF and
+// text refs into MissionAttachments — writes any error response itself and
 // returns ok=false, mirroring chat.validateAttachments' shape but as a
 // method so it can write directly (create()'s other validation blocks
 // use jsonError+return rather than a returned error). Empty input
@@ -638,21 +638,33 @@ func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Conte
 		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("too many attachments (max %d)", maxMissionAttachments))
 		return nil, false
 	}
-	if h.markitdownURL == "" {
-		jsonError(w, http.StatusBadRequest, "bad_request", "pdf attachments require the markitdown sidecar (MARKITDOWN_URL)")
-		return nil, false
-	}
-	out := make([]missions.MissionAttachment, 0, len(in))
-	for _, input := range in {
+	// Fetch and validate mime up front so the markitdown-sidecar check
+	// below only fires when a PDF actually needs conversion — text
+	// attachments must succeed with no sidecar configured.
+	atts := make([]attachments.Attachment, len(in))
+	needsMarkitdown := false
+	for i, input := range in {
 		att, err := h.attachments.Get(ctx, input.ID)
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("attachment %q not found", input.ID))
 			return nil, false
 		}
-		if att.Mime != "application/pdf" {
+		if att.Mime != "application/pdf" && att.Mime != "text/plain" {
 			jsonError(w, http.StatusBadRequest, "bad_request", "only document attachments are supported for missions")
 			return nil, false
 		}
+		if att.Mime == "application/pdf" {
+			needsMarkitdown = true
+		}
+		atts[i] = att
+	}
+	if needsMarkitdown && h.markitdownURL == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "pdf attachments require the markitdown sidecar (MARKITDOWN_URL)")
+		return nil, false
+	}
+	out := make([]missions.MissionAttachment, 0, len(in))
+	for i, input := range in {
+		att := atts[i]
 		r, _, err := h.attachments.Open(ctx, att.ID)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
@@ -664,10 +676,15 @@ func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Conte
 			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
 			return nil, false
 		}
-		md, err := markitdown.Convert(ctx, h.markitdownHTTP, h.markitdownURL, att.ID+".pdf", att.Mime, raw)
-		if err != nil {
-			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
-			return nil, false
+		var md string
+		if att.Mime == "application/pdf" {
+			md, err = markitdown.Convert(ctx, h.markitdownHTTP, h.markitdownURL, att.ID+".pdf", att.Mime, raw)
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
+				return nil, false
+			}
+		} else {
+			md = string(raw)
 		}
 		out = append(out, missions.MissionAttachment{
 			ID: att.ID, Mime: att.Mime, Name: input.Name, Markdown: markitdown.TruncateMarkdown(md),

@@ -40,11 +40,42 @@ export interface PendingAttachment {
   uploading?: boolean
 }
 
-const allowedMimes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf']
+const allowedMimes = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+]
 // Exported: MissionAttachments.tsx reuses the same caps for its own
-// PDF-only upload flow.
+// document upload flow.
 export const maxAttachmentBytes = 10 * 1024 * 1024
 export const maxAttachments = 8
+
+// isAllowedFile accepts a file when its reported type is in
+// allowedMimes, or (for .md/.txt) by extension — browsers report
+// markdown files inconsistently: empty type, text/markdown, or
+// text/plain depending on OS/browser.
+export function isAllowedFile(file: File): boolean {
+  if (allowedMimes.includes(file.type)) return true
+  return /\.(md|txt)$/i.test(file.name)
+}
+
+// isDocumentFile is isAllowedFile narrowed to document types (PDF,
+// Markdown, text) — used where images aren't accepted, e.g. mission
+// attachments.
+export function isDocumentFile(file: File): boolean {
+  return isAllowedFile(file) && !file.type.startsWith('image/')
+}
+
+// isDocumentAttachment mirrors the server's document (non-image)
+// attachments: PDF and text/markdown files render as a document chip
+// rather than an image thumbnail.
+export function isDocumentAttachment(mime: string): boolean {
+  return mime === 'application/pdf' || mime === 'text/plain' || mime === 'text/markdown'
+}
 
 // Composer is the one message box: the chat page's docked input and
 // the home page's hero input are the same component so behavior
@@ -320,7 +351,7 @@ export function Composer({
   async function uploadFiles(files: File[]) {
     if (!onAttachments) return
     for (const file of files) {
-      if (!allowedMimes.includes(file.type)) {
+      if (!isAllowedFile(file)) {
         toast.error(`${file.name || 'file'}: unsupported file type`)
         continue
       }
@@ -446,10 +477,10 @@ export function Composer({
               className="group relative size-12 shrink-0 overflow-hidden rounded-lg border border-zinc-950/10 dark:border-white/10"
               title={a.name}
             >
-              {a.mime === 'application/pdf' ? (
+              {isDocumentAttachment(a.mime) ? (
                 <div className="flex size-full flex-col items-center justify-center gap-0.5 bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
                   <HugeiconsIcon icon={Pdf02Icon} className="size-4" />
-                  <span className="max-w-full truncate px-1 text-[9px]">{a.name ?? 'PDF'}</span>
+                  <span className="max-w-full truncate px-1 text-[9px]">{a.name ?? 'Document'}</span>
                 </div>
               ) : (
                 <img src={a.previewUrl} alt={a.name ?? 'attachment'} className="size-full object-cover" />
@@ -523,7 +554,7 @@ export function Composer({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.md,.txt,text/plain,text/markdown"
                 multiple
                 className="hidden"
                 onChange={(e) => {

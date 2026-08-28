@@ -460,6 +460,74 @@ func TestChatPDFAttachmentTruncatesOversizedMarkdown(t *testing.T) {
 	}
 }
 
+// TestChatTextAttachmentConvertsToDocument confirms a text/plain
+// attachment lands as a DocumentRef with its raw content inline,
+// without calling the markitdown sidecar.
+func TestChatTextAttachmentConvertsToDocument(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your notes")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("txt1", "text/plain", []byte("meeting notes: ship it"))
+	svc.SetAttachments(fa)
+	// SetMarkitdown intentionally not called: text must not require it.
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"txt1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].ID != "txt1" || um.Documents[0].Mime != "text/plain" {
+		t.Fatalf("documents = %+v, want one ref to txt1/text/plain", um.Documents)
+	}
+	if um.Documents[0].Markdown != "meeting notes: ship it" {
+		t.Fatalf("markdown = %q, want raw text content", um.Documents[0].Markdown)
+	}
+}
+
+// TestChatTextAttachmentTruncatesOversizedContent confirms an
+// oversized text attachment is cut at markitdown.TruncateMarkdown's
+// cap, same as an oversized converted PDF.
+func TestChatTextAttachmentTruncatesOversizedContent(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your huge notes")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	huge := strings.Repeat("a", docMarkdownCap+1024)
+	fa.seed("txt1", "text/plain", []byte(huge))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"txt1"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 {
+		t.Fatalf("documents = %+v, want one", um.Documents)
+	}
+	got := um.Documents[0].Markdown
+	const truncatedMarker = "\n\n[document truncated: markdown exceeded 128KB]"
+	if !strings.HasSuffix(got, truncatedMarker) {
+		t.Fatalf("markdown does not end with truncation marker: %q", got[max(0, len(got)-60):])
+	}
+}
+
 // TestChatDocumentsOnlyMessageDoesNotFlipToVisionRoute confirms the
 // D-046 vision auto-flip stays keyed on images alone: a message
 // carrying only a PDF (converted to plain text) never rides the
