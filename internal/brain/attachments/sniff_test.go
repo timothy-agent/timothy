@@ -13,7 +13,7 @@ import (
 // look-ahead requirement (e.g. the mp4 ftyp box needs its full boxSize
 // available in the sniffed buffer).
 
-var pngBytes = []byte{
+var sniffPNGBytes = []byte{
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
 	0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
 	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
@@ -58,7 +58,7 @@ func TestSniffAndNormalize(t *testing.T) {
 		data []byte
 		want string
 	}{
-		{"png", pngBytes, "image/png"},
+		{"png", sniffPNGBytes, "image/png"},
 		{"mp4", mp4Fixture(), "video/mp4"},
 		{"webm", webmFixture(), "video/webm"},
 		{"mp3", mp3Fixture(), "audio/mpeg"},
@@ -105,7 +105,7 @@ func TestSaveRejectsOversizeForType(t *testing.T) {
 	dir := t.TempDir()
 	s := &Store{dir: dir} // db unused: rejection happens before any query
 	oversized := bytes.Repeat([]byte{0}, int(maxDefaultBytes)+1)
-	oversized = append(pngBytes, oversized...)
+	oversized = append(sniffPNGBytes, oversized...)
 	_, err := s.Save(t.Context(), bytes.NewReader(oversized))
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("Save err = %v, want ErrTooLarge", err)
