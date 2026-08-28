@@ -15,7 +15,7 @@ import {
   Sun03Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
 import { getToken, subscribeNeedToken } from './api/client'
@@ -61,7 +61,6 @@ import { newlySeen, usePendingPermissions } from './lib/permissions'
 import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
-import { Analytics } from './pages/Analytics'
 import { AutomationDetail } from './pages/AutomationDetail'
 import { Automations } from './pages/Automations'
 import { EditSchedule } from './pages/EditSchedule'
@@ -73,6 +72,10 @@ import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
 import { Research } from './pages/Research'
 import { Settings, settingsAreas } from './pages/Settings'
+
+// Analytics pulls in ECharts (a large dependency), so it stays a
+// lazily-loaded chunk rather than bundling into the initial app load.
+const Analytics = lazy(() => import('./pages/Analytics').then((m) => ({ default: m.Analytics })))
 
 const nav = [
   { label: 'Home', href: '/', icon: Home01Icon },
@@ -477,7 +480,14 @@ function App() {
                   }
                 />
                 <Route path="/sessions/:id" element={<LegacySessionRedirect />} />
-                <Route path="/analytics" element={<Analytics />} />
+                <Route
+                  path="/analytics"
+                  element={
+                    <Suspense fallback={<div className="p-8 text-sm text-muted-foreground">Loading…</div>}>
+                      <Analytics />
+                    </Suspense>
+                  }
+                />
                 {/* Old bookmarks: the page lived at /dashboard before the rename. */}
                 <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
                 <Route path="/missions" element={<Missions />} />

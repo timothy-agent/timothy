@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BudgetStatus, GroupTotal, UsagePoint, UsageSummary } from '../api/types'
-import { Analytics } from './Analytics'
+import { Analytics, sortGroupsByTotal } from './Analytics'
+import * as echartsCore from 'echarts/core'
 
 vi.mock('../api/client', () => ({
   catalogPrices: vi.fn(),
@@ -15,6 +16,30 @@ vi.mock('../api/client', () => ({
   usageTotals: vi.fn(),
   usageUnpriced: vi.fn(),
 }))
+
+// jsdom has no canvas: EChart inits a real chart on mount, which throws
+// without a canvas 2d context. Stub the tree-shaken core entry point
+// with a no-op instance — the option builders (options.ts) are what
+// carry chart-logic test coverage, not the canvas render itself.
+vi.mock('echarts/core', () => ({
+  use: vi.fn(),
+  init: vi.fn(() => ({
+    setOption: vi.fn(),
+    resize: vi.fn(),
+    dispose: vi.fn(),
+    getZr: vi.fn(),
+  })),
+}))
+vi.mock('echarts/charts', () => ({ BarChart: {}, LineChart: {}, PieChart: {}, GaugeChart: {}, GraphChart: {} }))
+vi.mock('echarts/components', () => ({
+  GridComponent: {},
+  TooltipComponent: {},
+  LegendComponent: {},
+  TitleComponent: {},
+  DataZoomComponent: {},
+  MarkLineComponent: {},
+}))
+vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }))
 
 import {
   catalogPrices,
@@ -68,6 +93,27 @@ beforeEach(() => {
   vi.mocked(usageBudget).mockResolvedValue(calmBudget)
   vi.mocked(usageUnpriced).mockResolvedValue([])
   vi.mocked(catalogPrices).mockResolvedValue([])
+})
+
+describe('sortGroupsByTotal', () => {
+  it('orders groups by summed value across rows, descending', () => {
+    const rows = [
+      { bucket: 'a', openai: 2, anthropic: 10, local: 1 },
+      { bucket: 'b', openai: 4, anthropic: 0, local: 1 },
+    ]
+    // openai: 6, anthropic: 10, local: 2
+    expect(sortGroupsByTotal(['openai', 'anthropic', 'local'], rows)).toEqual(['anthropic', 'openai', 'local'])
+  })
+
+  it('breaks ties alphabetically', () => {
+    const rows = [{ bucket: 'a', zeta: 5, alpha: 5 }]
+    expect(sortGroupsByTotal(['zeta', 'alpha'], rows)).toEqual(['alpha', 'zeta'])
+  })
+
+  it('treats a group missing from a row as zero', () => {
+    const rows = [{ bucket: 'a', openai: 3 }]
+    expect(sortGroupsByTotal(['openai', 'anthropic'], rows)).toEqual(['openai', 'anthropic'])
+  })
 })
 
 describe('Analytics budget alert', () => {
@@ -245,8 +291,76 @@ const providerTotal: GroupTotal = {
   unpriced_output_tokens: 0,
 }
 
-describe('Analytics chart legend toggling', () => {
-  it('strikes through a legend entry on click and leaves others untouched', async () => {
+describe('Analytics chart legend selection', () => {
+  const providerPointB: UsagePoint = { ...providerPoint, group: 'anthropic' }
+  const providerTotalB: GroupTotal = { ...providerTotal, group: 'anthropic' }
+
+  it('plain click isolates a legend entry, second click restores all', async () => {
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) =>
+      group === 'provider' ? [providerPoint, providerPointB] : [],
+    )
+    vi.mocked(usageTotals).mockImplementation(async (_from, _to, group) =>
+      group === 'provider' ? [providerTotal, providerTotalB] : [],
+    )
+    renderPage()
+
+    const chart = (await screen.findByText('Spend over time')).closest('section')
+    if (!chart) throw new Error('chart section not found')
+    // StatsLegend renders the series name as a plain text node with no
+    // className, distinct from the "By provider"-style breakdown table
+    // cell that wraps its text in a truncate span.
+    const openaiEntry = (await within(chart).findAllByText('openai')).find((el) => el.className === '')
+    const anthropicEntry = within(chart).getAllByText('anthropic').find((el) => el.className === '')
+    if (!openaiEntry || !anthropicEntry) throw new Error('legend entry not found')
+
+    expect(openaiEntry).not.toHaveStyle({ textDecoration: 'line-through' })
+    fireEvent.click(openaiEntry)
+    // Isolating openai hides anthropic but leaves openai visible.
+    await waitFor(() => expect(anthropicEntry).toHaveStyle({ textDecoration: 'line-through' }))
+    expect(openaiEntry).not.toHaveStyle({ textDecoration: 'line-through' })
+
+    // Clicking the already-isolated entry again restores all.
+    fireEvent.click(openaiEntry)
+    await waitFor(() => expect(anthropicEntry).not.toHaveStyle({ textDecoration: 'line-through' }))
+  })
+
+  it('ctrl-click toggles just that entry, independent of other legends', async () => {
+    renderPage()
+    const chart = (await screen.findByText('Tokens in / out')).closest('section')
+    if (!chart) throw new Error('chart section not found')
+    const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
+    if (!inputEntry) throw new Error('legend entry not found')
+
+    fireEvent.click(inputEntry, { ctrlKey: true })
+    await waitFor(() => expect(inputEntry).toHaveStyle({ textDecoration: 'line-through' }))
+    // The sibling "output" entry in the same legend is untouched.
+    const outputEntry = within(chart)
+      .getAllByText('output')
+      .find((el) => el.className === '')
+    expect(outputEntry).not.toHaveStyle({ textDecoration: 'line-through' })
+
+    // Ctrl-click again restores just that entry.
+    fireEvent.click(inputEntry, { ctrlKey: true })
+    await waitFor(() => expect(inputEntry).not.toHaveStyle({ textDecoration: 'line-through' }))
+  })
+})
+
+// findChartOptionGetter locates the EChart init() instance whose
+// container lives inside the given section, and returns a getter for
+// its most recently applied option — several charts render on the
+// page, each with its own init() call/instance.
+async function findChartOptionGetter(section: HTMLElement) {
+  const chartDiv = section.querySelector('.mt-3 > div')
+  if (!chartDiv) throw new Error('chart container not found')
+  const initMock = vi.mocked(echartsCore.init)
+  await waitFor(() => expect(initMock.mock.calls.some((c) => c[0] === chartDiv)).toBe(true))
+  const callIndex = initMock.mock.calls.findIndex((c) => c[0] === chartDiv)
+  const instance = initMock.mock.results[callIndex].value
+  return () => vi.mocked(instance.setOption).mock.calls.at(-1)?.[0]
+}
+
+describe('Analytics bars/lines view toggle', () => {
+  it('defaults to lines and switches the spend-over-time chart to bars on click', async () => {
     vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) =>
       group === 'provider' ? [providerPoint] : [],
     )
@@ -254,38 +368,67 @@ describe('Analytics chart legend toggling', () => {
       group === 'provider' ? [providerTotal] : [],
     )
     renderPage()
-
-    const chart = (await screen.findByText('Cost by provider')).closest('section')
+    const chart = (await screen.findByText('Spend over time')).closest('section')
     if (!chart) throw new Error('chart section not found')
-    // The legend renders inside an SVG <li>/<span>, distinct from the
-    // "By provider"-style breakdown table, which never emits a plain
-    // element with an empty className — the legend text node does.
-    const legendEntry = (await within(chart).findAllByText('openai')).find((el) => el.className === '')
-    if (!legendEntry) throw new Error('legend entry not found')
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
 
-    expect(legendEntry).not.toHaveStyle({ textDecoration: 'line-through' })
-    fireEvent.click(legendEntry)
-    await waitFor(() => expect(legendEntry).toHaveStyle({ textDecoration: 'line-through' }))
-
-    // Clicking again restores it — the toggle is reversible.
-    fireEvent.click(legendEntry)
-    await waitFor(() => expect(legendEntry).not.toHaveStyle({ textDecoration: 'line-through' }))
+    fireEvent.click(within(chart).getByText('Bars'))
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('bar'))
   })
 
-  it('toggles the tokens-in/out legend independently of the cost chart', async () => {
+  it('defaults to lines and switches the tokens-in/out chart to bars on click', async () => {
     renderPage()
     const chart = (await screen.findByText('Tokens in / out')).closest('section')
     if (!chart) throw new Error('chart section not found')
-    const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
-    if (!inputEntry) throw new Error('legend entry not found')
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
 
-    fireEvent.click(inputEntry)
-    await waitFor(() => expect(inputEntry).toHaveStyle({ textDecoration: 'line-through' }))
-    // The sibling "output" entry in the same legend is untouched.
-    const outputEntry = within(chart)
-      .getAllByText('output')
-      .find((el) => el.className === '')
-    expect(outputEntry).not.toHaveStyle({ textDecoration: 'line-through' })
+    fireEvent.click(within(chart).getByText('Bars'))
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('bar'))
+  })
+
+  it('defaults to lines and switches the tokens-per-model chart to bars on click', async () => {
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) =>
+      group === 'model' ? [{ ...providerPoint, group: 'gpt-5.6-sol' }] : [],
+    )
+    renderPage()
+    const chart = (await screen.findByText('Tokens per model')).closest('section')
+    if (!chart) throw new Error('chart section not found')
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
+
+    fireEvent.click(within(chart).getByText('Bars'))
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('bar'))
+  })
+
+  it('has no toggle on the requests & errors panel', async () => {
+    renderPage()
+    const chart = (await screen.findByText('Requests & errors over time')).closest('section')
+    if (!chart) throw new Error('chart section not found')
+    expect(within(chart).queryByText('Bars')).toBeNull()
+    expect(within(chart).queryByText('Lines')).toBeNull()
+  })
+})
+
+describe('Analytics panel layout', () => {
+  it('orders chart panels: spend, tokens, cost by model, tokens per model, latency/spend share, requests & errors', async () => {
+    renderPage()
+    const headings = (await screen.findAllByRole('heading', { level: 2 })).map((h) => h.textContent)
+    const chartHeadings = [
+      'Spend over time',
+      'Tokens in / out',
+      'Cost by model',
+      'Tokens per model',
+      'Latency per provider',
+      'Spend share',
+      'Requests & errors over time',
+    ]
+    const positions = chartHeadings.map((h) => headings.indexOf(h))
+    expect(positions.every((p) => p >= 0)).toBe(true)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    // Requests & errors is the last chart panel, ahead of the budget/table sections.
+    expect(headings.indexOf('Requests & errors over time')).toBeGreaterThan(headings.indexOf('Latency per provider'))
   })
 })
 
@@ -332,7 +475,7 @@ describe('Analytics zero-cost exclusion', () => {
 
     // Same model, token-consumption chart: the free model's volume is
     // exactly the signal this chart exists to show, so it must render.
-    const tokenChart = (await screen.findByText('Token consumption per model')).closest('section')
+    const tokenChart = (await screen.findByText('Tokens per model')).closest('section')
     if (!tokenChart) throw new Error('token chart section not found')
     expect(await within(tokenChart).findByText('local-llama')).toBeInTheDocument()
   })

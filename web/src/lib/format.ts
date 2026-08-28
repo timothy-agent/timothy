@@ -1,8 +1,11 @@
 // Compact number formatting for dashboard-style stats (token counts, call counts).
+// Sub-1k values are whole counts most of the time (a token/request tally),
+// but a derived stat like a legend's mean can land on a fraction — rounded
+// to 2 decimals so it never renders with raw float precision.
 export function compact(v: number): string {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
-  return String(v)
+  return String(Math.round(v * 100) / 100)
 }
 
 // formatDuration renders a wall time compactly: sub-second as

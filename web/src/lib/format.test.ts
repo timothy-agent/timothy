@@ -15,6 +15,14 @@ describe('compact', () => {
     expect(compact(999)).toBe('999')
   })
 
+  it('rounds a sub-1k fractional value to at most 2 decimals', () => {
+    // A derived stat (e.g. a legend's mean) can land on a repeating
+    // float — must never render with raw float precision.
+    expect(compact(981.7368421052631)).toBe('981.74')
+    expect(compact(345.2631578947368)).toBe('345.26')
+    expect(compact(1.0526315789473684)).toBe('1.05')
+  })
+
   it('formats thousands with a k suffix', () => {
     expect(compact(1_000)).toBe('1.0k')
     expect(compact(120_000)).toBe('120.0k')

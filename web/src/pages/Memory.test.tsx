@@ -14,6 +14,30 @@ vi.mock('../api/client', () => ({
   entityMemories: vi.fn(),
 }))
 
+// jsdom has no canvas: EChart inits a real chart on mount, which throws
+// without a canvas 2d context. Stub the tree-shaken core entry point
+// with a no-op instance.
+vi.mock('echarts/core', () => ({
+  use: vi.fn(),
+  init: vi.fn(() => ({
+    setOption: vi.fn(),
+    resize: vi.fn(),
+    dispose: vi.fn(),
+    on: vi.fn(),
+    getZr: vi.fn(() => ({ on: vi.fn() })),
+  })),
+}))
+vi.mock('echarts/charts', () => ({ BarChart: {}, LineChart: {}, PieChart: {}, GaugeChart: {}, GraphChart: {} }))
+vi.mock('echarts/components', () => ({
+  GridComponent: {},
+  TooltipComponent: {},
+  LegendComponent: {},
+  TitleComponent: {},
+  DataZoomComponent: {},
+  MarkLineComponent: {},
+}))
+vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }))
+
 import { entityGraph, listMemories, resolveMemory, searchMemories } from '../api/client'
 
 const pendingMemory: MemoryItem = {
@@ -139,7 +163,7 @@ describe('Memory graph tab', () => {
     renderPage()
     fireEvent.click(await screen.findByTestId('tab-graph'))
     expect(await screen.findByTestId('entity-graph')).toBeInTheDocument()
-    expect(screen.getAllByTestId('entity-node')).toHaveLength(1)
+    expect(screen.getByText('project')).toBeInTheDocument()
   })
 })
 

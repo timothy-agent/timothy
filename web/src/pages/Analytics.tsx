@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { StackedBarChart } from '../components/charts/StackedBarChart'
-import { MultiLineChart } from '../components/charts/MultiLineChart'
-import { LatencyBars } from '../components/charts/LatencyBars'
-import { ChartLegend } from '../components/charts/ChartLegend'
+import { EChart } from '../components/charts/EChart'
+import { StatsLegend } from '../components/charts/StatsLegend'
+import {
+  areaLinesOption,
+  donutOption,
+  gaugeOption,
+  latencyBarsOption,
+  multiLineOption,
+  requestsErrorsOption,
+  stackedBarsOption,
+} from '../components/charts/options'
 import { palette } from '../components/charts/palette'
 import {
   catalogPrices,
@@ -35,9 +42,10 @@ const ranges = [
   { key: 'today', label: 'Today', days: 0, bucket: 'hour' as const },
   { key: '7d', label: '7 days', days: 7, bucket: 'day' as const },
   { key: '30d', label: '30 days', days: 30, bucket: 'day' as const },
+  { key: '90d', label: '90 days', days: 90, bucket: 'week' as const },
 ]
 
-function rangeDates(key: string): { from: Date; to: Date; bucket: 'hour' | 'day' } {
+function rangeDates(key: string): { from: Date; to: Date; bucket: 'hour' | 'day' | 'week' } {
   const r = ranges.find((x) => x.key === key) ?? ranges[2]
   const to = new Date()
   const from = new Date()
@@ -82,7 +90,6 @@ interface Loaded {
   summaries: UsageSummary[]
   byProvider: UsagePoint[]
   byModel: UsagePoint[]
-  byRoute: UsagePoint[]
   providerTotals: GroupTotal[]
   modelTotals: GroupTotal[]
   sessions: SessionUsage[]
@@ -91,11 +98,23 @@ interface Loaded {
   budget: BudgetStatus | null
 }
 
-// pivot turns (bucket, group) points into recharts rows keyed by
-// bucket with one column per group. onlyGroups, when given, restricts
-// both the emitted columns and the rows' contents to that set — how
-// zero-cost groups get excluded from cost charts without touching the
-// token charts fed by the same series.
+// sortGroupsByTotal orders group names by their summed value across
+// rows, descending, ties broken alphabetically — stack order, legend
+// rows, and palette index all follow since they index into this order.
+export function sortGroupsByTotal(groups: string[], rows: Record<string, number | string>[]): string[] {
+  const totals = new Map(groups.map((g) => [g, 0]))
+  for (const row of rows) {
+    for (const g of groups) totals.set(g, (totals.get(g) ?? 0) + (Number(row[g]) || 0))
+  }
+  return [...groups].sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0) || a.localeCompare(b))
+}
+
+// pivot turns (bucket, group) points into chart-ready rows keyed by
+// bucket with one column per group, groups ordered by total value
+// descending. onlyGroups, when given, restricts both the emitted
+// columns and the rows' contents to that set — how zero-cost groups
+// get excluded from cost charts without touching the token charts fed
+// by the same series.
 function pivot(points: UsagePoint[], metric: (p: UsagePoint) => number, onlyGroups?: Set<string>) {
   const allGroups = [...new Set(points.map((p) => p.group))]
   const groups = onlyGroups ? allGroups.filter((g) => onlyGroups.has(g)) : allGroups
@@ -107,7 +126,8 @@ function pivot(points: UsagePoint[], metric: (p: UsagePoint) => number, onlyGrou
     row[p.group] = ((row[p.group] as number) ?? 0) + metric(p)
     rows.set(key, row)
   }
-  return { groups, rows: [...rows.values()] }
+  const rowList = [...rows.values()]
+  return { groups: sortGroupsByTotal(groups, rowList), rows: rowList }
 }
 
 // TotalsRow is one group's collapsed totals — extends ConvertedRow so
@@ -152,20 +172,55 @@ const bucketLabel = (iso: string, bucket: string) => {
     : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-// useHiddenKeys backs a chart's selectable legend: clicking an entry
-// toggles its data key out of the rendered series (and struck-through
-// in the legend itself) rather than filtering the underlying data.
-function useHiddenKeys() {
+// ChartView is the bars/lines toggle shared by the two cost-over-time
+// panels — a compact segmented control matching the range picker's style.
+type ChartView = 'bars' | 'lines'
+
+function ViewToggle({ view, onChange }: { view: ChartView; onChange: (v: ChartView) => void }) {
+  const options: { key: ChartView; label: string }[] = [
+    { key: 'bars', label: 'Bars' },
+    { key: 'lines', label: 'Lines' },
+  ]
+  return (
+    <div className="flex rounded-lg border border-border p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.key}
+          type="button"
+          onClick={() => onChange(o.key)}
+          className={
+            view === o.key
+              ? 'rounded-md bg-zinc-200/80 px-2 py-0.5 text-xs font-medium dark:bg-zinc-800'
+              : 'rounded-md px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground'
+          }
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// useSeriesSelection backs a chart's selectable legend with Grafana
+// semantics: a plain click isolates that key (hides all others, or
+// restores all if it's already the only one visible); an additive
+// click (ctrl/cmd) toggles just that key in/out of the visible set.
+function useSeriesSelection(keys: string[]) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
-  const onToggle = (key: string) => {
+  const onSelect = (key: string, additive: boolean) => {
     setHidden((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
+      if (additive) {
+        const next = new Set(prev)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      }
+      const isolated = new Set(keys.filter((k) => k !== key))
+      const alreadyIsolated = keys.every((k) => (k === key ? !prev.has(k) : prev.has(k)))
+      return alreadyIsolated ? new Set() : isolated
     })
   }
-  return { hidden, onToggle }
+  return { hidden, onSelect }
 }
 
 export function Analytics() {
@@ -184,7 +239,6 @@ export function Analytics() {
       usageSummary(from, to),
       usageSeries(from, to, bucket, 'provider'),
       usageSeries(from, to, bucket, 'model'),
-      usageSeries(from, to, bucket, 'route'),
       usageTotals(from, to, 'provider'),
       usageTotals(from, to, 'model'),
       usageSessions(from, to, 10),
@@ -203,15 +257,14 @@ export function Analytics() {
         summaries: val(results[0], []),
         byProvider: val(results[1], []),
         byModel: val(results[2], []),
-        byRoute: val(results[3], []),
-        providerTotals: val(results[4], []),
-        modelTotals: val(results[5], []),
-        sessions: val(results[6], []),
-        latency: val(results[7], []),
-        cache: val(results[8], []),
-        budget: val<BudgetStatus | null>(results[9], null),
+        providerTotals: val(results[3], []),
+        modelTotals: val(results[4], []),
+        sessions: val(results[5], []),
+        latency: val(results[6], []),
+        cache: val(results[7], []),
+        budget: val<BudgetStatus | null>(results[8], null),
       })
-      setUnpriced(val<UnpricedGroup[]>(results[10], []))
+      setUnpriced(val<UnpricedGroup[]>(results[9], []))
     })
     return () => {
       live = false
@@ -219,11 +272,6 @@ export function Analytics() {
   }, [range])
 
   const { bucket } = rangeDates(range)
-
-  const costLegend = useHiddenKeys()
-  const tokensLegend = useHiddenKeys()
-  const modelCostLegend = useHiddenKeys()
-  const modelTokensLegend = useHiddenKeys()
 
   // Zero-cost groups (unpriced NULL rows and genuinely-free providers
   // like local Ollama) add no signal to a cost view — excluded from
@@ -267,6 +315,20 @@ export function Analytics() {
     return [...byBucket.values()]
   }, [data])
 
+  // requestsErrors sums requests/errors across providers per bucket —
+  // the fixed two-series panel (requests as bars, error rate as a line).
+  const requestsErrors = useMemo(() => {
+    if (!data) return []
+    const byBucket = new Map<string, { bucket: string; requests: number; errors: number }>()
+    for (const p of data.byProvider) {
+      const row = byBucket.get(p.bucket) ?? { bucket: p.bucket, requests: 0, errors: 0 }
+      row.requests += p.requests
+      row.errors += p.errors
+      byBucket.set(p.bucket, row)
+    }
+    return [...byBucket.values()]
+  }, [data])
+
   const modelCost = useMemo(
     () => (data ? pivot(data.byModel, chartCost, pricedModels) : { groups: [], rows: [] }),
     [data, pricedModels],
@@ -275,6 +337,16 @@ export function Analytics() {
     () => (data ? pivot(data.byModel, (p) => p.input_tokens + p.output_tokens) : { groups: [], rows: [] }),
     [data],
   )
+
+  const costLegend = useSeriesSelection(cost.groups)
+  const tokensLegend = useSeriesSelection(['input', 'output'])
+  const modelCostLegend = useSeriesSelection(modelCost.groups)
+  const modelTokensLegend = useSeriesSelection(modelTokens.groups)
+
+  const [costView, setCostView] = useState<ChartView>('lines')
+  const [modelCostView, setModelCostView] = useState<ChartView>('lines')
+  const [tokensView, setTokensView] = useState<ChartView>('lines')
+  const [modelTokensView, setModelTokensView] = useState<ChartView>('lines')
 
   // Advisory estimates for calls the ledger recorded without a price
   // (cost NULL): the (provider, model) pairs from usageUnpriced, each
@@ -371,6 +443,11 @@ export function Analytics() {
 
   const colorOf = (g: string, groups: string[]) => palette[groups.indexOf(g) % palette.length]
 
+  // Budget gauges render only when a window has a configured limit —
+  // day for the "today" tile's spend, month for longer ranges.
+  const dayGauge = budget?.day.limit != null ? budget.day : null
+  const monthGauge = budget?.month.limit != null ? budget.month : null
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-full px-8 py-8">
@@ -463,99 +540,212 @@ export function Analytics() {
           </p>
         )}
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <section className="rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Cost by provider</h2>
-            <div className="mt-3">
-              <StackedBarChart
-                rows={cost.rows}
-                groups={cost.groups}
-                colorOf={(g) => colorOf(g, cost.groups)}
-                hidden={costLegend.hidden}
-                xLabel={(v) => bucketLabel(v, bucket)}
-                valueLabel={chartMoney}
-              />
-            </div>
-            <ChartLegend
-              groups={cost.groups}
-              colorOf={(g) => colorOf(g, cost.groups)}
-              hidden={costLegend.hidden}
-              onToggle={costLegend.onToggle}
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">Spend over time</h2>
+            <ViewToggle view={costView} onChange={setCostView} />
+          </div>
+          <div className="mt-3">
+            <EChart
+              option={(costView === 'bars' ? stackedBarsOption : multiLineOption)(
+                cost.rows,
+                cost.groups,
+                costLegend.hidden,
+                (g) => colorOf(g, cost.groups),
+                (v) => bucketLabel(v, bucket),
+                chartMoney,
+              )}
             />
-          </section>
+          </div>
+          <StatsLegend
+            rows={cost.rows}
+            groups={cost.groups}
+            colorOf={(g) => colorOf(g, cost.groups)}
+            hidden={costLegend.hidden}
+            onSelect={costLegend.onSelect}
+            valueLabel={chartMoney}
+          />
+        </section>
 
-          <section className="rounded-xl border border-border p-4">
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium">Tokens in / out</h2>
-            <div className="mt-3">
-              <MultiLineChart
-                rows={tokens as unknown as Record<string, number | string>[]}
-                groups={['input', 'output']}
-                colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
-                hidden={tokensLegend.hidden}
-                xLabel={(v) => bucketLabel(v, bucket)}
-                valueLabel={compact}
-              />
-            </div>
-            <ChartLegend
-              groups={['input', 'output']}
-              colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
-              hidden={tokensLegend.hidden}
-              onToggle={tokensLegend.onToggle}
+            <ViewToggle view={tokensView} onChange={setTokensView} />
+          </div>
+          <div className="mt-3">
+            <EChart
+              option={(tokensView === 'bars' ? stackedBarsOption : areaLinesOption)(
+                tokens as unknown as Record<string, number | string>[],
+                ['input', 'output'],
+                tokensLegend.hidden,
+                (g) => (g === 'input' ? palette[0] : palette[2]),
+                (v) => bucketLabel(v, bucket),
+                compact,
+              )}
             />
-          </section>
-        </div>
+          </div>
+          <StatsLegend
+            rows={tokens as unknown as Record<string, number | string>[]}
+            groups={['input', 'output']}
+            colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
+            hidden={tokensLegend.hidden}
+            onSelect={tokensLegend.onSelect}
+            valueLabel={compact}
+          />
+        </section>
+
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">Cost by model</h2>
+            <ViewToggle view={modelCostView} onChange={setModelCostView} />
+          </div>
+          <div className="mt-3">
+            <EChart
+              option={(modelCostView === 'bars' ? stackedBarsOption : multiLineOption)(
+                modelCost.rows,
+                modelCost.groups,
+                modelCostLegend.hidden,
+                (g) => colorOf(g, modelCost.groups),
+                (v) => bucketLabel(v, bucket),
+                chartMoney,
+              )}
+            />
+          </div>
+          <StatsLegend
+            rows={modelCost.rows}
+            groups={modelCost.groups}
+            colorOf={(g) => colorOf(g, modelCost.groups)}
+            hidden={modelCostLegend.hidden}
+            onSelect={modelCostLegend.onSelect}
+            valueLabel={chartMoney}
+          />
+          {modelCost.groups.length === 0 && data && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              No priced model usage in range (free/unpriced models are excluded from cost views).
+            </p>
+          )}
+        </section>
+
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">Tokens per model</h2>
+            <ViewToggle view={modelTokensView} onChange={setModelTokensView} />
+          </div>
+          <div className="mt-3">
+            <EChart
+              option={(modelTokensView === 'bars' ? stackedBarsOption : multiLineOption)(
+                modelTokens.rows,
+                modelTokens.groups,
+                modelTokensLegend.hidden,
+                (g) => colorOf(g, modelTokens.groups),
+                (v) => bucketLabel(v, bucket),
+                compact,
+              )}
+            />
+          </div>
+          <StatsLegend
+            rows={modelTokens.rows}
+            groups={modelTokens.groups}
+            colorOf={(g) => colorOf(g, modelTokens.groups)}
+            hidden={modelTokensLegend.hidden}
+            onSelect={modelTokensLegend.onSelect}
+            valueLabel={compact}
+          />
+        </section>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <section className="rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Cost by model</h2>
-            <div className="mt-3">
-              <StackedBarChart
-                rows={modelCost.rows}
-                groups={modelCost.groups}
-                colorOf={(g) => colorOf(g, modelCost.groups)}
-                hidden={modelCostLegend.hidden}
-                xLabel={(v) => bucketLabel(v, bucket)}
-                valueLabel={chartMoney}
-              />
-            </div>
-            <ChartLegend
-              groups={modelCost.groups}
-              colorOf={(g) => colorOf(g, modelCost.groups)}
-              hidden={modelCostLegend.hidden}
-              onToggle={modelCostLegend.onToggle}
-            />
-            {modelCost.groups.length === 0 && data && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                No priced model usage in range (free/unpriced models are excluded from cost views).
-              </p>
+          <section className="flex flex-col rounded-xl border border-border p-4">
+            <h2 className="text-sm font-medium">Latency per provider</h2>
+            {data && data.latency.length > 0 ? (
+              <div className="mt-3 min-h-[240px] flex-1">
+                <EChart
+                  fill
+                  option={latencyBarsOption(
+                    data.latency,
+                    { p50: '#2a78d6', p95: '#eda100', p99: '#e34948' },
+                    (ms) => formatDuration(Math.round(ms)),
+                  )}
+                />
+              </div>
+            ) : (
+              <p className="mt-3 py-6 text-center text-sm text-muted-foreground">No requests in range.</p>
             )}
           </section>
 
-          <section className="rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Token consumption per model</h2>
-            <div className="mt-3">
-              <MultiLineChart
-                rows={modelTokens.rows}
-                groups={modelTokens.groups}
-                colorOf={(g) => colorOf(g, modelTokens.groups)}
-                hidden={modelTokensLegend.hidden}
-                xLabel={(v) => bucketLabel(v, bucket)}
-                valueLabel={compact}
+          <section className="flex flex-col rounded-xl border border-border p-4">
+            <h2 className="text-sm font-medium">Spend share</h2>
+            <div className="mt-3 min-h-[240px] flex-1">
+              <EChart
+                fill
+                option={donutOption(
+                  (data?.providerTotals ?? []).filter((g) => g.cost > 0),
+                  (g) => colorOf(g, cost.groups),
+                  chartMoney,
+                )}
               />
             </div>
-            <ChartLegend
-              groups={modelTokens.groups}
-              colorOf={(g) => colorOf(g, modelTokens.groups)}
-              hidden={modelTokensLegend.hidden}
-              onToggle={modelTokensLegend.onToggle}
-            />
+            {pricedProviders.size === 0 && data && (
+              <p className="mt-2 text-xs text-muted-foreground">No priced spend in range.</p>
+            )}
           </section>
         </div>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-3">
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <h2 className="text-sm font-medium">Requests &amp; errors over time</h2>
+          <div className="mt-3">
+            <EChart
+              option={requestsErrorsOption(
+                requestsErrors,
+                (v) => bucketLabel(v, bucket),
+                palette[0],
+                palette[7],
+              )}
+            />
+          </div>
+        </section>
+
+        {(dayGauge || monthGauge) && (
+          <div className="mt-6 grid gap-6 sm:grid-cols-2">
+            {dayGauge && dayGauge.limit && (
+              <section className="rounded-xl border border-border p-4">
+                <h2 className="text-sm font-medium">Daily budget</h2>
+                <div className="mt-3">
+                  <EChart
+                    option={gaugeOption(
+                      dayGauge.spend,
+                      dayGauge.limit.amount,
+                      '#1baf7a',
+                      '#e34948',
+                      (v) => money(v, dayGauge.limit!.currency),
+                    )}
+                    height={200}
+                  />
+                </div>
+              </section>
+            )}
+            {monthGauge && monthGauge.limit && (
+              <section className="rounded-xl border border-border p-4">
+                <h2 className="text-sm font-medium">Monthly budget</h2>
+                <div className="mt-3">
+                  <EChart
+                    option={gaugeOption(
+                      monthGauge.spend,
+                      monthGauge.limit.amount,
+                      '#1baf7a',
+                      '#e34948',
+                      (v) => money(v, monthGauge.limit!.currency),
+                    )}
+                    height={200}
+                  />
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <ProviderCostTable rows={data?.providerTotals ?? []} />
           <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
-          <BreakdownTable title="By route" rows={data ? totals(data.byRoute) : []} />
         </div>
 
         <section className="mt-6 rounded-xl border border-border p-4">
@@ -592,41 +782,6 @@ export function Analytics() {
               )}
             </tbody>
           </table>
-        </section>
-
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <h2 className="text-sm font-medium">Latency per provider</h2>
-          {data && data.latency.length > 0 ? (
-            <div className="mt-3">
-              <LatencyBars rows={data.latency} />
-            </div>
-          ) : (
-            <p className="mt-3 py-6 text-center text-sm text-muted-foreground">No requests in range.</p>
-          )}
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-md text-sm">
-              <thead>
-                <tr className="text-left text-xs text-muted-foreground">
-                  <th className="pb-2 font-medium">Provider</th>
-                  <th className="pb-2 text-right font-medium">p50</th>
-                  <th className="pb-2 text-right font-medium">p95</th>
-                  <th className="pb-2 text-right font-medium">p99</th>
-                  <th className="pb-2 text-right font-medium">Requests</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data?.latency ?? []).map((l) => (
-                  <tr key={l.provider} className="border-t border-border/60">
-                    <td className="py-2">{l.provider}</td>
-                    <td className="py-2 text-right">{formatDuration(Math.round(l.p50_ms))}</td>
-                    <td className="py-2 text-right">{formatDuration(Math.round(l.p95_ms))}</td>
-                    <td className="py-2 text-right">{formatDuration(Math.round(l.p99_ms))}</td>
-                    <td className="py-2 text-right text-muted-foreground">{compact(l.requests)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </section>
       </div>
     </div>
