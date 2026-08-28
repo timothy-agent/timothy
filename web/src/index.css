@@ -180,3 +180,23 @@
   background-image: radial-gradient(color-mix(in oklch, var(--muted-foreground) 10%, transparent) 1px, transparent 1px);
   background-size: 22px 22px;
 }
+
+/* Chat code blocks (CodeBlock.tsx) render shiki with dual light/dark
+   CSS variables per span (defaultColor: false, themes: {light, dark}).
+   Token color picks --shiki-light by default, --shiki-dark under the
+   app's .dark class (same selector lib/theme.ts stamps on <html> for
+   every other themed surface). Shiki's own <pre>/<code> background and
+   padding are reset so the block's own container styling shows through. */
+.shiki-container pre.shiki,
+.shiki-container code {
+  background-color: transparent !important;
+  padding: 0;
+}
+.shiki-container .shiki,
+.shiki-container .shiki span {
+  color: var(--shiki-light);
+}
+.dark .shiki-container .shiki,
+.dark .shiki-container .shiki span {
+  color: var(--shiki-dark);
+}
