@@ -83,10 +83,23 @@ func LLMContext(events []Event, budget int) ([]provider.Message, error) {
 			// Documents carry their markdown already converted and
 			// persisted (chat.Chat, at send time) — projection just
 			// appends it as ordinary text, no store round-trip and no
-			// sidecar call. PDFs never flip the vision route; only
-			// images do.
+			// sidecar call. PDFs/audio/video never flip the vision
+			// route; only images do. A document with no markdown
+			// (video, or audio with no whisper configured) renders as
+			// a one-line neutralized note instead of the usual block —
+			// the model is told it exists but never asked to read
+			// content that isn't there.
 			for _, doc := range m.Documents {
-				block := fmt.Sprintf("[attached document %s (%s)]\n%s", doc.ID, doc.Mime, doc.Markdown)
+				var block string
+				if doc.Markdown == "" {
+					label := doc.Name
+					if label == "" {
+						label = doc.ID
+					}
+					block = fmt.Sprintf("[attached file: %s (%s), not viewable by the model]", label, doc.Mime)
+				} else {
+					block = fmt.Sprintf("[attached document %s (%s)]\n%s", doc.ID, doc.Mime, doc.Markdown)
+				}
 				if msg.Content == "" {
 					msg.Content = block
 				} else {
@@ -246,7 +259,7 @@ func UITranscript(events []Event) ([]TranscriptItem, error) {
 			}
 			item.Kind, item.Text, item.Images = "user", m.Text, m.Images
 			for _, doc := range m.Documents {
-				item.Documents = append(item.Documents, ImageRef{ID: doc.ID, Mime: doc.Mime})
+				item.Documents = append(item.Documents, ImageRef{ID: doc.ID, Mime: doc.Mime, Name: doc.Name})
 			}
 		case KindAssistantTurn:
 			var t AssistantTurn

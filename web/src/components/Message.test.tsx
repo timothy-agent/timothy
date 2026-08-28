@@ -575,7 +575,7 @@ describe('UserMessage attachments', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 
-  it('renders a non-clickable chip per attached document, never fetching it', async () => {
+  it('renders a chip per attached document, labeled by mime, without fetching it up front', async () => {
     const client = await import('../api/client')
 
     render(
@@ -593,5 +593,46 @@ describe('UserMessage attachments', () => {
   it('renders no document chips when the message carries none', () => {
     render(<UserMessage text="plain text" />)
     expect(screen.queryByText('PDF')).not.toBeInTheDocument()
+  })
+
+  it('shows the filename on a document chip when present, falling back to the mime label', () => {
+    render(
+      <UserMessage
+        text="summarize this"
+        documents={[
+          { id: 'doc-1', mime: 'application/pdf', name: 'quarterly-report.pdf' },
+          { id: 'doc-2', mime: 'audio/mpeg' },
+        ]}
+      />,
+    )
+    expect(screen.getByText('quarterly-report.pdf')).toBeInTheDocument()
+    expect(screen.getByText('MP3')).toBeInTheDocument()
+  })
+
+  it('opens the AttachmentViewer modal when a document chip is clicked', async () => {
+    render(
+      <UserMessage
+        text="summarize this"
+        documents={[{ id: 'doc-1', mime: 'application/pdf', name: 'report.pdf' }]}
+      />,
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('report.pdf'))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('application/pdf')).toBeInTheDocument()
+  })
+
+  it('opens the AttachmentViewer modal when an image thumbnail is clicked', async () => {
+    const localUrls = new Map([['att-1', 'blob:local-preview']])
+    render(
+      <UserMessage
+        text="sending…"
+        images={[{ id: 'att-1', mime: 'image/png', name: 'photo.png' }]}
+        localUrls={localUrls}
+      />,
+    )
+    fireEvent.click(screen.getByRole('img'))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('photo.png')).toBeInTheDocument()
   })
 })

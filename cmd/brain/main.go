@@ -560,6 +560,9 @@ func main() {
 	if markitdownURL != "" {
 		svc.SetMarkitdown(markitdownURL)
 	}
+	if whisperURL != "" {
+		svc.SetWhisper(whisperURL)
+	}
 
 	// kb_search: nil-safe wiring, same shape as memory retrieve/extract
 	// above — mc satisfies IngestDocument/KBSearch unconditionally, so

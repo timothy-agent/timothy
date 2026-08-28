@@ -200,3 +200,23 @@
 .dark .shiki-container .shiki span {
   color: var(--shiki-dark);
 }
+
+/* GitHub-style inline code chips in prose bodies (Message.tsx). Kills
+   the typography plugin's backtick pseudo-content and gives inline
+   code a translucent neutral background instead. Excludes fenced
+   code (pre code, .shiki-container code), which CodeBlock renders. */
+.prose :where(code):not(:where(pre code, .shiki-container code))::before,
+.prose :where(code):not(:where(pre code, .shiki-container code))::after {
+  content: none;
+}
+.prose :where(code):not(:where(pre code, .shiki-container code)) {
+  padding: 0.2em 0.4em;
+  border-radius: 6px;
+  font-size: 85%;
+  font-weight: inherit;
+  background-color: rgba(0, 0, 0, 0.06);
+}
+.dark .prose :where(code):not(:where(pre code, .shiki-container code)),
+.prose-invert :where(code):not(:where(pre code, .shiki-container code)) {
+  background-color: rgba(255, 255, 255, 0.12);
+}

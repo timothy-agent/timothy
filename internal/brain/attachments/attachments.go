@@ -1,7 +1,8 @@
-// Package attachments stores user-uploaded images and PDFs
-// content-addressed on a local volume, with metadata only in Postgres
-// — binaries never enter the database (D-045). ATTACHMENTS_DIR unset
-// means the feature is off: callers nil-gate on a nil *Store.
+// Package attachments stores user-uploaded images, documents, video
+// and audio content-addressed on a local volume, with metadata only
+// in Postgres — binaries never enter the database (D-045).
+// ATTACHMENTS_DIR unset means the feature is off: callers nil-gate on
+// a nil *Store.
 package attachments
 
 import (
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,20 +24,37 @@ import (
 )
 
 // MaxSizeBytes caps a single attachment upload; enforced by the caller
-// via http.MaxBytesReader before Save ever sees the body.
-const MaxSizeBytes = 10 << 20 // 10MB
+// via http.MaxBytesReader before Save ever sees the body. This is the
+// largest per-type cap (video) — the HTTP layer must accept up to this
+// many bytes since the real type isn't known until Save sniffs it;
+// Save itself rejects a file over its own type's cap once sniffed.
+const MaxSizeBytes = maxVideoBytes
+
+// Per-type caps: video is the largest, audio bounded by the whisper
+// sidecar's body limit, everything else stays the original 10MB.
+const (
+	maxDefaultBytes = 10 << 20  // 10MB: images, pdf, text
+	maxVideoBytes   = 100 << 20 // 100MB
+	maxAudioBytes   = 25 << 20  // 25MB: whisper sidecar body cap
+)
 
 // ErrUnsupportedMIME reports a sniffed content type outside the
 // allowlist — decided server-side (http.DetectContentType), never
 // trusting the client-supplied header.
 var ErrUnsupportedMIME = errors.New("attachments: unsupported mime type")
 
+// ErrTooLarge reports a file over its sniffed type's size cap.
+var ErrTooLarge = errors.New("attachments: file too large for its type")
+
 // ErrNotFound reports an id with no matching row.
 var ErrNotFound = errors.New("attachments: not found")
 
-// allowedExt maps the sniffed MIME type (bare, parameters stripped) to
-// its stored file extension. Only these six are accepted; anything
-// else is ErrUnsupportedMIME.
+// allowedExt maps the canonical MIME type to its stored file
+// extension. Only these are accepted; anything else is
+// ErrUnsupportedMIME. Canonical mimes are reached via
+// normalizeSniffedMime, since http.DetectContentType's raw sniff
+// values don't always match the wire-standard type string (e.g. WAV
+// sniffs as "audio/wave").
 var allowedExt = map[string]string{
 	"image/png":       ".png",
 	"image/jpeg":      ".jpg",
@@ -43,6 +62,42 @@ var allowedExt = map[string]string{
 	"image/gif":       ".gif",
 	"application/pdf": ".pdf",
 	"text/plain":      ".txt",
+	"video/mp4":       ".mp4",
+	"video/webm":      ".webm",
+	"audio/mpeg":      ".mp3",
+	"audio/wav":       ".wav",
+	"audio/ogg":       ".ogg",
+}
+
+// maxBytesFor returns the size cap for a canonical mime type.
+func maxBytesFor(mime string) int64 {
+	switch {
+	case strings.HasPrefix(mime, "video/"):
+		return maxVideoBytes
+	case strings.HasPrefix(mime, "audio/"):
+		return maxAudioBytes
+	default:
+		return maxDefaultBytes
+	}
+}
+
+// normalizeSniffedMime maps http.DetectContentType's raw output to the
+// canonical mime allowedExt keys on. DetectContentType returns
+// non-standard values for some of these types: "audio/wave" for WAV
+// (not "audio/wav"), "application/ogg" for an Ogg container (not
+// "audio/ogg"). m4a is not sniffable reliably (its ftyp brand overlaps
+// with mp4/video, and some encoders' output sniffs as
+// application/octet-stream) so it is not supported — see the package
+// report for the sniff investigation.
+func normalizeSniffedMime(bare string) string {
+	switch bare {
+	case "audio/wave", "audio/x-wav", "audio/wav":
+		return "audio/wav"
+	case "application/ogg":
+		return "audio/ogg"
+	default:
+		return bare
+	}
 }
 
 // Attachment is one stored image's metadata.
@@ -100,9 +155,13 @@ func (s *Store) Save(ctx context.Context, r io.Reader) (Attachment, error) {
 	if parsed, _, err := mime.ParseMediaType(sniffedMime); err == nil {
 		bareMime = parsed
 	}
+	bareMime = normalizeSniffedMime(bareMime)
 	ext, ok := allowedExt[bareMime]
 	if !ok {
 		return Attachment{}, fmt.Errorf("attachments: save: mime %q: %w", sniffedMime, ErrUnsupportedMIME)
+	}
+	if size > maxBytesFor(bareMime) {
+		return Attachment{}, fmt.Errorf("attachments: save: %d bytes exceeds the %q cap: %w", size, bareMime, ErrTooLarge)
 	}
 
 	id := fmt.Sprintf("%x", h.Sum(nil))

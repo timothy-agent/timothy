@@ -30,6 +30,8 @@ func failAttachment(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusNotFound, "not_found", "attachment not found")
 	case errors.Is(err, attachments.ErrUnsupportedMIME):
 		jsonError(w, http.StatusBadRequest, "unsupported_mime", err.Error())
+	case errors.Is(err, attachments.ErrTooLarge):
+		jsonError(w, http.StatusBadRequest, "too_large", err.Error())
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}
@@ -48,7 +50,7 @@ type attachmentView struct {
 func (h *attachmentAPI) upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, attachments.MaxSizeBytes)
 	if err := r.ParseMultipartForm(attachments.MaxSizeBytes); err != nil { //nolint:gosec // G120: r.Body is already MaxBytesReader-capped above at the same limit
-		jsonError(w, http.StatusBadRequest, "too_large", "file exceeds the 10MB limit")
+		jsonError(w, http.StatusBadRequest, "too_large", "file exceeds the maximum upload size")
 		return
 	}
 	file, _, err := r.FormFile("file")

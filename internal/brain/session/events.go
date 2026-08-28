@@ -67,20 +67,27 @@ type UserMessage struct {
 
 // ImageRef points at a stored attachment; Mime rides alongside so
 // projections and drivers can build a data: URL without a store
-// round-trip.
+// round-trip. Name is the original filename, additive: events
+// persisted before D-0xx filename threading omit it, and the UI falls
+// back to its existing short-hash label in that case.
 type ImageRef struct {
 	ID   string `json:"id"`
 	Mime string `json:"mime"`
+	Name string `json:"name,omitempty"`
 }
 
-// DocumentRef points at a stored PDF attachment; Markdown is its
-// converted text, persisted so projection is deterministic and the
-// markitdown sidecar is called exactly once per attach (see
-// UserMessage.Documents).
+// DocumentRef points at a stored document attachment (PDF, text,
+// audio, video); Markdown is its converted text or transcript,
+// persisted so projection is deterministic and the markitdown/whisper
+// sidecar is called exactly once per attach (see UserMessage.Documents).
+// Video attachments and audio attachments with no transcript (whisper
+// unconfigured) carry an empty Markdown — never sent to the model as
+// content, see projection.go. Name is additive, same as ImageRef.
 type DocumentRef struct {
 	ID       string `json:"id"`
 	Mime     string `json:"mime"`
 	Markdown string `json:"markdown"`
+	Name     string `json:"name,omitempty"`
 }
 
 // UIBlock is one renderable piece of an assistant turn.

@@ -398,6 +398,96 @@ describe('Composer attachments', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
 
+  it('uploads a selected video file and adds a document chip on success', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-vid',
+      mime: 'video/mp4',
+      size_bytes: 2048,
+    })
+    const onAttachments = vi.fn()
+    const { rerender } = render(
+      <Composer {...baseProps()} attachments={[]} onAttachments={onAttachments} />,
+    )
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const video = makeImageFile('clip.mp4', 'video/mp4', 2048)
+    fireEvent.change(input, { target: { files: [video] } })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(video))
+    await waitFor(() =>
+      expect(onAttachments).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: 'att-vid', mime: 'video/mp4', uploading: false }),
+      ]),
+    )
+
+    const [[chips]] = onAttachments.mock.calls.slice(-1)
+    rerender(<Composer {...baseProps()} attachments={chips} onAttachments={onAttachments} />)
+    expect(screen.getByText('clip.mp4')).toBeTruthy()
+  })
+
+  it('uploads a selected audio file and adds a document chip on success', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.uploadAttachment).mockResolvedValue({
+      id: 'att-aud',
+      mime: 'audio/mpeg',
+      size_bytes: 512,
+    })
+    const onAttachments = vi.fn()
+    const { rerender } = render(
+      <Composer {...baseProps()} attachments={[]} onAttachments={onAttachments} />,
+    )
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const audio = makeImageFile('note.mp3', 'audio/mpeg', 512)
+    fireEvent.change(input, { target: { files: [audio] } })
+
+    await waitFor(() => expect(client.uploadAttachment).toHaveBeenCalledWith(audio))
+    await waitFor(() =>
+      expect(onAttachments).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: 'att-aud', mime: 'audio/mpeg', uploading: false }),
+      ]),
+    )
+
+    const [[chips]] = onAttachments.mock.calls.slice(-1)
+    rerender(<Composer {...baseProps()} attachments={chips} onAttachments={onAttachments} />)
+    expect(screen.getByText('note.mp3')).toBeTruthy()
+  })
+
+  it('allows a video file under the 100MB cap but rejects one over it', async () => {
+    const client = await import('../api/client')
+    const { toast } = await import('sonner')
+    const onAttachments = vi.fn()
+    render(<Composer {...baseProps()} onAttachments={onAttachments} />)
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const big = makeImageFile('huge.mp4', 'video/mp4', 101 * 1024 * 1024)
+    fireEvent.change(input, { target: { files: [big] } })
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('huge.mp4: exceeds the 100MB limit'),
+    )
+    expect(client.uploadAttachment).not.toHaveBeenCalled()
+    expect(onAttachments).not.toHaveBeenCalled()
+  })
+
+  it('rejects an audio file over the 25MB cap', async () => {
+    const client = await import('../api/client')
+    const { toast } = await import('sonner')
+    const onAttachments = vi.fn()
+    render(<Composer {...baseProps()} onAttachments={onAttachments} />)
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const big = makeImageFile('huge.mp3', 'audio/mpeg', 26 * 1024 * 1024)
+    fireEvent.change(input, { target: { files: [big] } })
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('huge.mp3: exceeds the 25MB limit'),
+    )
+    expect(client.uploadAttachment).not.toHaveBeenCalled()
+    expect(onAttachments).not.toHaveBeenCalled()
+  })
+
   it('uploads a pasted image from the clipboard', async () => {
     const client = await import('../api/client')
     vi.mocked(client.uploadAttachment).mockResolvedValue({

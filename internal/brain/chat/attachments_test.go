@@ -60,7 +60,7 @@ func TestChatAcceptsAttachmentOnlyMessage(t *testing.T) {
 	fa.seed("abc123", "image/png", []byte("fake-png-bytes"))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Attachments: []string{"abc123"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Attachments: []AttachmentRef{{ID: "abc123"}}})
 	if err != nil {
 		t.Fatalf("Chat with no text but an attachment: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestChatRejectsUnknownAttachmentBeforeAnyAppend(t *testing.T) {
 	svc := newService(&fakeGW{}, log)
 	svc.SetAttachments(newFakeAttachments()) // enabled, but "missing" is unseeded
 
-	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "look", Attachments: []string{"missing"}})
+	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "look", Attachments: []AttachmentRef{{ID: "missing"}}})
 	if !errors.Is(err, ErrBadRequest) {
 		t.Fatalf("err = %v, want ErrBadRequest", err)
 	}
@@ -104,7 +104,7 @@ func TestChatRejectsAttachmentsWhenDisabled(t *testing.T) {
 	t.Parallel()
 	svc := newService(&fakeGW{}, newFakeLog())
 	// SetAttachments never called: s.attachments stays nil.
-	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "look", Attachments: []string{"x"}})
+	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "look", Attachments: []AttachmentRef{{ID: "x"}}})
 	if !errors.Is(err, ErrBadRequest) {
 		t.Fatalf("err = %v, want ErrBadRequest", err)
 	}
@@ -123,7 +123,7 @@ func TestChatImageRefsLandInUserMessageEvent(t *testing.T) {
 	fa.seed("img1", "image/png", []byte("raw-bytes"))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []AttachmentRef{{ID: "img1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRetryReplaysImageRefs(t *testing.T) {
 	fa.seed("img1", "image/webp", []byte("webp-data"))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "q", Attachments: []string{"img1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "q", Attachments: []AttachmentRef{{ID: "img1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestChatImageMessageAutoFlipsToVisionRoute(t *testing.T) {
 	fa.seed("img1", "image/png", []byte("bytes"))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []AttachmentRef{{ID: "img1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestChatImageMessageWithExplicitRouteIsHonored(t *testing.T) {
 	svc.SetAttachments(fa)
 
 	_, ch, err := svc.Chat(t.Context(), Request{
-		SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}, Route: "research",
+		SessionID: "s1", Message: "what is this?", Attachments: []AttachmentRef{{ID: "img1"}}, Route: "research",
 	})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -269,7 +269,7 @@ func TestChatImageMessageOnSensitivePinnedSessionKeepsPinnedRoute(t *testing.T) 
 	fa.seed("img1", "image/png", []byte("bytes"))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []AttachmentRef{{ID: "img1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestRetryOfImageTurnStaysOnVisionRoute(t *testing.T) {
 	fa.seed("img1", "image/png", []byte("bytes"))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []string{"img1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what is this?", Attachments: []AttachmentRef{{ID: "img1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestChatPDFAttachmentConvertsToDocument(t *testing.T) {
 	md := fakeMarkitdown(t, "# Converted Title")
 	svc.SetMarkitdown(md.URL)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestChatPDFAttachmentWithoutMarkitdownIsBadRequest(t *testing.T) {
 	svc.SetAttachments(fa)
 	// SetMarkitdown intentionally not called.
 
-	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	_, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
 	if !errors.Is(err, ErrBadRequest) {
 		t.Fatalf("err = %v, want ErrBadRequest", err)
 	}
@@ -435,7 +435,7 @@ func TestChatPDFAttachmentTruncatesOversizedMarkdown(t *testing.T) {
 	md := fakeMarkitdown(t, huge)
 	svc.SetMarkitdown(md.URL)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestChatTextAttachmentConvertsToDocument(t *testing.T) {
 	svc.SetAttachments(fa)
 	// SetMarkitdown intentionally not called: text must not require it.
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"txt1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "txt1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestChatTextAttachmentTruncatesOversizedContent(t *testing.T) {
 	fa.seed("txt1", "text/plain", []byte(huge))
 	svc.SetAttachments(fa)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"txt1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "txt1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestChatDocumentsOnlyMessageDoesNotFlipToVisionRoute(t *testing.T) {
 	md := fakeMarkitdown(t, "converted text")
 	svc.SetMarkitdown(md.URL)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []string{"doc1"}})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -552,5 +552,190 @@ func TestChatDocumentsOnlyMessageDoesNotFlipToVisionRoute(t *testing.T) {
 	sent := gw.lastChatRequest()
 	if sent.Route != "default" {
 		t.Fatalf("route = %q, want %q (documents-only message, no vision flip)", sent.Route, "default")
+	}
+}
+
+// fakeWhisper stands in for the whisper sidecar: POST /transcribe
+// replies with a fixed transcript, same wire shape whisper.Transcribe
+// expects.
+func fakeWhisper(t *testing.T, text string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, err := json.Marshal(map[string]string{"text": text})
+		if err != nil {
+			t.Fatalf("marshal fake whisper response: %v", err)
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestChatAudioAttachmentTranscribesToDocument confirms an audio
+// attachment ref is transcribed through the whisper sidecar exactly
+// once at send time and lands as a DocumentRef on the persisted
+// user_message, name threaded through.
+func TestChatAudioAttachmentTranscribesToDocument(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("heard your note")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("aud1", "audio/mpeg", []byte("fake-mp3-bytes"))
+	svc.SetAttachments(fa)
+	ws := fakeWhisper(t, "buy some milk")
+	svc.SetWhisper(ws.URL)
+
+	_, ch, err := svc.Chat(t.Context(), Request{
+		SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "aud1", Name: "note.mp3"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].ID != "aud1" || um.Documents[0].Mime != "audio/mpeg" {
+		t.Fatalf("documents = %+v, want one ref to aud1/audio/mpeg", um.Documents)
+	}
+	if um.Documents[0].Markdown != "buy some milk" {
+		t.Fatalf("markdown = %q, want transcript", um.Documents[0].Markdown)
+	}
+	if um.Documents[0].Name != "note.mp3" {
+		t.Fatalf("name = %q, want note.mp3", um.Documents[0].Name)
+	}
+}
+
+// TestChatAudioAttachmentWithoutWhisperAttachesOnly confirms an audio
+// ref is kept (never rejected) when whisper isn't configured, with an
+// empty transcript rather than a 400.
+func TestChatAudioAttachmentWithoutWhisperAttachesOnly(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("ok")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("aud1", "audio/wav", []byte("fake-wav-bytes"))
+	svc.SetAttachments(fa)
+	// SetWhisper intentionally not called.
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Attachments: []AttachmentRef{{ID: "aud1"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].Markdown != "" {
+		t.Fatalf("documents = %+v, want one ref with empty markdown", um.Documents)
+	}
+}
+
+// TestChatVideoAttachmentNeverConvertsContent confirms a video
+// attachment lands as a DocumentRef with an empty Markdown — never
+// sent to any sidecar, never carrying content.
+func TestChatVideoAttachmentNeverConvertsContent(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("ok")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("vid1", "video/mp4", []byte("fake-mp4-bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{
+		SessionID: "s1", Message: "watch this", Attachments: []AttachmentRef{{ID: "vid1", Name: "clip.mp4"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].Markdown != "" || um.Documents[0].Mime != "video/mp4" {
+		t.Fatalf("documents = %+v, want one video ref with empty markdown", um.Documents)
+	}
+	if um.Documents[0].Name != "clip.mp4" {
+		t.Fatalf("name = %q, want clip.mp4", um.Documents[0].Name)
+	}
+
+	sent := gw.lastChatRequest()
+	last := sent.Messages[len(sent.Messages)-1]
+	if !strings.Contains(last.Content, "not viewable by the model") {
+		t.Fatalf("prompt content = %q, want the neutralized attach-only note", last.Content)
+	}
+}
+
+// TestChatAudioAndVideoDoNotFlipToVisionRoute confirms the D-046
+// vision auto-flip stays keyed on images alone: audio/video attachments
+// never ride the vision chain, same as PDF/text documents.
+func TestChatAudioAndVideoDoNotFlipToVisionRoute(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("ok")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("aud1", "audio/mpeg", []byte("fake-mp3-bytes"))
+	fa.seed("vid1", "video/webm", []byte("fake-webm-bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{
+		SessionID: "s1", Message: "look and listen",
+		Attachments: []AttachmentRef{{ID: "aud1"}, {ID: "vid1"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	sent := gw.lastChatRequest()
+	if sent.Route != "default" {
+		t.Fatalf("route = %q, want %q (audio/video attachments, no vision flip)", sent.Route, "default")
+	}
+}
+
+// TestChatImageNameThreadsToPersistedRef confirms the client-supplied
+// filename lands on the persisted ImageRef.
+func TestChatImageNameThreadsToPersistedRef(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("described")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("img1", "image/png", []byte("bytes"))
+	svc.SetAttachments(fa)
+
+	_, ch, err := svc.Chat(t.Context(), Request{
+		SessionID: "s1", Message: "what is this?", Attachments: []AttachmentRef{{ID: "img1", Name: "photo.png"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Images) != 1 || um.Images[0].Name != "photo.png" {
+		t.Fatalf("images = %+v, want name photo.png", um.Images)
 	}
 }

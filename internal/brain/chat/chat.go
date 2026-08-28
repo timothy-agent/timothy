@@ -31,6 +31,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
+	"github.com/SumonMSelim/timothy/internal/platform/whisper"
 )
 
 const (
@@ -150,6 +151,8 @@ type Service struct {
 	attachments    AttachmentStore                      // nil: attachments disabled (ATTACHMENTS_DIR unset)
 	markitdownURL  string                               // "": pdf attachments disabled (MARKITDOWN_URL unset)
 	markitdownHTTP *http.Client                         // shared client for the markitdown sidecar call
+	whisperURL     string                               // "": audio attachments attach without a transcript (WHISPER_URL unset)
+	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
 	kbSearch       KBSearch                             // nil: kb_search never offered, regardless of agent config
 	kbRead         KBRead                               // nil: kb_read never offered, regardless of agent config
 	logger         *slog.Logger
@@ -241,6 +244,16 @@ func (s *Service) SetMarkitdown(url string) {
 	s.markitdownURL = url
 	if s.markitdownHTTP == nil {
 		s.markitdownHTTP = &http.Client{}
+	}
+}
+
+// SetWhisper wires the whisper sidecar's base URL for audio attachment
+// transcription. Optional — empty (WHISPER_URL unset) attaches audio
+// with no transcript rather than rejecting it (attach-only fallback).
+func (s *Service) SetWhisper(url string) {
+	s.whisperURL = url
+	if s.whisperHTTP == nil {
+		s.whisperHTTP = &http.Client{}
 	}
 }
 
@@ -755,6 +768,14 @@ func resolveToolAllow(profile agents.Agent) []string {
 	return allow
 }
 
+// AttachmentRef names one already-uploaded attachment to resolve for a
+// turn; Name is display-only (the store itself doesn't carry a
+// filename), mirrors missionAttachmentInput's shape.
+type AttachmentRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Request is one chat turn.
 type Request struct {
 	SessionID string `json:"session_id,omitempty"`
@@ -769,10 +790,12 @@ type Request struct {
 	// skip: the pack's body is in the system prompt before the first
 	// token streams.
 	SkillHint string `json:"skill_hint,omitempty"`
-	// Attachments are attachment ids (internal/brain/attachments)
-	// the user attached to this message — refs only, resolved into
-	// base64 at request-build time (D-045).
-	Attachments []string `json:"attachments,omitempty"`
+	// Attachments name already-uploaded attachments (internal/brain/
+	// attachments) the user attached to this message — refs only,
+	// resolved into base64 (images) or transcript/markdown text
+	// (documents) at request-build time (D-045). Name is the original
+	// filename, display-only: the store itself doesn't carry one.
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
 	// Knowledge names kb collections the user pinned to this turn's
 	// session (composer # mentions) — unioned into the session's
 	// stored knowledge list before the turn runs.
@@ -938,19 +961,19 @@ func (s *Service) readAttachment(ctx context.Context, id string) (string, error)
 // validateAttachments checks every id exists in the attachment store
 // BEFORE the turn's exclusivity is won or anything is appended (D-042:
 // store lookups are read-only and safe before turnBegin, but a bad ref
-// must 400 before even the user_message persists). Empty ids returns
+// must 400 before even the user_message persists). Empty refs returns
 // nil, nil, nil without touching the store — attachments stay off when
 // unconfigured, and a message with none never needs it wired.
 //
-// PDFs are converted to markdown here, once, at send time (not lazily
-// per turn like images): re-converting on every turn would re-call the
-// markitdown sidecar every turn, and any output drift would rewrite an
-// earlier projected message — breaking LLMContext's prefix stability
-// that provider prompt caches depend on. A conversion failure is the
-// sidecar's fault, not the client's, so it returns a plain wrapped
-// error rather than ErrBadRequest.
-func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]session.ImageRef, []session.DocumentRef, error) {
-	if len(ids) == 0 {
+// PDFs/text/audio are converted to markdown (or transcript) here,
+// once, at send time (not lazily per turn like images): re-converting
+// on every turn would re-call the sidecar every turn, and any output
+// drift would rewrite an earlier projected message — breaking
+// LLMContext's prefix stability that provider prompt caches depend on.
+// A conversion failure is the sidecar's fault, not the client's, so it
+// returns a plain wrapped error rather than ErrBadRequest.
+func (s *Service) validateAttachments(ctx context.Context, refs []AttachmentRef) ([]session.ImageRef, []session.DocumentRef, error) {
+	if len(refs) == 0 {
 		return nil, nil, nil
 	}
 	if s.attachments == nil {
@@ -958,48 +981,83 @@ func (s *Service) validateAttachments(ctx context.Context, ids []string) ([]sess
 	}
 	var images []session.ImageRef
 	var documents []session.DocumentRef
-	for _, id := range ids {
-		att, err := s.attachments.Get(ctx, id)
+	for _, ref := range refs {
+		att, err := s.attachments.Get(ctx, ref.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+			return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, ref.ID, err)
 		}
 		switch {
 		case strings.HasPrefix(att.Mime, "image/"):
-			images = append(images, session.ImageRef{ID: att.ID, Mime: att.Mime})
+			images = append(images, session.ImageRef{ID: att.ID, Mime: att.Mime, Name: ref.Name})
 		case att.Mime == "application/pdf":
 			if s.markitdownURL == "" {
 				return nil, nil, fmt.Errorf("chat: %w: pdf attachments require the markitdown sidecar (MARKITDOWN_URL)", ErrBadRequest)
 			}
-			r, _, err := s.attachments.Open(ctx, att.ID)
+			raw, err := s.readAttachmentBytes(ctx, att.ID)
 			if err != nil {
-				return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
-			}
-			raw, err := io.ReadAll(r)
-			_ = r.Close()
-			if err != nil {
-				return nil, nil, fmt.Errorf("chat: read attachment %q: %w", id, err)
+				return nil, nil, err
 			}
 			md, err := markitdown.Convert(ctx, s.markitdownHTTP, s.markitdownURL, att.ID+".pdf", att.Mime, raw)
 			if err != nil {
-				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", id, err)
+				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", ref.ID, err)
 			}
-			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(md)})
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(md), Name: ref.Name})
 		case att.Mime == "text/plain":
-			r, _, err := s.attachments.Open(ctx, att.ID)
+			raw, err := s.readAttachmentBytes(ctx, att.ID)
 			if err != nil {
-				return nil, nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+				return nil, nil, err
 			}
-			raw, err := io.ReadAll(r)
-			_ = r.Close()
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(string(raw)), Name: ref.Name})
+		case strings.HasPrefix(att.Mime, "audio/"):
+			doc, err := s.transcribeAudioAttachment(ctx, att, ref.Name)
 			if err != nil {
-				return nil, nil, fmt.Errorf("chat: read attachment %q: %w", id, err)
+				return nil, nil, err
 			}
-			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(string(raw))})
+			documents = append(documents, doc)
+		case strings.HasPrefix(att.Mime, "video/"):
+			// Never converted or sent as content — projection.go renders
+			// an empty-markdown document as a neutralized attach-only
+			// note instead.
+			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Name: ref.Name})
 		default:
-			return nil, nil, fmt.Errorf("chat: %w: attachment %q: unsupported mime %q", ErrBadRequest, id, att.Mime)
+			return nil, nil, fmt.Errorf("chat: %w: attachment %q: unsupported mime %q", ErrBadRequest, ref.ID, att.Mime)
 		}
 	}
 	return images, documents, nil
+}
+
+// readAttachmentBytes opens and fully reads one attachment's bytes.
+func (s *Service) readAttachmentBytes(ctx context.Context, id string) ([]byte, error) {
+	r, _, err := s.attachments.Open(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("chat: %w: attachment %q: %v", ErrBadRequest, id, err)
+	}
+	defer func() { _ = r.Close() }()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("chat: read attachment %q: %w", id, err)
+	}
+	return raw, nil
+}
+
+// transcribeAudioAttachment sends an audio attachment's bytes through
+// the whisper sidecar and returns a DocumentRef carrying the
+// transcript. When whisper isn't configured (WHISPER_URL unset), the
+// attachment is kept but with no transcript — attach-only, never
+// silently dropped.
+func (s *Service) transcribeAudioAttachment(ctx context.Context, att attachments.Attachment, name string) (session.DocumentRef, error) {
+	if s.whisperURL == "" {
+		return session.DocumentRef{ID: att.ID, Mime: att.Mime, Name: name}, nil
+	}
+	raw, err := s.readAttachmentBytes(ctx, att.ID)
+	if err != nil {
+		return session.DocumentRef{}, err
+	}
+	text, err := whisper.Transcribe(ctx, s.whisperHTTP, s.whisperURL, raw, "")
+	if err != nil {
+		return session.DocumentRef{}, fmt.Errorf("chat: transcribe attachment %q: %w", att.ID, err)
+	}
+	return session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(text), Name: name}, nil
 }
 
 // pinSensitiveRoute promotes the session-wide privacy floor above the

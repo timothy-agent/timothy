@@ -101,7 +101,9 @@ export interface ChatRequest {
   route?: string
   model_hint?: string
   skill_hint?: string
-  attachments?: string[]
+  // attachments name already-uploaded attachments; name is the
+  // original filename, display-only.
+  attachments?: { id: string; name?: string }[]
   // knowledge is the set of kb collection names pinned for this turn;
   // the server unions them into the session's knowledge list.
   knowledge?: string[]
@@ -127,10 +129,13 @@ export interface UIBlock {
 }
 
 // ImageRef is one attachment carried by a user transcript item — the
-// attachment's id (content hash) and MIME type, never the bytes.
+// attachment's id (content hash) and MIME type, never the bytes. name
+// is the original filename; absent on events persisted before
+// filename threading shipped.
 export interface ImageRef {
   id: string
   mime: string
+  name?: string
 }
 
 // One executed tool call in the replay projection (digest only).

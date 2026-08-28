@@ -3,6 +3,8 @@ import {
   ArrowDown01Icon,
   ArrowUp01Icon,
   Cancel01Icon,
+  FileMusicIcon,
+  FileVideoIcon,
   Loading03Icon,
   Mic01Icon,
   Pdf02Icon,
@@ -48,11 +50,34 @@ const allowedMimes = [
   'application/pdf',
   'text/plain',
   'text/markdown',
+  'video/mp4',
+  'video/webm',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/ogg',
 ]
 // Exported: MissionAttachments.tsx reuses the same caps for its own
 // document upload flow.
 export const maxAttachmentBytes = 10 * 1024 * 1024
+export const maxVideoBytes = 100 * 1024 * 1024
+export const maxAudioBytes = 25 * 1024 * 1024
 export const maxAttachments = 8
+
+// maxBytesFor mirrors the server's per-type size caps (internal/brain/
+// attachments) so an oversize file is rejected client-side before an
+// upload round-trip.
+function maxBytesFor(mime: string): number {
+  if (mime.startsWith('video/')) return maxVideoBytes
+  if (mime.startsWith('audio/')) return maxAudioBytes
+  return maxAttachmentBytes
+}
+
+// documentChipIcon picks the composer's pending-chip icon by mime.
+function documentChipIcon(mime: string) {
+  if (mime.startsWith('video/')) return FileVideoIcon
+  if (mime.startsWith('audio/')) return FileMusicIcon
+  return Pdf02Icon
+}
 
 // isAllowedFile accepts a file when its reported type is in
 // allowedMimes, or (for .md/.txt) by extension — browsers report
@@ -64,17 +89,29 @@ export function isAllowedFile(file: File): boolean {
 }
 
 // isDocumentFile is isAllowedFile narrowed to document types (PDF,
-// Markdown, text) — used where images aren't accepted, e.g. mission
-// attachments.
+// Markdown, text) — used where only documents are accepted, e.g.
+// mission attachments. Video/audio are chat-only (explicit decision):
+// excluded here even though allowedMimes carries them for the composer.
 export function isDocumentFile(file: File): boolean {
-  return isAllowedFile(file) && !file.type.startsWith('image/')
+  return (
+    isAllowedFile(file) &&
+    !file.type.startsWith('image/') &&
+    !file.type.startsWith('video/') &&
+    !file.type.startsWith('audio/')
+  )
 }
 
 // isDocumentAttachment mirrors the server's document (non-image)
-// attachments: PDF and text/markdown files render as a document chip
-// rather than an image thumbnail.
+// attachments: PDF, text/markdown, video and audio files render as a
+// document chip rather than an image thumbnail.
 export function isDocumentAttachment(mime: string): boolean {
-  return mime === 'application/pdf' || mime === 'text/plain' || mime === 'text/markdown'
+  return (
+    mime === 'application/pdf' ||
+    mime === 'text/plain' ||
+    mime === 'text/markdown' ||
+    mime.startsWith('video/') ||
+    mime.startsWith('audio/')
+  )
 }
 
 // Composer is the one message box: the chat page's docked input and
@@ -355,8 +392,9 @@ export function Composer({
         toast.error(`${file.name || 'file'}: unsupported file type`)
         continue
       }
-      if (file.size > maxAttachmentBytes) {
-        toast.error(`${file.name || 'file'}: exceeds the 10MB limit`)
+      const cap = maxBytesFor(file.type)
+      if (file.size > cap) {
+        toast.error(`${file.name || 'file'}: exceeds the ${Math.round(cap / (1024 * 1024))}MB limit`)
         continue
       }
       if (attachmentsRef.current.length >= maxAttachments) {
@@ -479,7 +517,7 @@ export function Composer({
             >
               {isDocumentAttachment(a.mime) ? (
                 <div className="flex size-full flex-col items-center justify-center gap-0.5 bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
-                  <HugeiconsIcon icon={Pdf02Icon} className="size-4" />
+                  <HugeiconsIcon icon={documentChipIcon(a.mime)} className="size-4" />
                   <span className="max-w-full truncate px-1 text-[9px]">{a.name ?? 'Document'}</span>
                 </div>
               ) : (
@@ -554,7 +592,7 @@ export function Composer({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.md,.txt,text/plain,text/markdown"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.md,.txt,text/plain,text/markdown,video/mp4,video/webm,audio/mpeg,audio/wav,audio/ogg"
                 multiple
                 className="hidden"
                 onChange={(e) => {

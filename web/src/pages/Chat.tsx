@@ -15,7 +15,7 @@ import {
 import type { ChatEvent } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
 import { useAgents } from '../components/AgentPicker'
-import { Composer, type PendingAttachment } from '../components/Composer'
+import { Composer, isDocumentAttachment, type PendingAttachment } from '../components/Composer'
 import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from '../components/Message'
 import { PermissionModal } from '../components/PermissionModal'
 import { Sheet } from '../components/ui/sheet'
@@ -361,16 +361,21 @@ export function Chat({
       localUrlsRef.current.set(userItemId, new Map(ready.map((a) => [a.id, a.previewUrl])))
     }
     const readyImages = ready.filter((a) => a.mime.startsWith('image/'))
-    const readyDocuments = ready.filter((a) => a.mime === 'application/pdf')
+    const readyDocuments = ready.filter((a) => isDocumentAttachment(a.mime))
     setItems((prev) => [
       ...prev,
       {
         id: userItemId,
         role: 'user',
         text: message,
-        images: readyImages.length > 0 ? readyImages.map((a) => ({ id: a.id, mime: a.mime })) : undefined,
+        images:
+          readyImages.length > 0
+            ? readyImages.map((a) => ({ id: a.id, mime: a.mime, name: a.name }))
+            : undefined,
         documents:
-          readyDocuments.length > 0 ? readyDocuments.map((a) => ({ id: a.id, mime: a.mime })) : undefined,
+          readyDocuments.length > 0
+            ? readyDocuments.map((a) => ({ id: a.id, mime: a.mime, name: a.name }))
+            : undefined,
       },
       { id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() },
     ])
@@ -394,7 +399,8 @@ export function Chat({
           agent: agentName,
           route: routeName || undefined,
           skill_hint: hint,
-          attachments: ready.length > 0 ? ready.map((a) => a.id) : undefined,
+          attachments:
+            ready.length > 0 ? ready.map((a) => ({ id: a.id, name: a.name })) : undefined,
           knowledge: sentKnowledge.length > 0 ? sentKnowledge : undefined,
         },
         (ev: ChatEvent) => {

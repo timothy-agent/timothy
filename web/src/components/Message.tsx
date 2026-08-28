@@ -1,5 +1,8 @@
 import {
   Copy01Icon,
+  File01Icon,
+  FileMusicIcon,
+  FileVideoIcon,
   ImageNotFound01Icon,
   Link04Icon,
   Loading03Icon,
@@ -14,29 +17,37 @@ import remarkGfm from 'remark-gfm'
 import { fetchAttachmentBlob } from '../api/client'
 import type { ImageRef } from '../api/types'
 import { ActivityLine } from './Activity'
+import { AttachmentViewer, mimeLabel } from './AttachmentViewer'
 import { CodeBlock } from './CodeBlock'
 import { ModelBadge } from './ModelBadge'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
+import { attachmentURLCache } from '../lib/attachmentCache'
 import type { AssistantState } from '../lib/chat'
 import { compact, formatDuration, money } from '../lib/format'
 import { cn } from '../lib/utils'
-
-// Object URLs fetched per attachment id, cached module-level: an
-// attachment is content-addressed and immutable (D-045), so replaying
-// the same transcript (reload, resumed session) never refetches it.
-const attachmentURLCache = new Map<string, string>()
 
 // AuthedImage renders one attachment thumbnail. GET
 // /v1/attachments/{id} requires the bearer header, so a bare <img
 // src> can't fetch it directly — this fetches the bytes through the
 // authed client and renders them as a blob object URL, with a loading
 // shimmer while in flight and a broken-image fallback on failure.
-// Click opens the same resolved blob URL in a new tab — a raw
-// /v1/attachments/{id} href would 401 without the bearer header.
+// Click opens the AttachmentViewer modal on the same resolved blob URL
+// — a raw /v1/attachments/{id} href would 401 without the bearer
+// header, and a new tab loses the app's own reader/download chrome.
 // `localUrl`, when given (an optimistic item's own object URL from
 // the composer), is used directly and never fetched.
-function AuthedImage({ id, mime, localUrl }: { id: string; mime: string; localUrl?: string }) {
+function AuthedImage({
+  id,
+  mime,
+  localUrl,
+  onOpen,
+}: {
+  id: string
+  mime: string
+  localUrl?: string
+  onOpen: () => void
+}) {
   const [url, setUrl] = useState<string | undefined>(localUrl ?? attachmentURLCache.get(id))
   const [failed, setFailed] = useState(false)
 
@@ -85,7 +96,7 @@ function AuthedImage({ id, mime, localUrl }: { id: string; mime: string; localUr
     <img
       src={url}
       alt={mime}
-      onClick={() => window.open(url, '_blank')}
+      onClick={onOpen}
       className="max-h-50 max-w-full cursor-pointer rounded-lg object-cover"
     />
   )
@@ -94,33 +105,57 @@ function AuthedImage({ id, mime, localUrl }: { id: string; mime: string; localUr
 // ImageGrid renders a user message's attached images above the text.
 // Optimistic items carry their own local object URL (localUrls keyed
 // by id) so the just-sent thumbnail never round-trips the network.
-function ImageGrid({ images, localUrls }: { images: ImageRef[]; localUrls?: Map<string, string> }) {
+function ImageGrid({
+  images,
+  localUrls,
+  onOpen,
+}: {
+  images: ImageRef[]
+  localUrls?: Map<string, string>
+  onOpen: (img: ImageRef) => void
+}) {
   return (
     <div className="flex max-w-2xl flex-wrap justify-end gap-1.5">
       {images.map((img) => (
-        <AuthedImage key={img.id} id={img.id} mime={img.mime} localUrl={localUrls?.get(img.id)} />
+        <AuthedImage
+          key={img.id}
+          id={img.id}
+          mime={img.mime}
+          localUrl={localUrls?.get(img.id)}
+          onOpen={() => onOpen(img)}
+        />
       ))}
     </div>
   )
 }
 
-// DocumentChips renders a user message's attached PDFs as small,
-// non-clickable chips — unlike images there is no thumbnail to show
-// and no authed fetch to make (the converted markdown already rode
-// the turn server-side); this is just an acknowledgment of what was
-// attached.
-function DocumentChips({ documents }: { documents: ImageRef[] }) {
+// documentChipIcon picks a chip's icon by mime — PDF, video, audio, or
+// plain text/markdown all get a distinct glyph.
+function documentChipIcon(mime: string) {
+  if (mime.startsWith('video/')) return FileVideoIcon
+  if (mime.startsWith('audio/')) return FileMusicIcon
+  if (mime === 'text/plain' || mime === 'text/markdown') return File01Icon
+  return Pdf02Icon
+}
+
+// DocumentChips renders a user message's attached documents (PDF,
+// text, markdown, video, audio) as small clickable chips that open the
+// AttachmentViewer modal — labeled by mime, showing the original
+// filename when present.
+function DocumentChips({ documents, onOpen }: { documents: ImageRef[]; onOpen: (doc: ImageRef) => void }) {
   return (
     <div className="flex max-w-2xl flex-wrap justify-end gap-1.5">
       {documents.map((doc) => (
-        <div
+        <button
           key={doc.id}
-          title={doc.id.slice(0, 8)}
-          className="flex items-center gap-1 rounded-lg border border-zinc-950/10 bg-zinc-100 px-2 py-1 text-xs text-zinc-500 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400"
+          type="button"
+          title={doc.name ?? doc.id.slice(0, 8)}
+          onClick={() => onOpen(doc)}
+          className="flex items-center gap-1 rounded-lg border border-zinc-950/10 bg-zinc-100 px-2 py-1 text-xs text-zinc-500 transition hover:bg-zinc-200 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
         >
-          <HugeiconsIcon icon={Pdf02Icon} className="size-3.5" />
-          PDF
-        </div>
+          <HugeiconsIcon icon={documentChipIcon(doc.mime)} className="size-3.5" />
+          {doc.name ?? mimeLabel(doc.mime)}
+        </button>
       ))}
     </div>
   )
@@ -211,8 +246,8 @@ export function UserMessage({
   // Attached images (transcript's Images, or the live turn's own
   // optimistic list) — thumbnails render above the text bubble.
   images?: ImageRef[]
-  // Attached PDFs (transcript's Documents, or the live turn's own
-  // optimistic list) — rendered as small chips, never fetched.
+  // Attached documents (transcript's Documents, or the live turn's own
+  // optimistic list) — rendered as small clickable chips.
   documents?: ImageRef[]
   // Optimistic-send local object URLs keyed by attachment id, so a
   // just-sent message's thumbnails render instantly without
@@ -223,10 +258,24 @@ export function UserMessage({
   // component just renders whatever it's handed.
   onRetry?: () => void
 }) {
+  const [viewerAttachment, setViewerAttachment] = useState<ImageRef | null>(null)
+  const openAttachment = (ref: ImageRef) => setViewerAttachment(ref)
   return (
     <div className="flex flex-col items-end gap-1">
-      {images && images.length > 0 && <ImageGrid images={images} localUrls={localUrls} />}
-      {documents && documents.length > 0 && <DocumentChips documents={documents} />}
+      {images && images.length > 0 && (
+        <ImageGrid images={images} localUrls={localUrls} onOpen={openAttachment} />
+      )}
+      {documents && documents.length > 0 && (
+        <DocumentChips documents={documents} onOpen={openAttachment} />
+      )}
+      <AttachmentViewer
+        open={viewerAttachment !== null}
+        onOpenChange={(open) => {
+          if (!open) setViewerAttachment(null)
+        }}
+        attachment={viewerAttachment}
+        localUrl={viewerAttachment ? localUrls?.get(viewerAttachment.id) : undefined}
+      />
       <div className="group/message flex items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (

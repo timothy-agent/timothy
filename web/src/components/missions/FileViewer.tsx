@@ -1,10 +1,6 @@
 import { Download04Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import hljs from 'highlight.js'
-import { useEffect, useMemo, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import rehypeHighlight from 'rehype-highlight'
-import remarkGfm from 'remark-gfm'
+import { useEffect, useState } from 'react'
 import {
   MissionFileTooLargeError,
   downloadMissionFile,
@@ -12,63 +8,16 @@ import {
   missionFilePreviewCap,
 } from '../../api/client'
 import type { MissionFile } from '../../api/types'
+import { FileCodeBlock, FileMarkdownBlock } from '../FilePreviewBlocks'
 import { CopyButton } from '../Message'
 import { errText } from '../settings/util'
 import { Button } from '../ui/button'
-import { codeLanguageOf, previewKindOf } from './filePreviewKind'
-import 'highlight.js/styles/github-dark.css'
+import { previewKindOf } from './filePreviewKind'
 
 function humanSize(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
-
-// CodeBlock highlights plain (non-markdown) text/code files directly
-// with highlight.js — hljs escapes the source itself before wrapping
-// it in span tags, the same trust model rehype-highlight already uses
-// for markdown in Message.tsx, so the resulting HTML is safe to inject.
-// A line-number gutter runs alongside it, GitHub-style: one row per
-// source line, select-none so copying the code never grabs the numbers.
-function CodeBlock({ code, path }: { code: string; path: string }) {
-  const html = useMemo(() => {
-    const lang = codeLanguageOf(path)
-    const result = lang
-      ? hljs.highlight(code, { language: lang, ignoreIllegals: true })
-      : hljs.highlightAuto(code)
-    return result.value
-  }, [code, path])
-  const lineCount = useMemo(() => code.split('\n').length, [code])
-  return (
-    <div className="flex overflow-x-auto p-3 font-mono text-xs leading-5">
-      <div
-        aria-hidden="true"
-        className="select-none pr-3 text-right text-muted-foreground"
-      >
-        {Array.from({ length: lineCount }, (_, i) => (
-          <div key={i}>{i + 1}</div>
-        ))}
-      </div>
-      <pre className="min-w-0 flex-1 font-mono text-xs leading-5">
-        <code
-          className="hljs !bg-transparent !p-0 font-mono text-xs leading-5"
-          // eslint-disable-next-line react/no-danger -- hljs escapes `code` itself; see CodeBlock comment above.
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      </pre>
-    </div>
-  )
-}
-
-function MarkdownBlock({ text, raw }: { text: string; raw: boolean }) {
-  if (raw) return <CodeBlock code={text} path="file.md" />
-  return (
-    <div className="prose prose-sm max-w-none p-3 dark:prose-invert prose-pre:bg-zinc-900">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-        {text}
-      </ReactMarkdown>
-    </div>
-  )
 }
 
 type LoadState =
@@ -197,10 +146,10 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
           </div>
         )}
         {state.status === 'text' && kind === 'markdown' && (
-          <MarkdownBlock text={state.text} raw={showRawMarkdown} />
+          <FileMarkdownBlock text={state.text} raw={showRawMarkdown} />
         )}
         {state.status === 'text' && kind === 'code' && (
-          <CodeBlock code={state.text} path={file.path} />
+          <FileCodeBlock code={state.text} path={file.path} />
         )}
       </div>
     </div>
