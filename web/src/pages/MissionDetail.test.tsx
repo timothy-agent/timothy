@@ -23,6 +23,7 @@ vi.mock('../api/client', () => ({
   downloadMissionArchive: vi.fn(),
   pushMission: vi.fn(),
   openMissionPR: vi.fn(),
+  fetchAttachmentBlob: vi.fn(),
 }))
 
 import {
@@ -545,6 +546,23 @@ describe('MissionDetail', () => {
 
     fireEvent.click(screen.getByText('Show exploration'))
     expect(screen.getByText('three').tagName).toBe('STRONG')
+  })
+
+  it('omits the Artifacts refs section when artifact_refs is absent', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('att-1')).toBeNull()
+  })
+
+  it('renders artifact ref chips when artifact_refs is set', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      artifact_refs: [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }],
+    })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+
+    expect(screen.getByText('report.md')).toBeInTheDocument()
   })
 
   it('shows the permission banner with tool detail when pending_permission is set', async () => {

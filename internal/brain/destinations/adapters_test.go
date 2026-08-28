@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
 type fakeMailSender struct {
@@ -133,6 +135,32 @@ func TestWebhookAdapterJSONNeverIncludesFiles(t *testing.T) {
 	}
 	if strings.Contains(gotBody, "secret.txt") || strings.Contains(gotBody, "should never appear") {
 		t.Fatalf("webhook JSON body leaked file content: %q", gotBody)
+	}
+}
+
+func TestWebhookAdapterJSONIncludesArtifactRefs(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := &WebhookAdapter{}
+	payload := Payload{
+		Body:         "digest",
+		ArtifactRefs: []missions.ArtifactRef{{ID: "att-1", Mime: "text/markdown", Name: "report.md"}},
+	}
+	cfg, _ := json.Marshal(WebhookConfig{URL: srv.URL, Format: "json"})
+	if err := a.Deliver(t.Context(), cfg, "", payload); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	for _, want := range []string{"att-1", "text/markdown", "report.md"} {
+		if !strings.Contains(gotBody, want) {
+			t.Fatalf("webhook JSON body = %q, want it to include %q", gotBody, want)
+		}
 	}
 }
 

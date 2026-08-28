@@ -75,6 +75,7 @@ type driverStore interface {
 	SetFinalOutput(ctx context.Context, id, text string) error
 	SetExploreNotes(ctx context.Context, id, notes string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
+	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	AppendProgress(ctx context.Context, id, note string) error
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
 }
@@ -197,6 +198,15 @@ type Driver struct {
 	// would cycle; cmd/brain/main.go's wiring closure bridges the two,
 	// same as SetMemoryExtract does for memoryd.
 	deliverDestinations DestinationDeliver
+
+	// artifactCopy wires the best-effort copy of declared artifact
+	// files into the attachment store on a mission's terminal done
+	// transition (see SetArtifactCopy / copyArtifacts) — nil-safe:
+	// unset leaves ArtifactRefs empty, same as before this existed. A
+	// func type for the same import-cycle reason as deliverDestinations:
+	// the copy needs the attachment store and destinations' own
+	// artifact-path resolution, both out of missions' reach.
+	artifactCopy ArtifactCopy
 
 	// onTerminal wires the workflows engine's reaction to a mission
 	// reaching a terminal phase (see SetOnTerminal / fireOnTerminal) —
@@ -456,6 +466,46 @@ func (d *Driver) deliverToDestinations(m Mission, terminal Phase) {
 	go d.deliverDestinations(rctx, m, m.DestinationIDs) //nolint:gosec // G118: deliberate — the mission is already terminal, delivery must outlive whatever request/ctx observed that transition
 }
 
+// ArtifactCopy best-effort copies a terminal mission's declared
+// artifact files into the attachment store and returns the resulting
+// refs — destinations.CopyArtifacts satisfies this signature. Must
+// never error or block indefinitely: a vanished/oversize/disallowed-
+// mime file is simply skipped, never fails the transition.
+type ArtifactCopy func(ctx context.Context, m Mission) []ArtifactRef
+
+// SetArtifactCopy wires the artifact-copy hook fired on a mission's
+// terminal done transition (see copyArtifacts) — a setter for the same
+// reason SetDestinationDeliver is. Optional — nil leaves ArtifactRefs
+// empty, same as a mission with no declared artifacts.
+func (d *Driver) SetArtifactCopy(fn ArtifactCopy) {
+	d.artifactCopy = fn
+}
+
+// copyArtifacts runs the artifact-copy hook exactly on a transition
+// into phase=done (mirrors deliverToDestinations) and persists the
+// resulting refs onto the mission row — SYNCHRONOUS, unlike delivery/
+// memory extraction below, so deliverToDestinations' webhook payload
+// (built from the same reloaded Mission) can include them. Bounded so
+// a slow attachment store never stalls the terminal-transition path
+// indefinitely.
+func (d *Driver) copyArtifacts(ctx context.Context, id string, m Mission, terminal Phase) Mission {
+	if d.artifactCopy == nil || terminal != PhaseDone {
+		return m
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	refs := d.artifactCopy(cctx, m)
+	if len(refs) == 0 {
+		return m
+	}
+	if err := d.store.SetArtifactRefs(ctx, id, refs); err != nil {
+		d.log.Warn("driver: persist artifact refs failed", "mission_id", id, "error", err)
+		return m
+	}
+	m.ArtifactRefs = refs
+	return m
+}
+
 // OnTerminal reacts to a mission reaching a terminal phase —
 // workflows.Engine.OnMissionTerminal satisfies this. Fire-and-forget by
 // contract, same as DestinationDeliver: it must never return an error,
@@ -534,9 +584,13 @@ func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) {
 //  3. name backfill (SYNCHRONOUS — see backfillMissionName)
 //  4. one mission reload, AFTER the backfill above, so every hook past
 //     this point sees a stable, already-backfilled name
-//  5. memory extraction, destinations delivery, workflow onTerminal —
-//     each handed the SAME reloaded Mission, no hook reloads on its own
-//  6. fireOnComplete, done transitions only
+//  5. artifact copy (SYNCHRONOUS, done transitions only — see
+//     copyArtifacts) — runs BEFORE the hooks below so destinations
+//     delivery's webhook payload can include the resulting refs
+//  6. memory extraction, destinations delivery, workflow onTerminal —
+//     each handed the SAME reloaded (and artifact-copy-updated)
+//     Mission, no hook reloads on its own
+//  7. fireOnComplete, done transitions only
 //
 // Each hook may still dispatch its own goroutine (memory/destinations/
 // workflow all remain fire-and-forget past this function returning) —
@@ -569,6 +623,7 @@ func (d *Driver) runTerminalHooks(ctx context.Context, id string, terminal Phase
 		d.log.Warn("driver: terminal hooks: reload mission failed", "mission_id", id, "error", err)
 		return
 	}
+	m = d.copyArtifacts(ctx, id, m, terminal)
 	d.extractMissionMemory(ctx, m, terminal, reason)
 	d.deliverToDestinations(m, terminal)
 	d.fireOnTerminal(m)

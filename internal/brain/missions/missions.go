@@ -33,7 +33,7 @@ type Mission struct {
 	// Empty means kb_search is never offered on this mission's turns.
 	Knowledge []string `json:"knowledge,omitempty"`
 	Phase     Phase    `json:"phase"`
-	Status        Status `json:"status"`
+	Status    Status   `json:"status"`
 	// FailureReason is derived (no column) from this mission's latest
 	// mission.failed event's payload.reason — "cancelled" or
 	// "max_iterations" (statemachine.go) — set only by Store.List/Get for
@@ -192,6 +192,22 @@ type Mission struct {
 	// workflow engine reads terminal missions, it never mutates them.
 	WorkflowRunID string `json:"workflow_run_id,omitempty"`
 	WorkflowStep  string `json:"workflow_step,omitempty"`
+	// ArtifactRefs are this mission's declared artifact files, best-
+	// effort copied into the attachment store on the terminal done
+	// transition (driver.go's copyArtifacts) — survive workspace
+	// deletion, unlike the live-workspace files ArtifactsSection
+	// browses. Empty until that copy runs, or if it finds nothing to
+	// copy.
+	ArtifactRefs []ArtifactRef `json:"artifact_refs,omitempty"`
+}
+
+// ArtifactRef is one mission artifact file copied into the attachment
+// store at terminal done — id names an attachments-store row, mirrors
+// MissionAttachment's shape (id/mime/name, never bytes — D-045).
+type ArtifactRef struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
+	Name string `json:"name,omitempty"`
 }
 
 // MissionAttachment is one PDF document attached at mission create

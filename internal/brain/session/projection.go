@@ -178,15 +178,34 @@ func livePendingSeq(events []Event) int64 {
 	return -1
 }
 
-// renderAssistant serializes a turn for the LLM: the message plus,
-// for events written before turn_memory became its own kind, the
-// embedded residue block.
+// renderAssistant serializes a turn for the LLM: the message, a
+// one-line note per generated media block (never inline content —
+// D-045), plus, for events written before turn_memory became its own
+// kind, the embedded residue block.
 func renderAssistant(t AssistantTurn) string {
+	msg := t.LLM.Message
+	for _, b := range t.UI.Blocks {
+		if b.Type != "media" {
+			continue
+		}
+		for _, m := range b.Media {
+			label := m.Name
+			if label == "" {
+				label = m.ID
+			}
+			note := fmt.Sprintf("[generated file: %s (%s)]", label, m.Mime)
+			if msg == "" {
+				msg = note
+			} else {
+				msg += "\n\n" + note
+			}
+		}
+	}
 	block := renderTurnMemory(t.LLM.TurnMemory)
 	if block == "" {
-		return t.LLM.Message
+		return msg
 	}
-	return t.LLM.Message + "\n\n" + block
+	return msg + "\n\n" + block
 }
 
 // renderTurnMemory serializes residue into its compact deterministic

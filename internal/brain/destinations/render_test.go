@@ -23,6 +23,15 @@ func TestRender(t *testing.T) {
 		}
 	})
 
+	t.Run("carries artifact refs from the mission", func(t *testing.T) {
+		withRefs := m
+		withRefs.ArtifactRefs = []missions.ArtifactRef{{ID: "att-1", Mime: "text/markdown", Name: "report.md"}}
+		p := Render(withRefs, "", nil, time.UTC)
+		if len(p.ArtifactRefs) != 1 || p.ArtifactRefs[0] != withRefs.ArtifactRefs[0] {
+			t.Fatalf("ArtifactRefs = %+v, want %+v", p.ArtifactRefs, withRefs.ArtifactRefs)
+		}
+	})
+
 	t.Run("with web base url", func(t *testing.T) {
 		p := Render(m, "https://timothy.example.lan/", nil, time.UTC)
 		if len(p.Links) != 1 || p.Links[0] != "https://timothy.example.lan/missions/m1" {

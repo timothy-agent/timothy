@@ -56,11 +56,25 @@ type ToolResultEvent struct {
 	Status     string `json:"status"`
 	Digest     string `json:"digest,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
+	// Media is any media the tool emitted during this call (refs only,
+	// never bytes — D-045), additive: empty on every call that emits
+	// none.
+	Media []MediaRef `json:"media,omitempty"`
 	// Args is the call's own input, brain-internal only (json:"-": never
 	// reaches the client wire); chat's sensitivity check needs it to
 	// resolve which account a unified aggregate tool call (e.g.
 	// mail_search) actually routed to (session.SensitiveTools.Matches).
 	Args json.RawMessage `json:"-"`
+}
+
+// MediaRef points at one attachment-store item a tool generated during
+// its call — id, mime, and an optional display name, never bytes
+// (D-045). Mirrors tools.MediaRef; defined here (not imported from
+// tools) since stream sits lower in the import graph.
+type MediaRef struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
+	Name string `json:"name,omitempty"`
 }
 
 // PermissionRequestEvent tells the client the turn parked waiting for

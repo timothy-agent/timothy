@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -470,6 +471,14 @@ func (s *googleSource) gmailReadAttachment() *tools.Tool {
 			raw, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(strings.TrimRight(att.Data, "="))
 			if err != nil {
 				return "", fmt.Errorf("decode attachment: %w", err)
+			}
+			// Best-effort: the raw bytes exist here before markitdown
+			// conversion discards them — emit them as media too, but a
+			// failure (unconfigured, unsupported mime, oversize) must
+			// never fail the tool; the markdown conversion below is the
+			// call's actual contract.
+			if collector := tools.CollectorFrom(ctx); collector != nil {
+				_, _ = collector.Emit(ctx, in.Filename, bytes.NewReader(raw))
 			}
 			return markitdown.Convert(ctx, s.g.Client, s.g.MarkItDownURL, in.Filename, "", raw)
 		},

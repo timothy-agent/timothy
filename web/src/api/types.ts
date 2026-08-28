@@ -14,12 +14,21 @@ export interface ToolCallEvent {
   input?: unknown
 }
 
+// MediaRef points at one attachment-store item a tool generated during
+// a call — id, mime, and an optional display name, never bytes.
+export interface MediaRef {
+  id: string
+  mime: string
+  name?: string
+}
+
 export interface ToolResultEvent {
   id: string
   name: string
   status: 'ok' | 'error' | 'denied'
   digest?: string
   duration_ms: number
+  media?: MediaRef[]
 }
 
 export interface PermissionRequestEvent {
@@ -124,8 +133,9 @@ export interface SessionMeta {
 }
 
 export interface UIBlock {
-  type: 'text' | 'reasoning'
-  text: string
+  type: 'text' | 'reasoning' | 'media'
+  text?: string
+  media?: MediaRef[]
 }
 
 // ImageRef is one attachment carried by a user transcript item — the
@@ -771,6 +781,11 @@ export interface Mission {
   // MissionDetail.tsx's mutually exclusive light/!light Result blocks).
   light?: boolean
   final_output?: string
+  // artifact_refs are this mission's declared artifact files, best-
+  // effort copied into the attachment store on the terminal done
+  // transition — survive workspace deletion, unlike the live-workspace
+  // files ArtifactsSection browses. Absent/empty until that copy runs.
+  artifact_refs?: MediaRef[]
   created_at: string
   updated_at: string
 }

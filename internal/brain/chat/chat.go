@@ -1328,6 +1328,10 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 	// flag a turn whose answer is entirely tool/reasoning traffic with
 	// no text.
 	ranTool := false
+	// mediaRefs accumulates every media ref a tool call emitted this
+	// turn (in call-result order), rendered as a trailing UIBlock at
+	// persist time — see noteToolResult below.
+	var mediaRefs []session.MediaRef
 	// failure captures a terminal EventError/EventIncomplete's code and
 	// message (D-044): the relay used to just drop these on the floor
 	// after streaming them to the client, leaving a turn with nothing
@@ -1362,6 +1366,9 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 				return
 			}
 			ranTool = true
+			for _, m := range ev.ToolResult.Media {
+				mediaRefs = append(mediaRefs, session.MediaRef{ID: m.ID, Mime: m.Mime, Name: m.Name})
+			}
 			if s.sensitive.Matches(reqCtx, ev.ToolResult.Name, ev.ToolResult.Args) {
 				turnSensitive = true
 			}
@@ -1463,7 +1470,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order — mirrors missions.Store's own "publish only after
@@ -1533,7 +1540,7 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -1623,6 +1630,9 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		if seg := text[start:]; seg != "" {
 			turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "text", Text: seg})
 		}
+	}
+	if len(mediaRefs) > 0 {
+		turn.UI.Blocks = append(turn.UI.Blocks, session.UIBlock{Type: "media", Media: mediaRefs})
 	}
 	if meta != nil {
 		turn.Provider, turn.Model, turn.LedgerID = meta.Provider, meta.Model, meta.LedgerID

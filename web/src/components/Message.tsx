@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchAttachmentBlob } from '../api/client'
-import type { ImageRef } from '../api/types'
+import type { ImageRef, MediaRef } from '../api/types'
 import { ActivityLine } from './Activity'
 import { AttachmentViewer, mimeLabel } from './AttachmentViewer'
 import { CodeBlock } from './CodeBlock'
@@ -102,20 +102,24 @@ function AuthedImage({
   )
 }
 
-// ImageGrid renders a user message's attached images above the text.
-// Optimistic items carry their own local object URL (localUrls keyed
-// by id) so the just-sent thumbnail never round-trips the network.
+// ImageGrid renders a set of image attachments (a user message's
+// attached images, or an assistant turn's generated media) above the
+// text. Optimistic items carry their own local object URL (localUrls
+// keyed by id) so the just-sent thumbnail never round-trips the
+// network.
 function ImageGrid({
   images,
   localUrls,
   onOpen,
+  align = 'end',
 }: {
-  images: ImageRef[]
+  images: (ImageRef | MediaRef)[]
   localUrls?: Map<string, string>
-  onOpen: (img: ImageRef) => void
+  onOpen: (img: ImageRef | MediaRef) => void
+  align?: 'start' | 'end'
 }) {
   return (
-    <div className="flex max-w-2xl flex-wrap justify-end gap-1.5">
+    <div className={cn('flex max-w-2xl flex-wrap gap-1.5', align === 'end' ? 'justify-end' : 'justify-start')}>
       {images.map((img) => (
         <AuthedImage
           key={img.id}
@@ -138,13 +142,21 @@ function documentChipIcon(mime: string) {
   return Pdf02Icon
 }
 
-// DocumentChips renders a user message's attached documents (PDF,
-// text, markdown, video, audio) as small clickable chips that open the
-// AttachmentViewer modal — labeled by mime, showing the original
-// filename when present.
-function DocumentChips({ documents, onOpen }: { documents: ImageRef[]; onOpen: (doc: ImageRef) => void }) {
+// DocumentChips renders a set of non-image attachments (a user
+// message's documents, or an assistant turn's generated media) as
+// small clickable chips that open the AttachmentViewer modal — labeled
+// by mime, showing the original filename when present.
+function DocumentChips({
+  documents,
+  onOpen,
+  align = 'end',
+}: {
+  documents: (ImageRef | MediaRef)[]
+  onOpen: (doc: ImageRef | MediaRef) => void
+  align?: 'start' | 'end'
+}) {
   return (
-    <div className="flex max-w-2xl flex-wrap justify-end gap-1.5">
+    <div className={cn('flex max-w-2xl flex-wrap gap-1.5', align === 'end' ? 'justify-end' : 'justify-start')}>
       {documents.map((doc) => (
         <button
           key={doc.id}
@@ -157,6 +169,33 @@ function DocumentChips({ documents, onOpen }: { documents: ImageRef[]; onOpen: (
           {doc.name ?? mimeLabel(doc.mime)}
         </button>
       ))}
+    </div>
+  )
+}
+
+// GeneratedMedia renders an assistant turn's tool-generated media
+// (share_file, mail_read_attachment): image mimes as thumbnails via
+// AuthedImage, everything else as a chip — same rendering the user
+// message's own attachments use, opening the same AttachmentViewer.
+function GeneratedMedia({ media }: { media: MediaRef[] }) {
+  const [viewerAttachment, setViewerAttachment] = useState<MediaRef | null>(null)
+  const images = media.filter((m) => m.mime.startsWith('image/'))
+  const documents = media.filter((m) => !m.mime.startsWith('image/'))
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      {images.length > 0 && (
+        <ImageGrid images={images} align="start" onOpen={(img) => setViewerAttachment(img)} />
+      )}
+      {documents.length > 0 && (
+        <DocumentChips documents={documents} align="start" onOpen={(doc) => setViewerAttachment(doc)} />
+      )}
+      <AttachmentViewer
+        open={viewerAttachment !== null}
+        onOpenChange={(open) => {
+          if (!open) setViewerAttachment(null)
+        }}
+        attachment={viewerAttachment}
+      />
     </div>
   )
 }
@@ -433,6 +472,8 @@ export function AssistantMessage({
         </ReactMarkdown>
         {msg.streaming && msg.permissions.length === 0 && <span className="animate-pulse">▍</span>}
       </div>
+
+      {msg.media.length > 0 && <GeneratedMedia media={msg.media} />}
 
       {citations.length > 0 && <SourcesPanel citations={citations} />}
 

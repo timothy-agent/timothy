@@ -517,6 +517,14 @@ func (s *imapSource) mailReadAttachment() *tools.Tool {
 			if err != nil {
 				return "", err
 			}
+			// Best-effort: the raw bytes exist here before markitdown
+			// conversion discards them — emit them as media too, but a
+			// failure (unconfigured, unsupported mime, oversize) must
+			// never fail the tool; the markdown conversion below is the
+			// call's actual contract.
+			if collector := tools.CollectorFrom(ctx); collector != nil {
+				_, _ = collector.Emit(ctx, in.Filename, bytes.NewReader(raw))
+			}
 			return markitdown.Convert(ctx, s.client, s.markItDownURL, in.Filename, contentType, raw)
 		},
 	}

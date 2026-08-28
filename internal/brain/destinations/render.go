@@ -35,6 +35,12 @@ type Payload struct {
 	// attached — see resolveArtifactFiles.
 	TextArtifacts []TextArtifact `json:"-"`
 	OversizeFiles []string       `json:"-"`
+	// ArtifactRefs are the mission's artifact-store refs (id/mime/name,
+	// never bytes — D-045), copied in by the terminal-transition
+	// artifact-copy hook before Render runs. Unlike Files/TextArtifacts,
+	// these DO serialize: webhook's JSON body is the only delivery kind
+	// with no other way to reference an artifact's content.
+	ArtifactRefs []missions.ArtifactRef `json:"artifact_refs,omitempty"`
 }
 
 // Render builds a mission's delivery Payload: body is a short
@@ -82,6 +88,7 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event, loc 
 		Files:         files,
 		TextArtifacts: texts,
 		OversizeFiles: oversize,
+		ArtifactRefs:  m.ArtifactRefs,
 	}
 }
 

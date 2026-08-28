@@ -187,6 +187,15 @@ func (f *fakeStore) SetNameIfEmpty(ctx context.Context, id, name string) error {
 	return nil
 }
 
+func (f *fakeStore) SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.ArtifactRefs = refs
+	f.missions[id] = m
+	return nil
+}
+
 func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

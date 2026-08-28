@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -562,6 +563,37 @@ func main() {
 	}
 	if whisperURL != "" {
 		svc.SetWhisper(whisperURL)
+	}
+
+	// share_file: registered here, not inside buildAgent, since it
+	// needs attachmentStore (built above, after buildAgent). Nil-gated
+	// the same way attachments-dependent wiring above is: no
+	// ATTACHMENTS_DIR means no media emission at all.
+	if attachmentStore != nil {
+		agent.SetMediaSaver(func(ctx context.Context, r io.Reader) (string, string, error) {
+			a, err := attachmentStore.Save(ctx, r)
+			if err != nil {
+				return "", "", err
+			}
+			return a.ID, a.Mime, nil
+		})
+		shareFileTool := builtin.ShareFile(builtin.ShareFileConfig{Root: workspace})
+		current := builtinSet.add(shareFileTool)
+		if conns != nil {
+			swapAgentTools(agent, current, conns, app.Log, toolCalls)
+		} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+			app.Log.Warn("share_file tool registration failed; agent keeps its previous tool surface", "error", err)
+		} else {
+			agent.SwapTools(constrained, defs)
+		}
+	}
+
+	// Mission artifact copy: registered here for the same reason
+	// share_file is — needs attachmentStore, built after buildMissions.
+	// Nil-gated on both attachmentStore (ATTACHMENTS_DIR) and
+	// missionDriver (WORKSPACES).
+	if attachmentStore != nil && missionDriver != nil {
+		missionDriver.SetArtifactCopy(destinations.CopyArtifacts(attachmentStore, app.Log))
 	}
 
 	// kb_search: nil-safe wiring, same shape as memory retrieve/extract

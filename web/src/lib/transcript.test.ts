@@ -65,6 +65,25 @@ describe('fromTranscript', () => {
     expect(items[0]).toMatchObject({ role: 'assistant', text: 'part one\n\npart two' })
   })
 
+  it('replays a media block into the assistant item', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'assistant',
+        blocks: [
+          { type: 'text', text: 'here you go' },
+          { type: 'media', media: [{ id: 'att-1', mime: 'image/png', name: 'chart.png' }] },
+        ],
+        created_at: at,
+      },
+    ])
+    expect(items[0]).toMatchObject({
+      role: 'assistant',
+      text: 'here you go',
+      media: [{ id: 'att-1', mime: 'image/png', name: 'chart.png' }],
+    })
+  })
+
   it('omits meta when the turn has no provider attribution', () => {
     const items = fromTranscript([
       { seq: 1, kind: 'assistant', blocks: [{ type: 'text', text: 'x' }], created_at: at },

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -769,6 +770,45 @@ func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) 
 	}
 	if !strings.Contains(out, "converted(filename=receipt.pdf") {
 		t.Fatalf("read_attachment = %q, want it routed through markitdown with the given filename", out)
+	}
+}
+
+func TestGmailReadAttachmentEmitsMedia(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+
+	collector := tools.NewCollector(func(_ context.Context, r io.Reader) (string, string, error) {
+		_, _ = io.ReadAll(r)
+		return "att-1", "application/pdf", nil
+	})
+	ctx := tools.WithCollector(t.Context(), collector)
+	if _, err := toolByName(t, src, "mail_read_attachment").Execute(ctx,
+		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`)); err != nil {
+		t.Fatalf("read_attachment: %v", err)
+	}
+	refs := collector.Drain()
+	if len(refs) != 1 || refs[0].ID != "att-1" || refs[0].Name != "receipt.pdf" {
+		t.Fatalf("refs = %+v, want one media ref for receipt.pdf", refs)
+	}
+}
+
+func TestGmailReadAttachmentEmitFailureDoesNotFailTool(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+
+	collector := tools.NewCollector(func(context.Context, io.Reader) (string, string, error) {
+		return "", "", errors.New("save failed")
+	})
+	ctx := tools.WithCollector(t.Context(), collector)
+	out, err := toolByName(t, src, "mail_read_attachment").Execute(ctx,
+		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`))
+	if err != nil {
+		t.Fatalf("read_attachment: %v, want the markdown conversion to still succeed", err)
+	}
+	if !strings.Contains(out, "converted(filename=receipt.pdf") {
+		t.Fatalf("out = %q, want it routed through markitdown despite media emit failure", out)
 	}
 }
 

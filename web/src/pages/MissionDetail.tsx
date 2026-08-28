@@ -24,6 +24,7 @@ import {
   sendMissionNote,
 } from '../api/client'
 import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
+import { ArtifactRefsSection } from '../components/missions/ArtifactRefsSection'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanSection } from '../components/missions/PlanSection'
@@ -823,6 +824,8 @@ export function MissionDetail() {
             />
           </section>
         )}
+
+      <ArtifactRefsSection refs={mission.artifact_refs ?? []} />
 
       <ArtifactsSection missionId={id} phase={mission.phase} workspace={mission.workspace} />
 

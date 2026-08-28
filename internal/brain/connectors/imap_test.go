@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -269,6 +270,61 @@ func TestIMAPMailReadAttachmentUsesMarkItDown(t *testing.T) {
 	}
 	if !strings.Contains(out, "converted(filename=receipt.pdf, mimetype=application/pdf)") {
 		t.Fatalf("out = %q, want it routed through markitdown", out)
+	}
+}
+
+func TestIMAPMailReadAttachmentEmitsMedia(t *testing.T) {
+	t.Parallel()
+	srv := markitdownStub(t)
+
+	sess := &fakeIMAPSession{attachments: map[imap.UID]map[string]struct {
+		raw []byte
+		ct  string
+	}{
+		9: {"receipt.pdf": {raw: []byte("pdf bytes"), ct: "application/pdf"}},
+	}}
+	src, _ := testIMAPSource(t, imapRow(""), sess)
+	src.markItDownURL = srv.URL
+
+	collector := tools.NewCollector(func(_ context.Context, r io.Reader) (string, string, error) {
+		_, _ = io.ReadAll(r)
+		return "att-1", "application/pdf", nil
+	})
+	ctx := tools.WithCollector(t.Context(), collector)
+	if _, err := imapToolByName(t, src, "mail_read_attachment").Execute(ctx,
+		json.RawMessage(`{"message_id":"9","filename":"receipt.pdf"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	refs := collector.Drain()
+	if len(refs) != 1 || refs[0].ID != "att-1" || refs[0].Name != "receipt.pdf" {
+		t.Fatalf("refs = %+v, want one media ref for receipt.pdf", refs)
+	}
+}
+
+func TestIMAPMailReadAttachmentEmitFailureDoesNotFailTool(t *testing.T) {
+	t.Parallel()
+	srv := markitdownStub(t)
+
+	sess := &fakeIMAPSession{attachments: map[imap.UID]map[string]struct {
+		raw []byte
+		ct  string
+	}{
+		9: {"receipt.pdf": {raw: []byte("pdf bytes"), ct: "application/pdf"}},
+	}}
+	src, _ := testIMAPSource(t, imapRow(""), sess)
+	src.markItDownURL = srv.URL
+
+	collector := tools.NewCollector(func(context.Context, io.Reader) (string, string, error) {
+		return "", "", errors.New("save failed")
+	})
+	ctx := tools.WithCollector(t.Context(), collector)
+	out, err := imapToolByName(t, src, "mail_read_attachment").Execute(ctx,
+		json.RawMessage(`{"message_id":"9","filename":"receipt.pdf"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v, want the markdown conversion to still succeed", err)
+	}
+	if !strings.Contains(out, "converted(filename=receipt.pdf, mimetype=application/pdf)") {
+		t.Fatalf("out = %q, want it routed through markitdown despite media emit failure", out)
 	}
 }
 

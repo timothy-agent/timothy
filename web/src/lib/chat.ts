@@ -1,4 +1,4 @@
-import type { ChatEvent, PermissionRequestEvent, Usage } from '../api/types'
+import type { ChatEvent, MediaRef, PermissionRequestEvent, Usage } from '../api/types'
 
 // ToolRun is one tool call's lifecycle inside a live turn.
 export interface ToolRun {
@@ -19,6 +19,9 @@ export interface AssistantState {
   notices: string[]
   tools: ToolRun[]
   permissions: PermissionRequestEvent[]
+  // media accumulates every ref a tool call emitted this turn, in
+  // call-result order.
+  media: MediaRef[]
   error?: string
   meta?: {
     provider?: string
@@ -35,7 +38,7 @@ export interface AssistantState {
 }
 
 export function emptyAssistant(): AssistantState {
-  return { text: '', reasoning: '', notices: [], tools: [], permissions: [], streaming: true }
+  return { text: '', reasoning: '', notices: [], tools: [], permissions: [], media: [], streaming: true }
 }
 
 // applyEvent folds one SSE event into the assistant message state.
@@ -75,6 +78,7 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
         // Clear only the prompt tied to THIS call; other parallel
         // calls may still be parked awaiting their own decision.
         permissions: msg.permissions.filter((p) => p.call_id !== r.id),
+        media: r.media && r.media.length > 0 ? [...msg.media, ...r.media] : msg.media,
       }
     }
     case 'permission_request': {

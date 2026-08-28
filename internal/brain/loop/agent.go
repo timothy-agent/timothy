@@ -149,6 +149,12 @@ type Agent struct {
 	// main.go wires it, and always a no-op once the manager is ready
 	// (the hook should return instantly by then).
 	waitToolsReady func(context.Context)
+
+	// mediaSaver persists media a tool emits during its call (see
+	// tools.Collector). nil (the default) leaves media emission
+	// unconfigured — a tool's Emit call then always errors, same as
+	// ATTACHMENTS_DIR unset gates chat's own attachment upload path.
+	mediaSaver tools.SaveFunc
 }
 
 func NewAgent(gw Gateway, exec Executor, perms Permissioner, outputs OutputSink, audit AuditSink, events EventAppender, broker *PermBroker, defs []provider.ToolDef, logger *slog.Logger) *Agent {
@@ -243,6 +249,14 @@ func (a *Agent) SetForceRouteByConnector(names func(context.Context) []string, r
 
 // SetWaitToolsReady registers the turn-entry readiness hook (see the
 // waitToolsReady field doc). Startup-time only.
+// SetMediaSaver wires the media-emission collector's save backend
+// (see tools.Collector, tools.SaveFunc). Optional — nil (the default)
+// leaves media emission unconfigured, same nil-gate shape as
+// SetForceRoute and friends.
+func (a *Agent) SetMediaSaver(fn tools.SaveFunc) {
+	a.mediaSaver = fn
+}
+
 func (a *Agent) SetWaitToolsReady(fn func(context.Context)) {
 	a.waitToolsReady = fn
 }
@@ -727,6 +741,11 @@ func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string,
 
 func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
+	// A fresh collector per call: media a tool emits during THIS
+	// Execute rides on ctx, drained right below, never leaking into a
+	// concurrent sibling call's result.
+	collector := tools.NewCollector(a.mediaSaver)
+	ctx = tools.WithCollector(ctx, collector)
 	// A panicking tool must become feedback the model can read (D-009),
 	// never a process crash: executeOne runs inside an errgroup worker,
 	// and an unrecovered panic there takes down the whole brain — every
@@ -741,6 +760,14 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 		return a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, emit)
 	}()
 	isError := status != "ok"
+	media := collector.Drain()
+	if len(media) > tools.MaxMediaPerCall {
+		media = media[:tools.MaxMediaPerCall]
+	}
+	streamMedia := make([]stream.MediaRef, len(media))
+	for i, m := range media {
+		streamMedia[i] = stream.MediaRef{ID: m.ID, Mime: m.Mime, Name: m.Name}
+	}
 
 	if status == "ok" {
 		offloaded, err := a.offloadIfBig(ctx, sessionID, call.Name, content)
@@ -793,6 +820,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 	emit(stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
 		ID: call.ID, Name: call.Name, Status: status,
 		Digest: digest, DurationMs: duration.Milliseconds(), Args: call.Input,
+		Media: streamMedia,
 	}})
 
 	return provider.ToolResult{ID: call.ID, Content: content, IsError: isError}

@@ -151,6 +151,26 @@ describe('AssistantMessage', () => {
     )
   })
 
+  it('renders a document chip for generated media from a live tool_result', () => {
+    const msg = play([
+      { type: 'chunk', text: 'Here is the file.' },
+      {
+        type: 'tool_result',
+        tool_result: {
+          id: 'call-1',
+          name: 'share_file',
+          status: 'ok',
+          duration_ms: 5,
+          media: [{ id: 'att-1', mime: 'application/pdf', name: 'report.pdf' }],
+        },
+      },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+  })
+
   it('renders errors as errors', () => {
     const msg = play([
       { type: 'error', error: { code: 'chain_exhausted', message: 'all failed', retryable: false } },

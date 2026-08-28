@@ -92,9 +92,23 @@ type DocumentRef struct {
 
 // UIBlock is one renderable piece of an assistant turn.
 type UIBlock struct {
-	Type string         `json:"type"` // text | reasoning | tool_call | meta
+	Type string         `json:"type"` // text | reasoning | tool_call | meta | media
 	Text string         `json:"text,omitempty"`
 	Meta map[string]any `json:"meta,omitempty"`
+	// Media carries refs only (never bytes, D-045) for a "media" block
+	// — content a tool call generated during the turn (share_file,
+	// mail_read_attachment). Additive: absent on every block type that
+	// predates this.
+	Media []MediaRef `json:"media,omitempty"`
+}
+
+// MediaRef points at one attachment-store item a tool generated during
+// a turn — id, mime, and an optional display name, never bytes
+// (D-045). Mirrors stream.MediaRef; converted at the chat.go boundary.
+type MediaRef struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
+	Name string `json:"name,omitempty"`
 }
 
 // TurnMemory is the structured residue distilled from a turn's raw

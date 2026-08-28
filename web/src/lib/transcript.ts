@@ -58,6 +58,7 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
       notices: [],
       tools,
       permissions,
+      media: [],
       streaming: false,
       meta: undefined,
     })
@@ -87,11 +88,13 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
       case 'assistant': {
         let text = ''
         let reasoning = ''
+        let media: NonNullable<(typeof item)['blocks']>[number]['media'] = undefined
         for (const b of item.blocks ?? []) {
           // An empty block serializes without its text key (omitempty);
           // naive concat would render a literal "undefined".
           if (b.type === 'text') text += (text && b.text ? '\n\n' : '') + (b.text ?? '')
           else if (b.type === 'reasoning') reasoning += b.text ?? ''
+          else if (b.type === 'media' && b.media) media = [...(media ?? []), ...b.media]
         }
         const tools = pendingTools.map((p) => toToolRun(p.tool))
         const permissions = pendingPermissions.map((p) => p.permission)
@@ -105,6 +108,7 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
           notices: [],
           tools,
           permissions,
+          media: media ?? [],
           streaming: false,
           meta: item.provider
             ? {

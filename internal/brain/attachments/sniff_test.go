@@ -3,6 +3,7 @@ package attachments
 import (
 	"bytes"
 	"errors"
+	"mime"
 	"net/http"
 	"testing"
 )
@@ -71,6 +72,40 @@ func TestSniffAndNormalize(t *testing.T) {
 			got := normalizeSniffedMime(sniffed)
 			if got != tc.want {
 				t.Fatalf("normalizeSniffedMime(DetectContentType(%s)) = %q (raw sniff %q), want %q", tc.name, got, sniffed, tc.want)
+			}
+			if _, ok := allowedExt[got]; !ok {
+				t.Fatalf("%q missing from allowedExt", got)
+			}
+		})
+	}
+}
+
+// TestSniffTextVariantsAllowedAsPlainText confirms csv/json/md content
+// all sniff as text/plain (Go's DetectContentType has no dedicated
+// signature for any of them) and are accepted under the existing
+// text/plain allowlist entry — no new allowedExt types needed for
+// share_file to publish these.
+func TestSniffTextVariantsAllowedAsPlainText(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"csv", []byte("name,age\nAda,36\n")},
+		{"json", []byte(`{"key":"value"}`)},
+		{"markdown", []byte("# Title\n\nBody text.\n")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Mirrors Save's own pipeline: DetectContentType, strip
+			// params via ParseMediaType, then normalize.
+			sniffed := http.DetectContentType(tc.data)
+			bare := sniffed
+			if parsed, _, err := mime.ParseMediaType(sniffed); err == nil {
+				bare = parsed
+			}
+			got := normalizeSniffedMime(bare)
+			if got != "text/plain" {
+				t.Fatalf("normalize(%s) = %q (raw sniff %q), want text/plain", tc.name, got, sniffed)
 			}
 			if _, ok := allowedExt[got]; !ok {
 				t.Fatalf("%q missing from allowedExt", got)

@@ -202,7 +202,14 @@ CREATE TABLE IF NOT EXISTS missions (
     -- NULL/'' for an ordinary mission. The workflow engine reads these
     -- via mission terminal events; it never writes mission state.
     workflow_run_id        uuid,
-    workflow_step          text NOT NULL DEFAULT ''
+    workflow_step          text NOT NULL DEFAULT '',
+    -- ArtifactRefs: this mission's declared artifact files, best-effort
+    -- copied into the attachment store on the terminal done transition
+    -- (driver.go's copyArtifacts) — a jsonb array of {id, mime, name},
+    -- mirroring attachments' own shape. Never bytes (D-045). Lets a
+    -- mission's result artifacts survive workspace deletion, unlike the
+    -- live-workspace files ArtifactsSection browses.
+    artifact_refs          jsonb NOT NULL DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

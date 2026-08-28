@@ -51,7 +51,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, light, final_output, created_at, updated_at,
-	workflow_run_id, workflow_step`
+	workflow_run_id, workflow_step, artifact_refs`
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
 // column: the mission's latest mission.failed event's payload.reason
@@ -60,13 +60,13 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 // web UI's mission list/detail views read.
 func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	var (
-		m                                             Mission
-		agentID, scheduleID, sessionID, parentMission *string
-		phase, status                                 string
-		pendingPermission                             *string
-		spec, progress, attachmentsRaw, knowledgeRaw  []byte
-		failureReason                                 *string
-		workflowRunID                                 *string
+		m                                                             Mission
+		agentID, scheduleID, sessionID, parentMission                 *string
+		phase, status                                                 string
+		pendingPermission                                             *string
+		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
+		failureReason                                                 *string
+		workflowRunID                                                 *string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -78,11 +78,12 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep,
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
+	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -142,12 +143,12 @@ const failureReasonJoin = `
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
-		m                                             Mission
-		agentID, scheduleID, sessionID, parentMission *string
-		phase, status                                 string
-		pendingPermission                             *string
-		spec, progress, attachmentsRaw, knowledgeRaw  []byte
-		workflowRunID                                 *string
+		m                                                             Mission
+		agentID, scheduleID, sessionID, parentMission                 *string
+		phase, status                                                 string
+		pendingPermission                                             *string
+		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
+		workflowRunID                                                 *string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -159,10 +160,11 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep); err != nil {
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw); err != nil {
 		return Mission{}, err
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
+	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -383,6 +385,28 @@ func (s *Store) SetSpec(ctx context.Context, id string, spec Spec) error {
 	}
 	if _, err := db.Exec(ctx, `UPDATE missions SET spec = $2, updated_at = now() WHERE id = $1`, id, data); err != nil {
 		return fmt.Errorf("missions set spec: %w", err)
+	}
+	return nil
+}
+
+// SetArtifactRefs persists the mission's artifact-store refs (see
+// driver.go's copyArtifacts) — bypasses the state machine, same as
+// SetSpec, since it runs from a terminal-transition hook rather than
+// an Advance step.
+func (s *Store) SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set artifact refs: %w", err)
+	}
+	if refs == nil {
+		refs = []ArtifactRef{}
+	}
+	data, err := json.Marshal(refs)
+	if err != nil {
+		return fmt.Errorf("missions set artifact refs: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET artifact_refs = $2, updated_at = now() WHERE id = $1`, id, data); err != nil {
+		return fmt.Errorf("missions set artifact refs: %w", err)
 	}
 	return nil
 }
