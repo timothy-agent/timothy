@@ -2070,6 +2070,24 @@ func TestClassifyCollectionOverGatewayProposesNewCollection(t *testing.T) {
 	}
 }
 
+// TestClassifyCollectionOverGatewayListsDocCounts confirms the
+// collection list sent to the model includes each collection's
+// document count, so the model can judge how established a collection
+// already is.
+func TestClassifyCollectionOverGatewayListsDocCounts(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("col-1")}
+	ClassifyCollectionOverGateway(gw, discard())(context.Background(), "Q3 Invoice", "some invoice text",
+		[]kb.Collection{{ID: "col-1", Name: "Finance", Description: "money stuff", DocCount: 7}})
+
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	user := fmt.Sprint(gw.requests[0].Messages)
+	if !strings.Contains(user, "col-1: Finance (7 docs) - money stuff") {
+		t.Fatalf("user message missing doc count in the collection list:\n%s", user)
+	}
+}
+
 // TestClassifyCollectionOverGatewayFallsBackToUnsortedOnGatewayError
 // confirms the best-effort contract: any Stream error resolves to the
 // Unsorted fallback rather than propagating.

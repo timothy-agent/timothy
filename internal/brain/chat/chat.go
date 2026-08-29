@@ -634,11 +634,11 @@ func ClassifyCollectionOverGateway(gw Gateway, log *slog.Logger) func(ctx contex
 			list.WriteString("No collections exist yet.")
 		} else {
 			for _, c := range collections {
-				fmt.Fprintf(&list, "%s: %s — %s\n", c.ID, c.Name, c.Description)
+				fmt.Fprintf(&list, "%s: %s (%d docs) - %s\n", c.ID, c.Name, c.DocCount, c.Description)
 			}
 		}
 
-		const classifySystem = `You file documents into a knowledge base. Given a document and a list of existing collections, reply with exactly one line: either the bare id of the best-matching existing collection, or "NEW: <name> | <description>" to propose a new collection when nothing fits. Prefer an existing collection whenever the document broadly belongs to its topic — an imperfect match beats a new collection. A new collection's name must be a SHORT GENERIC TOPIC CATEGORY of 1-3 words (like "AI Agents", "Scalability", "Code Review", "CVs") that many future documents could belong to — never a title describing this specific document. The description should state the topic's scope broadly. No other text.`
+		const classifySystem = `You file documents into a knowledge base. Given a document and a list of existing collections, reply with exactly one line: either the bare id of the best-matching existing collection, or "NEW: <name> | <description>" to propose a new collection when nothing fits. Prefer the MOST SPECIFIC existing collection that fits the document's primary topic; propose NEW only when the primary topic is clearly narrower than every existing collection and is a topic more future documents could join. A broad collection is the wrong pick when a narrower on-topic one already exists, or when the document's topic deserves its own collection - do not use a catch-all just because it is easy. A new collection's name must be a SHORT GENERIC TOPIC CATEGORY of 1-3 words (like "AI Agents", "Scalability", "Code Review", "CVs") that many future documents could belong to, never a title describing this specific document. The description should state the topic's scope broadly. No other text.`
 		route, ok, err := gw.RouteForRole(ctx, "summarize")
 		if err != nil || !ok {
 			route, ok, err = gw.RouteForRole(ctx, "default")
