@@ -469,6 +469,27 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 	}
 }
 
+// TestPlanSessionPromptsLengthAwareSplitting pins that the planner is
+// told to split a unit whose own deliverable demands a long
+// continuous generation (many chapters/sections/files) along its
+// natural boundaries, regardless of the goal's subject matter — a
+// long single-turn stream truncating mid-generation is what a
+// too-few-units plan risks (a real 12-chapter book goal collapsed
+// into one unit and truncated on a long model stream, twice).
+func TestPlanSessionPromptsLengthAwareSplitting(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	system := agent.requests[0].System
+	if !strings.Contains(system, "split that unit along its own natural boundaries") {
+		t.Fatalf("planner system prompt missing length-aware splitting guidance: %s", system)
+	}
+}
+
 // TestPlanSessionForcesPlanTool pins D-063: when submit_plan is the
 // planning turn's sole tool, the request forces it.
 func TestPlanSessionForcesPlanTool(t *testing.T) {
