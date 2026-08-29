@@ -189,8 +189,11 @@ export function requestsErrorsOption(
 // slice labels (name + percent) outside with label lines. Caps at 8
 // slices, folding overflow into "other". Plain pie (no hole), centered
 // in the panel — no legend needed since every slice is direct-labeled.
+// A row may carry its own tooltip `label` (a slice whose amount stayed
+// in a foreign currency shows that currency, not the chart's); rows
+// without one, and the "other" bucket, fall back to valueLabel.
 export function donutOption(
-  rows: { group: string; cost: number }[],
+  rows: { group: string; cost: number; label?: string }[],
   colorOf: (g: string) => string,
   valueLabel: (v: number) => string,
 ): EChartsOption {
@@ -199,6 +202,7 @@ export function donutOption(
   const top = sorted.slice(0, 8)
   const rest = sorted.slice(8)
   const restTotal = rest.reduce((n, r) => n + r.cost, 0)
+  const labels = new Map(top.filter((r) => r.label).map((r) => [r.group, r.label as string]))
   const data = top.map((r) => ({ name: r.group, value: r.cost, itemStyle: { color: colorOf(r.group) } }))
   if (restTotal > 0) data.push({ name: 'other', value: restTotal, itemStyle: { color: 'var(--muted-foreground)' } })
 
@@ -209,7 +213,8 @@ export function donutOption(
       ...theme.tooltip,
       formatter: (p) => {
         const param = p as { name: string; value: number; percent: number }
-        return `${param.name}<br/>${valueLabel(param.value)} (${param.percent}%)`
+        const label = labels.get(param.name) ?? valueLabel(param.value)
+        return `${param.name}<br/>${label} (${param.percent}%)`
       },
     },
     series: [

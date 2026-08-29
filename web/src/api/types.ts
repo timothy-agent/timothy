@@ -378,15 +378,6 @@ export interface MissionUsage {
   models: ModelUsed[]
 }
 
-export interface SessionUsage extends ConvertedMoney {
-  session_id: string
-  currency: string
-  cost: number
-  input_tokens: number
-  output_tokens: number
-  requests: number
-}
-
 export interface LatencyRow {
   provider: string
   p50_ms: number

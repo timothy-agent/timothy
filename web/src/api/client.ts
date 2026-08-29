@@ -37,7 +37,6 @@ import type {
   RetrievedMemory,
   Schedule,
   SessionMeta,
-  SessionUsage,
   TestResult,
   Transcript,
   UnpricedGroup,
@@ -575,13 +574,6 @@ export async function usageUnpriced(from: Date, to: Date): Promise<UnpricedGroup
     `/v1/admin/usage/unpriced?${rangeParams(from, to)}`,
   )
   return groups ?? []
-}
-
-export async function usageSessions(from: Date, to: Date, limit = 10): Promise<SessionUsage[]> {
-  const { sessions } = await request<{ sessions: SessionUsage[] }>(
-    `/v1/admin/usage/sessions?${rangeParams(from, to, { limit: String(limit) })}`,
-  )
-  return sessions ?? []
 }
 
 export async function usageLatency(from: Date, to: Date): Promise<LatencyRow[]> {

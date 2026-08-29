@@ -140,6 +140,28 @@ describe('donutOption', () => {
     const series = opt.series as Array<{ center: [string, string] }>
     expect(series[0].center).toEqual(['50%', '50%'])
   })
+
+  it("tooltips a row's own label when given, falling back to valueLabel", () => {
+    const rows = [
+      { group: 'glm', cost: 0.859, label: '৳0.86' },
+      { group: 'openai', cost: 10 },
+    ]
+    const opt = donutOption(rows, colorOf, money)
+    const formatter = (opt.tooltip as { formatter: (p: unknown) => string }).formatter
+    expect(formatter({ name: 'glm', value: 0.859, percent: 7.9 })).toBe('glm<br/>৳0.86 (7.9%)')
+    expect(formatter({ name: 'openai', value: 10, percent: 92.1 })).toBe('openai<br/>$10 (92.1%)')
+  })
+
+  it('labels the "other" bucket with valueLabel, never a folded row\'s label', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      group: `p${i}`,
+      cost: 10 - i,
+      label: `L${i}`,
+    }))
+    const opt = donutOption(rows, colorOf, money)
+    const formatter = (opt.tooltip as { formatter: (p: unknown) => string }).formatter
+    expect(formatter({ name: 'other', value: 3, percent: 5 })).toBe('other<br/>$3 (5%)')
+  })
 })
 
 describe('latencyBarsOption', () => {

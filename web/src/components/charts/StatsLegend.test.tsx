@@ -22,15 +22,20 @@ describe('StatsLegend', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('computes mean/last/max per group', () => {
+  it('computes mean/max/total per group under matching headers', () => {
     render(
       <StatsLegend rows={rows} groups={groups} colorOf={colorOf} hidden={new Set()} onSelect={vi.fn()} valueLabel={valueLabel} />,
     )
-    // openai: mean (2+4+9)/3 = 5, last 9, max 9
+    expect(screen.getByText('Mean')).toBeInTheDocument()
+    expect(screen.getByText('Max')).toBeInTheDocument()
+    expect(screen.getByText('Total')).toBeInTheDocument()
+    expect(screen.queryByText('Min')).toBeNull()
+    expect(screen.queryByText('Last')).toBeNull()
+    // openai: mean (2+4+9)/3 = 5, max 9, total 15
     const row = screen.getByText('openai').closest('tr')
     expect(row).not.toBeNull()
-    expect(row).toHaveTextContent('5.0')
-    expect(row).toHaveTextContent('9.0')
+    const cells = [...row!.querySelectorAll('td')].slice(1).map((td) => td.textContent)
+    expect(cells).toEqual(['5.0', '9.0', '15.0'])
   })
 
   it('clicking a name calls onSelect non-additively and shows strikethrough when hidden', () => {
@@ -77,9 +82,10 @@ describe('StatsLegend', () => {
     render(
       <StatsLegend rows={rows} groups={groups} colorOf={colorOf} hidden={new Set()} onSelect={vi.fn()} valueLabel={valueLabel} />,
     )
-    // anthropic: (10+0+5)/3 = 5, last 5, max 10
+    // anthropic: mean (10+0+5)/3 = 5, max 10, total 15
     const row = screen.getByText('anthropic').closest('tr')
-    expect(row).toHaveTextContent('10.0')
+    const cells = [...row!.querySelectorAll('td')].slice(1).map((td) => td.textContent)
+    expect(cells).toEqual(['5.0', '10.0', '15.0'])
   })
 
   it('renders a fractional mean rounded, never at raw float precision, when fed the compact formatter', () => {

@@ -11,7 +11,6 @@ vi.mock('../api/client', () => ({
   usageCache: vi.fn(),
   usageLatency: vi.fn(),
   usageSeries: vi.fn(),
-  usageSessions: vi.fn(),
   usageSummary: vi.fn(),
   usageTotals: vi.fn(),
   usageUnpriced: vi.fn(),
@@ -47,7 +46,6 @@ import {
   usageCache,
   usageLatency,
   usageSeries,
-  usageSessions,
   usageSummary,
   usageTotals,
   usageUnpriced,
@@ -87,7 +85,6 @@ beforeEach(() => {
   vi.mocked(usageSummary).mockResolvedValue([summary])
   vi.mocked(usageSeries).mockResolvedValue([])
   vi.mocked(usageTotals).mockResolvedValue([])
-  vi.mocked(usageSessions).mockResolvedValue([])
   vi.mocked(usageLatency).mockResolvedValue([])
   vi.mocked(usageCache).mockResolvedValue([])
   vi.mocked(usageBudget).mockResolvedValue(calmBudget)
@@ -326,7 +323,7 @@ describe('Analytics chart legend selection', () => {
 
   it('ctrl-click toggles just that entry, independent of other legends', async () => {
     renderPage()
-    const chart = (await screen.findByText('Token consumption')).closest('section')
+    const chart = (await screen.findByText('Tokens consumption')).closest('section')
     if (!chart) throw new Error('chart section not found')
     const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
     if (!inputEntry) throw new Error('legend entry not found')
@@ -379,7 +376,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('defaults to lines and switches the tokens-in/out chart to bars on click', async () => {
     renderPage()
-    const chart = (await screen.findByText('Token consumption')).closest('section')
+    const chart = (await screen.findByText('Tokens consumption')).closest('section')
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -404,7 +401,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('has no toggle on the requests & errors panel', async () => {
     renderPage()
-    const chart = (await screen.findByText('Requests & errors over time')).closest('section')
+    const chart = (await screen.findByText('Requests & error rate')).closest('section')
     if (!chart) throw new Error('chart section not found')
     expect(within(chart).queryByText('Bars')).toBeNull()
     expect(within(chart).queryByText('Lines')).toBeNull()
@@ -412,23 +409,23 @@ describe('Analytics bars/lines view toggle', () => {
 })
 
 describe('Analytics panel layout', () => {
-  it('orders chart panels: spend by provider, spend by model, tokens per model, token consumption, latency/spend share, requests & errors', async () => {
+  it('orders chart panels: spend by provider, spend by model, tokens per model, tokens consumption, latency/spend share, requests & errors', async () => {
     renderPage()
     const headings = (await screen.findAllByRole('heading', { level: 2 })).map((h) => h.textContent)
     const chartHeadings = [
       'Spend by provider',
       'Spend by model',
       'Tokens per model',
-      'Token consumption',
+      'Tokens consumption',
       'Latency per provider',
       'Spend share by provider',
-      'Requests & errors over time',
+      'Requests & error rate',
     ]
     const positions = chartHeadings.map((h) => headings.indexOf(h))
     expect(positions.every((p) => p >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((a, b) => a - b))
     // Requests & errors is the last chart panel, ahead of the budget/table sections.
-    expect(headings.indexOf('Requests & errors over time')).toBeGreaterThan(headings.indexOf('Latency per provider'))
+    expect(headings.indexOf('Requests & error rate')).toBeGreaterThan(headings.indexOf('Latency per provider'))
   })
 })
 
@@ -468,7 +465,7 @@ describe('Analytics zero-cost exclusion', () => {
     )
     renderPage()
 
-    const providerTable = (await screen.findByText('Provider cost breakdown')).closest('section')
+    const providerTable = (await screen.findByText('Cost breakdown by provider')).closest('section')
     if (!providerTable) throw new Error('provider cost table not found')
     expect(await within(providerTable).findByText('openai')).toBeInTheDocument()
     expect(within(providerTable).queryByText('local-llama')).toBeNull()

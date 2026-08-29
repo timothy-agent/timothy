@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router'
 import { EChart } from '../components/charts/EChart'
 import { StatsLegend } from '../components/charts/StatsLegend'
 import {
@@ -18,7 +17,6 @@ import {
   usageCache,
   usageLatency,
   usageSeries,
-  usageSessions,
   usageSummary,
   usageTotals,
   usageUnpriced,
@@ -29,7 +27,6 @@ import type {
   CatalogPrice,
   GroupTotal,
   LatencyRow,
-  SessionUsage,
   UnpricedGroup,
   UsagePoint,
   UsageSummary,
@@ -92,7 +89,6 @@ interface Loaded {
   byModel: UsagePoint[]
   providerTotals: GroupTotal[]
   modelTotals: GroupTotal[]
-  sessions: SessionUsage[]
   latency: LatencyRow[]
   cache: CacheRow[]
   budget: BudgetStatus | null
@@ -241,7 +237,6 @@ export function Analytics() {
       usageSeries(from, to, bucket, 'model'),
       usageTotals(from, to, 'provider'),
       usageTotals(from, to, 'model'),
-      usageSessions(from, to, 10),
       usageLatency(from, to),
       usageCache(from, to),
       usageBudget(),
@@ -259,12 +254,11 @@ export function Analytics() {
         byModel: val(results[2], []),
         providerTotals: val(results[3], []),
         modelTotals: val(results[4], []),
-        sessions: val(results[5], []),
-        latency: val(results[6], []),
-        cache: val(results[7], []),
-        budget: val<BudgetStatus | null>(results[8], null),
+        latency: val(results[5], []),
+        cache: val(results[6], []),
+        budget: val<BudgetStatus | null>(results[7], null),
       })
-      setUnpriced(val<UnpricedGroup[]>(results[9], []))
+      setUnpriced(val<UnpricedGroup[]>(results[8], []))
     })
     return () => {
       live = false
@@ -628,7 +622,7 @@ export function Analytics() {
 
         <section className="mt-6 rounded-xl border border-border p-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Token consumption</h2>
+            <h2 className="text-sm font-medium">Tokens consumption</h2>
             <ViewToggle view={tokensView} onChange={setTokensView} />
           </div>
           <div className="mt-3">
@@ -678,7 +672,18 @@ export function Analytics() {
               <EChart
                 fill
                 option={donutOption(
-                  (data?.providerTotals ?? []).filter((g) => g.cost > 0),
+                  // Converted-first, same as the bar chart's chartCost:
+                  // slices plot the default-currency figure when a rate
+                  // exists; a slice with no stored rate keeps its raw
+                  // amount and labels it in its OWN currency (D-013:
+                  // never mislabel one currency's amount as another's).
+                  (data?.providerTotals ?? [])
+                    .filter((g) => (g.converted_amount ?? g.cost) > 0)
+                    .map((g) => ({
+                      group: g.group,
+                      cost: g.converted_amount ?? g.cost,
+                      label: money(g.converted_amount ?? g.cost, g.converted_currency ?? g.currency),
+                    })),
                   (g) => colorOf(g, cost.groups),
                   chartMoney,
                 )}
@@ -691,7 +696,7 @@ export function Analytics() {
         </div>
 
         <section className="mt-6 rounded-xl border border-border p-4">
-          <h2 className="text-sm font-medium">Requests &amp; errors over time</h2>
+          <h2 className="text-sm font-medium">Requests &amp; error rate</h2>
           <div className="mt-3">
             <EChart
               option={requestsErrorsOption(
@@ -745,44 +750,9 @@ export function Analytics() {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <ProviderCostTable rows={data?.providerTotals ?? []} />
-          <BreakdownTable title="By model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
+          <BreakdownTable title="Cost breakdown by model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
         </div>
 
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <h2 className="text-sm font-medium">Top sessions by cost</h2>
-          <table className="mt-3 w-full text-sm">
-            <tbody>
-              {(data?.sessions ?? []).map((sess) => (
-                <tr key={sess.session_id} className="border-t border-border/60">
-                  <td className="py-2 pr-2">
-                    <Link
-                      to={`/chat/${sess.session_id}`}
-                      className="block max-w-40 truncate text-blue-600 hover:underline dark:text-blue-400"
-                    >
-                      {sess.session_id.slice(0, 8)}…
-                    </Link>
-                  </td>
-                  <td className="py-2 text-right text-muted-foreground">{sess.requests} req</td>
-                  <td className="py-2 text-right font-medium">
-                    {primaryMoney(sess, sess.cost)}
-                    {secondaryMoney(sess, sess.cost) && (
-                      <span className="ml-1 text-xs font-normal text-muted-foreground">
-                        ({secondaryMoney(sess, sess.cost)})
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {data && data.sessions.length === 0 && (
-                <tr>
-                  <td className="py-6 text-center text-muted-foreground">
-                    No session spend in range.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </section>
       </div>
     </div>
   )
@@ -876,7 +846,7 @@ function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
 
   return (
     <section className="rounded-xl border border-border p-4">
-      <h2 className="text-sm font-medium">Provider cost breakdown</h2>
+      <h2 className="text-sm font-medium">Cost breakdown by provider</h2>
       <table className="mt-3 w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-muted-foreground">

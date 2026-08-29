@@ -1,18 +1,17 @@
 import type { Row } from './options'
 
-// statsFor computes mean/last/max for one group across the visible
+// statsFor computes mean/max/total for one group across the visible
 // rows — "visible" here means the rows fed to the chart, not filtered
 // by hidden (a hidden series still shows its stats, struck through).
-function statsFor(rows: Row[], group: string): { mean: number; last: number; max: number } {
+function statsFor(rows: Row[], group: string): { mean: number; max: number; total: number } {
   const values = rows.map((r) => Number(r[group]) || 0)
-  const sum = values.reduce((n, v) => n + v, 0)
-  const mean = values.length > 0 ? sum / values.length : 0
-  const last = values.length > 0 ? values[values.length - 1] : 0
+  const total = values.reduce((n, v) => n + v, 0)
+  const mean = values.length > 0 ? total / values.length : 0
   const max = values.length > 0 ? Math.max(...values) : 0
-  return { mean, last, max }
+  return { mean, max, total }
 }
 
-// Grafana-style legend: color swatch, series name, Mean/Last/Max
+// Grafana-style legend: color swatch, series name, Mean/Max/Total
 // columns computed from rows. Plain click isolates that series;
 // ctrl/cmd-click toggles it in/out of the visible set (name renders
 // plain text so tests/click targets select by it).
@@ -39,8 +38,8 @@ export function StatsLegend({
           <tr className="text-left text-muted-foreground">
             <th className="pb-1 font-medium">Series</th>
             <th className="pb-1 pl-3 text-right font-medium">Mean</th>
-            <th className="pb-1 pl-3 text-right font-medium">Last</th>
             <th className="pb-1 pl-3 text-right font-medium">Max</th>
+            <th className="pb-1 pl-3 text-right font-medium">Total</th>
           </tr>
         </thead>
         <tbody>
@@ -61,8 +60,8 @@ export function StatsLegend({
                   </span>
                 </td>
                 <td className="py-0.5 pl-3 text-right text-muted-foreground">{valueLabel(s.mean)}</td>
-                <td className="py-0.5 pl-3 text-right text-muted-foreground">{valueLabel(s.last)}</td>
                 <td className="py-0.5 pl-3 text-right text-muted-foreground">{valueLabel(s.max)}</td>
+                <td className="py-0.5 pl-3 text-right text-muted-foreground">{valueLabel(s.total)}</td>
               </tr>
             )
           })}
