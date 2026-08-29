@@ -118,7 +118,7 @@ func TestKBCollectionsCRUD(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
 	create := httptest.NewRequest("POST", "/v1/admin/kb/collections", strings.NewReader(`{"name":"itest-docs","description":"test collection"}`))
 	create.Header.Set("Authorization", "Bearer tok")
@@ -203,7 +203,7 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-upload", "")
 	if err != nil {
@@ -267,7 +267,7 @@ func TestKBDocumentUploadStripsNULAndInvalidUTF8(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-nul", "")
 	if err != nil {
@@ -305,7 +305,7 @@ func TestKBDocumentUploadRejectsUnsupportedType(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-upload-bad", "")
 	if err != nil {
@@ -341,7 +341,7 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url", "")
 	if err != nil {
@@ -403,7 +403,7 @@ func TestKBDocumentUploadAutoCreatesNewCollection(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
 	body, contentType := multipartFile(t, "file", "notes.md", []byte("# Title\nsome content"))
 	req := httptest.NewRequest("POST", "/v1/admin/kb/documents", body)
@@ -458,7 +458,7 @@ func TestKBDocumentFromURLAutoUsesExistingCollection(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", matchExisting)
+	a.registerKB(m.Handle, store, ingester, "", matchExisting, nil)
 
 	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/url",
 		strings.NewReader(`{"url":"`+page.URL+`/notes.md","title":""}`))
@@ -541,11 +541,382 @@ func TestKBSweepStaleFailsStuckDocuments(t *testing.T) {
 	}
 }
 
+// clipRequest builds a valid clip JSON body, letting each test override
+// individual fields via the returned map before marshaling.
+func clipRequest(overrides map[string]any) string {
+	body := map[string]any{
+		"url":         "https://example.com/article",
+		"title":       "Article title",
+		"markdown":    "# Article title\n\nsome content",
+	}
+	for k, v := range overrides {
+		if v == nil {
+			delete(body, k)
+			continue
+		}
+		body[k] = v
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+func postClip(t *testing.T, m *http.ServeMux, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/clip", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	return w
+}
+
+func TestKBClipValidation(t *testing.T) {
+	store := testKBStore(t)
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+
+	tests := []struct {
+		name       string
+		overrides  map[string]any
+		wantStatus int
+		wantCode   string
+	}{
+		{"missing url", map[string]any{"url": nil}, http.StatusBadRequest, "bad_request"},
+		{"invalid url scheme", map[string]any{"url": "ftp://example.com/x"}, http.StatusBadRequest, "bad_request"},
+		{"empty markdown", map[string]any{"markdown": "  "}, http.StatusBadRequest, "bad_request"},
+		{"oversize markdown", map[string]any{"markdown": strings.Repeat("a", (128<<10)+1)}, http.StatusRequestEntityTooLarge, "too_large"},
+		{"unknown collection_id", map[string]any{"collection_id": "00000000-0000-0000-0000-000000000000"}, http.StatusNotFound, "not_found"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := postClip(t, m, clipRequest(tc.overrides))
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d body %s", w.Code, tc.wantStatus, w.Body)
+			}
+			var resp struct {
+				Error string `json:"error"`
+			}
+			if err := decodeBody(t, w.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.Error != tc.wantCode {
+				t.Fatalf("error code = %q, want %q", resp.Error, tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestKBClipNewDocumentAutoClassifiesAndNormalizesURL exercises the
+// happy path with no collection_id: the classifier is consulted, the
+// document lands with source_type clip, and the stored source_ref has
+// tracking params stripped but real params kept.
+func TestKBClipNewDocumentAutoClassifiesAndNormalizesURL(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+	classified := false
+	classify := func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
+		classified = true
+		return chat.CollectionChoice{NewName: "itest-clip-auto", NewDesc: "auto"}
+	}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", classify, nil)
+
+	body := clipRequest(map[string]any{"url": "https://example.com/article?utm_source=x&x=1#frag"})
+	w := postClip(t, m, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 body %s", w.Code, w.Body)
+	}
+	if !classified {
+		t.Fatal("classifier was not consulted for a new clip with no collection_id")
+	}
+	if strings.Contains(w.Body.String(), "some content") {
+		t.Fatal("response must not include markdown")
+	}
+
+	var doc struct {
+		ID           string `json:"id"`
+		CollectionID string `json:"collection_id"`
+		SourceType   string `json:"source_type"`
+		SourceRef    string `json:"source_ref"`
+		Status       string `json:"status"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.SourceType != "clip" {
+		t.Fatalf("source_type = %q, want clip", doc.SourceType)
+	}
+	if doc.SourceRef != "https://example.com/article?x=1" {
+		t.Fatalf("source_ref = %q, want tracking params stripped and fragment dropped", doc.SourceRef)
+	}
+	coll, err := store.GetCollection(context.Background(), doc.CollectionID)
+	if err != nil {
+		t.Fatalf("GetCollection: %v", err)
+	}
+	if coll.Name != "itest-clip-auto" {
+		t.Fatalf("collection name = %q, want the classifier's proposed itest-clip-auto", coll.Name)
+	}
+}
+
+func TestKBClipNewDocumentWithCollectionSkipsClassifier(t *testing.T) {
+	store := testKBStore(t)
+	classified := false
+	classify := func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
+		classified = true
+		return chat.CollectionChoice{NewName: "should-not-be-created"}
+	}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-clip-target", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	w := postClip(t, m, clipRequest(map[string]any{"collection_id": collID}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 body %s", w.Code, w.Body)
+	}
+	if classified {
+		t.Fatal("classifier must not be consulted when collection_id is given")
+	}
+
+	var doc struct {
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.CollectionID != collID {
+		t.Fatalf("collection_id = %q, want %q", doc.CollectionID, collID)
+	}
+}
+
+// TestKBClipReClipRefreshesInPlace covers the dedup path: posting the
+// same normalized URL twice must update the existing row, not create a
+// second one, and must not re-consult the classifier.
+func TestKBClipReClipRefreshesInPlace(t *testing.T) {
+	store := testKBStore(t)
+	classifyCalls := 0
+	classify := func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
+		classifyCalls++
+		return chat.CollectionChoice{NewName: "itest-clip-reclip"}
+	}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil)
+
+	first := postClip(t, m, clipRequest(map[string]any{"url": "https://example.com/reclip?utm_source=a#x"}))
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first clip status = %d body %s", first.Code, first.Body)
+	}
+	var firstDoc struct {
+		ID           string `json:"id"`
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, first.Body.Bytes(), &firstDoc); err != nil {
+		t.Fatal(err)
+	}
+	if classifyCalls != 1 {
+		t.Fatalf("classifyCalls after first clip = %d, want 1", classifyCalls)
+	}
+
+	second := postClip(t, m, clipRequest(map[string]any{
+		"url":      "https://example.com/reclip?utm_source=b#y",
+		"title":    "Updated title",
+		"markdown": "# Updated title\n\nnew content",
+	}))
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("second clip status = %d body %s", second.Code, second.Body)
+	}
+	var secondDoc struct {
+		ID           string `json:"id"`
+		Title        string `json:"title"`
+		CollectionID string `json:"collection_id"`
+		Status       string `json:"status"`
+	}
+	if err := decodeBody(t, second.Body.Bytes(), &secondDoc); err != nil {
+		t.Fatal(err)
+	}
+	if secondDoc.ID != firstDoc.ID {
+		t.Fatalf("second clip created a new document %q, want the same id %q", secondDoc.ID, firstDoc.ID)
+	}
+	if secondDoc.Title != "Updated title" {
+		t.Fatalf("title = %q, want updated", secondDoc.Title)
+	}
+	if secondDoc.Status != "pending" {
+		t.Fatalf("status = %q, want pending", secondDoc.Status)
+	}
+	if secondDoc.CollectionID != firstDoc.CollectionID {
+		t.Fatalf("collection_id changed to %q without collection_id in the request, want unchanged %q", secondDoc.CollectionID, firstDoc.CollectionID)
+	}
+	if classifyCalls != 1 {
+		t.Fatalf("classifyCalls after re-clip = %d, want still 1 (not re-consulted)", classifyCalls)
+	}
+
+	final, err := store.GetDocument(context.Background(), firstDoc.ID)
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	if final.Markdown != "# Updated title\n\nnew content" {
+		t.Fatalf("stored markdown = %q, want updated", final.Markdown)
+	}
+	if final.Bytes != int64(len(final.Markdown)) {
+		t.Fatalf("bytes = %d, want %d", final.Bytes, len(final.Markdown))
+	}
+
+	rows, err := store.ListDocuments(context.Background(), firstDoc.CollectionID)
+	if err != nil {
+		t.Fatalf("ListDocuments: %v", err)
+	}
+	count := 0
+	for _, d := range rows {
+		if d.ID == firstDoc.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("found %d rows for the re-clipped document, want exactly 1 (no duplicate)", count)
+	}
+}
+
+func TestKBClipReClipMovesCollection(t *testing.T) {
+	store := testKBStore(t)
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+
+	origID, err := store.CreateCollection(context.Background(), "itest-clip-orig", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	newID, err := store.CreateCollection(context.Background(), "itest-clip-new", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	first := postClip(t, m, clipRequest(map[string]any{"url": "https://example.com/move", "collection_id": origID}))
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first clip status = %d body %s", first.Code, first.Body)
+	}
+
+	second := postClip(t, m, clipRequest(map[string]any{"url": "https://example.com/move", "collection_id": newID}))
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("second clip status = %d body %s", second.Code, second.Body)
+	}
+	var doc struct {
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, second.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.CollectionID != newID {
+		t.Fatalf("collection_id = %q, want moved to %q", doc.CollectionID, newID)
+	}
+}
+
+func TestKBClipStripsNULBytes(t *testing.T) {
+	store := testKBStore(t)
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+
+	w := postClip(t, m, clipRequest(map[string]any{"markdown": "clean\x00 text \xff here"}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body %s", w.Code, w.Body)
+	}
+	var doc struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	final, err := store.GetDocument(context.Background(), doc.ID)
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	if final.Markdown != "clean text � here" {
+		t.Fatalf("stored markdown = %q, want NUL stripped and invalid UTF-8 replaced", final.Markdown)
+	}
+}
+
+func TestKBClipEmptyTitleUsesGeneratedTitle(t *testing.T) {
+	store := testKBStore(t)
+	titler := func(ctx context.Context, input string) string { return "Generated Title" }
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler)
+
+	w := postClip(t, m, clipRequest(map[string]any{"title": ""}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 body %s", w.Code, w.Body)
+	}
+	var doc struct {
+		Title string `json:"title"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Title != "Generated Title" {
+		t.Fatalf("title = %q, want the titler's Generated Title", doc.Title)
+	}
+}
+
+func TestKBClipEmptyTitleFallsBackToURLWhenTitlerEmpty(t *testing.T) {
+	store := testKBStore(t)
+	titler := func(ctx context.Context, input string) string { return "" }
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler)
+
+	body := clipRequest(map[string]any{"title": "", "url": "https://example.com/docs/getting-started.html"})
+	w := postClip(t, m, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 body %s", w.Code, w.Body)
+	}
+	var doc struct {
+		Title string `json:"title"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Title != "getting-started" {
+		t.Fatalf("title = %q, want titleFromURL's derivation getting-started", doc.Title)
+	}
+}
+
+func TestKBClipExplicitTitleSkipsTitler(t *testing.T) {
+	store := testKBStore(t)
+	titler := func(ctx context.Context, input string) string {
+		t.Fatal("titler must not be consulted when title is non-empty")
+		return ""
+	}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler)
+
+	w := postClip(t, m, clipRequest(map[string]any{"title": "Explicit Title"}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 body %s", w.Code, w.Body)
+	}
+	var doc struct {
+		Title string `json:"title"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Title != "Explicit Title" {
+		t.Fatalf("title = %q, want Explicit Title", doc.Title)
+	}
+}
+
 func TestKBDocumentFromURLRejectsBadURL(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url-bad", "")
 	if err != nil {
@@ -569,7 +940,7 @@ func TestKBDocumentFromURLBlocksLocalAddresses(t *testing.T) {
 	m := mux(a)
 	// Real guarded transport: the loopback httptest server must be
 	// refused at dial time.
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("secret internal page"))
@@ -596,7 +967,7 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	ingester := &fakeIngester{err: errors.New("memoryd unreachable")}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-reingest", "")
 	if err != nil {

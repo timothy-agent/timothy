@@ -70,6 +70,34 @@ func TestFetchURLBlockedStatus(t *testing.T) {
 	}
 }
 
+func TestNormalizeClipURL(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"fragment dropped", "https://example.com/a#section-2", "https://example.com/a"},
+		{"mixed tracking and real params", "https://example.com/a?utm_source=x&x=1&fbclid=abc&gclid=def", "https://example.com/a?x=1"},
+		{"no params unchanged", "https://example.com/a", "https://example.com/a"},
+		{"all params stripped drops the question mark", "https://example.com/a?utm_source=x&utm_medium=y", "https://example.com/a"},
+		{"credentials cleared", "https://user:pass@example.com/a", "https://example.com/a"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, err := url.Parse(tc.url)
+			if err != nil {
+				t.Fatalf("parse %s: %v", tc.url, err)
+			}
+			u.User = nil
+			if got := normalizeClipURL(u); got != tc.want {
+				t.Fatalf("normalizeClipURL(%s) = %q, want %q", tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConvertFetched(t *testing.T) {
 	t.Parallel()
 	markitdown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

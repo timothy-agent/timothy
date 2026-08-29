@@ -287,6 +287,48 @@ func (s *Store) SetFailed(ctx context.Context, id, errMsg string) error {
 	return nil
 }
 
+// FindDocumentBySource looks up a document by its dedup key
+// (source_type, source_ref) — used by clip ingestion to tell a fresh
+// clip from a re-clip of the same URL.
+func (s *Store) FindDocumentBySource(ctx context.Context, sourceType, sourceRef string) (Document, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return Document{}, fmt.Errorf("kb document by source: %w", err)
+	}
+	d, err := scanDocument(db.QueryRow(ctx,
+		`SELECT `+documentColumns+` FROM kb_documents WHERE source_type = $1 AND source_ref = $2`,
+		sourceType, sourceRef))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Document{}, fmt.Errorf("document %s %s: %w", sourceType, sourceRef, ErrNotFound)
+	}
+	if err != nil {
+		return Document{}, fmt.Errorf("kb document by source: %w", err)
+	}
+	return d, nil
+}
+
+// ReplaceDocumentContent overwrites a document's content on a re-clip:
+// title, markdown, and bytes are replaced, status resets to pending for
+// a fresh ingest, and any error is cleared. collectionID moves the
+// document only when non-empty, leaving it in place otherwise.
+func (s *Store) ReplaceDocumentContent(ctx context.Context, id, title, markdown string, bytes int64, collectionID string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("kb document %s replace: %w", id, err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE kb_documents
+		SET title = $2, markdown = $3, bytes = $4, status = 'pending', error = '',
+			collection_id = COALESCE(NULLIF($5, '')::uuid, collection_id), updated_at = now()
+		WHERE id = $1`, id, title, markdown, bytes, collectionID)
+	if err != nil {
+		return fmt.Errorf("kb document %s replace: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("document %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // DeleteDocument removes a document; ON DELETE CASCADE takes its
 // chunks with it.
 func (s *Store) DeleteDocument(ctx context.Context, id string) error {
