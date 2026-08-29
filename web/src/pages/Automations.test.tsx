@@ -111,6 +111,16 @@ describe('Automations page', () => {
     expect(await screen.findByText('ops-inbox')).toBeTruthy()
   })
 
+  it('shows the destination kind icon inside the badge alongside the name', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([destination])
+    vi.mocked(listSchedules).mockResolvedValue([
+      { ...schedule, mission_template: { ...schedule.mission_template, destination_ids: ['d1'] } },
+    ])
+    renderPage()
+    const badge = await screen.findByText('ops-inbox')
+    expect(badge.closest('span')?.querySelector('svg')).toBeInTheDocument()
+  })
+
   it('shows no destination badges when the schedule has none attached', async () => {
     vi.mocked(listDestinations).mockResolvedValue([destination])
     vi.mocked(listSchedules).mockResolvedValue([schedule])

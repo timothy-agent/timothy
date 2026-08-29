@@ -14,10 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog'
-import { Toggle } from './shared'
+import { DestinationKindIcon, Toggle } from './shared'
 import { errText } from './util'
-
-const kindIcon = { email: Mail01Icon, webhook: GlobalIcon } as const
 
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
@@ -154,11 +152,7 @@ function DestinationCard({
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:shadow-md">
       <div className="flex items-center gap-3">
-        {destination.kind === 'telegram' ? (
-          <TelegramIcon className="size-9" />
-        ) : (
-          <HugeiconsIcon icon={kindIcon[destination.kind]} className="size-9" />
-        )}
+        <DestinationKindIcon kind={destination.kind} className="size-9" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{destination.name}</div>
           <div className="text-xs text-muted-foreground uppercase">{destination.kind}</div>

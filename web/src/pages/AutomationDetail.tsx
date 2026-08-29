@@ -1,10 +1,17 @@
+import { PencilEdit01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { listDestinations, listMissions, listSchedules } from '../api/client'
+import { toast } from 'sonner'
+import { listDestinations, listMissions, listSchedules, patchSchedule } from '../api/client'
 import type { Destination, Mission, Schedule } from '../api/types'
+import { slugify } from '../components/settings/AgentForm'
 import { MissionCard } from '../components/missions/MissionCard'
+import { DestinationKindIcon } from '../components/settings/shared'
+import { errText } from '../components/settings/util'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import { describeCron } from '../lib/schedules'
 import { relativeTime, relativeTimeUntil } from '../lib/format'
 
@@ -17,6 +24,8 @@ export function AutomationDetail() {
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [loading, setLoading] = useState(true)
   const [missions, setMissions] = useState<Mission[]>([])
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState('')
   // Destinations fetched once per page, just to resolve
   // destination_ids into display names for the badges below.
   const [destinations, setDestinations] = useState<Destination[]>([])
@@ -41,6 +50,25 @@ export function AutomationDetail() {
   }, [id])
 
   useEffect(refresh, [refresh])
+
+  const startRename = () => {
+    if (!schedule) return
+    setName(schedule.name)
+    setRenaming(true)
+  }
+
+  const commitRename = async () => {
+    const slug = slugify(name)
+    setRenaming(false)
+    if (!schedule || slug === '' || slug === schedule.name) return
+    try {
+      await patchSchedule(schedule.id, { name: slug })
+      toast.success('Automation renamed')
+      refresh()
+    } catch (err) {
+      toast.error('Could not rename automation', { description: errText(err) })
+    }
+  }
 
   if (!id) return null
 
@@ -69,7 +97,32 @@ export function AutomationDetail() {
     <div className="mx-auto w-full max-w-full px-8 py-6">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{schedule.name}</h1>
+          {renaming ? (
+            <Input
+              aria-label="Automation name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => void commitRename()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                if (e.key === 'Escape') setRenaming(false)
+              }}
+              autoFocus
+              className="h-8 max-w-sm text-xl font-semibold tracking-tight"
+            />
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <h1 className="truncate text-xl font-semibold tracking-tight">{schedule.name}</h1>
+              <button
+                type="button"
+                aria-label="Rename automation"
+                onClick={startRename}
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+              >
+                <HugeiconsIcon icon={PencilEdit01Icon} className="size-4" />
+              </button>
+            </div>
+          )}
           <p className="line-clamp-1 text-sm text-muted-foreground">{schedule.mission_template.goal}</p>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
             <span>{describeCron(schedule.cron)}</span>
@@ -84,6 +137,7 @@ export function AutomationDetail() {
                   const d = destinations.find((d) => d.id === did)
                   return (
                     <Badge key={did} variant="outline" className="text-xs">
+                      {d && <DestinationKindIcon kind={d.kind} />}
                       {d?.name ?? did}
                     </Badge>
                   )

@@ -1,3 +1,5 @@
+import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { listSchedules } from '../api/client'
@@ -49,8 +51,16 @@ export function EditSchedule() {
 
   return (
     <div className="mx-auto w-full max-w-full px-8 py-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Edit schedule</h1>
+      <Link
+        to={`/automations/${id}`}
+        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+      >
+        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+        Automation
+      </Link>
+
+      <div className="mt-6">
+        <h1 className="text-xl font-semibold tracking-tight">Edit automation</h1>
         <p className="text-sm text-muted-foreground">
           A recurring mission that fires on the cron below.
         </p>

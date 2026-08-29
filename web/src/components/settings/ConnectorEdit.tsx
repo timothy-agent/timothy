@@ -1,4 +1,4 @@
-import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { ArrowLeft01Icon, Delete02Icon, PencilEdit01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from '../ui/dialog'
 import { Input } from '../ui/input'
+import { slugify } from './AgentForm'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, unknownPreset } from './connectorPresets'
 import { Field, Toggle } from './shared'
@@ -45,6 +46,8 @@ export function ConnectorEdit() {
   const [token, setToken] = useState('')
   const [savingToken, setSavingToken] = useState(false)
   const [oauthBusy, setOAuthBusy] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState('')
 
   const refresh = useCallback(() => {
     listConnectors()
@@ -134,6 +137,25 @@ export function ConnectorEdit() {
     toast.success('Public key copied')
   }
 
+  const startRename = () => {
+    if (!connector) return
+    setName(connector.name)
+    setRenaming(true)
+  }
+
+  const commitRename = async () => {
+    const slug = slugify(name)
+    setRenaming(false)
+    if (!connector || slug === '' || slug === connector.name) return
+    try {
+      await patchConnector(connector.id, { name: slug })
+      toast.success('Connector renamed')
+      refresh()
+    } catch (err) {
+      toast.error('Could not rename connector', { description: errText(err) })
+    }
+  }
+
   const reconnectOAuth = async () => {
     if (!connector) return
     setOAuthBusy(true)
@@ -164,7 +186,32 @@ export function ConnectorEdit() {
       <div className="flex items-center gap-4 border-b border-border pb-6">
         <ConnectorLogo preset={preset} className="size-12" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{connector.name}</h1>
+          {renaming ? (
+            <Input
+              aria-label="Connector name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => void commitRename()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                if (e.key === 'Escape') setRenaming(false)
+              }}
+              autoFocus
+              className="h-8 max-w-sm text-xl font-semibold tracking-tight"
+            />
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <h1 className="truncate text-xl font-semibold tracking-tight">{connector.name}</h1>
+              <button
+                type="button"
+                aria-label="Rename connector"
+                onClick={startRename}
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+              >
+                <HugeiconsIcon icon={PencilEdit01Icon} className="size-4" />
+              </button>
+            </div>
+          )}
           <p className="text-sm text-muted-foreground uppercase">{connector.kind}</p>
         </div>
         <Button variant="destructive" onClick={() => setConfirmDelete(true)}>

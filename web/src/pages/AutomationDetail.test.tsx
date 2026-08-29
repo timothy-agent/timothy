@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Destination, Mission, Schedule } from '../api/types'
@@ -8,9 +8,12 @@ vi.mock('../api/client', () => ({
   listSchedules: vi.fn(),
   listMissions: vi.fn(),
   listDestinations: vi.fn(),
+  patchSchedule: vi.fn(),
 }))
 
-import { listDestinations, listMissions, listSchedules } from '../api/client'
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+
+import { listDestinations, listMissions, listSchedules, patchSchedule } from '../api/client'
 
 const schedule: Schedule = {
   id: 's1',
@@ -109,5 +112,34 @@ describe('AutomationDetail', () => {
     renderAt('s1')
     await screen.findByText('weekly-digest')
     expect(screen.queryByText('ops-inbox')).toBeNull()
+  })
+
+  it('renames the automation: pencil click, edit, Enter saves the slugified name', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    vi.mocked(patchSchedule).mockResolvedValue({ ...schedule, name: 'new-name' })
+    renderAt('s1')
+    await screen.findByText('weekly-digest')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename automation' }))
+    const input = screen.getByRole('textbox', { name: 'Automation name' })
+    fireEvent.change(input, { target: { value: 'New Name' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(patchSchedule).toHaveBeenCalledWith('s1', { name: 'new-name' }))
+  })
+
+  it('cancels the rename on Escape without calling patchSchedule', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    renderAt('s1')
+    await screen.findByText('weekly-digest')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename automation' }))
+    const input = screen.getByRole('textbox', { name: 'Automation name' })
+    fireEvent.change(input, { target: { value: 'New Name' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(screen.queryByRole('textbox', { name: 'Automation name' })).toBeNull()
+    expect(screen.getByText('weekly-digest')).toBeTruthy()
+    expect(patchSchedule).not.toHaveBeenCalled()
   })
 })

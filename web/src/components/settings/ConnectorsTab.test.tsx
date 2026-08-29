@@ -104,6 +104,35 @@ describe('Connectors tab', () => {
     )
   })
 
+  it('renames a connector: pencil click, edit, Enter saves the slugified name', async () => {
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+    await screen.findByRole('heading', { name: 'google-calendar' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename connector' }))
+    const input = screen.getByRole('textbox', { name: 'Connector name' })
+    fireEvent.change(input, { target: { value: 'New Calendar' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, { name: 'new-calendar' }),
+    )
+  })
+
+  it('cancels a connector rename on Escape without calling patchConnector', async () => {
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+    await screen.findByRole('heading', { name: 'google-calendar' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename connector' }))
+    const input = screen.getByRole('textbox', { name: 'Connector name' })
+    fireEvent.change(input, { target: { value: 'New Calendar' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(screen.queryByRole('textbox', { name: 'Connector name' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'google-calendar' })).toBeTruthy()
+    expect(patchConnector).not.toHaveBeenCalled()
+  })
+
   it('renders a Reconnect button and the failure message for a failed google test', async () => {
     vi.mocked(testConnector).mockResolvedValue({
       ok: false,

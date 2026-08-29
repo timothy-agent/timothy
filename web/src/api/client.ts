@@ -1066,7 +1066,7 @@ export async function createConnector(c: Partial<AdminConnector>): Promise<strin
 
 export async function patchConnector(
   id: string,
-  patch: Partial<Pick<AdminConnector, 'config' | 'credential_ref' | 'enabled' | 'sensitive'>>,
+  patch: Partial<Pick<AdminConnector, 'name' | 'config' | 'credential_ref' | 'enabled' | 'sensitive'>>,
 ): Promise<void> {
   await request<void>(`/v1/admin/connectors/${id}`, {
     method: 'PATCH',

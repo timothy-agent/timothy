@@ -50,12 +50,13 @@ export function ConnectorsList() {
           {connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Integrations the agent can use as tools. Mail/calendar tools appear to the model once
-          per capability (e.g. <span className="font-mono text-xs">mail_search</span>) with an{' '}
+          Integrations the agent can use as tools. A tool appears to the model once per capability
+          (e.g. <span className="font-mono text-xs">mail_search</span>) with an{' '}
           <span className="font-mono text-xs">account</span> argument routing to the right
-          connected account; MCP connectors&apos; tools still appear as{' '}
-          <span className="font-mono text-xs">name_tool</span>. Either way, tool calls go through
-          the same permission prompts as everything else.
+          connector when more than one serves it; a name that would otherwise collide (with a
+          built-in tool, or across two MCP servers with different schemas) keeps its{' '}
+          <span className="font-mono text-xs">name_tool</span> form instead. Either way, tool
+          calls go through the same permission prompts as everything else.
         </p>
         {connectors.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">

@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
-import { Toggle } from '../components/settings/shared'
+import { DestinationKindIcon, Toggle } from '../components/settings/shared'
 import { errText } from '../components/settings/util'
 
 // Automations lists every recurring schedule as a card, folding in what
@@ -97,6 +97,7 @@ export function Automations() {
                     const d = destinations.find((d) => d.id === id)
                     return (
                       <Badge key={id} variant="outline" className="text-xs">
+                        {d && <DestinationKindIcon kind={d.kind} />}
                         {d?.name ?? id}
                       </Badge>
                     )
