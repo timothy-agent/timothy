@@ -16,13 +16,15 @@ import (
 // content (e.g. email text) to a cloud model. ConnectorNames is the
 // user-controlled input (a connector's own "sensitive" flag, set from
 // the connectors settings UI). Two ways a tool call can be covered:
-// suffix+"_" prefix against an MCP-style namespaced name
-// ("<connector-name>_<tool-name>", connectors.Manager.Tools' MCP
-// passthrough), or, for a unified aggregate tool (connectors.Manager's
-// mail_search etc., which carries no connector name in its own name),
-// AccountConnector resolving the call's actual account to a sensitive
-// connector. AccountConnector is nil-safe (not every caller wires it,
-// and non-connector tools never resolve). All three funcs re-resolve on
+// suffix+"_" prefix against a namespaced name ("<connector-name>_<tool-
+// name>", connectors.Manager.Tools' fallback for a name that can't
+// unify — a builtin collision or, MCP-only, a schema mismatch across
+// connectors), or, for a unified tool (most connector tools, MCP
+// included, once merged under their raw name — mail_search etc. carry
+// no connector name in their own name), AccountConnector resolving the
+// call's actual account to a sensitive connector. AccountConnector is
+// nil-safe (not every caller wires it, and non-connector tools never
+// resolve). All three funcs re-resolve on
 // every call, not cached, so toggling a connector's sensitive flag (or
 // the configured route) applies to the next side-call without a
 // restart; an empty Route result means the feature is currently off

@@ -1446,10 +1446,18 @@ func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger, to
 }
 
 // swapAgentTools recompiles builtin + connector tools and swaps them
-// into the agent. A compile failure keeps the previous surface — a
-// broken connector schema must not take down the builtins.
+// into the agent. builtins' own names are passed to conns.Tools as the
+// reserved set: a connector tool (MCP raw names now included, see
+// Manager.Tools) never aggregates under a name the agent already has
+// from somewhere else, so it stays namespaced instead of shadowing it.
+// A compile failure keeps the previous surface — a broken connector
+// schema must not take down the builtins.
 func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors.Manager, log *slog.Logger, toolCalls *prometheus.CounterVec) {
-	constrained, defs, err := compileToolset(builtins, conns.Tools(), log, toolCalls)
+	reserved := make(map[string]bool, len(builtins))
+	for _, t := range builtins {
+		reserved[t.Name] = true
+	}
+	constrained, defs, err := compileToolset(builtins, conns.Tools(reserved), log, toolCalls)
 	if err != nil {
 		log.Warn("connector toolset compile failed; keeping previous tools", "error", err)
 		return

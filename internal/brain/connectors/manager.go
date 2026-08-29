@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -145,22 +146,22 @@ func (m *Manager) Reload(ctx context.Context) error {
 // toolNameSanitizer strips characters providers reject in tool names.
 var toolNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
-// Tools returns the agent's whole non-MCP tool surface aggregated one
-// tool per raw name (see aggregateTools), plus every MCP source's
-// tools individually namespaced "<connector>_<tool>" as before: MCP
-// servers are external, their names can't be unified.
-func (m *Manager) Tools() []*tools.Tool {
+// Tools returns the agent's whole tool surface: every source (MCP
+// included) joins the raw-name aggregation aggregateTools performs,
+// with an "account" argument selecting the connector once more than
+// one contributes the same raw name — same as the unified mail/
+// calendar surface. reserved names (the agent's non-connector tools,
+// e.g. builtins) never aggregate under their raw form: a connector
+// tool sharing one falls back to "<connector>_<tool>" instead, so a
+// remote MCP server can never shadow a tool the operator didn't wire
+// through a connector. Two MCP connectors serving the same raw name
+// with non-identical schemas also fall back to namespaced form for
+// that name (see aggregateTools): unlike Timothy's own connector
+// kinds, an external MCP server's schema can't be assumed to match.
+func (m *Manager) Tools(reserved map[string]bool) []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := aggregateTools(m.sources, false)
-	for name, src := range m.sources {
-		mcp, isMCP := src.(*mcpSource)
-		if !isMCP {
-			continue
-		}
-		out = append(out, namespacedTools(name, mcp.Tools())...)
-	}
-	return out
+	return aggregateTools(m.sources, false, reserved)
 }
 
 // ReadOnlyTools returns the aggregated ReadOnly-marked non-MCP tool
@@ -174,7 +175,7 @@ func (m *Manager) Tools() []*tools.Tool {
 func (m *Manager) ReadOnlyTools() []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return aggregateTools(m.sources, true)
+	return aggregateTools(m.sources, true, nil)
 }
 
 // AccountConnector resolves which connector name a unified tool call
@@ -182,30 +183,25 @@ func (m *Manager) ReadOnlyTools() []*tools.Tool {
 // resolution aggregateTool's Execute applies, exposed standalone so
 // callers that only need to know WHICH connector a call touches (e.g.
 // connector-level sensitivity, session.SensitiveTools) don't have to
-// re-run the call to find out. Returns "" when toolName isn't a
-// currently aggregated non-MCP tool, or when args' account doesn't
-// resolve (missing-but-required, or unknown); callers fall back to
-// their own default in that case, same as any non-connector tool call.
+// re-run the call to find out. Every source, MCP included, contributes
+// here through groupByRawName's SAME merge decision Tools uses: an MCP
+// tool that actually merged into the raw-name surface routes through
+// account resolution, so a sensitive MCP connector's raw-named tool
+// call still resolves back to it; an MCP tool that stayed namespaced
+// (Guard A/B) never reaches here under its raw name, since it isn't
+// exposed that way. reserved is nil: sensitivity resolution runs after
+// the agent's tool surface is already fixed, so it only needs to know
+// what's ACTUALLY unified, which groupByRawName reports regardless of
+// reserved (a nil reserved set only affects the split, never whether a
+// name that did merge is resolvable). Returns "" when toolName isn't a
+// currently aggregated tool, or when args' account doesn't resolve
+// (missing-but-required, or unknown); callers fall back to their own
+// default in that case, same as any non-connector tool call.
 func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	byName := map[string][]toolAccount{}
-	for name, src := range m.sources {
-		if _, isMCP := src.(*mcpSource); isMCP {
-			continue
-		}
-		var kind, email string
-		if info, ok := src.(accountInfo); ok {
-			kind, email = info.AccountInfo()
-		}
-		for _, t := range src.Tools() {
-			if t.Name != toolName {
-				continue
-			}
-			byName[t.Name] = append(byName[t.Name], toolAccount{connector: name, kind: kind, email: email, tool: t})
-		}
-	}
-	accounts, ok := byName[toolName]
+	merged, _ := groupByRawName(m.sources, nil)
+	accounts, ok := merged[toolName]
 	if !ok {
 		return ""
 	}
@@ -217,7 +213,8 @@ func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string
 }
 
 // namespacedTools clones ts renamed "<name>_<tool>", sanitized and
-// length-capped: MCP's tool-naming scheme, unchanged by unification.
+// length-capped: MCP's tool-naming scheme, kept for a name that stays
+// split (see groupByRawName).
 func namespacedTools(name string, ts []*tools.Tool) []*tools.Tool {
 	out := make([]*tools.Tool, 0, len(ts))
 	for _, t := range ts {
@@ -235,16 +232,15 @@ func namespacedTools(name string, ts []*tools.Tool) []*tools.Tool {
 // accountInfo is the optional Source capability that reports the
 // source's kind and connected account email (google-, microsoft-kind
 // today): the input aggregateTools groups tools around. A source that
-// doesn't implement it (mcp) is never aggregated; Tools/ReadOnlyTools
-// handle mcp separately.
+// doesn't implement it (mcp included) reports empty kind/email but
+// still joins the raw-name grouping.
 type accountInfo interface {
 	AccountInfo() (kind, email string)
 }
 
-// toolAccount is one accountInfo-capable source's contribution to an
-// aggregated tool: its connector name/kind/email (for account matching
-// and the description's connected-accounts list) plus its own
-// (un-namespaced) tool.
+// toolAccount is one source's contribution to an aggregated tool: its
+// connector name/kind/email (for account matching and the description's
+// connected-accounts list) plus its own (un-namespaced) tool.
 type toolAccount struct {
 	connector string
 	kind      string
@@ -252,48 +248,185 @@ type toolAccount struct {
 	tool      *tools.Tool
 }
 
-// aggregateTools groups every non-MCP source's tools by their RAW
-// (un-namespaced) name and returns one aggregate tool per name, giving
-// the unified mail surface: "mail_search" once, regardless of how many
-// accounts or connector kinds serve it. A future connector kind joins
-// this surface automatically just by giving its tools the same raw
-// names; accountInfo is read opportunistically for kind/email metadata
-// (empty when a source doesn't implement it) and never gates whether a
-// source's tools aggregate. readOnlyOnly mirrors the old ReadOnlyTools'
-// filter: a WHOLE aggregate is dropped unless every contributing
-// account's tool is ReadOnly. Contributing accounts on one capability
-// should always agree (see aggregateTool's ReadOnly), so this only ever
-// matters if that invariant is somehow violated, in which case the
-// safer behavior is to withhold the capability entirely rather than
-// silently narrow it to a subset of accounts.
-func aggregateTools(sources map[string]Source, readOnlyOnly bool) []*tools.Tool {
+// groupByRawName is the merge decision Tools, ReadOnlyTools, and
+// AccountConnector all share: every source's tools grouped by their
+// RAW (un-namespaced) name, split into what actually aggregates under
+// that name and what must stay namespaced. Two guards pull a name (or
+// one connector's copy of it) out of the merged set and into split:
+//
+//   - reserved: a name the agent could already have from somewhere
+//     else (builtins, chat-only mission tools) never aggregates,
+//     regardless of source — a connector must never shadow a tool the
+//     operator didn't wire through a connector. nil means nothing is
+//     reserved (safe default for callers, like AccountConnector, that
+//     run after the actual surface is already fixed).
+//   - schema mismatch among MCP contributors: non-MCP sources sharing a
+//     raw name are Timothy's own code and assumed schema-identical by
+//     construction (TestGoogleMicrosoftSharedToolSchemasMatch); an
+//     external MCP server can't be trusted the same way. If any two
+//     MCP connectors serving the same raw name (or an MCP connector and
+//     a non-MCP one already occupying that name) disagree on
+//     InputSchema, every MCP contributor at that name splits instead of
+//     merging — the non-MCP contributors, if any, still merge among
+//     themselves.
+//
+// A name with zero merged contributors after splitting simply doesn't
+// appear in merged; its split contributors still get their namespaced
+// form from the caller.
+func groupByRawName(sources map[string]Source, reserved map[string]bool) (merged map[string][]toolAccount, split map[string][]toolAccount) {
 	byName := map[string][]toolAccount{}
-	var order []string
 	for name, src := range sources {
-		if _, isMCP := src.(*mcpSource); isMCP {
-			continue
-		}
 		var kind, email string
 		if info, ok := src.(accountInfo); ok {
 			kind, email = info.AccountInfo()
 		}
 		for _, t := range src.Tools() {
-			if _, seen := byName[t.Name]; !seen {
-				order = append(order, t.Name)
-			}
 			byName[t.Name] = append(byName[t.Name], toolAccount{connector: name, kind: kind, email: email, tool: t})
 		}
+	}
+
+	merged = map[string][]toolAccount{}
+	split = map[string][]toolAccount{}
+	for name, accounts := range byName {
+		if reserved[name] {
+			split[name] = accounts
+			continue
+		}
+		mcpSchemasMatch := true
+		var mcpSchema json.RawMessage
+		for _, a := range accounts {
+			if _, isMCP := sources[a.connector].(*mcpSource); !isMCP {
+				continue
+			}
+			if mcpSchema == nil {
+				mcpSchema = a.tool.InputSchema
+				continue
+			}
+			if !schemasEqual(mcpSchema, a.tool.InputSchema) {
+				mcpSchemasMatch = false
+				break
+			}
+		}
+		// An MCP contributor also has to match a non-MCP occupant of the
+		// same name, not just other MCP contributors, or joining would
+		// silently pick whichever schema aggregateTool happens to render.
+		if mcpSchemasMatch && mcpSchema != nil {
+			for _, a := range accounts {
+				if _, isMCP := sources[a.connector].(*mcpSource); isMCP {
+					continue
+				}
+				if !schemasEqual(mcpSchema, a.tool.InputSchema) {
+					mcpSchemasMatch = false
+					break
+				}
+			}
+		}
+		if mcpSchemasMatch {
+			merged[name] = accounts
+			continue
+		}
+		// Mismatch: only the MCP contributors split off; any non-MCP
+		// tool at this name is Timothy's own code and keeps merging.
+		for _, a := range accounts {
+			if _, isMCP := sources[a.connector].(*mcpSource); isMCP {
+				split[name] = append(split[name], a)
+			} else {
+				merged[name] = append(merged[name], a)
+			}
+		}
+	}
+	return merged, split
+}
+
+// schemasEqual reports whether two tool input schemas are the same
+// JSON value, ignoring key order — an MCP server's exact byte
+// formatting is never guaranteed to match another's or to be stable
+// build to build.
+func schemasEqual(a, b json.RawMessage) bool {
+	var av, bv any
+	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
+// aggregateTools groups every source's tools by their RAW (un-
+// namespaced) name and returns one tool per name for whatever merges
+// (see groupByRawName), plus "<connector>_<tool>" for whatever splits.
+// A future connector kind (or a raw-named MCP tool) joins the unified
+// surface automatically just by giving its tools the same raw name;
+// accountInfo is read opportunistically for kind/email metadata (empty
+// when a source doesn't implement it, mcp included) and never gates
+// whether a source's tools can merge. readOnlyOnly mirrors the old
+// ReadOnlyTools' filter: a WHOLE merged aggregate is dropped unless
+// every contributing account's tool is ReadOnly, and every split (MCP)
+// tool is dropped outright — a remote MCP server's ReadOnly claim can't
+// be verified, unlike google/microsoft's tool constructors, which are
+// Timothy's own code.
+func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[string]bool) []*tools.Tool {
+	merged, split := groupByRawName(sources, reserved)
+
+	if readOnlyOnly {
+		// MCP never contributes to ReadOnlyTools, merged or not: a
+		// remote server's ReadOnly claim can't be verified, unlike
+		// google/microsoft's tool constructors (Timothy's own code).
+		// Strip MCP accounts out of each merged group rather than
+		// trusting groupByRawName's ordinary merge/split split, which
+		// answers a different question (does this name unify safely),
+		// not this one (is this account's claim trustworthy).
+		filtered := map[string][]toolAccount{}
+		for name, accounts := range merged {
+			var kept []toolAccount
+			for _, a := range accounts {
+				if _, isMCP := sources[a.connector].(*mcpSource); !isMCP {
+					kept = append(kept, a)
+				}
+			}
+			if len(kept) > 0 {
+				filtered[name] = kept
+			}
+		}
+		merged = filtered
+	}
+
+	order := make([]string, 0, len(merged))
+	for name := range merged {
+		order = append(order, name)
 	}
 	sort.Strings(order)
 	out := make([]*tools.Tool, 0, len(order))
 	for _, name := range order {
-		accounts := byName[name]
+		accounts := merged[name]
 		sort.Slice(accounts, func(i, j int) bool { return accounts[i].connector < accounts[j].connector })
 		agg := aggregateTool(name, accounts)
 		if readOnlyOnly && !agg.ReadOnly {
 			continue
 		}
 		out = append(out, agg)
+	}
+	if readOnlyOnly {
+		return out
+	}
+
+	splitNames := make([]string, 0, len(split))
+	for name := range split {
+		splitNames = append(splitNames, name)
+	}
+	sort.Strings(splitNames)
+	for _, name := range splitNames {
+		accounts := split[name]
+		sort.Slice(accounts, func(i, j int) bool { return accounts[i].connector < accounts[j].connector })
+		byConnector := map[string][]*tools.Tool{}
+		var connectorOrder []string
+		for _, a := range accounts {
+			if _, seen := byConnector[a.connector]; !seen {
+				connectorOrder = append(connectorOrder, a.connector)
+			}
+			byConnector[a.connector] = append(byConnector[a.connector], a.tool)
+		}
+		for _, connector := range connectorOrder {
+			out = append(out, namespacedTools(connector, byConnector[connector])...)
+		}
 	}
 	return out
 }

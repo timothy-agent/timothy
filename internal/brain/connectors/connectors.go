@@ -9,11 +9,13 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -38,21 +40,22 @@ type Connector struct {
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
-	// Sensitive marks the WHOLE connector as sensitive: an MCP
-	// connector's tools are namespaced "<name>_<tool>" (see
-	// Manager.Tools), so its own name is a PREFIX of every tool it
-	// serves, and session.SensitiveTools.Matches checks this prefix. A
-	// non-MCP connector's tools instead aggregate into unified,
-	// un-namespaced tools (mail_search etc.); Matches catches those via
-	// AccountConnector resolving a call's account back to this
-	// connector's name.
+	// Sensitive marks the WHOLE connector as sensitive. Most of a
+	// connector's tools — MCP included, unless a name collision or
+	// schema mismatch keeps them namespaced (see Manager.groupByRawName)
+	// — aggregate into unified, un-namespaced tools (mail_search,
+	// create_issue, etc.); session.SensitiveTools.Matches catches those
+	// via Manager.AccountConnector resolving a call's account back to
+	// this connector's name. A tool that DID stay namespaced
+	// "<name>_<tool>" (Manager.Tools) has its own name as a PREFIX,
+	// which Matches also checks directly, no account resolution needed.
 	Sensitive bool `json:"sensitive"`
 }
 
-// namePattern keeps connector names usable both as MCP tool-name
-// prefixes ("<name>_<tool>") and as a unified aggregate tool's
-// "account" argument value (see Manager.aggregateTools): lowercase
-// slug, no spaces.
+// namePattern keeps connector names usable both as a namespaced tool's
+// prefix ("<name>_<tool>", for whatever fails to unify — see
+// Manager.groupByRawName) and as a unified aggregate tool's "account"
+// argument value: lowercase slug, no spaces.
 var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
 
 func validate(c Connector) error {
@@ -155,17 +158,27 @@ func (s *Store) Create(ctx context.Context, c Connector) (string, error) {
 	return id, nil
 }
 
-// Patch applies a partial update. Name and kind are immutable: the
-// name prefixes served tool names and the kind picks the builder —
-// changing either mid-flight would silently re-identify every tool.
+// Patch applies a partial update. Kind is immutable: it picks the
+// builder, and changing it mid-flight would silently re-identify every
+// tool. Name is patchable — it prefixes MCP tool names and serves as a
+// unified aggregate tool's account argument, but renaming takes effect
+// on the next reload same as any other config change.
 type Patch struct {
+	Name          *string          `json:"name"`
 	Config        *json.RawMessage `json:"config"`
 	CredentialRef *string          `json:"credential_ref"`
 	Enabled       *bool            `json:"enabled"`
 	Sensitive     *bool            `json:"sensitive"`
 }
 
+// ErrNameConflict is the sentinel error the HTTP layer maps onto 409,
+// mirroring missions.ErrScheduleNameConflict.
+var ErrNameConflict = fmt.Errorf("a connector with this name already exists")
+
 func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
+	if patch.Name != nil && !namePattern.MatchString(*patch.Name) {
+		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _), it prefixes MCP tool names and is used as an account argument")
+	}
 	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
 	}
@@ -190,6 +203,9 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 		return err
 	}
 	after := before
+	if patch.Name != nil {
+		after.Name = *patch.Name
+	}
 	if patch.Config != nil {
 		after.Config = *patch.Config
 	}
@@ -203,9 +219,12 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 		after.Sensitive = *patch.Sensitive
 	}
 
-	if _, err := tx.Exec(ctx, `UPDATE connectors SET config = $2, credential_ref = $3,
-			enabled = $4, sensitive = $5, updated_at = now() WHERE id = $1`,
-		id, after.Config, after.CredentialRef, after.Enabled, after.Sensitive); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE connectors SET name = $2, config = $3, credential_ref = $4,
+			enabled = $5, sensitive = $6, updated_at = now() WHERE id = $1`,
+		id, after.Name, after.Config, after.CredentialRef, after.Enabled, after.Sensitive); err != nil {
+		if isUniqueViolation(err) {
+			return ErrNameConflict
+		}
 		return fmt.Errorf("connectors patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -214,6 +233,11 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 	s.audit(ctx, "update", id, before, after)
 	s.onChange(ctx)
 	return nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // Delete removes a connector; its tools vanish on the next reload.

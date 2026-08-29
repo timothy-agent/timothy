@@ -5,6 +5,7 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -140,6 +141,51 @@ func TestConnectorCRUDAuditsAndNotifies(t *testing.T) {
 	}
 	if audits != 3 {
 		t.Fatalf("audit rows = %d, want 3 (create, update, delete)", audits)
+	}
+}
+
+func TestConnectorPatchRename(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := t.Context()
+
+	name := marker + "rename-a"
+	id, err := store.Create(ctx, Connector{Name: name, Kind: "mcp"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	other := marker + "rename-b"
+	otherID, err := store.Create(ctx, Connector{Name: other, Kind: "mcp"})
+	if err != nil {
+		t.Fatalf("Create other: %v", err)
+	}
+
+	t.Run("valid slug renames", func(t *testing.T) {
+		newName := marker + "renamed"
+		if err := store.Patch(ctx, id, Patch{Name: &newName}); err != nil {
+			t.Fatalf("Patch: %v", err)
+		}
+		got, err := store.Get(ctx, id)
+		if err != nil || got.Name != newName {
+			t.Fatalf("Get after rename = %+v, err = %v, want name %s", got, err, newName)
+		}
+	})
+
+	t.Run("invalid slug rejected", func(t *testing.T) {
+		bad := "Has Spaces"
+		if err := store.Patch(ctx, id, Patch{Name: &bad}); err == nil {
+			t.Fatal("invalid slug accepted")
+		}
+	})
+
+	t.Run("duplicate name rejected", func(t *testing.T) {
+		if err := store.Patch(ctx, id, Patch{Name: &other}); !errors.Is(err, ErrNameConflict) {
+			t.Fatalf("Patch error = %v, want ErrNameConflict", err)
+		}
+	})
+
+	if err := store.Delete(ctx, otherID); err != nil {
+		t.Fatalf("Delete other: %v", err)
 	}
 }
 

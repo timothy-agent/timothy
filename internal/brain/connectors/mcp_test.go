@@ -248,24 +248,57 @@ func TestMCPStatusErrorNeverLeaksRawJSON(t *testing.T) {
 	}
 }
 
-// TestManagerNamespacesMCPTools pins that only MCP sources still get
-// the "<connector>_<tool>" prefix (external names can't be unified);
-// a real *mcpSource is used since Manager's MCP exclusion in
-// aggregateTools type-asserts against it specifically.
-func TestManagerNamespacesMCPTools(t *testing.T) {
+// TestManagerMergesLoneMCPToolUnderRawName pins the raw-name refactor's
+// default case: a single MCP connector with no reserved-name collision
+// and nothing else sharing its tools' raw names joins the unified
+// surface exactly like any other source (see groupByRawName) — no
+// prefix, "account" left off the schema since there's only one
+// contributor.
+func TestManagerMergesLoneMCPToolUnderRawName(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
 		"github": &mcpSource{name: "github", toolList: []*tools.Tool{
-			{Name: "create_issue"},
-			{Name: "search code"}, // space sanitized
+			{Name: "create_issue", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		}},
 	}
 	names := map[string]bool{}
-	for _, tl := range m.Tools() {
+	for _, tl := range m.Tools(nil) {
 		names[tl.Name] = true
 	}
-	if !names["github_create_issue"] || !names["github_search_code"] {
-		t.Fatalf("namespaced tools = %v", names)
+	if !names["create_issue"] {
+		t.Fatalf("tools = %v, want create_issue un-namespaced", names)
+	}
+	if names["github_create_issue"] {
+		t.Fatalf("tools = %v, must not also appear namespaced", names)
+	}
+}
+
+// TestManagerNamespacesMCPToolReservedByBuiltin pins Guard A: a raw
+// name in the reserved set (the agent's non-connector tools) never
+// merges, MCP included — an MCP tool sharing that name falls back to
+// "<connector>_<tool>" (namespacedTools' sanitizer intact, hence the
+// space in "search code") instead of shadowing the reserved tool.
+func TestManagerNamespacesMCPToolReservedByBuiltin(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"github": &mcpSource{name: "github", toolList: []*tools.Tool{
+			{Name: "create_issue", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "search code", InputSchema: json.RawMessage(`{"type":"object"}`)}, // space sanitized
+		}},
+	}
+	names := map[string]bool{}
+	for _, tl := range m.Tools(map[string]bool{"search code": true}) {
+		names[tl.Name] = true
+	}
+	if !names["create_issue"] {
+		t.Fatalf("tools = %v, want unreserved create_issue un-namespaced", names)
+	}
+	if !names["github_search_code"] {
+		t.Fatalf("tools = %v, want the reserved name namespaced", names)
+	}
+	if names["search code"] {
+		t.Fatalf("tools = %v, reserved raw name must never be served directly", names)
 	}
 }
