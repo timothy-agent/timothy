@@ -640,7 +640,7 @@ export interface KbDocument {
   id: string
   collection_id: string
   title: string
-  source_type: 'file' | 'notion' | 'wiki' | 'url'
+  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip'
   source_ref: string
   status: 'pending' | 'ingesting' | 'ready' | 'failed'
   error: string

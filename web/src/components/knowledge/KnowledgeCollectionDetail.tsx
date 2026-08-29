@@ -34,7 +34,37 @@ import {
 } from '../ui/dialog'
 import { errText } from '../settings/util'
 import { Input } from '../ui/input'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { KbUploadForm } from './KbUploadForm'
+
+const linkedSourceTypes = new Set<KbDocument['source_type']>(['url', 'clip'])
+
+export function SourceBadge({ doc }: { doc: KbDocument }) {
+  const badge = (
+    <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">
+      {doc.source_type}
+    </span>
+  )
+  const content = linkedSourceTypes.has(doc.source_type) ? (
+    <a
+      href={doc.source_ref}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="hover:text-foreground"
+    >
+      {badge}
+    </a>
+  ) : (
+    badge
+  )
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent>{doc.source_ref}</TooltipContent>
+    </Tooltip>
+  )
+}
 
 const statusStyle: Record<KbDocument['status'], string> = {
   pending: 'bg-muted text-muted-foreground',
@@ -197,62 +227,62 @@ export function KnowledgeCollectionDetail() {
       {documents.length === 0 ? (
         <p className="text-sm text-muted-foreground">No documents yet.</p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full text-sm">
-            <thead className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2">Title</th>
-                <th className="px-3 py-2">Source</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Chunks</th>
-                <th className="px-3 py-2">Size</th>
-                <th className="px-3 py-2">Ingested</th>
-                <th className="px-3 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {documents.map((doc) => (
-                <tr key={doc.id} className="border-b border-border last:border-0">
-                  <td className="flex items-center gap-2 px-3 py-2">
-                    <HugeiconsIcon icon={File02Icon} className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{doc.title}</span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">
-                      {doc.source_type}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <StatusBadge doc={doc} />
-                  </td>
-                  <td className="px-3 py-2">{doc.chunk_count}</td>
-                  <td className="px-3 py-2">{humanBytes(doc.bytes)}</td>
-                  <td className="px-3 py-2">{doc.ingested_at ? relativeTime(doc.ingested_at) : '—'}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        aria-label={`Re-ingest ${doc.title}`}
-                        onClick={() => void reingest(doc)}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <HugeiconsIcon icon={ReloadIcon} className="size-4" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Delete ${doc.title}`}
-                        onClick={() => setConfirmDeleteDoc(doc)}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-                      </button>
-                    </div>
-                  </td>
+        <TooltipProvider>
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Title</th>
+                  <th className="px-3 py-2">Source</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Chunks</th>
+                  <th className="px-3 py-2">Size</th>
+                  <th className="px-3 py-2">Ingested</th>
+                  <th className="px-3 py-2" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {documents.map((doc) => (
+                  <tr key={doc.id} className="border-b border-border last:border-0">
+                    <td className="flex items-center gap-2 px-3 py-2">
+                      <HugeiconsIcon icon={File02Icon} className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{doc.title}</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <SourceBadge doc={doc} />
+                    </td>
+                    <td className="px-3 py-2">
+                      <StatusBadge doc={doc} />
+                    </td>
+                    <td className="px-3 py-2">{doc.chunk_count}</td>
+                    <td className="px-3 py-2">{humanBytes(doc.bytes)}</td>
+                    <td className="px-3 py-2">{doc.ingested_at ? relativeTime(doc.ingested_at) : '—'}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          aria-label={`Re-ingest ${doc.title}`}
+                          onClick={() => void reingest(doc)}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <HugeiconsIcon icon={ReloadIcon} className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Delete ${doc.title}`}
+                          onClick={() => setConfirmDeleteDoc(doc)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <HugeiconsIcon icon={Delete02Icon} className="size-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </TooltipProvider>
       )}
 
       <Dialog open={editing} onOpenChange={setEditing}>
