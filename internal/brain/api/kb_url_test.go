@@ -70,7 +70,7 @@ func TestFetchURLBlockedStatus(t *testing.T) {
 	}
 }
 
-func TestNormalizeClipURL(t *testing.T) {
+func TestNormalizeSourceURL(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -91,8 +91,8 @@ func TestNormalizeClipURL(t *testing.T) {
 				t.Fatalf("parse %s: %v", tc.url, err)
 			}
 			u.User = nil
-			if got := normalizeClipURL(u); got != tc.want {
-				t.Fatalf("normalizeClipURL(%s) = %q, want %q", tc.url, got, tc.want)
+			if got := normalizeSourceURL(u); got != tc.want {
+				t.Fatalf("normalizeSourceURL(%s) = %q, want %q", tc.url, got, tc.want)
 			}
 		})
 	}

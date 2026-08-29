@@ -394,6 +394,233 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 	}
 }
 
+// TestKBDocumentFromURLScopedReAddRefreshesInPlace covers the scoped
+// route's dedup: re-adding the same URL updates the existing row (200,
+// same id, no second row) instead of duplicating it.
+func TestKBDocumentFromURLScopedReAddRefreshesInPlace(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+
+	body := "# Fetched\nversion one"
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer page.Close()
+
+	saved := kbFetchTransport
+	kbFetchTransport = http.DefaultTransport
+	defer func() { kbFetchTransport = saved }()
+
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-url-readd", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents/url",
+			strings.NewReader(`{"url":"`+page.URL+`/page","title":""}`))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	first := post()
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status = %d body %s", first.Code, first.Body)
+	}
+	var firstDoc struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(t, first.Body.Bytes(), &firstDoc); err != nil {
+		t.Fatal(err)
+	}
+
+	body = "# Fetched\nversion two"
+	second := post()
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200 body %s", second.Code, second.Body)
+	}
+	var secondDoc struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(t, second.Body.Bytes(), &secondDoc); err != nil {
+		t.Fatal(err)
+	}
+	if secondDoc.ID != firstDoc.ID {
+		t.Fatalf("second add created a new document %q, want the same id %q", secondDoc.ID, firstDoc.ID)
+	}
+
+	rows, err := store.ListDocuments(context.Background(), collID)
+	if err != nil {
+		t.Fatalf("ListDocuments: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("found %d documents, want exactly 1 (no duplicate)", len(rows))
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if ingester.callCount() >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	final, err := store.GetDocument(context.Background(), firstDoc.ID)
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	if final.Markdown != "# Fetched\nversion two" {
+		t.Fatalf("stored markdown = %q, want the refreshed body", final.Markdown)
+	}
+}
+
+// TestKBDocumentFromURLAutoReAddSkipsClassifierKeepsCollection covers
+// the unscoped route's dedup: re-adding the same URL must not
+// re-consult the classifier and must keep the document in its current
+// collection.
+func TestKBDocumentFromURLAutoReAddSkipsClassifierKeepsCollection(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+
+	body := "# Fetched\nversion one"
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer page.Close()
+
+	saved := kbFetchTransport
+	kbFetchTransport = http.DefaultTransport
+	defer func() { kbFetchTransport = saved }()
+
+	classifyCalls := 0
+	classify := func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
+		classifyCalls++
+		return chat.CollectionChoice{NewName: "itest-url-auto-readd"}
+	}
+
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", classify, nil)
+
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/v1/admin/kb/documents/url",
+			strings.NewReader(`{"url":"`+page.URL+`/auto-page","title":""}`))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	first := post()
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status = %d body %s", first.Code, first.Body)
+	}
+	var firstDoc struct {
+		ID           string `json:"id"`
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, first.Body.Bytes(), &firstDoc); err != nil {
+		t.Fatal(err)
+	}
+	if classifyCalls != 1 {
+		t.Fatalf("classifyCalls after first add = %d, want 1", classifyCalls)
+	}
+
+	body = "# Fetched\nversion two"
+	second := post()
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200 body %s", second.Code, second.Body)
+	}
+	var secondDoc struct {
+		ID           string `json:"id"`
+		CollectionID string `json:"collection_id"`
+	}
+	if err := decodeBody(t, second.Body.Bytes(), &secondDoc); err != nil {
+		t.Fatal(err)
+	}
+	if secondDoc.ID != firstDoc.ID {
+		t.Fatalf("second add created a new document %q, want the same id %q", secondDoc.ID, firstDoc.ID)
+	}
+	if secondDoc.CollectionID != firstDoc.CollectionID {
+		t.Fatalf("collection_id = %q, want unchanged %q", secondDoc.CollectionID, firstDoc.CollectionID)
+	}
+	if classifyCalls != 1 {
+		t.Fatalf("classifyCalls after re-add = %d, want still 1 (not re-consulted)", classifyCalls)
+	}
+}
+
+// TestKBDocumentFromURLDifferentURLStillCreates confirms dedup keys on
+// the normalized URL, not the collection or title: a distinct URL
+// always creates a second document.
+func TestKBDocumentFromURLDifferentURLStillCreates(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte("# Fetched\nbody"))
+	}))
+	defer page.Close()
+
+	saved := kbFetchTransport
+	kbFetchTransport = http.DefaultTransport
+	defer func() { kbFetchTransport = saved }()
+
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-url-distinct", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	post := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents/url",
+			strings.NewReader(`{"url":"`+page.URL+path+`","title":""}`))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	first := post("/page-a")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status = %d body %s", first.Code, first.Body)
+	}
+	second := post("/page-b")
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second status = %d, want 201 body %s", second.Code, second.Body)
+	}
+	var firstDoc, secondDoc struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(t, first.Body.Bytes(), &firstDoc); err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeBody(t, second.Body.Bytes(), &secondDoc); err != nil {
+		t.Fatal(err)
+	}
+	if firstDoc.ID == secondDoc.ID {
+		t.Fatal("distinct URLs must not collapse into the same document")
+	}
+
+	rows, err := store.ListDocuments(context.Background(), collID)
+	if err != nil {
+		t.Fatalf("ListDocuments: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("found %d documents, want 2", len(rows))
+	}
+}
+
 // TestKBDocumentUploadAutoCreatesNewCollection exercises the unscoped
 // upload route: no collection is chosen up front, so the classifier's
 // proposed new collection (fixedClassifier) must be created and the

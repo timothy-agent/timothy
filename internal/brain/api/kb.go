@@ -413,11 +413,45 @@ func (h *kbAPI) decodeURL(w http.ResponseWriter, r *http.Request, req kbURLReque
 	if title == "" {
 		title = titleFromURL(u)
 	}
-	return decodedURL{title: title, url: u.String(), markdown: markdownText, rawBytes: int64(len(body))}, true
+	return decodedURL{title: title, url: normalizeSourceURL(u), markdown: markdownText, rawBytes: int64(len(body))}, true
+}
+
+// refreshOrCreate looks up an existing document by (sourceType,
+// sourceRef). On a hit it refreshes the row in place (200 OK), moving
+// it to moveTo ("" keeps the current collection). On a miss it calls
+// resolveCollectionID to pick a collection (classifying or using the
+// caller's choice) and creates a new document (201 Created).
+func (h *kbAPI) refreshOrCreate(w http.ResponseWriter, r *http.Request, resolveCollectionID func() (string, error), moveTo, title, sourceType, sourceRef, markdownText string, size int64) {
+	existing, err := h.store.FindDocumentBySource(r.Context(), sourceType, sourceRef)
+	switch {
+	case errors.Is(err, kb.ErrNotFound):
+		collectionID, err := resolveCollectionID()
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
+			return
+		}
+		h.finishIngest(w, r, collectionID, title, sourceType, sourceRef, markdownText, size)
+	case err != nil:
+		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
+	default:
+		if err := h.store.ReplaceDocumentContent(r.Context(), existing.ID, title, markdownText, size, moveTo); err != nil {
+			failKB(w, err)
+			return
+		}
+		h.startIngest(existing.ID, title)
+		doc, err := h.store.GetDocument(r.Context(), existing.ID)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, sanitizeDocument(doc))
+	}
 }
 
 // addDocumentFromURL fetches a user-supplied URL into a caller-chosen
-// collection.
+// collection. Re-adding an already-known URL (by source_type=url,
+// source_ref=normalized URL) refreshes the existing document in place,
+// moving it to collectionID since the operator explicitly chose it.
 func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
 	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
@@ -433,12 +467,15 @@ func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.finishIngest(w, r, collectionID, d.title, "url", d.url, d.markdown, d.rawBytes)
+	resolve := func() (string, error) { return collectionID, nil }
+	h.refreshOrCreate(w, r, resolve, collectionID, d.title, "url", d.url, d.markdown, d.rawBytes)
 }
 
 // addDocumentFromURLAuto fetches a user-supplied URL with no collection
 // chosen: the document is classified against existing collections (or
-// files into a newly proposed one) before ingest.
+// files into a newly proposed one) before ingest. Re-adding an
+// already-known URL refreshes it in place and keeps its current
+// collection, skipping the classifier.
 func (h *kbAPI) addDocumentFromURLAuto(w http.ResponseWriter, r *http.Request) {
 	var req kbURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -449,12 +486,8 @@ func (h *kbAPI) addDocumentFromURLAuto(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	collectionID, err := h.resolveCollection(r.Context(), d.title, d.markdown)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
-		return
-	}
-	h.finishIngest(w, r, collectionID, d.title, "url", d.url, d.markdown, d.rawBytes)
+	resolve := func() (string, error) { return h.resolveCollection(r.Context(), d.title, d.markdown) }
+	h.refreshOrCreate(w, r, resolve, "", d.title, "url", d.url, d.markdown, d.rawBytes)
 }
 
 // kbClipRequest is a browser-extension clip: the extension converts the
@@ -467,12 +500,12 @@ type kbClipRequest struct {
 	CollectionID string `json:"collection_id"`
 }
 
-// normalizeClipURL is the clip dedup key: fragment dropped, and
-// tracking query parameters (fbclid, gclid, utm_*) stripped. The
+// normalizeSourceURL is the url/clip dedup key: fragment dropped, and
+// tracking query parameters (fbclid, gclid, utm_*) stripped. The clip
 // extension already strips these client-side; this re-strips as
 // defense so a stray tracking param never splits one page into two
 // documents.
-func normalizeClipURL(u *url.URL) string {
+func normalizeSourceURL(u *url.URL) string {
 	out := *u
 	out.Fragment = ""
 	q := out.Query()
@@ -549,7 +582,7 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sourceRef := normalizeClipURL(u)
+	sourceRef := normalizeSourceURL(u)
 	existing, err := h.store.FindDocumentBySource(r.Context(), "clip", sourceRef)
 	switch {
 	case errors.Is(err, kb.ErrNotFound):
