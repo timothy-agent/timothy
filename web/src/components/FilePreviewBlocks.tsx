@@ -3,6 +3,7 @@ import hljs from 'highlight.js'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+import { MarkdownPre } from './MarkdownPre'
 import { codeLanguageOf } from './missions/filePreviewKind'
 import 'highlight.js/styles/github-dark.css'
 
@@ -48,7 +49,11 @@ export function FileMarkdownBlock({ text, raw }: { text: string; raw: boolean })
   if (raw) return <FileCodeBlock code={text} path="file.md" />
   return (
     <div className="prose prose-sm max-w-none p-3 dark:prose-invert prose-pre:bg-zinc-900">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{ pre: MarkdownPre }}
+      >
         {text}
       </ReactMarkdown>
     </div>

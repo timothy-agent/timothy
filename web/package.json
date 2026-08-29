@@ -23,6 +23,7 @@
     "echarts": "^6.1.0",
     "highlight.js": "^11.12.0",
     "lucide-react": "^1.34.0",
+    "mermaid": "^11.17.2",
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
     "react-day-picker": "^10.0.1",

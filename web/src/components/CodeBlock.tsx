@@ -23,6 +23,7 @@ import swiftLogo from '../assets/langs/swift.svg'
 import typescriptLogo from '../assets/langs/typescript.svg'
 import yamlLogo from '../assets/langs/yaml.svg'
 import { CopyButton } from './Message'
+import { MermaidBlock } from './MermaidBlock'
 
 // GitHub linguist colors for common languages, small dot next to the
 // language name in the header. Unrecognized languages fall back to gray.
@@ -318,14 +319,14 @@ export function extractText(node: ReactNode): string {
 
 // hast Element shape as passed via react-markdown's `node` prop,
 // declared locally to avoid a direct hast-types dependency.
-type HastElement = {
+export type HastElement = {
   type: 'element'
   tagName: string
   properties?: { className?: unknown }
   children?: HastElement[]
 }
 
-function findLanguageClass(node: HastElement | undefined): string | undefined {
+export function findLanguageClass(node: HastElement | undefined): string | undefined {
   for (const child of node?.children ?? []) {
     if (child.type !== 'element') continue
     const classes = child.properties?.className
@@ -340,7 +341,7 @@ function findLanguageClass(node: HastElement | undefined): string | undefined {
 
 // Fallback when the hast node isn't available: reads the `language-xxx`
 // class straight off the rendered `<code>` child element.
-function languageFromChildren(children: ReactNode): string | undefined {
+export function languageFromChildren(children: ReactNode): string | undefined {
   let found: string | undefined
   Children.forEach(children, (child) => {
     if (found) return
@@ -405,13 +406,16 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
   const text = extractText(children).replace(/\n$/, '')
   // Only guess when the fence carries no language tag at all — a tagged
   // fence (even one with an unrecognized tag) keeps it verbatim.
+  const isMermaid = taggedLanguage?.toLowerCase() === 'mermaid'
   const language = taggedLanguage ?? detectLanguage(text)
   const lineCount = text === '' ? 1 : text.split('\n').length
   const langKey = language?.toLowerCase()
   const color = langKey ? LANGUAGE_COLORS[langKey] : undefined
   const logo = langKey ? LANGUAGE_LOGOS[langKey] : undefined
   const needsChip = langKey ? DARK_MODE_NEEDS_CHIP.has(langKey) : false
-  const html = useHighlightedHtml(text, language)
+  const html = useHighlightedHtml(isMermaid ? '' : text, isMermaid ? undefined : language)
+
+  if (isMermaid) return <MermaidBlock code={text} />
 
   return (
     <div className="not-prose my-4 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">

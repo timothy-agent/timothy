@@ -92,6 +92,13 @@ vi.mock('shiki/langs', () => ({
   },
 }))
 
+const mermaidRender = vi.fn(async (_id: string, _code: string) => ({
+  svg: '<svg data-testid="diagram" />',
+}))
+vi.mock('mermaid', () => ({
+  default: { initialize: vi.fn(), render: (id: string, code: string) => mermaidRender(id, code) },
+}))
+
 function renderMarkdown(text: string) {
   return render(<ReactMarkdown components={{ pre: CodeBlock }}>{text}</ReactMarkdown>)
 }
@@ -327,5 +334,12 @@ describe('CodeBlock', () => {
     const header = screen.getByText('java').closest('span')
     const chip = header?.querySelector('img')?.parentElement
     expect(chip?.className).not.toContain('dark:bg-white')
+  })
+
+  it('delegates a mermaid fence to the diagram renderer instead of shiki', async () => {
+    renderMarkdown('```mermaid\ngraph TD; A-->B;\n```')
+    await waitFor(() => expect(screen.getByTestId('diagram')).toBeInTheDocument())
+    expect(screen.queryByTestId('shiki-html')).not.toBeInTheDocument()
+    expect(mermaidRender).toHaveBeenCalledWith(expect.any(String), 'graph TD; A-->B;')
   })
 })
