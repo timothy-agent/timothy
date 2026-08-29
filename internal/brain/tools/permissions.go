@@ -65,13 +65,13 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 		db:            db,
 		workspaceRoot: workspaceRoot,
 		exempt: map[string]bool{
-			"current_time":    true,
-			"convert_time":    true,
-			"calculate":       true,
-			"web_fetch":       true,
-			"web_search":      true,
-			"retrieve_output": true,
-			"load_skill":      true,
+			"get_current_time": true,
+			"convert_time":     true,
+			"calculate":        true,
+			"fetch_url":        true,
+			"search_web":       true,
+			"retrieve_output":  true,
+			"load_skill":       true,
 			// remember fires only on the user's explicit ask — a
 			// prompt would demand consent for consent. The write is
 			// visible and reversible in the memory browser.
@@ -91,18 +91,18 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			"write_file": true,
 			// list_missions/get_mission are pure reads over the missions
 			// store (list / status snapshot) — zero side effects, same
-			// reasoning as web_search. push_mission_branch is
+			// reasoning as search_web. push_mission_branch is
 			// deliberately NOT here: it must always ask (see
 			// PushMissionBranch's doc comment).
 			"list_missions": true,
 			"get_mission":   true,
-			// kb_search is a pure read scoped to collections bound in Go
+			// search_kb is a pure read scoped to collections bound in Go
 			// at construction (D-060), never model input — same reasoning
-			// as web_search/missions.
-			"kb_search": true,
-			// kb_read is the same pure read, one document at a time,
+			// as search_web/missions.
+			"search_kb": true,
+			// read_kb is the same pure read, one document at a time,
 			// with the collection allowlist bound the same way.
-			"kb_read": true,
+			"read_kb": true,
 		},
 	}
 }
@@ -273,9 +273,9 @@ func (p *Permissions) Grant(ctx context.Context, sessionID, tool, pattern string
 // D-036: a grant row's tool also matches when the call's tool name
 // ENDS WITH "_"+rowTool — connector tools are namespaced
 // "<connector-name>_<tool-name>" (connectors.Manager.Tools), so an
-// allowlist entry like "calendar_list_events" (agent-authored, before
+// allowlist entry like "list_calendar_events" (agent-authored, before
 // any connector name is known) still hits
-// "google-calendar_calendar_list_events" at call time. Same suffix
+// "google-calendar_list_calendar_events" at call time. Same suffix
 // semantics as loop.Agent.SetForceRoute, for the same reason. The
 // SandboxGrantTool sentinel ("__sandbox__") is excluded — it is never
 // a real tool call, only a stored sandbox root, and its leading "__"
@@ -352,7 +352,7 @@ func callSubject(tool string, args json.RawMessage) string {
 		if c, ok := m["command"].(string); ok {
 			return c
 		}
-	case "web_fetch":
+	case "fetch_url":
 		if u, ok := m["url"].(string); ok {
 			return u
 		}
@@ -380,7 +380,7 @@ var guardPatterns = []struct {
 var AllowedAbsPrefixes = []string{"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
 
 // guardSubject applies the policy guard to shell commands. Other
-// tools have no path-bearing arguments yet; web_fetch has its own
+// tools have no path-bearing arguments yet; fetch_url has its own
 // network guard.
 func guardSubject(root, tool, subject string) string {
 	if tool != "shell" {

@@ -932,7 +932,7 @@ export async function deleteAgent(id: string): Promise<void> {
   await request<void>(`/v1/admin/agents/${id}`, { method: 'DELETE' })
 }
 
-// --- knowledge (RAG collections agents search with kb_search) ---
+// --- knowledge (RAG collections agents search with search_kb) ---
 
 export async function listKbCollections(): Promise<KbCollection[]> {
   const { collections } = await request<{ collections: KbCollection[] }>('/v1/admin/kb/collections')

@@ -51,7 +51,7 @@ export function ConnectorsList() {
         </h2>
         <p className="text-sm text-muted-foreground">
           Integrations the agent can use as tools. A tool appears to the model once per capability
-          (e.g. <span className="font-mono text-xs">mail_search</span>) with an{' '}
+          (e.g. <span className="font-mono text-xs">search_mail</span>) with an{' '}
           <span className="font-mono text-xs">account</span> argument routing to the right
           connector when more than one serves it; a name that would otherwise collide (with a
           built-in tool, or across two MCP servers with different schemas) keeps its{' '}

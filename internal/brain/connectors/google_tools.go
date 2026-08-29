@@ -294,11 +294,11 @@ func htmlPart(parts []gmailPart) []byte {
 
 func (s *googleSource) gmailSearch() *tools.Tool {
 	return &tools.Tool{
-		Name:     "mail_search",
+		Name:     "search_mail",
 		ReadOnly: true,
 		Description: `Search a connected mail account. Returns up to max_results
 (default 10) messages as id, date, from, subject, snippet. Use
-mail_read with an id for the full body. See the tool description's
+read_mail with an id for the full body. See the tool description's
 Connected accounts list for this account's query syntax.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"search query"},
@@ -347,7 +347,7 @@ Connected accounts list for this account's query syntax.`,
 }
 
 // gmailAttachment names one attachment found while walking a message's
-// MIME tree, ready to hand to gmail_read_attachment.
+// MIME tree, ready to hand to read_mail_attachment.
 type gmailAttachment struct {
 	Filename     string
 	AttachmentID string
@@ -356,7 +356,7 @@ type gmailAttachment struct {
 // attachments walks the MIME tree collecting every part that names a
 // file AND carries an attachment id — inline images with no filename,
 // and body parts with data inlined directly rather than referenced by
-// id, are not attachments in the sense gmail_read_attachment needs.
+// id, are not attachments in the sense read_mail_attachment needs.
 func attachments(parts []gmailPart) []gmailAttachment {
 	var out []gmailAttachment
 	for _, p := range parts {
@@ -369,7 +369,7 @@ func attachments(parts []gmailPart) []gmailAttachment {
 }
 
 // findAttachment returns the attachment id for a given filename.
-// gmail_read_attachment takes a filename, never the raw Gmail
+// read_mail_attachment takes a filename, never the raw Gmail
 // attachment id: that id is a 300-400+ char opaque token, and models
 // reliably truncate it when copying it into a tool call — every
 // real-world attempt failed with "Invalid attachment token" before
@@ -387,9 +387,9 @@ func findAttachment(parts []gmailPart, filename string) (string, bool) {
 
 func (s *googleSource) gmailRead() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_read",
+		Name:        "read_mail",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from mail_search). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use mail_read_attachment with the message id and a filename from that list to read an attachment's content.",
+		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -434,12 +434,12 @@ func (s *googleSource) gmailRead() *tools.Tool {
 
 func (s *googleSource) gmailReadAttachment() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_read_attachment",
+		Name:        "read_mail_attachment",
 		ReadOnly:    true,
-		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from mail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
+		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from read_mail's attachments list). Handles PDFs, Office documents, and other common formats.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"message_id":{"type":"string","description":"message id"},
-			"filename":{"type":"string","description":"Attachment filename from mail_read's attachments list"}
+			"filename":{"type":"string","description":"Attachment filename from read_mail's attachments list"}
 		},"required":["message_id","filename"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
@@ -460,7 +460,7 @@ func (s *googleSource) gmailReadAttachment() *tools.Tool {
 			}
 			attachmentID, ok := findAttachment(msg.Payload.Parts, in.Filename)
 			if !ok {
-				return "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", in.Filename)
+				return "", fmt.Errorf("no attachment named %q on this message; check read_mail's attachments list", in.Filename)
 			}
 			var att gmailBody
 			if err := s.api(ctx, http.MethodGet,
@@ -487,7 +487,7 @@ func (s *googleSource) gmailReadAttachment() *tools.Tool {
 
 func (s *googleSource) gmailSend() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_send",
+		Name:        "send_mail",
 		Description: "Send an email from a connected mail account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"to":{"type":"string","description":"recipient address(es), comma-separated"},
@@ -526,7 +526,7 @@ func (s *googleSource) gmailSend() *tools.Tool {
 
 func (s *googleSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
-		Name:        "calendar_list_events",
+		Name:        "list_calendar_events",
 		ReadOnly:    true,
 		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
@@ -597,7 +597,7 @@ func (s *googleSource) calendarListEvents() *tools.Tool {
 
 func (s *googleSource) calendarCreateEvent() *tools.Tool {
 	return &tools.Tool{
-		Name:        "calendar_create_event",
+		Name:        "create_calendar_event",
 		Description: "Create an event on the connected account's primary calendar. start and end are RFC3339 timestamps with offset, e.g. 2026-07-22T15:00:00+02:00. Use only when the user asked for an event; depending on the provider, attendees may be notified immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"summary":{"type":"string","description":"event title"},
@@ -648,7 +648,7 @@ func (s *googleSource) calendarCreateEvent() *tools.Tool {
 
 // --- Drive ---
 
-// driveReadMaxResult bounds drive_read's returned text — Drive
+// driveReadMaxResult bounds read_drive_file's returned text — Drive
 // documents and downloaded/converted files have no inherent size
 // cap, and an unbounded file could blow the loop's context budget.
 // Same convention as webFetchMaxResult.
@@ -665,12 +665,12 @@ var driveExportMimeTypes = map[string]string{
 
 func (s *googleSource) driveSearch() *tools.Tool {
 	return &tools.Tool{
-		Name: "drive_search",
+		Name: "search_drive",
 		Description: `Search Google Drive by file name or content. query is matched
 against file names and, for supported formats, document content
 (Drive's "fullText contains" search). Returns up to max_results
 (default 20) files as id, name, mimeType, modifiedTime, webViewLink.
-Use drive_read with an id to read a file's content.`,
+Use read_drive_file with an id to read a file's content.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"words to match against file name and content"},
 			"max_results":{"type":"integer","minimum":1,"maximum":50}
@@ -721,8 +721,8 @@ Use drive_read with an id to read a file's content.`,
 
 func (s *googleSource) driveRead() *tools.Tool {
 	return &tools.Tool{
-		Name:        "drive_read",
-		Description: "Read a Drive file's content by id (from drive_search). Google Docs/Sheets/Slides export to text/markdown/CSV; other formats (PDF, Office documents, ...) download and convert to markdown. Long content is truncated.",
+		Name:        "read_drive_file",
+		Description: "Read a Drive file's content by id (from search_drive). Google Docs/Sheets/Slides export to text/markdown/CSV; other formats (PDF, Office documents, ...) download and convert to markdown. Long content is truncated.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"Drive file id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -781,7 +781,7 @@ func (s *googleSource) driveRead() *tools.Tool {
 
 // --- Docs ---
 
-// docsReadMaxResult bounds docs_read's returned text, same convention
+// docsReadMaxResult bounds read_doc's returned text, same convention
 // as driveReadMaxResult.
 const docsReadMaxResult = 64 << 10
 
@@ -812,8 +812,8 @@ type docsStructuralElement struct {
 
 func (s *googleSource) docsRead() *tools.Tool {
 	return &tools.Tool{
-		Name:        "docs_read",
-		Description: "Read a Google Doc's content by id (from drive_search, or a doc's id from its URL/docs_create's result). Returns the document title and body as plain text. Long documents are truncated.",
+		Name:        "read_doc",
+		Description: "Read a Google Doc's content by id (from search_drive, or a doc's id from its URL/create_doc's result). Returns the document title and body as plain text. Long documents are truncated.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"Google Doc id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -849,7 +849,7 @@ func (s *googleSource) docsRead() *tools.Tool {
 
 func (s *googleSource) docsCreate() *tools.Tool {
 	return &tools.Tool{
-		Name:        "docs_create",
+		Name:        "create_doc",
 		Description: "Create a new Google Doc with a title and initial body text. Returns the new doc's id and webViewLink. Use only when the user asked for a new document.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"title":{"type":"string"},
@@ -891,7 +891,7 @@ func (s *googleSource) docsCreate() *tools.Tool {
 
 func (s *googleSource) docsAppend() *tools.Tool {
 	return &tools.Tool{
-		Name:        "docs_append",
+		Name:        "append_doc",
 		Description: "Append text to the end of an existing Google Doc. Use only when the user asked to add to a document; the change is immediate and visible to anyone viewing it.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"Google Doc id"},

@@ -356,9 +356,9 @@ describe('tool calls', () => {
   })
 
   it('shows a running tool while streaming', () => {
-    const msg = play([{ type: 'tool_start', tool_call: { id: 'c1', name: 'web_fetch' } }])
+    const msg = play([{ type: 'tool_start', tool_call: { id: 'c1', name: 'fetch_url' } }])
     render(<AssistantMessage msg={msg} onShowActivity={vi.fn()} />)
-    expect(screen.getByTestId('activity-line')).toHaveTextContent('Running web_fetch…')
+    expect(screen.getByTestId('activity-line')).toHaveTextContent('Running fetch_url…')
   })
 
   it('parks visibly while a permission request is pending', () => {

@@ -115,13 +115,13 @@ describe('fromTranscript', () => {
       {
         seq: 1,
         kind: 'tool',
-        tool: { call_id: 'c1', name: 'web_search', status: 'ok', duration_ms: 10 },
+        tool: { call_id: 'c1', name: 'search_web', status: 'ok', duration_ms: 10 },
         created_at: at,
       },
       {
         seq: 2,
         kind: 'tool',
-        tool: { call_id: 'c2', name: 'web_fetch', status: 'ok', duration_ms: 20 },
+        tool: { call_id: 'c2', name: 'fetch_url', status: 'ok', duration_ms: 20 },
         created_at: at,
       },
       { seq: 3, kind: 'assistant', blocks: [{ type: 'text', text: 'done' }], created_at: at },

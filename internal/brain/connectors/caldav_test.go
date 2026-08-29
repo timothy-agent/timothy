@@ -204,7 +204,7 @@ func TestCalDAVListEventsDefaultWindow(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestCalDAVListEventsExplicitTimeRangeInReportBody(t *testing.T) {
 	srv := caldavTestServer(t, state)
 	src := testCalDAVSource(t, srv.URL)
 
-	_, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(),
+	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
 		json.RawMessage(`{"time_min":"2026-08-01T00:00:00Z","time_max":"2026-08-02T00:00:00Z"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -240,7 +240,7 @@ func TestCalDAVListEventsMaxResultsCap(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(), json.RawMessage(`{"max_results":2}`))
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{"max_results":2}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestCalDAVListEventsFormatsLines(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestCalDAVListEventsFallsBackWhenExpandUnsupported(t *testing.T) {
 	// dates: the fallback path now filters non-recurring events to the
 	// window (finding 4), so relying on the default now-relative window
 	// would make this test's fixture data go stale.
-	out, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(),
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
 		json.RawMessage(`{"time_min":"2026-07-20T00:00:00Z","time_max":"2026-07-26T00:00:00Z"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -298,7 +298,7 @@ func TestCalDAVCreateEventPutsExpectedBody(t *testing.T) {
 	srv := caldavTestServer(t, state)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "calendar_create_event").Execute(t.Context(), json.RawMessage(
+	out, err := caldavToolByName(t, src, "create_calendar_event").Execute(t.Context(), json.RawMessage(
 		`{"summary":"1:1","start":"2026-07-23T10:00:00Z","end":"2026-07-23T10:30:00Z","location":"zoom","attendees":["b@y.com"]}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -330,7 +330,7 @@ func TestCalDAVCreateEventGeneratesUniqueUID(t *testing.T) {
 	src := testCalDAVSource(t, srv.URL)
 
 	for i := 0; i < 2; i++ {
-		_, err := caldavToolByName(t, src, "calendar_create_event").Execute(t.Context(), json.RawMessage(
+		_, err := caldavToolByName(t, src, "create_calendar_event").Execute(t.Context(), json.RawMessage(
 			fmt.Sprintf(`{"summary":"e%d","start":"2026-07-23T10:00:00Z","end":"2026-07-23T10:30:00Z"}`, i)))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -483,7 +483,7 @@ func TestCalDAVQueryEventsServerError(t *testing.T) {
 	srv := caldavTestServer(t, state)
 	src := testCalDAVSource(t, srv.URL)
 
-	_, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(), json.RawMessage(`{}`))
+	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "status 500") {
 		t.Fatalf("err = %v, want a caldavStatusError naming status 500", err)
 	}
@@ -580,7 +580,7 @@ func TestCalDAVListEventsTimeMinInvalidErrors(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	_, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(),
+	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
 		json.RawMessage(`{"time_min":"not-a-timestamp"}`))
 	if err == nil || !strings.Contains(err.Error(), "time_min must be RFC3339") {
 		t.Fatalf("err = %v, want a time_min RFC3339 error", err)
@@ -592,7 +592,7 @@ func TestCalDAVListEventsTimeMaxInvalidErrors(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	_, err := caldavToolByName(t, src, "calendar_list_events").Execute(t.Context(),
+	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
 		json.RawMessage(`{"time_max":"not-a-timestamp"}`))
 	if err == nil || !strings.Contains(err.Error(), "time_max must be RFC3339") {
 		t.Fatalf("err = %v, want a time_max RFC3339 error", err)

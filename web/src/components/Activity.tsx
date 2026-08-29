@@ -25,7 +25,7 @@ export function totalDuration(tools: ToolRun[]): number {
 
 // summarizeTools names what a turn did, deduped by first appearance
 // and capped so a turn with a dozen tool calls still reads as one
-// line: "web_search, 2× web_fetch, +2 more".
+// line: "search_web, 2× fetch_url, +2 more".
 export function summarizeTools(tools: ToolRun[]): string {
   const order: string[] = []
   const counts = new Map<string, number>()

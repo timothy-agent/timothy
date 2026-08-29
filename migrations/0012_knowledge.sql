@@ -1,5 +1,5 @@
 -- Knowledge base: named collections of ingested documents an agent can
--- search with kb_search (D-060). Unlike memories, KB content is
+-- search with search_kb (D-060). Unlike memories, KB content is
 -- MUTABLE reference data — external documentation the operator curates,
 -- not something Timothy observed. Re-ingesting a document deletes its
 -- existing chunks and rewrites them; there is no supersede chain here.

@@ -472,7 +472,7 @@ func TestAgentStepCeilingForcesSynthesis(t *testing.T) {
 }
 
 // TestAgentForcesSynthesisOnRepeatedIdenticalCalls reproduces a live
-// loop: a model retrying the exact same tool call (e.g. web_search
+// loop: a model retrying the exact same tool call (e.g. search_web
 // hoping a later attempt "books" something it structurally cannot)
 // must be cut off well before the full step ceiling, not burn all
 // DefaultMaxSteps steps first.
@@ -1370,17 +1370,17 @@ func TestForceRouteByConnectorIgnoresUnlistedConnector(t *testing.T) {
 
 // TestForceRouteByConnectorMatchesUnifiedToolViaAccountConnector pins
 // the unified-tool path: a call to a name carrying no connector prefix
-// (e.g. mail_search) still pins the route once accountConnector
+// (e.g. search_mail) still pins the route once accountConnector
 // resolves the call to a name in the sensitive list: the account the
 // call actually routed to, not the tool's own name, decides the flip.
 func TestForceRouteByConnectorMatchesUnifiedToolViaAccountConnector(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
-		toolCallStep([2]string{"mail_search", `{"account":"work-outlook"}`}),
+		toolCallStep([2]string{"search_mail", `{"account":"work-outlook"}`}),
 		finalStep("done"),
 	}}
 	search := &tools.Tool{
-		Name:        "mail_search",
+		Name:        "search_mail",
 		Description: "searches connected mail",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"account":{"type":"string"}},"additionalProperties":false}`),
 		Execute: func(context.Context, json.RawMessage) (string, error) {
@@ -1392,7 +1392,7 @@ func TestForceRouteByConnectorMatchesUnifiedToolViaAccountConnector(t *testing.T
 		func(context.Context) []string { return []string{"work-outlook"} },
 		func(context.Context) string { return "local" },
 		func(_ context.Context, toolName string, args json.RawMessage) string {
-			if toolName == "mail_search" && strings.Contains(string(args), "work-outlook") {
+			if toolName == "search_mail" && strings.Contains(string(args), "work-outlook") {
 				return "work-outlook"
 			}
 			return ""
@@ -1413,7 +1413,7 @@ func TestForceRouteByConnectorMatchesUnifiedToolViaAccountConnector(t *testing.T
 		t.Fatalf("step 1 route = %q, want default (before the sensitive account's tool ran)", gw.requests[0].Route)
 	}
 	if gw.requests[1].Route != "local" {
-		t.Fatalf("step 2 route = %q, want local (forced after mail_search resolved to work-outlook)", gw.requests[1].Route)
+		t.Fatalf("step 2 route = %q, want local (forced after search_mail resolved to work-outlook)", gw.requests[1].Route)
 	}
 }
 
@@ -1702,9 +1702,9 @@ func TestFilterDefs(t *testing.T) {
 	}{
 		{
 			name:  "empty allow keeps everything",
-			defs:  []string{"web_search", "shell"},
+			defs:  []string{"search_web", "shell"},
 			allow: nil,
-			want:  []string{"web_search", "shell"},
+			want:  []string{"search_web", "shell"},
 		},
 		{
 			name:  "exact name still matches",
@@ -1719,21 +1719,21 @@ func TestFilterDefs(t *testing.T) {
 			want:  []string{"gmail_gmail_search"},
 		},
 		{
-			name:  "calendar_list_events allows google-calendar_calendar_list_events",
-			defs:  []string{"google-calendar_calendar_list_events"},
-			allow: []string{"calendar_list_events"},
-			want:  []string{"google-calendar_calendar_list_events"},
+			name:  "list_calendar_events allows google-calendar_list_calendar_events",
+			defs:  []string{"google-calendar_list_calendar_events"},
+			allow: []string{"list_calendar_events"},
+			want:  []string{"google-calendar_list_calendar_events"},
 		},
 		{
-			name:  "search matches web_search under the same suffix rule as matchGrant",
-			defs:  []string{"web_search"},
-			allow: []string{"search"},
-			want:  []string{"web_search"},
+			name:  "search matches search_web under the same suffix rule as matchGrant",
+			defs:  []string{"search_web"},
+			allow: []string{"web"},
+			want:  []string{"search_web"},
 		},
 		{
 			name:  "no underscore boundary rejected",
-			defs:  []string{"notcalendar_list_events"},
-			allow: []string{"calendar_list_events"},
+			defs:  []string{"notlist_calendar_events"},
+			allow: []string{"list_calendar_events"},
 			want:  nil,
 		},
 		{

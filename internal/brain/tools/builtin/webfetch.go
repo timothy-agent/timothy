@@ -54,7 +54,7 @@ func WebFetch(cfg WebFetchConfig) *tools.Tool {
 		},
 	}
 	return &tools.Tool{
-		Name: "web_fetch",
+		Name: "fetch_url",
 		Description: `Fetches a public web page and returns its readable text.
 
 Use to read the content of a specific URL the user gave you or one you

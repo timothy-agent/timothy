@@ -8,8 +8,8 @@ description: Decomposes complex research questions into independent sub-question
 ## Rules
 
 - Determine whether the task genuinely requires multi-angle research. When multiple independent angles are required, decompose the goal into 2-4 independent sub-questions during explore. A sub-question is independent only if it can be researched without knowing the answer to another one; questions that depend on each other's results stay together in one unit.
-- Scout each sub-question with 1-2 web_search calls before locking the plan: confirm it is actually answerable and roughly how much material exists. This is reconnaissance, not the research itself.
-- If a kb_search tool is available, search the knowledge base before the web and cite kb sources by their kb:// ref.
+- Scout each sub-question with 1-2 search_web calls before locking the plan: confirm it is actually answerable and roughly how much material exists. This is reconnaissance, not the research itself.
+- If a search_kb tool is available, search the knowledge base before the web and cite kb sources by their kb:// ref.
 - Use one research unit per independent sub-question. Each unit declares exactly one artifact, `findings-<slug>.md`, created with write_file. Each findings file contains:
   - the answer to that sub-question
   - key supporting facts with inline citations
@@ -43,7 +43,7 @@ description: Decomposes complex research questions into independent sub-question
 - A sub-question depends on another sub-question's answer but was split into its own parallel unit.
 - A research unit cites a URL that was never actually retrieved in that unit.
 - A search snippet is being cited as evidence without retrieving the underlying source.
-- The synthesis unit is making new web_search or fetch calls.
+- The synthesis unit is making new search_web or fetch calls.
 - A material claim in `report.md` has no traceable source in the findings files.
 - A decision-driving claim relies on a single non-authoritative source when independent corroboration is reasonably available.
 - Two supposedly independent sources clearly derive from the same underlying material.

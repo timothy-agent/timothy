@@ -210,11 +210,11 @@ func (r outlookRecipient) String() string {
 
 func (s *microsoftSource) mailSearch() *tools.Tool {
 	return &tools.Tool{
-		Name:     "mail_search",
+		Name:     "search_mail",
 		ReadOnly: true,
 		Description: `Search a connected mail account. Returns up to max_results
 (default 10) messages as id, date, from, subject, snippet. Use
-mail_read with an id for the full body. See the tool description's
+read_mail with an id for the full body. See the tool description's
 Connected accounts list for this account's query syntax.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"search query"},
@@ -258,9 +258,9 @@ Connected accounts list for this account's query syntax.`,
 
 func (s *microsoftSource) mailRead() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_read",
+		Name:        "read_mail",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from mail_search). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use mail_read_attachment with the message id and a filename from that list to read an attachment's content.",
+		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -315,8 +315,8 @@ type outlookAttachment struct {
 
 // listAttachments fetches one message's attachment metadata (id, name,
 // contentType), without the (potentially large) contentBytes field —
-// mail_read_attachment fetches one attachment's bytes separately, by
-// name, mirroring gmail_read_attachment's filename-lookup shape.
+// read_mail_attachment fetches one attachment's bytes separately, by
+// name, mirroring read_mail_attachment's filename-lookup shape.
 func (s *microsoftSource) listAttachments(ctx context.Context, messageID string) ([]outlookAttachment, error) {
 	var list struct {
 		Value []outlookAttachment `json:"value"`
@@ -331,12 +331,12 @@ func (s *microsoftSource) listAttachments(ctx context.Context, messageID string)
 
 func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_read_attachment",
+		Name:        "read_mail_attachment",
 		ReadOnly:    true,
-		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from mail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
+		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from read_mail's attachments list). Handles PDFs, Office documents, and other common formats.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"message_id":{"type":"string","description":"message id"},
-			"filename":{"type":"string","description":"Attachment filename from mail_read's attachments list"}
+			"filename":{"type":"string","description":"Attachment filename from read_mail's attachments list"}
 		},"required":["message_id","filename"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
@@ -358,7 +358,7 @@ func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 				}
 			}
 			if attachmentID == "" {
-				return "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", in.Filename)
+				return "", fmt.Errorf("no attachment named %q on this message; check read_mail's attachments list", in.Filename)
 			}
 			var full outlookAttachment
 			if err := s.api(ctx, http.MethodGet,
@@ -377,7 +377,7 @@ func (s *microsoftSource) mailReadAttachment() *tools.Tool {
 
 func (s *microsoftSource) mailSend() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_send",
+		Name:        "send_mail",
 		Description: "Send an email from a connected mail account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"to":{"type":"string","description":"recipient address(es), comma-separated"},
@@ -454,7 +454,7 @@ type outlookEvent struct {
 
 func (s *microsoftSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
-		Name:        "calendar_list_events",
+		Name:        "list_calendar_events",
 		ReadOnly:    true,
 		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{

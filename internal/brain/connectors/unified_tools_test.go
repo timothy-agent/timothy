@@ -5,8 +5,8 @@ import (
 )
 
 // TestSharedToolSchemasMatchAcrossKinds pins the unified mail surface's
-// precondition: every kind serving a raw tool name (mail_search,
-// mail_read, ...) serves the SAME input schema (property names, types,
+// precondition: every kind serving a raw tool name (search_mail,
+// read_mail, ...) serves the SAME input schema (property names, types,
 // required) AND the SAME Description as every other kind serving that
 // same name, so Manager's aggregation can offer one schema and one
 // base description per capability regardless of which account answers

@@ -42,7 +42,7 @@ export function KnowledgeCollectionAdd() {
       <div className="border-b border-border pb-6">
         <h1 className="text-xl font-semibold tracking-tight">New collection</h1>
         <p className="text-sm text-muted-foreground">
-          A named group of documents agents can search with kb_search.
+          A named group of documents agents can search with search_kb.
         </p>
       </div>
 

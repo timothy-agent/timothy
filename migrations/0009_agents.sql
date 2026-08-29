@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS agents (
     approval_allowlist jsonb NOT NULL DEFAULT '[]',
     harness            text NOT NULL DEFAULT '',
     -- Knowledge collections (kb_collections.name) this agent may search
-    -- with kb_search (D-060) — empty means none, same opt-in semantics
+    -- with search_kb (D-060) — empty means none, same opt-in semantics
     -- as skills/tools: an agent must name a collection explicitly.
     knowledge      jsonb NOT NULL DEFAULT '[]',
     created_at     timestamptz NOT NULL DEFAULT now(),
@@ -50,7 +50,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 -- Tool names are the compiled-in builtins' exact registered names
 -- (internal/brain/tools/builtin/*.go) plus the unified connector
 -- capability names (connectors.Manager.Tools aggregates every
--- connected account behind one name per capability, e.g. "mail_search"
+-- connected account behind one name per capability, e.g. "search_mail"
 -- covers every connected google/microsoft mail account); an allowlist
 -- entry here is agent-authored before any connector even exists, and
 -- covers every current and future account serving that capability.
@@ -59,6 +59,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
 INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
 SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'default',
     '["research-brief", "deep-research", "coding", "email-research"]',
-    '["current_time", "convert_time", "calculate", "currency_convert", "web_search", "web_fetch", "remember", "list_missions", "get_mission", "push_mission_branch", "followup_mission", "mail_search", "mail_read", "mail_read_attachment", "mail_send", "calendar_list_events", "calendar_create_event"]',
+    '["get_current_time", "convert_time", "calculate", "convert_currency", "search_web", "fetch_url", "remember", "list_missions", "get_mission", "push_mission_branch", "followup_mission", "search_mail", "read_mail", "read_mail_attachment", "send_mail", "list_calendar_events", "create_calendar_event"]',
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');

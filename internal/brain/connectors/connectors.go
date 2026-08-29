@@ -43,7 +43,7 @@ type Connector struct {
 	// Sensitive marks the WHOLE connector as sensitive. Most of a
 	// connector's tools — MCP included, unless a name collision or
 	// schema mismatch keeps them namespaced (see Manager.groupByRawName)
-	// — aggregate into unified, un-namespaced tools (mail_search,
+	// — aggregate into unified, un-namespaced tools (search_mail,
 	// create_issue, etc.); session.SensitiveTools.Matches catches those
 	// via Manager.AccountConnector resolving a call's account back to
 	// this connector's name. A tool that DID stay namespaced

@@ -54,7 +54,7 @@ type Agent struct {
 	// means inherit from settings; meaningless outside kind=coding.
 	Harness string `json:"harness"`
 	// Knowledge names the kb_collections this agent may search with
-	// kb_search (D-060) — empty means none (opt-in only, same as
+	// search_kb (D-060) — empty means none (opt-in only, same as
 	// Skills/Tools). Collection scoping is enforced in Go at the tool
 	// call, never left to a prompt.
 	Knowledge []string `json:"knowledge"`

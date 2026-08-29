@@ -20,7 +20,7 @@ import (
 // name>", connectors.Manager.Tools' fallback for a name that can't
 // unify — a builtin collision or, MCP-only, a schema mismatch across
 // connectors), or, for a unified tool (most connector tools, MCP
-// included, once merged under their raw name — mail_search etc. carry
+// included, once merged under their raw name — search_mail etc. carry
 // no connector name in their own name), AccountConnector resolving the
 // call's actual account to a sensitive connector. AccountConnector is
 // nil-safe (not every caller wires it, and non-connector tools never

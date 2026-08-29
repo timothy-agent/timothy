@@ -15,7 +15,7 @@ PostgreSQL database + React web UI, run via Docker Compose
 | `memoryd`    | Internal memory service: pgvector recall                                |
 | `sandboxd`   | Holds the Docker socket; per-mission sandbox containers                 |
 | `web`        | React UI (:3300)                                                        |
-| `searxng`    | Metasearch backend for web_search                                       |
+| `searxng`    | Metasearch backend for search_web                                       |
 | `markitdown` | Python sidecar: file → markdown                                         |
 | `whisper`    | Python sidecar: local speech-to-text                                    |
 

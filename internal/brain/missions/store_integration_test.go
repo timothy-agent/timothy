@@ -335,7 +335,7 @@ func TestMissionKnowledgeRoundTrips(t *testing.T) {
 		t.Fatalf("Knowledge = %v, want it to round-trip unchanged", m.Knowledge)
 	}
 
-	// Absent means "kb_search never offered" — must stay empty, not some
+	// Absent means "search_kb never offered" — must stay empty, not some
 	// driver default.
 	id2, err := s.Create(ctx, Mission{Goal: marker + "no-knowledge", Kind: "general", Route: "default"})
 	if err != nil {

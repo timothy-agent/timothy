@@ -17,7 +17,7 @@ func TestToolsEndpointListsLiveSurface(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
 	a.registerTools(m.Handle, stubToolset{defs: []provider.ToolDef{
-		{Name: "web_search", Description: "Search the web", InputSchema: []byte(`{}`)},
+		{Name: "search_web", Description: "Search the web", InputSchema: []byte(`{}`)},
 		{Name: "github_create_issue", Description: "Create a GitHub issue", InputSchema: []byte(`{}`)},
 	}})
 
@@ -30,7 +30,7 @@ func TestToolsEndpointListsLiveSurface(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := decodeToolsBody(t, w.Body.Bytes())
-	if len(body.Tools) != 2 || body.Tools[0].Name != "web_search" || body.Tools[1].Name != "github_create_issue" {
+	if len(body.Tools) != 2 || body.Tools[0].Name != "search_web" || body.Tools[1].Name != "github_create_issue" {
 		t.Fatalf("tools = %+v", body.Tools)
 	}
 	// Only name/description are exposed — never the input schema

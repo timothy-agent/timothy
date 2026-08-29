@@ -154,14 +154,14 @@ type nativeRunner struct {
 	// sandbox executes worker/reviewer shell commands in a per-mission
 	// Docker container instead of brain's own process.
 	sandbox sandboxExec
-	// kbSearch backs the per-turn kb_search ExtraTool (see kbSearchTool)
-	// — nil means kb_search is never offered on any mission turn,
+	// kbSearch backs the per-turn search_kb ExtraTool (see kbSearchTool)
+	// — nil means search_kb is never offered on any mission turn,
 	// regardless of a mission's own Knowledge snapshot (same "the
 	// dependency's absence turns the feature off entirely" contract as
 	// chat.go's SetKBSearch).
 	kbSearch KBSearchFunc
 
-	// kbRead backs the per-turn kb_read ExtraTool — same nil contract
+	// kbRead backs the per-turn read_kb ExtraTool — same nil contract
 	// as kbSearch.
 	kbRead KBReadFunc
 
@@ -293,7 +293,7 @@ func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 	r.connectorReads = resolve
 }
 
-// KBSearchFunc runs one kb_search call scoped to collectionNames — main
+// KBSearchFunc runs one search_kb call scoped to collectionNames — main
 // curries memclient.Client.KBSearch in, same shape as chat.go's
 // KBSearch type. collectionNames travels on every call (the mission's
 // own Knowledge snapshot), never bound once, since the same func serves
@@ -316,8 +316,8 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 // NewNativeRunnerWithFloor is NewNativeRunner plus a model floor deny
 // list (see nativeRunner.modelFloorDeny), a sandbox exec backend (a
 // *sandbox.Manager.Exec closure) — worker and reviewer shell calls
-// route through it instead of brain's own process — and a kb_search
-// backend (nil disables kb_search on every mission turn, matching
+// route through it instead of brain's own process — and a search_kb
+// backend (nil disables search_kb on every mission turn, matching
 // SetKBSearch's nil-safe contract).
 // The return type is the unexported *nativeRunner, not Runner: callers
 // that need to wire SetConnectorReads (cmd/brain/main.go) must hold the
@@ -327,15 +327,15 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, kbRead: kbRead, log: log}
 }
 
-// kbSearchTool builds this turn's kb_search ExtraTool bound to m's own
-// Knowledge snapshot, or nil when kb_search must not be offered: no
+// kbSearchTool builds this turn's search_kb ExtraTool bound to m's own
+// Knowledge snapshot, or nil when search_kb must not be offered: no
 // backend wired, or the mission's creating agent named no collections
-// (empty Knowledge = no kb_search, same opt-in-only contract as
+// (empty Knowledge = no search_kb, same opt-in-only contract as
 // chat.go's kbSearchTool, which this mirrors exactly). A non-nil sink
 // records every returned document at execution time — the harness's
 // citation evidence must come from here, not from the rendered tool
 // result: digests cap at digestCeiling and offload past 8KiB, so a
-// full kb_search result never survives into the digest text.
+// full search_kb result never survives into the digest text.
 func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
 	if r.kbSearch == nil || len(m.Knowledge) == 0 {
 		return nil
@@ -350,7 +350,7 @@ func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
 	})
 }
 
-// kbReadTool builds this turn's kb_read ExtraTool, gated exactly like
+// kbReadTool builds this turn's read_kb ExtraTool, gated exactly like
 // kbSearchTool: no backend, or an empty Knowledge snapshot, means the
 // tool is not offered.
 func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
@@ -375,7 +375,7 @@ func (r *nativeRunner) connectorReadTools(ctx context.Context, m Mission) []*too
 	return r.connectorReads(ctx, m.AgentID)
 }
 
-// kbRefSink accumulates the kb:// refs of documents kb_search actually
+// kbRefSink accumulates the kb:// refs of documents search_kb actually
 // returned across a worker run's turns. Guarded because the loop may
 // execute tool calls concurrently within a turn.
 type kbRefSink struct {
@@ -518,7 +518,7 @@ func (r *nativeRunner) belowFloor(model string) bool {
 
 // turnResult is runTurn's outcome: the full assistant text, the
 // sentinel tool call's raw arguments (if any), URLs the turn's
-// web_search/web_fetch calls saw, and the final assistant segment
+// search_web/fetch_url calls saw, and the final assistant segment
 // (see finalSeg's doc below, formerly a bare 5th return value).
 type turnResult struct {
 	text         string
@@ -576,7 +576,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.ToolCall != nil && ev.ToolCall.Name == sentinelTool {
 				sentinelArgs = ev.ToolCall.Input
 			}
-			if ev.ToolCall != nil && ev.ToolCall.Name == "web_fetch" {
+			if ev.ToolCall != nil && ev.ToolCall.Name == "fetch_url" {
 				seenURLs = append(seenURLs, webFetchArgURL(ev.ToolCall.Input)...)
 			}
 			// Any tool call OTHER than the sentinel is mid-turn activity —
@@ -609,7 +609,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.ToolResult != nil && ev.ToolResult.Status == "denied" && r.parker != nil {
 				r.parker.OnPermissionDenied(ctx, req.MissionID, ev.ToolResult.Name, ev.ToolResult.Digest)
 			}
-			if ev.ToolResult != nil && ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "web_search" {
+			if ev.ToolResult != nil && ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "search_web" {
 				seenURLs = append(seenURLs, webSearchResultURLs(ev.ToolResult.Digest)...)
 			}
 			if ev.ToolResult != nil && ev.ToolResult.Name != sentinelTool {
@@ -653,7 +653,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	return turnResult{b.String(), sentinelArgs, seenURLs, finalB.String()}, nil
 }
 
-// webFetchArgURL extracts the url arg from a web_fetch call's raw
+// webFetchArgURL extracts the url arg from a fetch_url call's raw
 // input — the exact field name webfetch.go's webFetchArgs decodes
 // (D-059). A malformed input yields nothing rather than an error: this
 // is best-effort evidence collection, not argument validation (the
@@ -668,7 +668,7 @@ func webFetchArgURL(input json.RawMessage) []string {
 	return []string{args.URL}
 }
 
-// webSearchResultURLs pulls result URLs out of web_search's rendered
+// webSearchResultURLs pulls result URLs out of search_web's rendered
 // output — websearch.go's runSearch emits one blank-line-separated
 // entry per result as "N. title\nurl\nsnippet" (D-059). Line 2 of each
 // three-line group is the URL; anything not matching that shape (the
@@ -676,7 +676,7 @@ func webFetchArgURL(input json.RawMessage) []string {
 // than guessed at. Best-effort only: the digest is capped (and big
 // results offload to a stub), so URLs past the cap are lost. That is
 // deliberate lenience on top of the reliable contract — cite what you
-// web_fetch, whose args are never truncated.
+// fetch_url, whose args are never truncated.
 var webSearchResultHeader = regexp.MustCompile(`^\d+\.\s`)
 
 func webSearchResultURLs(digest string) []string {
@@ -1152,8 +1152,8 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		System:    system,
 		Messages:  []provider.Message{{Role: "user", Content: user}},
 		// The planner plans; it must not act. No base tool matches this
-		// allowlist (submit_plan/kb_search arrive via ExtraTools, which
-		// bypass it, and kb_search is read-only — never "acting"), so
+		// allowlist (submit_plan/search_kb arrive via ExtraTools, which
+		// bypass it, and search_kb is read-only — never "acting"), so
 		// the turn's only BASE tool is none — a planner that reaches for
 		// shell parked a live canary on the permission gate for ten
 		// minutes trying to do the worker's job in plan phase.
@@ -1163,7 +1163,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		Unattended:   m.ScheduleID != "",
 	}
 	// Force submit_plan only when it is the turn's sole tool (D-063):
-	// a KB-attached mission also offers kb_search/kb_read here, and a
+	// a KB-attached mission also offers search_kb/read_kb here, and a
 	// forced choice would make consulting them impossible.
 	if len(extra) == 1 {
 		req.ForceTool = planToolName

@@ -28,7 +28,7 @@ type currentTimeArgs struct {
 
 func CurrentTime(now Clock, defaultLoc LocationFunc) *tools.Tool {
 	return &tools.Tool{
-		Name: "current_time",
+		Name: "get_current_time",
 		Description: `Returns the current date and time.
 
 Use when the answer depends on "now": today's date, the current time
@@ -95,7 +95,7 @@ func ConvertTime() *tools.Tool {
 
 Use when the user gives a time in one zone and needs it in another
 ("3pm New York time in Dhaka?"). Resolve the source time to RFC 3339
-with its offset first (use current_time if you need today's date).
+with its offset first (use get_current_time if you need today's date).
 
 Arguments:
 - time (string, required): RFC 3339 timestamp including offset,

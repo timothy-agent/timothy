@@ -585,7 +585,7 @@ export interface AdminAgent {
   memory: boolean
   is_default: boolean
   enabled: boolean
-  // Knowledge collections this agent can search with kb_search.
+  // Knowledge collections this agent can search with search_kb.
   // Optional: the backend doesn't send it yet, so callers default to
   // [] when absent.
   knowledge?: string[]
@@ -619,7 +619,7 @@ export interface AdminSkill {
 }
 
 // KbCollection is one document collection agents can search with
-// kb_search — a named group of ingested documents.
+// search_kb — a named group of ingested documents.
 export interface KbCollection {
   id: string
   name: string

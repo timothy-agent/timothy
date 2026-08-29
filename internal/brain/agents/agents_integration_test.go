@@ -66,7 +66,7 @@ func TestAgentCRUDAndResolve(t *testing.T) {
 	id, err := s.Create(ctx, Agent{
 		Name: name, Description: "d", PromptOverlay: "overlay",
 		Route: "research", Skills: []string{"research-task"},
-		Tools: []string{"web_search"}, Memory: true, Enabled: true,
+		Tools: []string{"search_web"}, Memory: true, Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

@@ -50,18 +50,18 @@ func WebSearch(baseURL string) *tools.Tool {
 	endpoint := strings.TrimRight(baseURL, "/") + "/search"
 
 	return &tools.Tool{
-		Name: "web_search",
+		Name: "search_web",
 		Description: `Searches the web and returns a list of matching pages.
 
 Use when the user needs current information you don't have — news,
 prices, recent releases, anything past your knowledge — or asks you to
 "search the internet". Returns titles, URLs, and short snippets, not
-full page text; call web_fetch on a promising URL to read further.
+full page text; call fetch_url on a promising URL to read further.
 
 This is read-only lookup, never a transaction: it cannot book a
 flight, reserve a hotel, purchase anything, or fill in a form. If the
 user asks you to "book" or "buy" something, use this tool (and
-web_fetch) to find options and prices, then tell the user what you
+fetch_url) to find options and prices, then tell the user what you
 found and that they need to complete the booking themselves — do not
 retry the search hoping for a different kind of result.
 

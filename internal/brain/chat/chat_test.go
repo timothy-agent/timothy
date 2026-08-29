@@ -283,7 +283,7 @@ func TestChatSegmentsTextAcrossToolActivity(t *testing.T) {
 	log := newFakeLog()
 	gw := &fakeGW{events: []stream.StreamEvent{
 		{Type: stream.EventChunk, Text: "exact nature area."},
-		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "call_1", Name: "web_search", Status: "ok"}},
+		{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{ID: "call_1", Name: "search_web", Status: "ok"}},
 		{Type: stream.EventChunk, Text: "I'm searching for"},
 		{Type: stream.EventDone, Meta: &stream.Meta{Provider: "prov", Model: "mod", LedgerID: "led"}},
 	}}
@@ -872,7 +872,7 @@ func TestChatSkillHintInjectsBodyDeterministically(t *testing.T) {
 }
 
 // extraToolNames returns the ExtraTools names on req, for asserting
-// which turn-only tools (kb_search, kb_read) were offered.
+// which turn-only tools (search_kb, read_kb) were offered.
 func extraToolNames(req gwclient.StreamRequest) []string {
 	var names []string
 	for _, t := range req.ExtraTools {
@@ -882,7 +882,7 @@ func extraToolNames(req gwclient.StreamRequest) []string {
 }
 
 // TestKBToolsOfferedFromSessionKnowledgeAlone pins the union contract:
-// an agent with an empty Knowledge list still gets kb_search/kb_read
+// an agent with an empty Knowledge list still gets search_kb/read_kb
 // offered when the session itself has pinned collections.
 func TestKBToolsOfferedFromSessionKnowledgeAlone(t *testing.T) {
 	t.Parallel()
@@ -907,8 +907,8 @@ func TestKBToolsOfferedFromSessionKnowledgeAlone(t *testing.T) {
 	drain(t, ch)
 
 	names := extraToolNames(chatRequest(t, gw))
-	if !slices.Contains(names, "kb_search") || !slices.Contains(names, "kb_read") {
-		t.Fatalf("extra tools = %v, want kb_search and kb_read from session knowledge alone", names)
+	if !slices.Contains(names, "search_kb") || !slices.Contains(names, "read_kb") {
+		t.Fatalf("extra tools = %v, want search_kb and read_kb from session knowledge alone", names)
 	}
 }
 
@@ -993,7 +993,7 @@ func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
 
 // TestKBToolsFallBackOnSessionKnowledgeLookupFailure pins the
 // best-effort contract: s.log.Knowledge erroring must not kill the
-// turn. kb_search still gets offered from the agent's own Knowledge
+// turn. search_kb still gets offered from the agent's own Knowledge
 // list, but the "Pinned knowledge" block is skipped since skErr != nil.
 func TestKBToolsFallBackOnSessionKnowledgeLookupFailure(t *testing.T) {
 	t.Parallel()
@@ -1016,8 +1016,8 @@ func TestKBToolsFallBackOnSessionKnowledgeLookupFailure(t *testing.T) {
 
 	req := chatRequest(t, gw)
 	names := extraToolNames(req)
-	if !slices.Contains(names, "kb_search") {
-		t.Fatalf("extra tools = %v, want kb_search from agent knowledge alone", names)
+	if !slices.Contains(names, "search_kb") {
+		t.Fatalf("extra tools = %v, want search_kb from agent knowledge alone", names)
 	}
 	if strings.Contains(req.System, "Pinned knowledge") {
 		t.Fatalf("system prompt has pinned knowledge block despite session knowledge lookup failure:\n%s", req.System)
@@ -1174,9 +1174,9 @@ func TestResolveToolAllowEmptyToolsWithSkillsAlsoGrantsLoadSkill(t *testing.T) {
 
 func TestResolveToolAllowNonEmptyToolsGainsInfraExemptions(t *testing.T) {
 	t.Parallel()
-	profile := agents.Agent{Tools: []string{"web_search", "current_time"}, Skills: []string{"some-skill"}}
+	profile := agents.Agent{Tools: []string{"search_web", "get_current_time"}, Skills: []string{"some-skill"}}
 	got := resolveToolAllow(profile)
-	want := []string{"web_search", "current_time", "retrieve_output", "load_skill"}
+	want := []string{"search_web", "get_current_time", "retrieve_output", "load_skill"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("resolveToolAllow(non-empty) = %v, want %v", got, want)
 	}
@@ -1699,7 +1699,7 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 			return agents.Agent{
 				Name: "researcher", Route: "research",
 				PromptOverlay: "Consult sources before answering.",
-				Tools:         []string{"web_search"},
+				Tools:         []string{"search_web"},
 				Memory:        false,
 			}, true
 		default:
@@ -1727,7 +1727,7 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	if sent.Route != "research" || sent.Agent != "researcher" {
 		t.Fatalf("route/agent = %s/%s, want research/researcher", sent.Route, sent.Agent)
 	}
-	if !slices.Equal(sent.ToolAllow, []string{"web_search", "retrieve_output"}) {
+	if !slices.Equal(sent.ToolAllow, []string{"search_web", "retrieve_output"}) {
 		t.Fatalf("tool allowlist = %v, want authored list plus retrieve_output", sent.ToolAllow)
 	}
 	if !strings.Contains(sent.System, "Consult sources before answering.") {
@@ -2370,7 +2370,7 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 	log := newFakeLog()
 	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
 		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
-			ApprovalAllowlist: []string{"calendar_list_events"}}, true
+			ApprovalAllowlist: []string{"list_calendar_events"}}, true
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
@@ -2383,8 +2383,8 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 	drain(t, ch)
 
 	got := granter.grantedTools("s1")
-	if len(got) != 1 || got[0] != "calendar_list_events" {
-		t.Fatalf("granted tools = %v, want [calendar_list_events]", got)
+	if len(got) != 1 || got[0] != "list_calendar_events" {
+		t.Fatalf("granted tools = %v, want [list_calendar_events]", got)
 	}
 }
 
@@ -2424,7 +2424,7 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 	log := newFakeLog()
 	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
 		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
-			ApprovalAllowlist: []string{"calendar_list_events"}}, true
+			ApprovalAllowlist: []string{"list_calendar_events"}}, true
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
@@ -2462,7 +2462,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 		switch name {
 		case "scheduler":
 			return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
-				ApprovalAllowlist: []string{"calendar_list_events"}}, true
+				ApprovalAllowlist: []string{"list_calendar_events"}}, true
 		case "mailer":
 			return agents.Agent{ID: "agent-2", Name: "mailer", Memory: true,
 				ApprovalAllowlist: []string{"gmail_search"}}, true
@@ -2490,7 +2490,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 	drain(t, ch)
 
 	got := granter.grantedTools("s1")
-	want := []string{"calendar_list_events", "gmail_search"}
+	want := []string{"list_calendar_events", "gmail_search"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("granted tools = %v, want %v (both agents' allowlists)", got, want)
 	}

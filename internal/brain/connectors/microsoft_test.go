@@ -69,7 +69,7 @@ func (f *fakeMicrosoft) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /me/messages/{id}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		if got := r.Header.Get("Prefer"); got != `outlook.body-content-type="text"` {
-			t.Fatalf("mail_read missing Prefer text header: %q", got)
+			t.Fatalf("read_mail missing Prefer text header: %q", got)
 		}
 		id := r.PathValue("id")
 		switch id {
@@ -323,7 +323,7 @@ func TestMicrosoftBuilderScopeGating(t *testing.T) {
 
 // TestMicrosoftNoSendScopeMeansNoSendTool pins the scope-gating matrix
 // entry the task calls out explicitly: Mail.Read alone must never
-// surface mail_send.
+// surface send_mail.
 func TestMicrosoftNoSendScopeMeansNoSendTool(t *testing.T) {
 	t.Parallel()
 	f := &fakeMicrosoft{}
@@ -334,8 +334,8 @@ func TestMicrosoftNoSendScopeMeansNoSendTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tl := range src.Tools() {
-		if tl.Name == "mail_send" {
-			t.Fatal("mail_send must not be present without Mail.Send scope")
+		if tl.Name == "send_mail" {
+			t.Fatal("send_mail must not be present without Mail.Send scope")
 		}
 	}
 }
@@ -372,21 +372,21 @@ func TestOutlookMailToolsRoundTrip(t *testing.T) {
 	f := &fakeMicrosoft{}
 	src, _ := connectedMicrosoftSource(t, f)
 
-	out, err := microsoftToolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"hi"}`))
+	out, err := microsoftToolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"hi"}`))
 	if err != nil || !strings.Contains(out, "subject: hi") {
 		t.Fatalf("search = (%q, %v)", out, err)
 	}
-	out, err = microsoftToolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"nowhere"}`))
+	out, err = microsoftToolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"nowhere"}`))
 	if err != nil || !strings.Contains(out, "no messages matched") {
 		t.Fatalf("empty search = (%q, %v)", out, err)
 	}
 
-	out, err = microsoftToolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m1"}`))
+	out, err = microsoftToolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"m1"}`))
 	if err != nil || !strings.Contains(out, "hello body") {
 		t.Fatalf("read = (%q, %v)", out, err)
 	}
 
-	out, err = microsoftToolByName(t, src, "mail_send").Execute(t.Context(),
+	out, err = microsoftToolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"b@y","subject":"re: hi","body":"on my way"}`))
 	if err != nil || out != "sent" {
 		t.Fatalf("send = (%q, %v)", out, err)
@@ -411,7 +411,7 @@ func TestOutlookMailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testi
 	f := &fakeMicrosoft{}
 	src, _ := connectedMicrosoftSource(t, f)
 
-	out, err := microsoftToolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
+	out, err := microsoftToolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestOutlookMailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testi
 		t.Fatalf("read = %q, want it to list the attachment name", out)
 	}
 
-	out, err = microsoftToolByName(t, src, "mail_read_attachment").Execute(t.Context(),
+	out, err = microsoftToolByName(t, src, "read_mail_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"m2","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("read_attachment: %v", err)
@@ -434,7 +434,7 @@ func TestOutlookMailReadAttachmentRejectsUnknownName(t *testing.T) {
 	f := &fakeMicrosoft{}
 	src, _ := connectedMicrosoftSource(t, f)
 
-	_, err := microsoftToolByName(t, src, "mail_read_attachment").Execute(t.Context(),
+	_, err := microsoftToolByName(t, src, "read_mail_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"m2","filename":"nope.pdf"}`))
 	if err == nil {
 		t.Fatal("expected an error for an unknown attachment name")
@@ -446,7 +446,7 @@ func TestOutlookCalendarListEvents(t *testing.T) {
 	f := &fakeMicrosoft{}
 	src, _ := connectedMicrosoftSource(t, f)
 
-	out, err := microsoftToolByName(t, src, "calendar_list_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := microsoftToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(out, "standup") || !strings.Contains(out, "zoom") ||
 		!strings.Contains(out, "Boss") {
 		t.Fatalf("list = (%q, %v)", out, err)

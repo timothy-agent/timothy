@@ -197,7 +197,7 @@ func main() {
 		return flags.Value(ctx, settings.ValueSensitiveToolRoute)
 	}
 	// fxStore backs both the daily rate fetch (below) and
-	// currency_convert's table-first lookup (buildAgent) — one fetch,
+	// convert_currency's table-first lookup (buildAgent) — one fetch,
 	// one table, shared by the live tool and by display conversion
 	// (Analytics, mission usage) elsewhere in this file.
 	fxStore := fxrates.NewStore(app.DB)
@@ -410,7 +410,7 @@ func main() {
 	}
 
 	// sensitiveAccountConnector resolves a unified aggregate tool call
-	// (e.g. mail_search) to the connector name its account actually
+	// (e.g. search_mail) to the connector name its account actually
 	// routed to: the unified surface's counterpart to
 	// sensitiveConnectorNames' MCP-prefix matching, since an aggregate
 	// tool's own name carries no connector name to prefix-match against.
@@ -596,7 +596,7 @@ func main() {
 		missionDriver.SetArtifactCopy(destinations.CopyArtifacts(attachmentStore, app.Log))
 	}
 
-	// kb_search: nil-safe wiring, same shape as memory retrieve/extract
+	// search_kb: nil-safe wiring, same shape as memory retrieve/extract
 	// above — mc satisfies IngestDocument/KBSearch unconditionally, so
 	// this always wires (memoryd unreachable surfaces as a per-call
 	// error, not a nil-gate, since MEMORYD_URL always resolves to a
@@ -667,7 +667,7 @@ func main() {
 // so it's built once here rather than each caller decoding the master
 // key independently. A nil return (with an error to log) means an
 // unusable master key or init failure; callers nil-gate on it.
-// kbReadFromStore builds the kb_read backing lookup: the full stored
+// kbReadFromStore builds the read_kb backing lookup: the full stored
 // markdown straight from brain's own kb store — no memoryd round trip.
 // A document outside the caller's allowed collections reads as not
 // found (never "forbidden": the distinction would leak that the id
@@ -739,7 +739,7 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 		goog.MarkItDownURL = markItDownURL
 		msft.MarkItDownURL = markItDownURL
 	} else {
-		log.Warn("MARKITDOWN_URL not set; gmail_read/mail_read fall back to a snippet or are unavailable for attachments")
+		log.Warn("MARKITDOWN_URL not set; read_mail falls back to a snippet or is unavailable for attachments")
 	}
 	return mgr, goog, msft, markItDownURL
 }
@@ -874,10 +874,10 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 // intersected with every built connector's ReadOnly-marked, non-MCP
 // tools (connectors.Manager.ReadOnlyTools already excludes MCP and
 // non-read-only tools, and aggregates the rest into one unified tool
-// per capability, e.g. "mail_search" regardless of how many accounts
+// per capability, e.g. "search_mail" regardless of how many accounts
 // serve it. tools.ToolMatches is the same rule filterDefs/matchGrant
 // use: its exact-match branch is what actually fires here, since an
-// allowlist entry like "mail_search" IS the aggregated tool's own name,
+// allowlist entry like "search_mail" IS the aggregated tool's own name,
 // with no connector-prefix suffix to resolve.
 func missionConnectorReadsResolver(agentReg *agents.Store, conns *connectors.Manager) missions.ConnectorReadsResolver {
 	return func(ctx context.Context, agentID string) []*tools.Tool {
@@ -949,7 +949,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// sandboxMgr routes model-authored command execution (the
 	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.
-	// kb_search: nil-safe (mc is never nil, MEMORYD_URL always resolves
+	// search_kb: nil-safe (mc is never nil, MEMORYD_URL always resolves
 	// to a default), same shape as chat's own SetKBSearch wiring — the
 	// mission's OWN Knowledge snapshot (never a live agent lookup)
 	// scopes collections per turn (missions.nativeRunner.kbSearchTool).

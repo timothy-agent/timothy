@@ -3,7 +3,7 @@ import { Chat } from './Chat'
 // Research is a dedicated, single-purpose entry point: the
 // research-brief skill is pinned for every turn (not removable, not
 // picked from a chip) so every answer follows the same source-grounded
-// discipline — web_search + web_fetch, cited claims, a structured
+// discipline — search_web + fetch_url, cited claims, a structured
 // Sources list the UI renders as its own panel.
 export function Research({ onNeedToken }: { onNeedToken: () => void }) {
   return (

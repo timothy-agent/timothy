@@ -6,7 +6,7 @@
 // provider actually billed).
 //
 // Source: open.er-api.com, not frankfurter.app (the source
-// internal/brain/tools/builtin/currency.go's live currency_convert tool
+// internal/brain/tools/builtin/currency.go's live convert_currency tool
 // used before this package existed, now sharing this same source and
 // parser). frankfurter.app publishes ECB reference rates, which do not
 // cover several currencies in settings.allowedCurrencies (BDT, AED,

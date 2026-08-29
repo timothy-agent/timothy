@@ -25,7 +25,7 @@ type currencyConvertArgs struct {
 // CurrencyLookup answers "what is from->to today" from the fx_rates
 // table (internal/brain/fxrates.Store.LatestUSDRate, composed for a
 // direct pair by CurrencyLookupFromStore below) — the primary path a
-// live turn's currency_convert call takes. ok is false when the table
+// live turn's convert_currency call takes. ok is false when the table
 // has no usable rate for this pair (missing, or older than the store's
 // own staleness bound), in which case the tool falls back to a live
 // fetch rather than guess. asOf is formatted "2006-01-02".
@@ -73,7 +73,7 @@ func ConvertCurrency(lookup CurrencyLookup) *tools.Tool {
 // fallback at a stub server instead of the live exchange-rate service.
 func newCurrencyConverter(lookup CurrencyLookup, client *http.Client, baseURL string) *tools.Tool {
 	return &tools.Tool{
-		Name: "currency_convert",
+		Name: "convert_currency",
 		Description: `Converts an amount from one currency to another using
 daily USD-base reference exchange rates (open.er-api.com, updated
 daily; falls back to a live lookup when no stored rate is available).

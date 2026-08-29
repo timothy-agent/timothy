@@ -88,9 +88,9 @@ CREATE TABLE IF NOT EXISTS missions (
     prompt_overlay        text NOT NULL DEFAULT '',
     -- Knowledge snapshots the creating agent's kb_collections allowlist
     -- at create time, same reasoning as prompt_overlay above — a
-    -- mission outlives the request that made it, so kb_search's
+    -- mission outlives the request that made it, so search_kb's
     -- collection scoping can't re-resolve a live agent lookup later.
-    -- Empty array means kb_search is never offered on this mission's
+    -- Empty array means search_kb is never offered on this mission's
     -- turns, regardless of what the agent row says today.
     knowledge             jsonb NOT NULL DEFAULT '[]',
     -- Harness snapshots the operator's execution-strategy choice for a

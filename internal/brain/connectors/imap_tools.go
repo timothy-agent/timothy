@@ -24,14 +24,14 @@ import (
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
-// imapSearchDefault/imapSearchMax mirror microsoft/google's mail_search
+// imapSearchDefault/imapSearchMax mirror microsoft/google's search_mail
 // max_results default and cap.
 const (
 	imapSearchDefault = 10
 	imapSearchMax     = 25
 )
 
-// imapMessageSummary is one mail_search result: envelope plus a best-
+// imapMessageSummary is one search_mail result: envelope plus a best-
 // effort snippet.
 type imapMessageSummary struct {
 	UID     imap.UID
@@ -42,13 +42,13 @@ type imapMessageSummary struct {
 }
 
 // imapAttachment names one attachment found in a parsed message, ready
-// to hand to mail_read_attachment.
+// to hand to read_mail_attachment.
 type imapAttachment struct {
 	Filename    string
 	ContentType string
 }
 
-// imapMessage is one mail_read result: headers, body text, and
+// imapMessage is one read_mail result: headers, body text, and
 // attachment metadata.
 type imapMessage struct {
 	From, To, Date, Subject string
@@ -116,7 +116,7 @@ func (s *imapConn) Search(ctx context.Context, words []string, max int) ([]imapM
 	return out, nil
 }
 
-// buildSummary builds one mail_search result's envelope fields from a
+// buildSummary builds one search_mail result's envelope fields from a
 // fetched message's UID/INTERNALDATE/ENVELOPE, pure so it's testable
 // without a live IMAP session. Date defaults to internalDate and is
 // only overwritten by the envelope's own Date when that's non-zero: a
@@ -267,7 +267,7 @@ func (s *imapConn) Close() error {
 }
 
 // formatEnvelopeAddresses renders envelope From addresses the same
-// "Name <addr>" shape microsoft/google's mail_search uses.
+// "Name <addr>" shape microsoft/google's search_mail uses.
 func formatEnvelopeAddresses(addrs []imap.Address) string {
 	parts := make([]string, 0, len(addrs))
 	for _, a := range addrs {
@@ -373,11 +373,11 @@ func findIMAPAttachment(raw []byte, filename string) ([]byte, string, error) {
 		}
 		return body, ct, nil
 	}
-	return nil, "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", filename)
+	return nil, "", fmt.Errorf("no attachment named %q on this message; check read_mail's attachments list", filename)
 }
 
 // joinAddresses renders a net/mail address list the same "Name <addr>"
-// shape microsoft/google's mail_read uses.
+// shape microsoft/google's read_mail uses.
 func joinAddresses(addrs []*mail.Address) string {
 	parts := make([]string, 0, len(addrs))
 	for _, a := range addrs {
@@ -388,11 +388,11 @@ func joinAddresses(addrs []*mail.Address) string {
 
 func (s *imapSource) mailSearch() *tools.Tool {
 	return &tools.Tool{
-		Name:     "mail_search",
+		Name:     "search_mail",
 		ReadOnly: true,
 		Description: `Search a connected mail account. Returns up to max_results
 (default 10) messages as id, date, from, subject, snippet. Use
-mail_read with an id for the full body. See the tool description's
+read_mail with an id for the full body. See the tool description's
 Connected accounts list for this account's query syntax.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"search query"},
@@ -442,9 +442,9 @@ Connected accounts list for this account's query syntax.`,
 
 func (s *imapSource) mailRead() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_read",
+		Name:        "read_mail",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from mail_search). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use mail_read_attachment with the message id and a filename from that list to read an attachment's content.",
+		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -487,12 +487,12 @@ func (s *imapSource) mailRead() *tools.Tool {
 
 func (s *imapSource) mailReadAttachment() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_read_attachment",
+		Name:        "read_mail_attachment",
 		ReadOnly:    true,
-		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from mail_read's attachments list). Handles PDFs, Office documents, and other common formats.",
+		Description: "Reads an attachment's content as markdown/text, given a message id and the attachment's filename (both from read_mail's attachments list). Handles PDFs, Office documents, and other common formats.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"message_id":{"type":"string","description":"message id"},
-			"filename":{"type":"string","description":"Attachment filename from mail_read's attachments list"}
+			"filename":{"type":"string","description":"Attachment filename from read_mail's attachments list"}
 		},"required":["message_id","filename"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
@@ -532,7 +532,7 @@ func (s *imapSource) mailReadAttachment() *tools.Tool {
 
 func (s *imapSource) mailSend() *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_send",
+		Name:        "send_mail",
 		Description: "Send an email from a connected mail account. Plain text only. Use only when the user asked for an email to be sent; the recipient sees it immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"to":{"type":"string","description":"recipient address(es), comma-separated"},
@@ -584,7 +584,7 @@ func (s *imapSource) mailSend() *tools.Tool {
 	}
 }
 
-// parseIMAPUID parses a mail_search-returned id string back into a UID.
+// parseIMAPUID parses a search_mail-returned id string back into a UID.
 func parseIMAPUID(id string) (imap.UID, error) {
 	n, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {

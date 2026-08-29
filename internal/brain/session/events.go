@@ -97,7 +97,7 @@ type UIBlock struct {
 	Meta map[string]any `json:"meta,omitempty"`
 	// Media carries refs only (never bytes, D-045) for a "media" block
 	// — content a tool call generated during the turn (share_file,
-	// mail_read_attachment). Additive: absent on every block type that
+	// read_mail_attachment). Additive: absent on every block type that
 	// predates this.
 	Media []MediaRef `json:"media,omitempty"`
 }

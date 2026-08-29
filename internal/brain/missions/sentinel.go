@@ -182,7 +182,7 @@ type WorkerVerdict struct {
 	// the tool.
 	Forced bool
 	// SeenURLs is every URL the worker actually observed this turn via
-	// web_fetch/web_search (D-059) — nativeRunner's own runTurn evidence,
+	// fetch_url/search_web (D-059) — nativeRunner's own runTurn evidence,
 	// never model-reported. Empty for the delegated (CLI harness) path,
 	// which has no stream to observe; citations verification is native-
 	// runner-only for now.

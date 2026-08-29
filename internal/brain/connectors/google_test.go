@@ -275,7 +275,7 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 	})
 	// Fakes the markitdown sidecar: echoes back a recognizable marker
 	// plus the filename/mimetype headers it was called with, so tests
-	// can assert gmail_read/gmail_read_attachment actually reached it
+	// can assert read_mail/read_mail_attachment actually reached it
 	// (rather than asserting real markitdown behavior — that's covered
 	// by the sidecar's own build/run, not this Go test).
 	mux.HandleFunc("POST /convert", func(w http.ResponseWriter, r *http.Request) {
@@ -484,10 +484,10 @@ func TestGoogleReadOnlyToolsPinned(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"mail_search":          true,
-		"mail_read":            true,
-		"mail_read_attachment": true,
-		"calendar_list_events": true,
+		"search_mail":          true,
+		"read_mail":            true,
+		"read_mail_attachment": true,
+		"list_calendar_events": true,
 	}
 	got := map[string]bool{}
 	for _, tl := range src.Tools() {
@@ -553,15 +553,15 @@ func TestGmailToolsRoundTrip(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"is:unread"}`))
+	out, err := toolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"is:unread"}`))
 	if err != nil || !strings.Contains(out, "subject: hi") {
 		t.Fatalf("search = (%q, %v)", out, err)
 	}
-	out, err = toolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m1"}`))
+	out, err = toolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"m1"}`))
 	if err != nil || !strings.Contains(out, "hello body") {
 		t.Fatalf("read = (%q, %v)", out, err)
 	}
-	out, err = toolByName(t, src, "mail_send").Execute(t.Context(),
+	out, err = toolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"b@y","subject":"re: hi","body":"on my way"}`))
 	if err != nil || !strings.Contains(out, "sent-1") {
 		t.Fatalf("send = (%q, %v)", out, err)
@@ -705,7 +705,7 @@ func TestGmailSearchZeroResultsSuggestsBroadening(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "mail_search").Execute(t.Context(),
+	out, err := toolByName(t, src, "search_mail").Execute(t.Context(),
 		json.RawMessage(`{"query":"from:nowhere.invalid"}`))
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -716,7 +716,7 @@ func TestGmailSearchZeroResultsSuggestsBroadening(t *testing.T) {
 }
 
 // TestGmailReadFallsBackToMarkItDownForHTMLOnlyBody pins the fix for
-// HTML-only mail (booking confirmations, receipts): gmail_read used to
+// HTML-only mail (booking confirmations, receipts): read_mail used to
 // fall back to the truncated snippet whenever a message had no
 // text/plain part. It must now hand the text/html part to markitdown
 // instead — asserted here against the fake sidecar (real conversion
@@ -726,7 +726,7 @@ func TestGmailReadFallsBackToMarkItDownForHTMLOnlyBody(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
+	out, err := toolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"m2"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -743,8 +743,8 @@ func TestGmailReadFallsBackToMarkItDownForHTMLOnlyBody(t *testing.T) {
 
 // TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown pins the
 // fix for PDF-only receipts (a Kiwi/Agoda-style booking whose amount
-// lives only in a PDF attachment): gmail_read must surface the
-// attachment filename, and gmail_read_attachment must look up the real
+// lives only in a PDF attachment): read_mail must surface the
+// attachment filename, and read_mail_attachment must look up the real
 // (long, opaque) Gmail attachment id itself — the model only ever
 // supplies the short, copyable filename.
 func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) {
@@ -752,7 +752,7 @@ func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) 
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"m3"}`))
+	out, err := toolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"m3"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestGmailReadListsAttachmentsAndReadAttachmentUsesMarkItDown(t *testing.T) 
 		t.Fatalf("read = %q, want the raw attachment id kept out of what the model sees", out)
 	}
 
-	out, err = toolByName(t, src, "mail_read_attachment").Execute(t.Context(),
+	out, err = toolByName(t, src, "read_mail_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("read_attachment: %v", err)
@@ -783,7 +783,7 @@ func TestGmailReadAttachmentEmitsMedia(t *testing.T) {
 		return "att-1", "application/pdf", nil
 	})
 	ctx := tools.WithCollector(t.Context(), collector)
-	if _, err := toolByName(t, src, "mail_read_attachment").Execute(ctx,
+	if _, err := toolByName(t, src, "read_mail_attachment").Execute(ctx,
 		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`)); err != nil {
 		t.Fatalf("read_attachment: %v", err)
 	}
@@ -802,7 +802,7 @@ func TestGmailReadAttachmentEmitFailureDoesNotFailTool(t *testing.T) {
 		return "", "", errors.New("save failed")
 	})
 	ctx := tools.WithCollector(t.Context(), collector)
-	out, err := toolByName(t, src, "mail_read_attachment").Execute(ctx,
+	out, err := toolByName(t, src, "read_mail_attachment").Execute(ctx,
 		json.RawMessage(`{"message_id":"m3","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("read_attachment: %v, want the markdown conversion to still succeed", err)
@@ -817,7 +817,7 @@ func TestGmailReadAttachmentRejectsUnknownFilename(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	_, err := toolByName(t, src, "mail_read_attachment").Execute(t.Context(),
+	_, err := toolByName(t, src, "read_mail_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"m3","filename":"nope.pdf"}`))
 	if err == nil {
 		t.Fatal("expected an error for an unknown attachment filename")
@@ -843,11 +843,11 @@ func TestCalendarToolsRoundTrip(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "calendar_list_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := toolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(out, "standup") || !strings.Contains(out, "zoom") {
 		t.Fatalf("list = (%q, %v)", out, err)
 	}
-	out, err = toolByName(t, src, "calendar_create_event").Execute(t.Context(), json.RawMessage(
+	out, err = toolByName(t, src, "create_calendar_event").Execute(t.Context(), json.RawMessage(
 		`{"summary":"1:1","start":"2026-07-23T10:00:00Z","end":"2026-07-23T10:30:00Z","attendees":["b@y"]}`))
 	if err != nil || !strings.Contains(out, "https://cal/ev-1") {
 		t.Fatalf("create = (%q, %v)", out, err)
@@ -862,7 +862,7 @@ func TestDriveSearchHappyPath(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedDriveDocsSource(t, f)
 
-	out, err := toolByName(t, src, "drive_search").Execute(t.Context(), json.RawMessage(`{"query":"budget"}`))
+	out, err := toolByName(t, src, "search_drive").Execute(t.Context(), json.RawMessage(`{"query":"budget"}`))
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -871,7 +871,7 @@ func TestDriveSearchHappyPath(t *testing.T) {
 		t.Fatalf("search = %q", out)
 	}
 
-	out, err = toolByName(t, src, "drive_search").Execute(t.Context(), json.RawMessage(`{"query":"nothing-matches"}`))
+	out, err = toolByName(t, src, "search_drive").Execute(t.Context(), json.RawMessage(`{"query":"nothing-matches"}`))
 	if err != nil || !strings.Contains(out, "no files matched") {
 		t.Fatalf("empty search = (%q, %v)", out, err)
 	}
@@ -886,7 +886,7 @@ func TestDriveReadExportsGoogleNativeFile(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedDriveDocsSource(t, f)
 
-	out, err := toolByName(t, src, "drive_read").Execute(t.Context(), json.RawMessage(`{"id":"d1"}`))
+	out, err := toolByName(t, src, "read_drive_file").Execute(t.Context(), json.RawMessage(`{"id":"d1"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -898,13 +898,13 @@ func TestDriveReadExportsGoogleNativeFile(t *testing.T) {
 
 // TestDriveReadDownloadsAndConvertsBinaryFile pins the non-native path:
 // a binary file (PDF) is downloaded via alt=media and handed to
-// markitdown, same as gmail_read_attachment's PDF handling.
+// markitdown, same as read_mail_attachment's PDF handling.
 func TestDriveReadDownloadsAndConvertsBinaryFile(t *testing.T) {
 	t.Parallel()
 	f := &fakeGoogle{}
 	src, _ := connectedDriveDocsSource(t, f)
 
-	out, err := toolByName(t, src, "drive_read").Execute(t.Context(), json.RawMessage(`{"id":"bin1"}`))
+	out, err := toolByName(t, src, "read_drive_file").Execute(t.Context(), json.RawMessage(`{"id":"bin1"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -919,7 +919,7 @@ func TestDocsReadFlattensBodyToText(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedDriveDocsSource(t, f)
 
-	out, err := toolByName(t, src, "docs_read").Execute(t.Context(), json.RawMessage(`{"id":"doc1"}`))
+	out, err := toolByName(t, src, "read_doc").Execute(t.Context(), json.RawMessage(`{"id":"doc1"}`))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -934,7 +934,7 @@ func TestDocsCreateWithInitialBody(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedDriveDocsSource(t, f)
 
-	out, err := toolByName(t, src, "docs_create").Execute(t.Context(),
+	out, err := toolByName(t, src, "create_doc").Execute(t.Context(),
 		json.RawMessage(`{"title":"New Doc","body":"hello world"}`))
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -955,7 +955,7 @@ func TestDocsAppendInsertsAtEndIndex(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedDriveDocsSource(t, f)
 
-	out, err := toolByName(t, src, "docs_append").Execute(t.Context(),
+	out, err := toolByName(t, src, "append_doc").Execute(t.Context(),
 		json.RawMessage(`{"id":"doc1","text":"more text"}`))
 	if err != nil {
 		t.Fatalf("append: %v", err)

@@ -75,7 +75,7 @@ func TestGuardSubject(t *testing.T) {
 	}
 
 	// The guard only applies to shell.
-	if got := guardSubject(root, "web_fetch", "https://example.com/.env"); got != "" {
+	if got := guardSubject(root, "fetch_url", "https://example.com/.env"); got != "" {
 		t.Fatalf("non-shell tool guarded: %q", got)
 	}
 }
@@ -88,7 +88,7 @@ func TestCallSubject(t *testing.T) {
 		want string
 	}{
 		{tool: "shell", args: `{"command":"ls -la"}`, want: "ls -la"},
-		{tool: "web_fetch", args: `{"url":"https://example.com"}`, want: "https://example.com"},
+		{tool: "fetch_url", args: `{"url":"https://example.com"}`, want: "https://example.com"},
 		{tool: "calculate", args: `{"expression":"1+1"}`, want: "calculate"},
 		{tool: "shell", args: `not json`, want: "shell"},
 	}
@@ -129,13 +129,13 @@ func TestToolMatches(t *testing.T) {
 		want          bool
 	}{
 		{name: "exact match", tool: "gmail_search", rowTool: "gmail_search", want: true},
-		{name: "connector suffix match", tool: "google-calendar_calendar_list_events", rowTool: "calendar_list_events", want: true},
+		{name: "connector suffix match", tool: "google-calendar_list_calendar_events", rowTool: "list_calendar_events", want: true},
 		{name: "connector suffix match gmail", tool: "gmail_gmail_search", rowTool: "gmail_search", want: true},
 		{name: "sandbox sentinel never suffix-matches", tool: "foo___sandbox__", rowTool: SandboxGrantTool, want: false},
 		{name: "sandbox sentinel exact still matches", tool: SandboxGrantTool, rowTool: SandboxGrantTool, want: true},
-		{name: "no underscore boundary rejected", tool: "notcalendar_list_events", rowTool: "calendar_list_events", want: false},
-		{name: "trailing extra text rejected", tool: "calendar_list_events_extra", rowTool: "calendar_list_events", want: false},
-		{name: "unrelated tool", tool: "shell", rowTool: "calendar_list_events", want: false},
+		{name: "no underscore boundary rejected", tool: "notlist_calendar_events", rowTool: "list_calendar_events", want: false},
+		{name: "trailing extra text rejected", tool: "list_calendar_events_extra", rowTool: "list_calendar_events", want: false},
+		{name: "unrelated tool", tool: "shell", rowTool: "list_calendar_events", want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -191,7 +191,7 @@ func TestResolveShortCircuits(t *testing.T) {
 	})
 
 	// list_missions/get_mission are pure reads (list/status snapshot)
-	// and exempt, same reasoning as web_search; push_mission_branch must
+	// and exempt, same reasoning as search_web; push_mission_branch must
 	// never be exempt (see TestResolvePushMissionBranchAsksWithoutGrant,
 	// the integration counterpart proving its full no-grant path) —
 	// this only pins the exempt-map membership the short-circuit above

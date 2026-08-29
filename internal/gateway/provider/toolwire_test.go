@@ -10,7 +10,7 @@ func toolLoopMessages() []Message {
 	return []Message{
 		{Role: "user", Content: "what time is it in Nairobi?"},
 		{Role: "assistant", Content: "Checking.", ToolCalls: []ToolCall{
-			{ID: "call_1", Name: "current_time", Input: json.RawMessage(`{"timezone":"Africa/Nairobi"}`)},
+			{ID: "call_1", Name: "get_current_time", Input: json.RawMessage(`{"timezone":"Africa/Nairobi"}`)},
 			{ID: "call_2", Name: "calculate", Input: json.RawMessage(`{"expression":"19*23"}`)},
 		}},
 		{Role: "tool", ToolResult: &ToolResult{ID: "call_1", Content: "2026-07-11T09:00:00+03:00"}},
@@ -36,7 +36,7 @@ func TestAnthropicMessagesToolRoundTrip(t *testing.T) {
 	if blocks[0].Type != "text" || blocks[0].Text != "Checking." {
 		t.Fatalf("text block = %+v", blocks[0])
 	}
-	if blocks[1].Type != "tool_use" || blocks[1].ID != "call_1" || blocks[1].Name != "current_time" {
+	if blocks[1].Type != "tool_use" || blocks[1].ID != "call_1" || blocks[1].Name != "get_current_time" {
 		t.Fatalf("tool_use block = %+v", blocks[1])
 	}
 
@@ -63,7 +63,7 @@ func TestAnthropicMessagesToolRoundTrip(t *testing.T) {
 func TestAnthropicMessagesEmptyToolInput(t *testing.T) {
 	t.Parallel()
 	msgs := anthropicMessages([]Message{
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c", Name: "current_time"}}},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c", Name: "get_current_time"}}},
 	})
 	blocks := msgs[0].Content.([]anthropicContentBlock)
 	if string(blocks[0].Input) != "{}" {
@@ -108,7 +108,7 @@ func TestOpenAICompatToolRoundTrip(t *testing.T) {
 		t.Fatalf("got %d messages, want 4", len(req.Messages))
 	}
 	asst := req.Messages[1]
-	if len(asst.ToolCalls) != 2 || asst.ToolCalls[0].Function.Name != "current_time" {
+	if len(asst.ToolCalls) != 2 || asst.ToolCalls[0].Function.Name != "get_current_time" {
 		t.Fatalf("assistant tool_calls = %+v", asst.ToolCalls)
 	}
 	if asst.ToolCalls[0].Function.Arguments != `{"timezone":"Africa/Nairobi"}` {

@@ -62,11 +62,11 @@ describe('summarizeTools', () => {
   it('dedupes by first appearance and counts repeats', () => {
     expect(
       summarizeTools([
-        { id: 'c1', name: 'web_search', status: 'ok' },
-        { id: 'c2', name: 'web_search', status: 'ok' },
-        { id: 'c3', name: 'web_fetch', status: 'ok' },
+        { id: 'c1', name: 'search_web', status: 'ok' },
+        { id: 'c2', name: 'search_web', status: 'ok' },
+        { id: 'c3', name: 'fetch_url', status: 'ok' },
       ]),
-    ).toBe('2× web_search, web_fetch')
+    ).toBe('2× search_web, fetch_url')
   })
 
   it('caps at three names and folds the rest into a "+N more"', () => {
@@ -252,10 +252,10 @@ describe('ActivityPanel', () => {
     const msg = play([
       { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
       { type: 'tool_result', tool_result: { id: 'c1', name: 'shell', status: 'ok', duration_ms: 42 } },
-      { type: 'tool_start', tool_call: { id: 'c2', name: 'web_search' } },
+      { type: 'tool_start', tool_call: { id: 'c2', name: 'search_web' } },
       {
         type: 'tool_result',
-        tool_result: { id: 'c2', name: 'web_search', status: 'ok', duration_ms: 58 },
+        tool_result: { id: 'c2', name: 'search_web', status: 'ok', duration_ms: 58 },
       },
       { type: 'meta', session_id: 's' },
     ])

@@ -20,7 +20,7 @@ import (
 // password lives in the connector's credential_ref (secret store),
 // never here. Port defaults to 993 (implicit TLS); port 143 selects
 // STARTTLS instead. AccountEmail defaults to Username when unset.
-// SMTPHost is optional and gates whether mail_send is served at all;
+// SMTPHost is optional and gates whether send_mail is served at all;
 // SMTPPort defaults to 587 (STARTTLS), port 465 selects implicit TLS.
 type IMAPConfig struct {
 	Host         string `json:"host"`
@@ -82,7 +82,7 @@ func imapConfig(c Connector) (IMAPConfig, error) {
 // IMAPBuilder returns the Builder for kind='imap'. client is used for
 // markitdown's HTTP call (attachment conversion); a nil client
 // defaults inside markitdown.Convert. markItDownURL is the markitdown
-// sidecar's base address; empty disables mail_read_attachment with a
+// sidecar's base address; empty disables read_mail_attachment with a
 // clear per-call error, same convention as Microsoft.MarkItDownURL.
 func IMAPBuilder(client *http.Client, markItDownURL string) Builder {
 	return func(_ context.Context, c Connector, resolve Resolve) (Source, error) {
@@ -126,8 +126,8 @@ type imapSource struct {
 	send func(ctx context.Context, cfg IMAPConfig, password string, recipients []string, message []byte) error
 }
 
-// Tools returns mail_search/mail_read/mail_read_attachment always,
-// plus mail_send only when SMTPHost is configured.
+// Tools returns search_mail/read_mail/read_mail_attachment always,
+// plus send_mail only when SMTPHost is configured.
 func (s *imapSource) Tools() []*tools.Tool {
 	out := []*tools.Tool{s.mailSearch(), s.mailRead(), s.mailReadAttachment()}
 	if s.cfg.SMTPHost != "" {

@@ -461,7 +461,7 @@ func aggregateTool(name string, accounts []toolAccount) *tools.Tool {
 // account's copy is schema-identical by construction, see
 // TestGoogleMicrosoftSharedToolSchemasMatch) plus a connected-accounts
 // list naming which account argument reaches which connector, its
-// kind, its email when known, and, for mail_search specifically, the
+// kind, its email when known, and, for search_mail specifically, the
 // provider's query syntax, since that's where google and microsoft
 // diverge and the shared schema has nowhere else to say so.
 func aggregateDescription(accounts []toolAccount) string {
@@ -480,13 +480,13 @@ func aggregateDescription(accounts []toolAccount) string {
 	} else {
 		b.WriteString("\naccount is required: pass one of the connector names or emails above.")
 	}
-	if accounts[0].tool.Name == "mail_search" {
+	if accounts[0].tool.Name == "search_mail" {
 		b.WriteString(mailSearchKindGuidance(accounts))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// mailSearchGuidanceByKind holds mail_search's per-provider query
+// mailSearchGuidanceByKind holds search_mail's per-provider query
 // syntax guidance, rendered by mailSearchKindGuidance only for kinds
 // actually contributing an account. Keyed by accountInfo's kind
 // string. The google entry keeps the zero-result broaden-retry
@@ -671,7 +671,7 @@ func (m *Manager) Names() []string {
 // "personal-gmail" joins the set, caught either via Matches' namespace-
 // prefix check (an MCP tool actually namespaced that way) or via
 // AccountConnector resolving a unified aggregate call's account (e.g.
-// mail_search) to that same connector name. Reads rows fresh each call
+// search_mail) to that same connector name. Reads rows fresh each call
 // (no restart needed for a settings toggle to take effect), same
 // reasoning as sensitiveRoute.
 func (m *Manager) SensitiveNames(ctx context.Context) ([]string, error) {

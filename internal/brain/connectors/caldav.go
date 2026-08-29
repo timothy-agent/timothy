@@ -107,7 +107,7 @@ type caldavSource struct {
 	client        *http.Client
 }
 
-// Tools returns calendar_list_events and calendar_create_event, always
+// Tools returns list_calendar_events and create_calendar_event, always
 // (caldav has no scope concept to gate on).
 func (s *caldavSource) Tools() []*tools.Tool {
 	return []*tools.Tool{s.calendarListEvents(), s.calendarCreateEvent()}

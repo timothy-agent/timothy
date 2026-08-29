@@ -174,7 +174,7 @@ function DocumentChips({
 }
 
 // GeneratedMedia renders an assistant turn's tool-generated media
-// (share_file, mail_read_attachment): image mimes as thumbnails via
+// (share_file, read_mail_attachment): image mimes as thumbnails via
 // AuthedImage, everything else as a chip — same rendering the user
 // message's own attachments use, opening the same AttachmentViewer.
 function GeneratedMedia({ media }: { media: MediaRef[] }) {

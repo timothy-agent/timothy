@@ -485,7 +485,7 @@ func TestPlanSessionForcesPlanTool(t *testing.T) {
 }
 
 // TestPlanSessionNoForceToolWithKB pins the D-063 carve-out: a
-// KB-attached mission also offers kb_search/kb_read on the planning
+// KB-attached mission also offers search_kb/read_kb on the planning
 // turn, so forcing submit_plan would make consulting them impossible.
 func TestPlanSessionNoForceToolWithKB(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1639,7 +1639,7 @@ func TestExploreSessionGetsShellButNotWriteFile(t *testing.T) {
 		t.Fatalf("explore ExtraTools = %v, want the explore_notes sentinel", names)
 	}
 	if agent.requests[0].ToolAllow != nil {
-		t.Fatalf("explore ToolAllow = %v, want nil so base tools (web_search/web_fetch) stay available", agent.requests[0].ToolAllow)
+		t.Fatalf("explore ToolAllow = %v, want nil so base tools (search_web/fetch_url) stay available", agent.requests[0].ToolAllow)
 	}
 }
 
@@ -1781,7 +1781,7 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 }
 
 // okToolResultEvent is toolResultEvent's ok-status counterpart with a
-// name and digest — web_search's rendered results ride the digest,
+// name and digest — search_web's rendered results ride the digest,
 // never a separate raw-result field (D-059).
 func okToolResultEvent(id, name, digest string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
@@ -1848,17 +1848,17 @@ func TestWebSearchResultURLs(t *testing.T) {
 }
 
 // TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch is the
-// end-to-end wiring check (D-059): a worker turn that calls web_fetch
-// and web_search must surface both URLs on the returned verdict, so
+// end-to-end wiring check (D-059): a worker turn that calls fetch_url
+// and search_web must surface both URLs on the returned verdict, so
 // the driver's citations check has real harness evidence to compare
 // against — never the model's own claim.
 func TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{
-			toolEndEvent("web_fetch", `{"url":"https://example.com/fetched"}`),
-			okToolResultEvent("call-1", "web_fetch", "fetched content"),
-			toolEndEvent("web_search", `{"query":"golang release notes"}`),
-			okToolResultEvent("call-2", "web_search", "1. Release notes\nhttps://example.com/searched\nsnippet"),
+			toolEndEvent("fetch_url", `{"url":"https://example.com/fetched"}`),
+			okToolResultEvent("call-1", "fetch_url", "fetched content"),
+			toolEndEvent("search_web", `{"query":"golang release notes"}`),
+			okToolResultEvent("call-2", "search_web", "1. Release notes\nhttps://example.com/searched\nsnippet"),
 			toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"researched"}`),
 		},
 	}}
@@ -1876,7 +1876,7 @@ func TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch(t *testing.T) {
 // TestKBSearchToolRecordsRefsInSink covers the execution-time harvest
 // (the digest is capped/offloaded past digestCeiling, so citation
 // evidence must be recorded when the tool RUNS, never parsed from the
-// rendered result): executing the worker's kb_search tool must land
+// rendered result): executing the worker's search_kb tool must land
 // every returned document's kb:// ref in the sink, and a nil sink
 // (explore/plan turns) must stay safe.
 func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
@@ -1954,7 +1954,7 @@ func TestRunWorkerSurfacesKBSinkRefsOnVerdict(t *testing.T) {
 }
 
 // kbExecutingAgent stands in for the loop actually running the offered
-// kb_search tool mid-turn: Start executes it for real (so the tool's
+// search_kb tool mid-turn: Start executes it for real (so the tool's
 // closure records into the worker's sink) before replaying the
 // scripted events.
 type kbExecutingAgent struct {
@@ -1963,7 +1963,7 @@ type kbExecutingAgent struct {
 
 func (a *kbExecutingAgent) Start(ctx context.Context, req loop.Request) (<-chan stream.StreamEvent, error) {
 	for _, tool := range req.ExtraTools {
-		if tool.Name == "kb_search" {
+		if tool.Name == "search_kb" {
 			if _, err := tool.Execute(ctx, json.RawMessage(`{"query":"q"}`)); err != nil {
 				return nil, err
 			}
@@ -1974,13 +1974,13 @@ func (a *kbExecutingAgent) Start(ctx context.Context, req loop.Request) (<-chan 
 
 // TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge covers
 // kbSearchTool's opt-in-only contract: no backend wired, or a mission
-// with an empty Knowledge snapshot, must never put kb_search on the
+// with an empty Knowledge snapshot, must never put search_kb on the
 // turn's offered tool surface (chat.go's kbSearchTool mirrors this
 // exactly on the chat side).
 func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
 	hasKBSearch := func(req loop.Request) bool {
 		for _, tool := range req.ExtraTools {
-			if tool.Name == "kb_search" {
+			if tool.Name == "search_kb" {
 				return true
 			}
 		}
@@ -1995,7 +1995,7 @@ func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
 			t.Fatalf("RunWorker: %v", err)
 		}
 		if hasKBSearch(agent.requests[0]) {
-			t.Fatal("kb_search offered with no backend wired")
+			t.Fatal("search_kb offered with no backend wired")
 		}
 	})
 
@@ -2009,7 +2009,7 @@ func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
 			t.Fatalf("RunWorker: %v", err)
 		}
 		if hasKBSearch(agent.requests[0]) {
-			t.Fatal("kb_search offered with empty mission Knowledge")
+			t.Fatal("search_kb offered with empty mission Knowledge")
 		}
 	})
 
@@ -2023,7 +2023,7 @@ func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
 			t.Fatalf("RunWorker: %v", err)
 		}
 		if !hasKBSearch(agent.requests[0]) {
-			t.Fatal("kb_search not offered despite backend wired and non-empty Knowledge")
+			t.Fatal("search_kb not offered despite backend wired and non-empty Knowledge")
 		}
 	})
 }

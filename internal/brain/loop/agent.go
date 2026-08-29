@@ -129,7 +129,7 @@ type Agent struct {
 	// ConnectorNames), not just a single named tool. Two ways a call can
 	// match: an MCP-style namespaced name ("<connector-name>_<tool-
 	// name>") where the connector's own name is a PREFIX; or, for a
-	// unified aggregate tool (connectors.Manager's mail_search etc.,
+	// unified aggregate tool (connectors.Manager's search_mail etc.,
 	// which carries no connector name in its own name)
 	// forceRouteByAccountConnector resolving the call's actual account
 	// to a sensitive connector. A single dynamic name-list func rather
@@ -234,7 +234,7 @@ func (a *Agent) SetForceRoute(suffix string, route func(context.Context) string)
 // connector marked sensitive (as opposed to one hardcoded tool name):
 // once any tool call matching a name currently in names(ctx) runs
 // (either an MCP-style "<name>_"-prefixed tool, or a unified aggregate
-// tool such as mail_search whose call resolves to that connector via
+// tool such as search_mail whose call resolves to that connector via
 // accountConnector), the rest of the turn pins to route(ctx), same
 // sticky/settings-live semantics as SetForceRoute. names, route, and
 // accountConnector are all re-resolved at flip/call time, so toggling a
@@ -278,7 +278,7 @@ type Request struct {
 	MissionID string // ledger tag: set when this turn serves a mission, not chat
 
 	// BuiltinsOnly restricts the turn's base tool surface to compiled-in
-	// builtins (calculator, shell, web_search, ...), excluding connector
+	// builtins (calculator, shell, search_web, ...), excluding connector
 	// tools (e.g. a write-capable GitHub MCP token) and the chat-only
 	// mission tools (list_missions/get_mission/push_mission_branch). Set by
 	// every mission-driven request (explore/plan/worker/reviewer) — a

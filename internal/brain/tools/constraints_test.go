@@ -286,13 +286,13 @@ func TestRepeatGuard(t *testing.T) {
 	t.Run("same call three times in a row trips", func(t *testing.T) {
 		t.Parallel()
 		var g RepeatGuard
-		if g.Record([]provider.ToolCall{call("web_search", `{"query":"book hotel in Nairobi"}`)}) {
+		if g.Record([]provider.ToolCall{call("search_web", `{"query":"book hotel in Nairobi"}`)}) {
 			t.Fatal("tripped on first occurrence")
 		}
-		if g.Record([]provider.ToolCall{call("web_search", `{"query":"book hotel in Nairobi"}`)}) {
+		if g.Record([]provider.ToolCall{call("search_web", `{"query":"book hotel in Nairobi"}`)}) {
 			t.Fatal("tripped on second occurrence")
 		}
-		if !g.Record([]provider.ToolCall{call("web_search", `{"query":"book hotel in Nairobi"}`)}) {
+		if !g.Record([]provider.ToolCall{call("search_web", `{"query":"book hotel in Nairobi"}`)}) {
 			t.Fatal("did not trip on third identical occurrence")
 		}
 	})
@@ -300,9 +300,9 @@ func TestRepeatGuard(t *testing.T) {
 	t.Run("different args resets the run", func(t *testing.T) {
 		t.Parallel()
 		var g RepeatGuard
-		g.Record([]provider.ToolCall{call("web_search", `{"query":"a"}`)})
-		g.Record([]provider.ToolCall{call("web_search", `{"query":"a"}`)})
-		if g.Record([]provider.ToolCall{call("web_search", `{"query":"b"}`)}) {
+		g.Record([]provider.ToolCall{call("search_web", `{"query":"a"}`)})
+		g.Record([]provider.ToolCall{call("search_web", `{"query":"a"}`)})
+		if g.Record([]provider.ToolCall{call("search_web", `{"query":"b"}`)}) {
 			t.Fatal("tripped after a genuinely different call broke the run")
 		}
 	})
@@ -311,10 +311,10 @@ func TestRepeatGuard(t *testing.T) {
 		t.Parallel()
 		var g RepeatGuard
 		for range 5 {
-			if g.Record([]provider.ToolCall{call("web_search", `{"query":"a"}`)}) {
+			if g.Record([]provider.ToolCall{call("search_web", `{"query":"a"}`)}) {
 				t.Fatal("tripped despite alternating calls")
 			}
-			if g.Record([]provider.ToolCall{call("web_fetch", `{"url":"https://example.com"}`)}) {
+			if g.Record([]provider.ToolCall{call("fetch_url", `{"url":"https://example.com"}`)}) {
 				t.Fatal("tripped despite alternating calls")
 			}
 		}

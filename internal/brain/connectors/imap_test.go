@@ -72,7 +72,7 @@ func (f *fakeIMAPSession) FetchAttachment(_ context.Context, uid imap.UID, filen
 	}
 	a, ok := byName[filename]
 	if !ok {
-		return nil, "", fmt.Errorf("no attachment named %q on this message; check mail_read's attachments list", filename)
+		return nil, "", fmt.Errorf("no attachment named %q on this message; check read_mail's attachments list", filename)
 	}
 	return a.raw, a.ct, nil
 }
@@ -140,7 +140,7 @@ func imapToolByName(t *testing.T, src *imapSource, name string) *tools.Tool {
 }
 
 // markitdownStub serves the same /convert response shape
-// microsoft_test.go's fakeMicrosoft uses, so mail_read_attachment's
+// microsoft_test.go's fakeMicrosoft uses, so read_mail_attachment's
 // markitdown round trip can be asserted without a real sidecar.
 func markitdownStub(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -163,7 +163,7 @@ func TestIMAPMailSearchFormatsResults(t *testing.T) {
 	}}
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 
-	out, err := imapToolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"hi"}`))
+	out, err := imapToolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"hi"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestIMAPMailSearchFormatsResults(t *testing.T) {
 		}
 	}
 	if !sess.closed {
-		t.Fatal("session not closed after mail_search")
+		t.Fatal("session not closed after search_mail")
 	}
 }
 
@@ -182,7 +182,7 @@ func TestIMAPMailSearchNoResults(t *testing.T) {
 	sess := &fakeIMAPSession{}
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 
-	out, err := imapToolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"nowhere"}`))
+	out, err := imapToolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"nowhere"}`))
 	if err != nil || out != "no messages matched" {
 		t.Fatalf("Execute = (%q, %v)", out, err)
 	}
@@ -198,7 +198,7 @@ func TestIMAPMailSearchMaxResultsDefaultAndCap(t *testing.T) {
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 
 	// Default (no max_results): capped at imapSearchDefault (10).
-	out, err := imapToolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"m"}`))
+	out, err := imapToolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"m"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestIMAPMailSearchMaxResultsDefaultAndCap(t *testing.T) {
 	}
 
 	// Explicit max_results above imapSearchMax (25): capped at 25.
-	out, err = imapToolByName(t, src, "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"m","max_results":1000}`))
+	out, err = imapToolByName(t, src, "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"m","max_results":1000}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestIMAPMailReadPrefersPlainTextOverHTML(t *testing.T) {
 	}}
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 
-	out, err := imapToolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"7"}`))
+	out, err := imapToolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"7"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestIMAPMailReadListsAttachments(t *testing.T) {
 	}}
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 
-	out, err := imapToolByName(t, src, "mail_read").Execute(t.Context(), json.RawMessage(`{"id":"9"}`))
+	out, err := imapToolByName(t, src, "read_mail").Execute(t.Context(), json.RawMessage(`{"id":"9"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestIMAPMailReadAttachmentUsesMarkItDown(t *testing.T) {
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 	src.markItDownURL = srv.URL
 
-	out, err := imapToolByName(t, src, "mail_read_attachment").Execute(t.Context(),
+	out, err := imapToolByName(t, src, "read_mail_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"9","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -291,7 +291,7 @@ func TestIMAPMailReadAttachmentEmitsMedia(t *testing.T) {
 		return "att-1", "application/pdf", nil
 	})
 	ctx := tools.WithCollector(t.Context(), collector)
-	if _, err := imapToolByName(t, src, "mail_read_attachment").Execute(ctx,
+	if _, err := imapToolByName(t, src, "read_mail_attachment").Execute(ctx,
 		json.RawMessage(`{"message_id":"9","filename":"receipt.pdf"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestIMAPMailReadAttachmentEmitFailureDoesNotFailTool(t *testing.T) {
 		return "", "", errors.New("save failed")
 	})
 	ctx := tools.WithCollector(t.Context(), collector)
-	out, err := imapToolByName(t, src, "mail_read_attachment").Execute(ctx,
+	out, err := imapToolByName(t, src, "read_mail_attachment").Execute(ctx,
 		json.RawMessage(`{"message_id":"9","filename":"receipt.pdf"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v, want the markdown conversion to still succeed", err)
@@ -336,7 +336,7 @@ func TestIMAPMailReadAttachmentUnknownName(t *testing.T) {
 	}{9: {}}}
 	src, _ := testIMAPSource(t, imapRow(""), sess)
 
-	_, err := imapToolByName(t, src, "mail_read_attachment").Execute(t.Context(),
+	_, err := imapToolByName(t, src, "read_mail_attachment").Execute(t.Context(),
 		json.RawMessage(`{"message_id":"9","filename":"nope.pdf"}`))
 	if err == nil {
 		t.Fatal("expected an error for an unknown attachment name")
@@ -347,8 +347,8 @@ func TestIMAPMailSendAbsentWithoutSMTPHost(t *testing.T) {
 	t.Parallel()
 	src, _ := testIMAPSource(t, imapRow(""), &fakeIMAPSession{})
 	for _, tl := range src.Tools() {
-		if tl.Name == "mail_send" {
-			t.Fatal("mail_send must not be present without smtp_host configured")
+		if tl.Name == "send_mail" {
+			t.Fatal("send_mail must not be present without smtp_host configured")
 		}
 	}
 }
@@ -358,12 +358,12 @@ func TestIMAPMailSendPresentWithSMTPHost(t *testing.T) {
 	src, _ := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
 	found := false
 	for _, tl := range src.Tools() {
-		if tl.Name == "mail_send" {
+		if tl.Name == "send_mail" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("mail_send must be present when smtp_host is configured")
+		t.Fatal("send_mail must be present when smtp_host is configured")
 	}
 }
 
@@ -371,7 +371,7 @@ func TestIMAPMailSendAssemblesMessage(t *testing.T) {
 	t.Parallel()
 	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
 
-	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+	out, err := imapToolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"b@y.com","cc":"c@z.com","subject":"hi there","body":"the body"}`))
 	if err != nil || out != "sent" {
 		t.Fatalf("Execute = (%q, %v)", out, err)
@@ -398,7 +398,7 @@ func TestIMAPMailSendDisplayNameRecipient(t *testing.T) {
 	t.Parallel()
 	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
 
-	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+	out, err := imapToolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"Bob Jones <b@y.com>","subject":"hi","body":"b"}`))
 	if err != nil || out != "sent" {
 		t.Fatalf("Execute = (%q, %v)", out, err)
@@ -417,7 +417,7 @@ func TestIMAPMailSendQuotedDisplayNameWithComma(t *testing.T) {
 	t.Parallel()
 	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
 
-	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+	out, err := imapToolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"\"Jones, Bob\" <b@y.com>","subject":"hi","body":"b"}`))
 	if err != nil || out != "sent" {
 		t.Fatalf("Execute = (%q, %v)", out, err)
@@ -434,7 +434,7 @@ func TestIMAPMailSendUnparseableAddressErrors(t *testing.T) {
 	t.Parallel()
 	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
 
-	_, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+	_, err := imapToolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"not an address","subject":"hi","body":"b"}`))
 	if err == nil {
 		t.Fatal("expected an error for an unparseable to address")
@@ -448,7 +448,7 @@ func TestIMAPMailSendEncodesNonASCIISubject(t *testing.T) {
 	t.Parallel()
 	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), &fakeIMAPSession{})
 
-	out, err := imapToolByName(t, src, "mail_send").Execute(t.Context(),
+	out, err := imapToolByName(t, src, "send_mail").Execute(t.Context(),
 		json.RawMessage(`{"to":"b@y.com","subject":"héllo","body":"b"}`))
 	if err != nil || out != "sent" {
 		t.Fatalf("Execute = (%q, %v)", out, err)
@@ -476,7 +476,7 @@ func TestIMAPMailSendRejectsHeaderInjection(t *testing.T) {
 		{"newline in cc", `{"to":"b@y.com","cc":"c@z.com\nBcc: evil@x.com","subject":"hi","body":"b"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := imapToolByName(t, src, "mail_send").Execute(t.Context(), json.RawMessage(tc.args))
+			_, err := imapToolByName(t, src, "send_mail").Execute(t.Context(), json.RawMessage(tc.args))
 			if err == nil {
 				t.Fatal("expected an error for a header value containing a newline")
 			}

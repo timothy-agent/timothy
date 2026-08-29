@@ -9,7 +9,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
-// KBDocument is one full document as kb_read returns it.
+// KBDocument is one full document as read_kb returns it.
 type KBDocument struct {
 	Title     string
 	SourceRef string
@@ -28,22 +28,22 @@ type kbReadArgs struct {
 }
 
 // KBRead lets the model read a knowledge-base document in full after
-// kb_search surfaced an excerpt from it. read is built per-agent,
+// search_kb surfaced an excerpt from it. read is built per-agent,
 // per-turn with the collection set already bound — this constructor
 // never sees or accepts collection names itself.
 func KBRead(read KBReadFunc) *tools.Tool {
 	return &tools.Tool{
-		Name: "kb_read",
+		Name: "read_kb",
 		Description: `Reads a full knowledge-base document by its kb:// reference.
 
-Use after kb_search when the returned passages are not enough — to see
+Use after search_kb when the returned passages are not enough — to see
 a passage's surrounding context, or to read the whole document a hit
 came from. Only documents in this agent's knowledge base collections
 are readable.
 
 Arguments:
 - ref (string, required): the "kb://<document-id>" reference from a
-  kb_search result's "Source:" line (the bare document id also works).
+  search_kb result's "Source:" line (the bare document id also works).
 
 Returns the document's title, source reference, and full markdown
 content. When citing it to the user, use the document title — never
@@ -53,7 +53,7 @@ the kb:// reference.`,
 			"properties": {
 				"ref": {
 					"type": "string",
-					"description": "kb:// reference (or bare document id) from a kb_search result."
+					"description": "kb:// reference (or bare document id) from a search_kb result."
 				}
 			},
 			"required": ["ref"],
@@ -62,15 +62,15 @@ the kb:// reference.`,
 		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var args kbReadArgs
 			if err := json.Unmarshal(raw, &args); err != nil {
-				return "", fmt.Errorf("kb_read: invalid arguments: %w", err)
+				return "", fmt.Errorf("read_kb: invalid arguments: %w", err)
 			}
 			id := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args.Ref), "kb://"))
 			if id == "" {
-				return "", fmt.Errorf("kb_read: ref must be a kb:// reference or document id")
+				return "", fmt.Errorf("read_kb: ref must be a kb:// reference or document id")
 			}
 			doc, err := read(ctx, id)
 			if err != nil {
-				return "", fmt.Errorf("kb_read: %w", err)
+				return "", fmt.Errorf("read_kb: %w", err)
 			}
 			var b strings.Builder
 			b.WriteString(doc.Title)

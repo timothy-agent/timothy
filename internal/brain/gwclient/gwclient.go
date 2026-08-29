@@ -32,7 +32,7 @@ type StreamRequest struct {
 	Agent     string   `json:"agent,omitempty"`
 	ToolAllow []string `json:"-"`
 	// ExtraTools are turn-only tool defs layered on top of the shared
-	// base set (loop.Request.ExtraTools) — chat's per-agent kb_search
+	// base set (loop.Request.ExtraTools) — chat's per-agent search_kb
 	// binding is the only caller today. Loop-internal, never
 	// serialized, same as ToolAllow.
 	ExtraTools []*tools.Tool      `json:"-"`

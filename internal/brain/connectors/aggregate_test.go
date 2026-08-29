@@ -9,12 +9,12 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
-// searchTool builds a minimal mail_search-shaped tool whose Execute
+// searchTool builds a minimal search_mail-shaped tool whose Execute
 // reports which account (by connector name) actually ran it, so a test
 // can assert routing without a real Google/Microsoft source.
 func searchTool(connector string, readOnly bool) *tools.Tool {
 	return &tools.Tool{
-		Name:        "mail_search",
+		Name:        "search_mail",
 		ReadOnly:    readOnly,
 		Description: "Search mail.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`),
@@ -45,7 +45,7 @@ func TestAggregateSingleAccountDefaultsWithoutAccountArg(t *testing.T) {
 		"gmail": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("gmail", true)}}, kind: "google"},
 	}
 
-	tl := toolNamed(t, m.Tools(nil), "mail_search")
+	tl := toolNamed(t, m.Tools(nil), "search_mail")
 	var schema map[string]any
 	if err := json.Unmarshal(tl.InputSchema, &schema); err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestAggregateMultiAccountRequiresAccount(t *testing.T) {
 		"work":     &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("work", true)}}, kind: "microsoft", email: "me@work.com"},
 	}
 
-	tl := toolNamed(t, m.Tools(nil), "mail_search")
+	tl := toolNamed(t, m.Tools(nil), "search_mail")
 	var schema map[string]any
 	if err := json.Unmarshal(tl.InputSchema, &schema); err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestAggregateUnknownAccountErrors(t *testing.T) {
 		"work":     &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("work", true)}}, kind: "microsoft"},
 	}
 
-	tl := toolNamed(t, m.Tools(nil), "mail_search")
+	tl := toolNamed(t, m.Tools(nil), "search_mail")
 	_, err := tl.Execute(t.Context(), json.RawMessage(`{"query":"x","account":"nope"}`))
 	if err == nil || !strings.Contains(err.Error(), "nope") ||
 		!strings.Contains(err.Error(), "personal") || !strings.Contains(err.Error(), "work") {
@@ -129,7 +129,7 @@ func TestAggregateUnknownAccountErrors(t *testing.T) {
 
 // TestAggregateDescriptionListsConnectedAccounts pins the description
 // shape: base description plus one line per account naming the
-// connector, its email when known, its kind, and mail_search's
+// connector, its email when known, its kind, and search_mail's
 // provider-specific syntax hint.
 func TestAggregateDescriptionListsConnectedAccounts(t *testing.T) {
 	t.Parallel()
@@ -139,7 +139,7 @@ func TestAggregateDescriptionListsConnectedAccounts(t *testing.T) {
 		"work":     &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("work", true)}}, kind: "microsoft"},
 	}
 
-	desc := toolNamed(t, m.Tools(nil), "mail_search").Description
+	desc := toolNamed(t, m.Tools(nil), "search_mail").Description
 	for _, want := range []string{
 		"Search mail.", "personal", "me@personal.com", "google",
 		"work", "microsoft", "For google accounts", "Gmail search syntax",
@@ -152,7 +152,7 @@ func TestAggregateDescriptionListsConnectedAccounts(t *testing.T) {
 }
 
 // TestAggregateDescriptionKindGuidanceOnlyForContributingKinds pins
-// that a kind's mail_search guidance block only renders when that kind
+// that a kind's search_mail guidance block only renders when that kind
 // actually contributes an account: a google-only deployment must never
 // see microsoft's Graph $search note, and vice versa.
 func TestAggregateDescriptionKindGuidanceOnlyForContributingKinds(t *testing.T) {
@@ -162,7 +162,7 @@ func TestAggregateDescriptionKindGuidanceOnlyForContributingKinds(t *testing.T) 
 		"personal": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("personal", true)}}, kind: "google"},
 	}
 
-	desc := toolNamed(t, m.Tools(nil), "mail_search").Description
+	desc := toolNamed(t, m.Tools(nil), "search_mail").Description
 	if !strings.Contains(desc, "For google accounts") {
 		t.Fatalf("description = %q, want the google guidance block", desc)
 	}
@@ -172,8 +172,8 @@ func TestAggregateDescriptionKindGuidanceOnlyForContributingKinds(t *testing.T) 
 }
 
 // TestAggregateIMAPContributesToMailSearch pins that an imap-kind
-// fakeAccountSource joins the unified mail_search surface exactly like
-// google/microsoft, and that its mail_search guidance block only
+// fakeAccountSource joins the unified search_mail surface exactly like
+// google/microsoft, and that its search_mail guidance block only
 // renders when an imap account actually contributes — mirroring
 // TestAggregateDescriptionKindGuidanceOnlyForContributingKinds.
 func TestAggregateIMAPContributesToMailSearch(t *testing.T) {
@@ -183,7 +183,7 @@ func TestAggregateIMAPContributesToMailSearch(t *testing.T) {
 		"mailbox": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("mailbox", true)}}, kind: "imap"},
 	}
 
-	desc := toolNamed(t, m.Tools(nil), "mail_search").Description
+	desc := toolNamed(t, m.Tools(nil), "search_mail").Description
 	if !strings.Contains(desc, "For imap accounts") {
 		t.Fatalf("description = %q, want the imap guidance block", desc)
 	}
@@ -191,7 +191,7 @@ func TestAggregateIMAPContributesToMailSearch(t *testing.T) {
 		t.Fatalf("description = %q, must not contain google/microsoft guidance with no such account connected", desc)
 	}
 
-	out, err := toolNamed(t, m.Tools(nil), "mail_search").Execute(t.Context(), json.RawMessage(`{"query":"x"}`))
+	out, err := toolNamed(t, m.Tools(nil), "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"x"}`))
 	if err != nil || out != "ran on mailbox" {
 		t.Fatalf("Execute = (%q, %v), want ran on mailbox", out, err)
 	}
@@ -208,7 +208,7 @@ func TestAggregateReadOnlyRequiresAllAccountsReadOnly(t *testing.T) {
 		"b": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("b", false)}}, kind: "microsoft"},
 	}
 
-	tl := toolNamed(t, m.Tools(nil), "mail_search")
+	tl := toolNamed(t, m.Tools(nil), "search_mail")
 	if tl.ReadOnly {
 		t.Fatal("aggregate ReadOnly=true, want false when any contributing account's tool is not ReadOnly")
 	}
@@ -217,8 +217,8 @@ func TestAggregateReadOnlyRequiresAllAccountsReadOnly(t *testing.T) {
 	// is ReadOnly, but the unified tool covers both accounts and can't
 	// selectively deny "b" mid-call.
 	for _, tl := range m.ReadOnlyTools() {
-		if tl.Name == "mail_search" {
-			t.Fatal("ReadOnlyTools must not include mail_search when one account's tool is not ReadOnly")
+		if tl.Name == "search_mail" {
+			t.Fatal("ReadOnlyTools must not include search_mail when one account's tool is not ReadOnly")
 		}
 	}
 }
@@ -242,8 +242,8 @@ func TestAggregateMCPJoinsUnifiedSurfaceAlongsideNonMCP(t *testing.T) {
 	for _, tl := range m.Tools(nil) {
 		names[tl.Name] = true
 	}
-	if !names["mail_search"] {
-		t.Fatal("aggregated mail_search missing")
+	if !names["search_mail"] {
+		t.Fatal("aggregated search_mail missing")
 	}
 	if !names["read_channel"] {
 		t.Fatal("MCP tool with no name collision must merge un-namespaced")

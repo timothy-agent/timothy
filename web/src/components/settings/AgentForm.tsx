@@ -193,7 +193,7 @@ export function AgentForm({
       <Field label="Tools allowlist" hint="pick from the live tool surface; empty = none">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>
-      <Field label="Knowledge allowlist" hint="collections this agent can search with kb_search; empty = none">
+      <Field label="Knowledge allowlist" hint="collections this agent can search with search_kb; empty = none">
         <KnowledgePicker value={fields.knowledge} onChange={fields.setKnowledge} />
       </Field>
     </div>

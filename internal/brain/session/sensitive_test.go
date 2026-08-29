@@ -32,7 +32,7 @@ func TestSensitiveToolsMatchesConnectorPrefix(t *testing.T) {
 	}{
 		{name: "connector-prefixed tool", tool: "slack_read_channel", want: true},
 		{name: "another tool under the same sensitive connector", tool: "slack_send_message", want: true},
-		{name: "unrelated connector", tool: "calendar_list_events", want: false},
+		{name: "unrelated connector", tool: "list_calendar_events", want: false},
 		{name: "connector name embedded but not as a namespace boundary", tool: "backslack_read", want: false},
 	}
 	for _, tc := range tests {
@@ -58,7 +58,7 @@ func TestSensitiveToolsMatchesConnectorNamesNil(t *testing.T) {
 }
 
 // TestSensitiveToolsMatchesAccountConnector pins the unified-tool path:
-// a call to a name carrying no connector prefix (e.g. "mail_search")
+// a call to a name carrying no connector prefix (e.g. "search_mail")
 // still matches once AccountConnector resolves it to a name in
 // ConnectorNames: the account the call actually routed to, not the
 // tool's own name, decides sensitivity here.
@@ -67,17 +67,17 @@ func TestSensitiveToolsMatchesAccountConnector(t *testing.T) {
 	s := &SensitiveTools{
 		ConnectorNames: func(context.Context) []string { return []string{"work-outlook"} },
 		AccountConnector: func(_ context.Context, toolName string, args json.RawMessage) string {
-			if toolName == "mail_search" && string(args) == `{"account":"work-outlook"}` {
+			if toolName == "search_mail" && string(args) == `{"account":"work-outlook"}` {
 				return "work-outlook"
 			}
 			return "personal-gmail"
 		},
 		Route: func(context.Context) string { return "local" },
 	}
-	if !s.Matches(context.Background(), "mail_search", json.RawMessage(`{"account":"work-outlook"}`)) {
+	if !s.Matches(context.Background(), "search_mail", json.RawMessage(`{"account":"work-outlook"}`)) {
 		t.Fatal("Matches false for a call AccountConnector resolves to a sensitive connector, want true")
 	}
-	if s.Matches(context.Background(), "mail_search", json.RawMessage(`{"account":"other"}`)) {
+	if s.Matches(context.Background(), "search_mail", json.RawMessage(`{"account":"other"}`)) {
 		t.Fatal("Matches true for a call resolving to a non-sensitive connector, want false")
 	}
 }
@@ -91,7 +91,7 @@ func TestSensitiveToolsMatchesAccountConnectorNil(t *testing.T) {
 		ConnectorNames: func(context.Context) []string { return []string{"work-outlook"} },
 		Route:          func(context.Context) string { return "local" },
 	}
-	if s.Matches(context.Background(), "mail_search", json.RawMessage(`{"account":"work-outlook"}`)) {
+	if s.Matches(context.Background(), "search_mail", json.RawMessage(`{"account":"work-outlook"}`)) {
 		t.Fatal("Matches true with nil AccountConnector, want false (no prefix match either)")
 	}
 }

@@ -44,7 +44,7 @@ func (e *verifyFailure) Error() string {
 // harness-run evidence may flip a unit's Passes flag, never model
 // output. Declared artifacts are checked first (exists, non-empty),
 // then (general missions only, D-059) that every URL cited in those
-// artifacts was actually seen by the worker via web_fetch/web_search
+// artifacts was actually seen by the worker via fetch_url/search_web
 // this turn — a tautological verify_cmd cannot pass a unit whose
 // artifact was never written, or whose citations were invented.
 // seenURLs is only ever populated by the caller right after the

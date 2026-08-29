@@ -62,7 +62,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `memoryd`    | Internal memory service: pgvector-backed recall                                               |
 | `sandboxd`   | Internal service holding the Docker socket: per-mission sandbox containers                    |
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                   |
-| `searxng`    | Internal metasearch backend for the web_search tool                                           |
+| `searxng`    | Internal metasearch backend for the search_web tool                                           |
 | `markitdown` | Internal Python sidecar: file→markdown conversion                                             |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
 

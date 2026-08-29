@@ -30,7 +30,7 @@ type Mission struct {
 	PromptOverlay string `json:"prompt_overlay,omitempty"`
 	// Knowledge is a snapshot of the creating agent's kb_collections
 	// allowlist at create time, same reasoning as PromptOverlay above.
-	// Empty means kb_search is never offered on this mission's turns.
+	// Empty means search_kb is never offered on this mission's turns.
 	Knowledge []string `json:"knowledge,omitempty"`
 	Phase     Phase    `json:"phase"`
 	Status    Status   `json:"status"`

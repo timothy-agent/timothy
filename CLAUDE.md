@@ -16,7 +16,7 @@ PostgreSQL database + React web UI, run via Docker Compose
 | `memoryd`      | Internal memory service: pgvector recall                                                                       |
 | `sandboxd`     | Internal service holding the Docker socket: per-mission sandbox containers, brain calls it via `sandboxclient` |
 | `web`          | React UI (:3300)                                                                                               |
-| `searxng`      | Internal metasearch backend for the web_search tool                                                            |
+| `searxng`      | Internal metasearch backend for the search_web tool                                                            |
 | `markitdown`   | Internal Python sidecar (`markitdown-svc/`): file→markdown                                                     |
 | `whisper`      | Internal Python sidecar (`whisper-svc/`): local speech-to-text                                                 |
 | (local models) | Native host Ollama at host.docker.internal:11434, registered as openaicompat provider                          |
@@ -59,8 +59,8 @@ First run: `cp deploy/env.example deploy/.env` and set
   (orchestration above missions: steps + outcome-driven edges, env-gated
   `WORKFLOWS_ENABLED`), `connectors`
   (google/microsoft/github/mcp/imap/caldav, unified capability tools:
-  `mail_search`, `mail_read`, `mail_send`, `calendar_list_events`,
-  `calendar_create_event` route to the right connector/account via an
+  `search_mail`, `read_mail`, `send_mail`, `list_calendar_events`,
+  `create_calendar_event` route to the right connector/account via an
   `account` parameter — see `manager.go`'s `aggregateTools`),
   `destinations` (mission result delivery: email/webhook/
   telegram), `kb` (knowledge-base collections/documents), `attachments`,

@@ -8,7 +8,7 @@ description: Source-grounded factual research with verification and citations. U
 ## Rules
 
 - Retrieve before you write: every load-bearing factual claim must be supported by a source actually retrieved this turn, not by trained recall.
-- If a kb_search tool is available, search the knowledge base before the web and cite kb sources by their kb:// ref.
+- If a search_kb tool is available, search the knowledge base before the web and cite kb sources by their kb:// ref.
 - Use two genuinely independent sources for any claim that drives a decision when practical. Syndicated copies, reposts, or sources relying on the same underlying material do not count as independent. One authoritative source is sufficient for background information when additional corroboration would not materially improve confidence.
 - Record where each important fact came from. A source mentioned only in the trailing list without being referenced in the body is not a citation.
 - Distinguish clearly between what a source states and what you infer from it. Label inference explicitly as `Inference: ...`.

@@ -189,8 +189,8 @@ func NormalizeURL(raw string) string {
 
 // CheckCitations verifies every http(s) URL and kb:// reference cited
 // in a unit's declared artifacts was actually seen by the worker this
-// turn — via web_fetch's url arg, a web_search result URL, or a
-// kb_search result's kb:// ref — never merely claimed. Scoped to
+// turn — via fetch_url's url arg, a search_web result URL, or a
+// search_kb result's kb:// ref — never merely claimed. Scoped to
 // "general" missions only (D-059): coding missions cite source, not
 // the web/knowledge base. seenURLs empty and the artifact cites
 // nothing passes trivially; seenURLs empty with citations present
@@ -256,9 +256,9 @@ func unknownCitationSummary(unknown []string) string {
 	case hasKB && hasURL:
 		return "cited URL(s)/kb reference(s) never seen this turn: " + strings.Join(unknown, ", ")
 	case hasKB:
-		return "cited kb reference(s) never seen via kb_search this turn: " + strings.Join(unknown, ", ")
+		return "cited kb reference(s) never seen via search_kb this turn: " + strings.Join(unknown, ", ")
 	default:
-		return "cited URL(s) never seen via web_fetch/web_search this turn: " + strings.Join(unknown, ", ")
+		return "cited URL(s) never seen via fetch_url/search_web this turn: " + strings.Join(unknown, ", ")
 	}
 }
 
@@ -275,10 +275,10 @@ func unknownCitationFix(unknown []string) string {
 	}
 	switch {
 	case hasKB && hasURL:
-		return "fetch a source with web_fetch, or search for it with kb_search, before citing it"
+		return "fetch a source with fetch_url, or search for it with search_kb, before citing it"
 	case hasKB:
-		return "search for it with kb_search before citing it"
+		return "search for it with search_kb before citing it"
 	default:
-		return "fetch a source with web_fetch before citing it"
+		return "fetch a source with fetch_url before citing it"
 	}
 }

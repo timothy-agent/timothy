@@ -153,8 +153,8 @@ type Service struct {
 	markitdownHTTP *http.Client                         // shared client for the markitdown sidecar call
 	whisperURL     string                               // "": audio attachments attach without a transcript (WHISPER_URL unset)
 	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
-	kbSearch       KBSearch                             // nil: kb_search never offered, regardless of agent config
-	kbRead         KBRead                               // nil: kb_read never offered, regardless of agent config
+	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config
+	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -264,15 +264,15 @@ func (s *Service) SetWhisper(url string) {
 // Knowledge list (D-060: enforced here in Go, never a prompt).
 type KBSearch func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
-// SetKBSearch wires the kb_search tool's backing search call. Optional
-// — nil means kb_search is never offered on any turn, regardless of an
+// SetKBSearch wires the search_kb tool's backing search call. Optional
+// — nil means search_kb is never offered on any turn, regardless of an
 // agent's Knowledge list (same "the dependency's absence turns the
 // feature off entirely" contract as SetMemoryRetrieve/SetAttachments).
 func (s *Service) SetKBSearch(fn KBSearch) { s.kbSearch = fn }
 
-// kbSearchTool builds this turn's kb_search ExtraTool bound to
+// kbSearchTool builds this turn's search_kb ExtraTool bound to
 // collections (the serving agent's Knowledge unioned with the
-// session's own pinned list), or nil when kb_search must not be
+// session's own pinned list), or nil when search_kb must not be
 // offered: no backing search call wired, or collections is empty
 // (opt-in-only, same contract as Skills/Tools — this is the "exclude
 // from the turn" choice, matching load_skill's precedent of leaving a
@@ -293,11 +293,11 @@ func (s *Service) kbSearchTool(collections []string) *tools.Tool {
 // is the serving agent's own Knowledge list.
 type KBRead func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error)
 
-// SetKBRead wires the kb_read tool's backing lookup. Optional — same
+// SetKBRead wires the read_kb tool's backing lookup. Optional — same
 // nil contract as SetKBSearch.
 func (s *Service) SetKBRead(fn KBRead) { s.kbRead = fn }
 
-// kbReadTool builds this turn's kb_read ExtraTool, gated exactly like
+// kbReadTool builds this turn's read_kb ExtraTool, gated exactly like
 // kbSearchTool: no backend or empty collections means the tool is not
 // offered.
 func (s *Service) kbReadTool(collections []string) *tools.Tool {
@@ -1247,12 +1247,12 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	}
 
 	// A pinned collection is an explicit user signal to search it, not
-	// just a passive tool grant — but only when kb_search will actually
+	// just a passive tool grant — but only when search_kb will actually
 	// be offered (skErr nil, s.kbSearch wired, union non-empty): a
 	// pinned name with no backend must never promise a tool that isn't
 	// there.
 	if skErr == nil && len(sk) > 0 && s.kbSearch != nil && len(collections) > 0 {
-		system += "\n\n# Pinned knowledge\n\nThe user pinned these knowledge collections to this session: " + strings.Join(sk, ", ") + ". This is an explicit signal: when a question could plausibly be answered by their content, call kb_search first and ground the answer in what it returns, rather than answering from general knowledge alone."
+		system += "\n\n# Pinned knowledge\n\nThe user pinned these knowledge collections to this session: " + strings.Join(sk, ", ") + ". This is an explicit signal: when a question could plausibly be answered by their content, call search_kb first and ground the answer in what it returns, rather than answering from general knowledge alone."
 	}
 
 	var extraTools []*tools.Tool

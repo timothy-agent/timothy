@@ -47,7 +47,7 @@ type kbSearchArgs struct {
 // accepts collection names itself.
 func KBSearch(search KBSearchFunc) *tools.Tool {
 	return &tools.Tool{
-		Name: "kb_search",
+		Name: "search_kb",
 		Description: `Searches this agent's knowledge base collections and returns matching passages with their source.
 
 Use when the user asks about something that might be documented in the
@@ -63,7 +63,7 @@ Arguments:
 Returns numbered passages, each with its document title, section
 breadcrumb, source reference, and content, plus a "Source:" line giving
 a stable kb:// reference. The kb:// reference is internal plumbing —
-pass it to kb_read to load the full document, but never show it to the
+pass it to read_kb to load the full document, but never show it to the
 user; when answering from a result, cite the document by its title.`,
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -90,24 +90,24 @@ user; when answering from a result, cite the document by its title.`,
 		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var args kbSearchArgs
 			if err := json.Unmarshal(raw, &args); err != nil {
-				return "", fmt.Errorf("kb_search: invalid arguments: %w", err)
+				return "", fmt.Errorf("search_kb: invalid arguments: %w", err)
 			}
 			if strings.TrimSpace(args.Query) == "" {
-				return "", fmt.Errorf("kb_search: query must not be empty")
+				return "", fmt.Errorf("search_kb: query must not be empty")
 			}
 			if args.Mode != "" && !kbSearchModes[args.Mode] {
-				return "", fmt.Errorf("kb_search: mode must be hybrid, semantic, or keyword, got %q", args.Mode)
+				return "", fmt.Errorf("search_kb: mode must be hybrid, semantic, or keyword, got %q", args.Mode)
 			}
 			k := kbSearchDefaultK
 			if args.K != nil {
 				k = *args.K
 				if k < 1 || k > kbSearchMaxK {
-					return "", fmt.Errorf("kb_search: k must be between 1 and %d, got %d", kbSearchMaxK, k)
+					return "", fmt.Errorf("search_kb: k must be between 1 and %d, got %d", kbSearchMaxK, k)
 				}
 			}
 			hits, err := search(ctx, args.Query, args.Mode, k)
 			if err != nil {
-				return "", fmt.Errorf("kb_search: %w", err)
+				return "", fmt.Errorf("search_kb: %w", err)
 			}
 			return formatKBHits(hits), nil
 		},

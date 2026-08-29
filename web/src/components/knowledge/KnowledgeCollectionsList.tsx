@@ -23,7 +23,7 @@ export function KnowledgeCollectionsList() {
   return (
     <div className="mt-6 space-y-6">
       <p className="text-sm text-muted-foreground">
-        Collections group documents an agent can search with kb_search for grounded answers.
+        Collections group documents an agent can search with search_kb for grounded answers.
         Upload files to a collection, then allow an agent to search it from the agent's own
         settings.
       </p>

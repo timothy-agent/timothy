@@ -63,7 +63,7 @@ type ToolResultEvent struct {
 	// Args is the call's own input, brain-internal only (json:"-": never
 	// reaches the client wire); chat's sensitivity check needs it to
 	// resolve which account a unified aggregate tool call (e.g.
-	// mail_search) actually routed to (session.SensitiveTools.Matches).
+	// search_mail) actually routed to (session.SensitiveTools.Matches).
 	Args json.RawMessage `json:"-"`
 }
 

@@ -18,7 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
-// caldavListDefault mirrors microsoft's calendar_list_events default
+// caldavListDefault mirrors microsoft's list_calendar_events default
 // max_results.
 const caldavListDefault = 20
 
@@ -32,7 +32,7 @@ type caldavEvent struct {
 
 func (s *caldavSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
-		Name:        "calendar_list_events",
+		Name:        "list_calendar_events",
 		ReadOnly:    true,
 		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
@@ -337,7 +337,7 @@ func rfc3339FromICal(v string) string {
 
 func (s *caldavSource) calendarCreateEvent() *tools.Tool {
 	return &tools.Tool{
-		Name:        "calendar_create_event",
+		Name:        "create_calendar_event",
 		Description: "Create an event on the connected account's primary calendar. start and end are RFC3339 timestamps with offset, e.g. 2026-07-22T15:00:00+02:00. Use only when the user asked for an event; depending on the provider, attendees may be notified immediately.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"summary":{"type":"string","description":"event title"},
