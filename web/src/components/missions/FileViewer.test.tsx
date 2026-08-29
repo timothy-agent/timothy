@@ -7,6 +7,7 @@ vi.mock('../../api/client', () => ({
   downloadMissionFile: vi.fn(),
   fetchMissionFileBlob: vi.fn(),
   missionFilePreviewCap: 1_000_000,
+  missionPdfPreviewCap: 25_000_000,
   MissionFileTooLargeError: class MissionFileTooLargeError extends Error {},
 }))
 
@@ -52,6 +53,15 @@ describe('FileViewer', () => {
 
     const img = await screen.findByRole('img')
     expect(img.getAttribute('src')).toBe('blob:mock')
+  })
+
+  it('renders pdf files inline in an iframe, retyped as application/pdf', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['%PDF-1.4']))
+    render(<FileViewer missionId="m1" file={file('report.pdf')} />)
+
+    const iframe = (await screen.findByTitle('report.pdf')) as HTMLIFrameElement
+    expect(iframe.getAttribute('src')).toBe('blob:mock')
+    expect(fetchMissionFileBlob).toHaveBeenCalledWith('m1', 'report.pdf', 25_000_000)
   })
 
   it('shows a too-large message without fetching preview content past the cap', async () => {

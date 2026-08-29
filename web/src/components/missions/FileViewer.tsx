@@ -6,6 +6,7 @@ import {
   downloadMissionFile,
   fetchMissionFileBlob,
   missionFilePreviewCap,
+  missionPdfPreviewCap,
 } from '../../api/client'
 import type { MissionFile } from '../../api/types'
 import { FileCodeBlock, FileMarkdownBlock } from '../FilePreviewBlocks'
@@ -26,6 +27,7 @@ type LoadState =
   | { status: 'too-large' }
   | { status: 'text'; text: string }
   | { status: 'image'; url: string }
+  | { status: 'pdf'; url: string }
 
 export function FileViewer({ missionId, file }: { missionId: string; file: MissionFile }) {
   const [state, setState] = useState<LoadState>({ status: 'loading' })
@@ -41,12 +43,19 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
     }
     let objectUrl: string | undefined
     let cancelled = false
-    fetchMissionFileBlob(missionId, file.path).then(
+    const cap = kind === 'pdf' ? missionPdfPreviewCap : missionFilePreviewCap
+    fetchMissionFileBlob(missionId, file.path, cap).then(
       (blob) => {
         if (cancelled) return
         if (kind === 'image') {
           objectUrl = URL.createObjectURL(blob)
           setState({ status: 'image', url: objectUrl })
+        } else if (kind === 'pdf') {
+          // Server forces Content-Type: application/octet-stream on this
+          // route deliberately — retype the blob client-side so the
+          // iframe's PDF plugin picks it up (see FileViewer.tsx's guard).
+          objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
+          setState({ status: 'pdf', url: objectUrl })
         } else {
           blob.text().then((text) => {
             if (!cancelled) setState({ status: 'text', text })
@@ -112,7 +121,7 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
               </Button>
             </>
           )}
-          {state.status === 'image' && (
+          {(state.status === 'image' || state.status === 'pdf') && (
             <Button variant="ghost" size="sm" onClick={() => window.open(state.url, '_blank')}>
               Raw
             </Button>
@@ -129,8 +138,8 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
         )}
         {state.status === 'too-large' && (
           <p className="p-3 text-sm text-muted-foreground">
-            File is larger than {humanSize(missionFilePreviewCap)}, too large to preview.
-            Download it instead.
+            File is larger than {humanSize(kind === 'pdf' ? missionPdfPreviewCap : missionFilePreviewCap)},
+            too large to preview. Download it instead.
           </p>
         )}
         {state.status === 'error' && (
@@ -144,6 +153,9 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
           <div className="flex justify-center p-3">
             <img src={state.url} alt={file.path} className="max-w-full" />
           </div>
+        )}
+        {state.status === 'pdf' && (
+          <iframe src={state.url} title={file.path} className="size-full border-0" />
         )}
         {state.status === 'text' && kind === 'markdown' && (
           <FileMarkdownBlock text={state.text} raw={showRawMarkdown} />

@@ -11,6 +11,11 @@ describe('previewKindOf', () => {
     expect(previewKindOf('README.md')).toBe('markdown')
   })
 
+  it('classifies pdf', () => {
+    expect(previewKindOf('report.pdf')).toBe('pdf')
+    expect(previewKindOf('a/b/report.PDF')).toBe('pdf')
+  })
+
   it('classifies known code extensions', () => {
     expect(previewKindOf('main.go')).toBe('code')
     expect(previewKindOf('index.tsx')).toBe('code')

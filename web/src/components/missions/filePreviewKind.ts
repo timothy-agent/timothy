@@ -1,4 +1,4 @@
-export type PreviewKind = 'image' | 'markdown' | 'code' | 'unsupported'
+export type PreviewKind = 'image' | 'markdown' | 'pdf' | 'code' | 'unsupported'
 
 const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
 const markdownExts = new Set(['md', 'markdown'])
@@ -76,6 +76,7 @@ export function previewKindOf(path: string): PreviewKind {
   const ext = extOf(path)
   if (imageExts.has(ext)) return 'image'
   if (markdownExts.has(ext)) return 'markdown'
+  if (ext === 'pdf') return 'pdf'
   if (baseOf(path) in basenameLanguages) return 'code'
   if (ext in codeLanguages) return 'code'
   return 'unsupported'

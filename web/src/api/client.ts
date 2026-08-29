@@ -1518,14 +1518,24 @@ export async function downloadMissionFile(id: string, path: string): Promise<voi
 // back to "download instead" in the UI.
 export const missionFilePreviewCap = 1_000_000
 
+// missionPdfPreviewCap is the same guard, raised for pdf kind: the
+// browser's own PDF plugin renders it, not the tab's JS, so a much
+// larger file is still safe to hand over as a blob URL.
+export const missionPdfPreviewCap = 25_000_000
+
 export class MissionFileTooLargeError extends Error {}
 
 // fetchMissionFileBlob reads a mission file's bytes for in-app
-// preview (image/text/markdown) rather than triggering a save — the
-// server forces Content-Type: application/octet-stream on this route
-// deliberately (a worker-authored file could be arbitrary HTML), so
-// callers must render the bytes themselves, never navigate to the URL.
-export async function fetchMissionFileBlob(id: string, path: string): Promise<Blob> {
+// preview (image/text/markdown/pdf) rather than triggering a save —
+// the server forces Content-Type: application/octet-stream on this
+// route deliberately (a worker-authored file could be arbitrary
+// HTML), so callers must render the bytes themselves, never navigate
+// to the URL.
+export async function fetchMissionFileBlob(
+  id: string,
+  path: string,
+  cap: number = missionFilePreviewCap,
+): Promise<Blob> {
   const res = await fetch(`/v1/missions/${id}/files/${encodeFilePath(path)}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
   })
@@ -1533,11 +1543,11 @@ export async function fetchMissionFileBlob(id: string, path: string): Promise<Bl
     failChat(res.status, `request failed (${res.status})`)
   }
   const len = res.headers.get('Content-Length')
-  if (len && Number(len) > missionFilePreviewCap) {
+  if (len && Number(len) > cap) {
     throw new MissionFileTooLargeError('file too large to preview')
   }
   const blob = await res.blob()
-  if (blob.size > missionFilePreviewCap) {
+  if (blob.size > cap) {
     throw new MissionFileTooLargeError('file too large to preview')
   }
   return blob
