@@ -1242,7 +1242,7 @@ func execEnvironmentNote(loc *time.Location) string {
 	// and mangles date-bounded calls (calendar windows, Gmail
 	// after:/before:). Date only, no clock time, for the same
 	// prompt-cache reason as chat's date line (D-018).
-	return " Commands run inside an isolated Linux container with python3, node, git, and standard POSIX/coreutils tools available; each mission gets its own container, state persists across your commands within the mission. Today is " + time.Now().In(loc).Format("Monday, 2006-01-02 (MST).")
+	return " Commands run inside an isolated Linux container with python3, node, git, and standard POSIX/coreutils tools available; each mission gets its own container, state persists across your commands within the mission. Today is " + time.Now().In(loc).Format("Monday, 2006-01-02 (MST).") + " Present all dates and times in this timezone unless the goal asks otherwise."
 }
 
 // parseSpec decodes the planner's reply strictly: fences stripped,

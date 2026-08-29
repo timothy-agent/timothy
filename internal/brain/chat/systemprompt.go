@@ -24,6 +24,12 @@ A message block starting with "[attached document <id> (<mime>)]" is followed by
 // the assembled prompt (D-018).
 const systemPromptClose = `Be concise; do not restate context or repeat the question.`
 
+// timezoneSteer follows the date line, telling the model to present
+// dates/times in the operator's configured timezone rather than
+// whatever a tool result happens to carry. A constant, not built from
+// loc, so it never varies request to request (D-018).
+const timezoneSteer = " Present all dates and times in this timezone unless the user asks otherwise."
+
 // assembleSystem builds the full system prompt: identity, then the
 // optional per-deploy skills index, then a current-date line, then the
 // closing steer. now must be evaluated at request time (never cached
@@ -38,7 +44,7 @@ func assembleSystem(skillsIndex string, now time.Time, loc *time.Location) strin
 	if loc == nil {
 		loc = time.UTC
 	}
-	dateLine := "Today is " + now.In(loc).Format("Monday, 2006-01-02 (MST).")
+	dateLine := "Today is " + now.In(loc).Format("Monday, 2006-01-02 (MST).") + timezoneSteer
 	if skillsIndex == "" {
 		return systemPrompt + "\n\n" + dateLine + "\n\n" + systemPromptClose
 	}

@@ -2094,6 +2094,35 @@ func TestSteeringForNilWithoutProgressReader(t *testing.T) {
 	}
 }
 
+// TestExecEnvironmentNoteIncludesTimezoneSteer pins that the date line
+// carries the timezone-presentation instruction right after the date,
+// for both an operator location and the nil (UTC) default — a global
+// harness instruction instead of per-prompt boilerplate.
+func TestExecEnvironmentNoteIncludesTimezoneSteer(t *testing.T) {
+	want := "Present all dates and times in this timezone unless the goal asks otherwise."
+
+	t.Run("nil location (UTC)", func(t *testing.T) {
+		note := execEnvironmentNote(nil)
+		if !strings.Contains(note, want) {
+			t.Fatalf("timezone steer missing:\n%s\nwant substring:\n%s", note, want)
+		}
+		if i, j := strings.Index(note, "Today is"), strings.Index(note, want); i == -1 || j <= i {
+			t.Fatalf("timezone steer must follow the date: %s", note)
+		}
+	})
+
+	t.Run("operator location", func(t *testing.T) {
+		loc, err := time.LoadLocation("Europe/Amsterdam")
+		if err != nil {
+			t.Fatalf("load location: %v", err)
+		}
+		note := execEnvironmentNote(loc)
+		if !strings.Contains(note, want) {
+			t.Fatalf("timezone steer missing:\n%s\nwant substring:\n%s", note, want)
+		}
+	})
+}
+
 // TestRunWorkerWiresSteeringFromProgressReader confirms RunWorker's
 // loop.Request actually carries a non-nil Steering func end-to-end when
 // a ProgressReader is wired, and that the request has none when it

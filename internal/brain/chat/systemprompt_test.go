@@ -47,6 +47,35 @@ func TestAssembleSystemDateLineOperatorLocation(t *testing.T) {
 	}
 }
 
+// TestAssembleSystemDateLineIncludesTimezoneSteer pins that the date
+// line carries the timezone-presentation instruction (timezoneSteer)
+// right after the date, both for an operator location and for the nil
+// (UTC) default — a global harness instruction instead of per-prompt
+// boilerplate.
+func TestAssembleSystemDateLineIncludesTimezoneSteer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.July, 28, 15, 4, 5, 0, time.UTC)
+	want := "Present all dates and times in this timezone"
+
+	t.Run("nil location (UTC)", func(t *testing.T) {
+		got := assembleSystem("", now, nil)
+		if !strings.Contains(got, want) {
+			t.Fatalf("timezone steer missing:\n%s\nwant substring:\n%s", got, want)
+		}
+	})
+
+	t.Run("operator location", func(t *testing.T) {
+		loc, err := time.LoadLocation("Europe/Amsterdam")
+		if err != nil {
+			t.Fatalf("load location: %v", err)
+		}
+		got := assembleSystem("", now, loc)
+		if !strings.Contains(got, want) {
+			t.Fatalf("timezone steer missing:\n%s\nwant substring:\n%s", got, want)
+		}
+	})
+}
+
 func TestAssembleSystemCloseStaysLast(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC)
