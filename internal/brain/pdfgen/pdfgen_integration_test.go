@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ import (
 	"github.com/SumonMSelim/timothy/migrations"
 )
 
-func integrationService(t *testing.T, renderCalls *atomic.Int32) *Service {
+func integrationService(t *testing.T, renderCalls *atomic.Int32) (*Service, string) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -50,13 +51,14 @@ func integrationService(t *testing.T, renderCalls *atomic.Int32) *Service {
 	t.Cleanup(srv.Close)
 
 	client := pdfgen.New(srv.URL)
-	att := attachments.New(t.TempDir(), pool)
-	return New(client, pool, att)
+	dir := t.TempDir()
+	att := attachments.New(dir, pool)
+	return New(client, pool, att), dir
 }
 
 func TestServiceRenderCacheMissThenHit(t *testing.T) {
 	var calls atomic.Int32
-	s := integrationService(t, &calls)
+	s, _ := integrationService(t, &calls)
 
 	docs := []pdfgen.Document{{Title: "Report", Content: "# unique-" + t.Name()}}
 	opts := pdfgen.Options{TOC: true}
@@ -89,7 +91,7 @@ func TestServiceRenderCacheMissThenHit(t *testing.T) {
 
 func TestServiceRenderRegeneratesWhenAttachmentMissing(t *testing.T) {
 	var calls atomic.Int32
-	s := integrationService(t, &calls)
+	s, _ := integrationService(t, &calls)
 
 	docs := []pdfgen.Document{{Title: "Report", Content: "# unique-" + t.Name()}}
 	opts := pdfgen.Options{}
@@ -119,5 +121,49 @@ func TestServiceRenderRegeneratesWhenAttachmentMissing(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("sidecar calls = %d, want 2 (miss, then regenerate)", calls.Load())
+	}
+}
+
+func TestServiceRenderRegeneratesWhenAttachmentFileGone(t *testing.T) {
+	var calls atomic.Int32
+	s, dir := integrationService(t, &calls)
+
+	docs := []pdfgen.Document{{Title: "Report", Content: "# unique-" + t.Name()}}
+	opts := pdfgen.Options{}
+
+	first, err := s.Render(t.Context(), docs, opts)
+	if err != nil {
+		t.Fatalf("Render (miss): %v", err)
+	}
+
+	// Metadata row survives but the file on disk is gone (cleanup, a
+	// moved attachments dir): Open fails with fs.ErrNotExist and the
+	// next call must regenerate, rewriting the file in place.
+	if err := os.Remove(filepath.Join(dir, first.AttachmentID+".pdf")); err != nil {
+		t.Fatalf("remove attachment file: %v", err)
+	}
+
+	second, err := s.Render(t.Context(), docs, opts)
+	if err != nil {
+		t.Fatalf("Render (regenerate): %v", err)
+	}
+	if second.Cached {
+		t.Fatal("render with the file missing reported Cached, want regeneration")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("sidecar calls = %d, want 2 (miss, then regenerate)", calls.Load())
+	}
+
+	// The regeneration must have healed the file: a third call is a
+	// plain cache hit again.
+	third, err := s.Render(t.Context(), docs, opts)
+	if err != nil {
+		t.Fatalf("Render (healed hit): %v", err)
+	}
+	if !third.Cached {
+		t.Fatal("render after regeneration did not report Cached")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("sidecar calls = %d after healed hit, want still 2", calls.Load())
 	}
 }

@@ -45,3 +45,12 @@ export function newlySeen(
 ): PendingPermission[] {
   return current.filter((p) => !seen.has(p.session_id))
 }
+
+// toastSessionLabel picks the approval toast's description: the
+// session's title once generated, else a static fallback — a brand
+// new session's title generates async (chat.TitleOverGateway) and can
+// still be empty when the first permission_request fires, so the
+// toast must never render the raw empty string as "Untitled session".
+export function toastSessionLabel(p: PendingPermission): string {
+  return p.session_title || 'Chat'
+}

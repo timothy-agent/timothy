@@ -52,7 +52,7 @@ export function PermissionModal({
           </DialogTitle>
           <DialogDescription>{request.rationale}</DialogDescription>
         </DialogHeader>
-        <pre className="max-h-48 overflow-auto rounded bg-zinc-100 p-3 text-xs whitespace-pre-wrap text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+        <pre className="min-w-0 max-h-48 overflow-auto rounded bg-zinc-100 p-3 text-xs whitespace-pre-wrap break-words text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
           {prettyArgs(request.args)}
         </pre>
         <DialogFooter className="gap-2">

@@ -826,6 +826,7 @@ export function MissionDetail() {
 
       <ArtifactsSection
         missionId={id}
+        missionName={mission.name}
         phase={mission.phase}
         workspace={mission.workspace}
         refs={mission.artifact_refs ?? []}

@@ -23,7 +23,13 @@
   show raw.where(lang: "mermaid"): it => {
     let result = merman.mermaid-result(it.text)
     if result.ok {
-      block(breakable: false, merman.mermaid(it.text, width: 80%))
+      // Natural size, shrunk only if wider than the page — a small
+      // diagram stays small instead of stretching to fill the width.
+      block(breakable: false, layout(size => {
+        let img = merman.mermaid(it.text)
+        let w = calc.min(measure(img).width, size.width)
+        box(width: w, img)
+      }))
     } else {
       it
     }
@@ -59,10 +65,18 @@
     pagebreak()
   }
 
+  // Injected chapter headings only make sense when there are chapters:
+  // several documents, or a TOC to anchor. A lone document keeps its
+  // own headings at their original levels (no duplicated title).
+  let chapters = docs.len() > 1 or toc
   for doc in docs {
     chapter-state.update(doc.title)
     pagebreak(weak: true)
-    heading(level: 1, doc.title)
-    cmarker.render(doc.content, raw-typst: false, h1-level: 2)
+    if chapters {
+      heading(level: 1, doc.title)
+      cmarker.render(doc.content, raw-typst: false, h1-level: 2)
+    } else {
+      cmarker.render(doc.content, raw-typst: false)
+    }
   }
 }

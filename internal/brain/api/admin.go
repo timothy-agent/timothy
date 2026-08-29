@@ -65,9 +65,11 @@ func (a *API) registerAdmin(handle func(pattern string, h http.Handler), admin h
 
 // registerSettings mounts brain's own feature switches — served
 // locally, not proxied: the gateway has no business knowing them.
-// whisperURL derives the read-only transcribe_enabled flag; it isn't a
-// stored setting and PATCH rejects it like any other unknown key.
-func (a *API) registerSettings(handle func(pattern string, h http.Handler), flags *settings.Store, whisperURL string) {
+// whisperURL derives the read-only transcribe_enabled flag; pdfExportEnabled
+// derives pdf_export_enabled the same way (whether the pdfgen sidecar is
+// configured) — neither is a stored setting, and PATCH rejects both like
+// any other unknown key.
+func (a *API) registerSettings(handle func(pattern string, h http.Handler), flags *settings.Store, whisperURL string, pdfExportEnabled bool) {
 	if flags == nil {
 		return
 	}
@@ -75,6 +77,7 @@ func (a *API) registerSettings(handle func(pattern string, h http.Handler), flag
 		w.Header().Set("Content-Type", "application/json")
 		s := flags.All(r.Context())
 		s["transcribe_enabled"] = whisperURL != ""
+		s["pdf_export_enabled"] = pdfExportEnabled
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"settings": s,
 			"values":   flags.AllValues(r.Context()),

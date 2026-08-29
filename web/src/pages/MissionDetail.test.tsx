@@ -21,6 +21,9 @@ vi.mock('../api/client', () => ({
   listSchedules: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
+  downloadMissionPdfExport: vi.fn(),
+  exportMissionPdf: vi.fn(),
+  getSettings: vi.fn(),
   pushMission: vi.fn(),
   openMissionPR: vi.fn(),
   fetchAttachmentBlob: vi.fn(),
@@ -31,6 +34,7 @@ import {
   cancelMission,
   deleteMission,
   getMission,
+  getSettings,
   listMissionFiles,
   listSchedules,
   missionEvents,
@@ -141,6 +145,7 @@ beforeEach(() => {
   })
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
   vi.mocked(listSchedules).mockResolvedValue([])
+  vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
 })
 
 describe('MissionDetail spend', () => {
@@ -554,9 +559,10 @@ describe('MissionDetail', () => {
     expect(screen.queryByText('att-1')).toBeNull()
   })
 
-  it('renders artifact ref chips when artifact_refs is set', async () => {
+  it('renders artifact ref chips when artifact_refs is set and the workspace is gone', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
+      workspace: undefined,
       artifact_refs: [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }],
     })
     renderPage()
@@ -713,8 +719,8 @@ describe('MissionDetail', () => {
   it('renders the timeline as a scrollable container with scroll-to-top/bottom controls', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.getByTitle('Scroll to top')).toBeTruthy()
-    expect(screen.getByTitle('Scroll to bottom')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
     expect(screen.getByText(`${events.length} events`)).toBeTruthy()
   })
 

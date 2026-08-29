@@ -24,6 +24,20 @@ describe('PermissionModal', () => {
     expect(modal).toHaveTextContent('rm -rf build/')
   })
 
+  it('wraps a long unbroken argument value instead of overflowing the card', () => {
+    const longValue = 'a'.repeat(200)
+    render(
+      <PermissionModal
+        request={{ ...request, args: JSON.stringify({ url: longValue }) }}
+        onDecision={() => {}}
+      />,
+    )
+    const pre = screen.getByTestId('permission-modal').querySelector('pre')
+    expect(pre).toHaveTextContent(longValue)
+    expect(pre?.className).toContain('break-words')
+    expect(pre?.className).toContain('min-w-0')
+  })
+
   it('delivers each button decision', () => {
     for (const [label, decision] of [
       ['Allow once', 'once'],

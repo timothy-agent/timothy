@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 
 	"github.com/jackc/pgx/v5"
 
@@ -23,7 +24,7 @@ import (
 // generatorVersion is folded into the input hash so a template/layout
 // change (a new sidecar build) invalidates every cached render without
 // a schema migration.
-const generatorVersion = "pdfgen/1"
+const generatorVersion = "pdfgen/3"
 
 // ErrNotEnabled reports a Service built with no sidecar configured
 // (PDFGEN_URL unset). Callers surface this as a clear "not enabled"
@@ -87,11 +88,12 @@ func (s *Service) Render(ctx context.Context, docs []pdfgen.Document, opts pdfge
 			}
 			return Result{AttachmentID: attachmentID, PDF: pdf, Cached: true}, nil
 		}
-		if !errors.Is(openErr, attachments.ErrNotFound) {
+		if !errors.Is(openErr, attachments.ErrNotFound) && !errors.Is(openErr, fs.ErrNotExist) {
 			return Result{}, fmt.Errorf("pdfgen: open cached attachment: %w", openErr)
 		}
-		// Attachment row is gone (e.g. manually cleaned up): treat as a
-		// cache miss and regenerate below.
+		// Attachment row or its file on disk is gone (e.g. manually
+		// cleaned up): treat as a cache miss and regenerate below —
+		// Save rewrites the file even when the metadata row survives.
 	}
 
 	pdf, err := s.client.Render(ctx, docs, opts)

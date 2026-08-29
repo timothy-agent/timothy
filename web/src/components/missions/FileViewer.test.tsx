@@ -5,19 +5,29 @@ import { FileViewer } from './FileViewer'
 
 vi.mock('../../api/client', () => ({
   downloadMissionFile: vi.fn(),
+  downloadMissionPdfExport: vi.fn(),
+  exportMissionPdf: vi.fn(),
   fetchMissionFileBlob: vi.fn(),
+  getSettings: vi.fn(),
   missionFilePreviewCap: 1_000_000,
   missionPdfPreviewCap: 25_000_000,
   MissionFileTooLargeError: class MissionFileTooLargeError extends Error {},
 }))
 
-import { MissionFileTooLargeError, fetchMissionFileBlob } from '../../api/client'
+import {
+  MissionFileTooLargeError,
+  downloadMissionPdfExport,
+  exportMissionPdf,
+  fetchMissionFileBlob,
+  getSettings,
+} from '../../api/client'
 
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   URL.createObjectURL = vi.fn(() => 'blob:mock')
   URL.revokeObjectURL = vi.fn()
+  vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
 })
 
 function file(path: string, size = 5): MissionFile {
@@ -41,7 +51,7 @@ describe('FileViewer', () => {
 
     expect(await screen.findByRole('heading', { name: 'Hello world' })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show raw markdown source' }))
     await screen.findByText('Hello', { exact: false })
     const code = container.querySelector('code.hljs')
     expect(code?.textContent).toBe('# Hello world')
@@ -107,9 +117,42 @@ describe('FileViewer', () => {
     render(<FileViewer missionId="m1" file={file('main.go')} />)
 
     await screen.findByText('package', { exact: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Raw' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open raw content in a new tab' }))
 
     expect(URL.createObjectURL).toHaveBeenCalled()
     expect(open).toHaveBeenCalledWith('blob:mock', '_blank')
+  })
+
+  it('hides Export PDF when pdf_export_enabled is false', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { pdf_export_enabled: false }, values: {} })
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['# Hello']))
+    render(<FileViewer missionId="m1" file={file('notes.md')} />)
+
+    await screen.findByRole('heading', { name: 'Hello' })
+    expect(screen.queryByRole('button', { name: 'Export this file as a typeset PDF' })).toBeNull()
+  })
+
+  it('hides Export PDF for non-markdown files even when enabled', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { pdf_export_enabled: true }, values: {} })
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['package main']))
+    render(<FileViewer missionId="m1" file={file('main.go')} />)
+
+    await screen.findByText('package', { exact: false })
+    expect(screen.queryByRole('button', { name: 'Export this file as a typeset PDF' })).toBeNull()
+  })
+
+  it('shows Export PDF for markdown when enabled, and downloads the attachment on click', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { pdf_export_enabled: true }, values: {} })
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['# Hello']))
+    vi.mocked(exportMissionPdf).mockResolvedValue({ attachment_id: 'att-1', cached: false })
+    vi.mocked(downloadMissionPdfExport).mockResolvedValue(undefined)
+    render(<FileViewer missionId="m1" file={file('notes.md')} />)
+
+    await screen.findByRole('heading', { name: 'Hello' })
+    fireEvent.click(screen.getByRole('button', { name: 'Export this file as a typeset PDF' }))
+
+    expect(exportMissionPdf).toHaveBeenCalledWith('m1', 'notes.md')
+    await screen.findByRole('button', { name: 'Export this file as a typeset PDF' })
+    expect(downloadMissionPdfExport).toHaveBeenCalledWith('att-1', 'notes.pdf')
   })
 })

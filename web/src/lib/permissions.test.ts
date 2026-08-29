@@ -11,7 +11,7 @@ vi.mock('./events', () => ({
 
 import { listPendingPermissions } from '../api/client'
 import { subscribeEvents } from './events'
-import { newlySeen, usePendingPermissions } from './permissions'
+import { newlySeen, toastSessionLabel, usePendingPermissions } from './permissions'
 
 const pending: PendingPermission = {
   session_id: 's1',
@@ -108,5 +108,15 @@ describe('newlySeen', () => {
   it('returns everything when seen is empty (first load)', () => {
     const result = newlySeen(new Set(), [pending])
     expect(result).toEqual([pending])
+  })
+})
+
+describe('toastSessionLabel', () => {
+  it('shows the session title when present', () => {
+    expect(toastSessionLabel(pending)).toBe('Gmail cleanup')
+  })
+
+  it('falls back to "Chat" when the title is still empty', () => {
+    expect(toastSessionLabel({ ...pending, session_title: '' })).toBe('Chat')
   })
 })

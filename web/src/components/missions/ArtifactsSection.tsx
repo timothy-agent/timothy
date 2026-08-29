@@ -1,24 +1,35 @@
-import { FolderZipIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { FolderZipIcon, Loading03Icon, Pdf02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { downloadMissionArchive, listMissionFiles } from '../../api/client'
+import {
+  downloadMissionArchive,
+  downloadMissionPdfExport,
+  exportMissionPdf,
+  getSettings,
+  listMissionFiles,
+} from '../../api/client'
 import type { MediaRef, MissionFile } from '../../api/types'
 import { errText } from '../settings/util'
 import { Button } from '../ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { ArtifactRefChips } from './ArtifactRefsSection'
 import { buildFileTree, type FileTreeNode } from './fileTree'
 import { FileTreeView } from './FileTreeView'
 import { FileViewer } from './FileViewer'
 import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
 
+const markdownFileRe = /\.(md|markdown)$/i
+
 export function ArtifactsSection({
   missionId,
+  missionName,
   phase,
   workspace,
   refs = [],
 }: {
   missionId: string
+  missionName?: string
   phase: string
   workspace?: string
   refs?: MediaRef[]
@@ -27,7 +38,15 @@ export function ArtifactsSection({
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<MissionFile | undefined>(undefined)
+  const [pdfExportEnabled, setPdfExportEnabled] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
   const { fullscreen, toggle, close } = useFullscreenPanel()
+
+  useEffect(() => {
+    getSettings()
+      .then((s) => setPdfExportEnabled(s.settings.pdf_export_enabled ?? false))
+      .catch(() => setPdfExportEnabled(false))
+  }, [])
 
   useEffect(() => {
     if (!workspace) return
@@ -54,6 +73,16 @@ export function ArtifactsSection({
     downloadMissionArchive(missionId).catch((err: unknown) =>
       toast.error('Could not download archive', { description: errText(err) }),
     )
+  }
+
+  const hasMarkdown = files.some((f) => markdownFileRe.test(f.path))
+
+  const exportAllPdf = () => {
+    setExportingPdf(true)
+    exportMissionPdf(missionId)
+      .then((r) => downloadMissionPdfExport(r.attachment_id, `${missionName || 'mission'}.pdf`))
+      .catch((err: unknown) => toast.error('Could not export PDF', { description: errText(err) }))
+      .finally(() => setExportingPdf(false))
   }
 
   const selectNode = (node: FileTreeNode) => {
@@ -83,18 +112,42 @@ export function ArtifactsSection({
           {files.length} file{files.length === 1 ? '' : 's'}
         </span>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={downloadAll} disabled={files.length === 0}>
-            <HugeiconsIcon icon={FolderZipIcon} />
-            Download all
-          </Button>
+          {pdfExportEnabled && hasMarkdown && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Export all workspace markdown as one merged PDF"
+                  onClick={exportAllPdf}
+                  disabled={exportingPdf}
+                >
+                  <HugeiconsIcon
+                    icon={exportingPdf ? Loading03Icon : Pdf02Icon}
+                    className={exportingPdf ? 'animate-spin' : undefined}
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export all workspace markdown as one merged PDF</TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Download the workspace as a zip archive"
+                onClick={downloadAll}
+                disabled={files.length === 0}
+              >
+                <HugeiconsIcon icon={FolderZipIcon} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Download the workspace as a zip archive</TooltipContent>
+          </Tooltip>
           <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
         </div>
       </div>
-      {refs.length > 0 && (
-        <div className="border-b border-border px-3 py-2">
-          <ArtifactRefChips refs={refs} />
-        </div>
-      )}
       {files.length === 0 ? (
         <p className="p-3 text-sm text-muted-foreground">No files yet.</p>
       ) : (
@@ -121,15 +174,17 @@ export function ArtifactsSection({
   )
 
   return (
-    <section>
-      <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
-      {fullscreen ? (
-        <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
-          {panel}
-        </FullscreenDialog>
-      ) : (
-        panel
-      )}
-    </section>
+    <TooltipProvider>
+      <section>
+        <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
+        {fullscreen ? (
+          <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
+            {panel}
+          </FullscreenDialog>
+        ) : (
+          panel
+        )}
+      </section>
+    </TooltipProvider>
   )
 }

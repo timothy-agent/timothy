@@ -1549,6 +1549,26 @@ export async function downloadMissionArchive(id: string): Promise<void> {
   return fetchBlobDownload(`/v1/missions/${id}/archive`, `mission-${id.slice(0, 8)}.zip`)
 }
 
+// exportMissionPdf renders a mission's workspace markdown to PDF via
+// the pdfgen sidecar. path exports a single file; omitted, it merges
+// all workspace markdown into one PDF. cached indicates the content
+// hash already matched an existing attachment.
+export async function exportMissionPdf(
+  id: string,
+  path?: string,
+): Promise<{ attachment_id: string; cached: boolean }> {
+  return request<{ attachment_id: string; cached: boolean }>(`/v1/missions/${id}/export-pdf`, {
+    method: 'POST',
+    body: JSON.stringify(path ? { path } : {}),
+  })
+}
+
+// downloadMissionPdfExport fetches the exported PDF attachment and
+// saves it under the caller-supplied filename.
+export async function downloadMissionPdfExport(attachmentId: string, filename: string): Promise<void> {
+  return fetchBlobDownload(`/v1/attachments/${attachmentId}`, filename)
+}
+
 // --- schedules (recurring cron triggers that fire mission templates) ---
 
 export interface CreateScheduleInput {

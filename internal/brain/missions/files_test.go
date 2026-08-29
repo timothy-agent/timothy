@@ -281,3 +281,74 @@ func mustWriteFile(t *testing.T, path, content string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+func TestOrderedMarkdownPaths(t *testing.T) {
+	entries := func(paths ...string) []FileEntry {
+		out := make([]FileEntry, len(paths))
+		for i, p := range paths {
+			out[i] = FileEntry{Path: p}
+		}
+		return out
+	}
+
+	tests := []struct {
+		name  string
+		input []FileEntry
+		want  []string
+	}{
+		{
+			name:  "non-markdown files excluded",
+			input: entries("notes.md", "image.png", "data.json"),
+			want:  []string{"notes.md"},
+		},
+		{
+			name:  "mixed case extension matched",
+			input: entries("a.MD", "b.Markdown", "c.txt"),
+			want:  []string{"a.MD", "b.Markdown"},
+		},
+		{
+			name:  "folders before files, case-insensitive within a level",
+			input: entries("zebra.md", "docs/b.md", "Apple.md", "docs/a.md"),
+			want:  []string{"docs/a.md", "docs/b.md", "Apple.md", "zebra.md"},
+		},
+		{
+			name:  "nested dirs sort recursively, folders before files at each level",
+			input: entries("b/y.md", "a/z.md", "a/sub/x.md", "a/a.md"),
+			want:  []string{"a/sub/x.md", "a/a.md", "a/z.md", "b/y.md"},
+		},
+		{
+			name:  "top-level README hoisted to front",
+			input: entries("zebra.md", "README.md", "apple.md"),
+			want:  []string{"README.md", "apple.md", "zebra.md"},
+		},
+		{
+			name:  "top-level readme case-insensitive and .markdown extension",
+			input: entries("b.md", "readme.markdown"),
+			want:  []string{"readme.markdown", "b.md"},
+		},
+		{
+			name:  "README in a subdirectory is not hoisted",
+			input: entries("zebra.md", "docs/README.md", "apple.md"),
+			want:  []string{"docs/README.md", "apple.md", "zebra.md"},
+		},
+		{
+			name:  "no markdown files",
+			input: entries("a.txt", "b.png"),
+			want:  nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := OrderedMarkdownPaths(tc.input)
+			if len(got) != len(tc.want) {
+				t.Fatalf("OrderedMarkdownPaths() = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("OrderedMarkdownPaths() = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}

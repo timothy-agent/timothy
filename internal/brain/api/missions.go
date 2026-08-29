@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -19,9 +20,12 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
+	pdfgenservice "github.com/SumonMSelim/timothy/internal/brain/pdfgen"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
+	"github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
@@ -67,7 +71,7 @@ type missionAttachmentStore interface {
 // (not *attachments.Store) so the caller's own nil-box guard (a nil
 // *attachments.Store boxed here would be a non-nil interface value)
 // happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service) {
 	if store == nil {
 		return
 	}
@@ -95,7 +99,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -111,6 +115,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("GET /v1/missions/{id}/files", a.auth(http.HandlerFunc(h.files)))
 	handle("GET /v1/missions/{id}/files/{path...}", a.auth(http.HandlerFunc(h.download)))
 	handle("GET /v1/missions/{id}/archive", a.auth(http.HandlerFunc(h.archive)))
+	handle("POST /v1/missions/{id}/export-pdf", a.auth(http.HandlerFunc(h.exportPDF)))
 	handle("POST /v1/missions/{id}/push", a.auth(http.HandlerFunc(h.push)))
 	handle("POST /v1/missions/{id}/pr", a.auth(http.HandlerFunc(h.pr)))
 	handle("GET /v1/notifications", a.auth(http.HandlerFunc(h.notifications)))
@@ -186,6 +191,9 @@ type missionAPI struct {
 	// rejects any attachment with a 400 naming the missing sidecar.
 	markitdownURL  string
 	markitdownHTTP *http.Client
+	// pdfService renders export-pdf requests via the pdfgen sidecar; nil
+	// (PDFGEN_URL unset or attachments disabled) 503s the endpoint.
+	pdfService *pdfgenservice.Service
 	// destinations resolves a create request's destination_ids against
 	// the operator-owned destinations table (D-061's exfiltration
 	// guard: an id must exist AND be enabled) — nil (destinations
@@ -1397,6 +1405,206 @@ func (h *missionAPI) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, "", fi.ModTime(), f)
+}
+
+// maxExportMarkdownBytes caps the total size of markdown selected for
+// a PDF export (single file or merged) — bounds worst-case sidecar
+// compile work.
+const maxExportMarkdownBytes = 10 << 20 // 10 MiB
+
+// exportPDF serves POST .../export-pdf: a single workspace-relative
+// markdown file, or (empty body/path) every markdown file merged into
+// one PDF with a cover page and TOC. Returns the rendered attachment
+// id; the client downloads it via GET /v1/attachments/{id}.
+func (h *missionAPI) exportPDF(w http.ResponseWriter, r *http.Request) {
+	if h.pdfService == nil {
+		jsonError(w, http.StatusServiceUnavailable, "not_enabled", "pdf generation is not enabled")
+		return
+	}
+	m, err := h.store.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	if m.Workspace == "" {
+		jsonError(w, http.StatusNotFound, "no_workspace", "this mission has no workspace")
+		return
+	}
+
+	var body struct {
+		Path string `json:"path"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with an optional path field")
+			return
+		}
+	}
+
+	var docs []pdfgen.Document
+	var opts pdfgen.Options
+	if body.Path != "" {
+		docs, opts, err = h.singleFileExportDocs(m, body.Path)
+	} else {
+		docs, opts, err = h.mergedExportDocs(r.Context(), m)
+	}
+	if err != nil {
+		var status int
+		var code string
+		switch {
+		case errors.As(err, new(*tools.Violation)), errors.Is(err, os.ErrNotExist):
+			status, code = http.StatusNotFound, "not_found"
+		case errors.Is(err, errNoMarkdownFiles), errors.Is(err, errNotMarkdown):
+			status, code = http.StatusBadRequest, "bad_request"
+		case errors.Is(err, errExportTooLarge):
+			status, code = http.StatusRequestEntityTooLarge, "too_large"
+		default:
+			status, code = http.StatusInternalServerError, "export_failed"
+		}
+		jsonError(w, status, code, err.Error())
+		return
+	}
+
+	result, err := h.pdfService.Render(r.Context(), docs, opts)
+	if err != nil {
+		if errors.Is(err, pdfgenservice.ErrNotEnabled) {
+			jsonError(w, http.StatusServiceUnavailable, "not_enabled", "pdf generation is not enabled")
+			return
+		}
+		jsonError(w, http.StatusBadGateway, "export_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attachment_id": result.AttachmentID, "cached": result.Cached})
+}
+
+var (
+	errNoMarkdownFiles = errors.New("workspace has no markdown files")
+	errNotMarkdown     = errors.New("path is not a markdown file")
+	errExportTooLarge  = fmt.Errorf("selected markdown exceeds %d bytes", maxExportMarkdownBytes)
+)
+
+// singleFileExportDocs builds the one-document Render input for a
+// single markdown file: chapter title is the file's base name without
+// extension, no cover page, no TOC.
+func (h *missionAPI) singleFileExportDocs(m missions.Mission, rel string) ([]pdfgen.Document, pdfgen.Options, error) {
+	if !markdownExt.MatchString(rel) {
+		return nil, pdfgen.Options{}, errNotMarkdown
+	}
+	f, fi, err := missions.OpenFile(m.WorkRoot(), rel)
+	if err != nil {
+		return nil, pdfgen.Options{}, err
+	}
+	defer func() { _ = f.Close() }()
+	if fi.Size() > maxExportMarkdownBytes {
+		return nil, pdfgen.Options{}, errExportTooLarge
+	}
+	content, err := io.ReadAll(f)
+	if err != nil {
+		return nil, pdfgen.Options{}, err
+	}
+	title := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
+	return []pdfgen.Document{{Title: title, Content: string(content)}}, pdfgen.Options{}, nil
+}
+
+// markdownExt matches a markdown file by extension, case-insensitive —
+// mirrors missions.OrderedMarkdownPaths' own pattern for the
+// single-file path (which never goes through ListFiles).
+var markdownExt = regexp.MustCompile(`(?i)\.(md|markdown)$`)
+
+// h1Line matches a level-1 ATX heading: "#" then required whitespace
+// then text, trailing "#"s and whitespace trimmed off separately.
+// Setext-style headings (a line of "===" under the title) are not
+// recognized here — merged exports only need to catch the common ATX
+// case models actually produce.
+var h1Line = regexp.MustCompile(`^#\s+(.+?)$`)
+
+// chapterTitle picks a merged-export chapter's title and returns the
+// content with any duplicated heading line removed. If content's first
+// non-blank line is a level-1 heading, that heading's text becomes the
+// title and the line is dropped (the template injects the chapter
+// heading, so keeping it would render the title twice). Otherwise the
+// title falls back to path with its markdown extension stripped.
+func chapterTitle(path, content string) (title, remaining string) {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if m := h1Line.FindStringSubmatch(trimmed); m != nil {
+			heading := strings.TrimRight(m[1], "# \t")
+			remaining = strings.Join(append(lines[:i:i], lines[i+1:]...), "\n")
+			return heading, remaining
+		}
+		break
+	}
+	return markdownExt.ReplaceAllString(path, ""), content
+}
+
+// mergedExportDocs builds the merged Render input: every markdown file
+// in the workspace, ordered by missions.OrderedMarkdownPaths, chapter
+// titled via chapterTitle. Cover title is the mission's display name,
+// falling back to its goal's first line or a short id.
+func (h *missionAPI) mergedExportDocs(ctx context.Context, m missions.Mission) ([]pdfgen.Document, pdfgen.Options, error) {
+	entries, _, err := missions.ListFiles(m.WorkRoot(), nil)
+	if err != nil {
+		return nil, pdfgen.Options{}, err
+	}
+	paths := missions.OrderedMarkdownPaths(entries)
+	if len(paths) == 0 {
+		return nil, pdfgen.Options{}, errNoMarkdownFiles
+	}
+
+	sizes := make(map[string]int64, len(entries))
+	for _, e := range entries {
+		sizes[e.Path] = e.Size
+	}
+	var total int64
+	for _, p := range paths {
+		total += sizes[p]
+	}
+	if total > maxExportMarkdownBytes {
+		return nil, pdfgen.Options{}, errExportTooLarge
+	}
+
+	docs := make([]pdfgen.Document, 0, len(paths))
+	for _, p := range paths {
+		f, _, err := missions.OpenFile(m.WorkRoot(), p)
+		if err != nil {
+			return nil, pdfgen.Options{}, err
+		}
+		content, readErr := io.ReadAll(f)
+		closeErr := f.Close()
+		if readErr != nil {
+			return nil, pdfgen.Options{}, readErr
+		}
+		if closeErr != nil {
+			return nil, pdfgen.Options{}, closeErr
+		}
+		title, remaining := chapterTitle(p, string(content))
+		docs = append(docs, pdfgen.Document{Title: title, Content: remaining})
+	}
+
+	return docs, pdfgen.Options{CoverTitle: missionDisplayName(m), TOC: true}, nil
+}
+
+// missionDisplayName resolves a mission's cover title: its generated
+// Name, or (before naming lands) the goal's first line, or a short-id
+// fallback when even the goal is empty.
+func missionDisplayName(m missions.Mission) string {
+	if m.Name != "" {
+		return m.Name
+	}
+	if goal := strings.TrimSpace(m.Goal); goal != "" {
+		if line, _, _ := strings.Cut(goal, "\n"); strings.TrimSpace(line) != "" {
+			return strings.TrimSpace(line)
+		}
+	}
+	id := m.ID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return "Mission " + id
 }
 
 // archive streams the mission's whole workspace as a zip. Headers are

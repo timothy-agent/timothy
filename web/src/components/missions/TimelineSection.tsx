@@ -2,7 +2,9 @@ import { ArrowDown01Icon, ArrowUp01Icon } from '@hugeicons-pro/core-stroke-round
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef } from 'react'
 import type { MissionEvent } from '../../api/types'
+import { CopyButton } from '../Message'
 import { Button } from '../ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { renderEvent } from './eventRenderers'
 import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
 
@@ -17,6 +19,14 @@ const followThresholdPx = 48
 // it's excluded here; MissionDetail's phase header shows the latest
 // one instead as a lightweight live indicator.
 const rowKind = (e: MissionEvent) => e.kind !== 'executor.progress'
+
+// timelineText renders a plain-text version of the timeline for the
+// copy button — one line per row, timestamp plus event kind (the
+// short, stable label; renderEvent's JSX detail is skipped, it's
+// styled markup, not plain text).
+function timelineText(rows: MissionEvent[]): string {
+  return rows.map((e) => `${new Date(e.created_at).toLocaleString()} · ${e.kind}`).join('\n')
+}
 
 export function TimelineSection({ events }: { events: MissionEvent[] }) {
   const rows = events.filter(rowKind)
@@ -61,13 +71,31 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
         <span className="text-xs text-muted-foreground">
           {rows.length} event{rows.length === 1 ? '' : 's'}
         </span>
-        <div className="flex gap-1">
-          <Button variant="ghost" size="icon-xs" title="Scroll to top" onClick={scrollToTop}>
-            <HugeiconsIcon icon={ArrowUp01Icon} />
-          </Button>
-          <Button variant="ghost" size="icon-xs" title="Scroll to bottom" onClick={scrollToBottom}>
-            <HugeiconsIcon icon={ArrowDown01Icon} />
-          </Button>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-xs" aria-label="Scroll to top" onClick={scrollToTop}>
+                <HugeiconsIcon icon={ArrowUp01Icon} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Scroll to top</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-xs" aria-label="Scroll to bottom" onClick={scrollToBottom}>
+                <HugeiconsIcon icon={ArrowDown01Icon} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Scroll to bottom</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <CopyButton text={timelineText(rows)} label="Copy timeline" alwaysVisible />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Copy</TooltipContent>
+          </Tooltip>
           <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
         </div>
       </div>
@@ -98,10 +126,12 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
     </div>
   )
 
-  if (!fullscreen) return panel
+  if (!fullscreen) return <TooltipProvider>{panel}</TooltipProvider>
   return (
-    <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
-      {panel}
-    </FullscreenDialog>
+    <TooltipProvider>
+      <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
+        {panel}
+      </FullscreenDialog>
+    </TooltipProvider>
   )
 }

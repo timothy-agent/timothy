@@ -6,6 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -147,4 +150,57 @@ func WriteArchive(workRoot string, w io.Writer) error {
 		return walkErr
 	}
 	return zw.Close()
+}
+
+// markdownPattern matches a markdown file by extension, case-insensitive.
+var markdownPattern = regexp.MustCompile(`(?i)\.(md|markdown)$`)
+
+// readmePattern matches a top-level README, case-insensitive.
+var readmePattern = regexp.MustCompile(`(?i)^readme\.(md|markdown)$`)
+
+// OrderedMarkdownPaths picks the markdown files out of entries (flat
+// ListFiles output) and orders them for a merged PDF export: folders
+// before files, case-insensitive lexicographic within a directory,
+// matching the web file tree's sort (fileTree.ts). A top-level
+// README.md/README.markdown is hoisted to the front — a README in a
+// subdirectory keeps its tree position.
+func OrderedMarkdownPaths(entries []FileEntry) []string {
+	var paths []string
+	for _, e := range entries {
+		if markdownPattern.MatchString(e.Path) {
+			paths = append(paths, e.Path)
+		}
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		return lessTreeOrder(paths[i], paths[j])
+	})
+	for i, p := range paths {
+		if !strings.Contains(p, "/") && readmePattern.MatchString(p) {
+			paths = append(paths[:i], paths[i+1:]...)
+			paths = append([]string{p}, paths...)
+			break
+		}
+	}
+	return paths
+}
+
+// lessTreeOrder compares two workspace-relative paths the way the
+// file tree sorts siblings: walk shared path segments; at the first
+// segment where the two diverge, whichever path continues into a
+// subdirectory there (more segments remain) sorts before the one that
+// ends as a file, otherwise the diverging segment names compare
+// case-insensitively.
+func lessTreeOrder(a, b string) bool {
+	as, bs := strings.Split(a, "/"), strings.Split(b, "/")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		if as[i] == bs[i] {
+			continue
+		}
+		aIsDir, bIsDir := i < len(as)-1, i < len(bs)-1
+		if aIsDir != bIsDir {
+			return aIsDir // folders before files
+		}
+		return strings.ToLower(as[i]) < strings.ToLower(bs[i])
+	}
+	return len(as) < len(bs)
 }

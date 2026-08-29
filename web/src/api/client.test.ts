@@ -6,7 +6,9 @@ import {
   consumeTokenFragment,
   createSSEParser,
   downloadMissionFile,
+  downloadMissionPdfExport,
   errorText,
+  exportMissionPdf,
   getToken,
   isTimothyAuthError,
   listMissionFiles,
@@ -439,5 +441,73 @@ describe('mission artifacts and push', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions/m1/pr')
     expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
     expect(r).toEqual(body)
+  })
+
+  it('exportMissionPdf posts an empty body for a merged export', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const body = { attachment_id: 'att-1', cached: false }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await exportMissionPdf('m1')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions/m1/export-pdf')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    expect(fetchMock.mock.calls[0][1]?.body).toBe('{}')
+    expect(r).toEqual(body)
+  })
+
+  it('exportMissionPdf posts the path for a single-file export', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ attachment_id: 'att-2', cached: true }), { status: 200 }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await exportMissionPdf('m1', 'notes.md')
+
+    expect(fetchMock.mock.calls[0][1]?.body).toBe(JSON.stringify({ path: 'notes.md' }))
+  })
+
+  it('exportMissionPdf surfaces a 503 as a ChatError when pdf generation is disabled', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: 'pdf generation not enabled' }), { status: 503 }),
+      ),
+    )
+
+    const err = (await exportMissionPdf('m1').catch((e: unknown) => e)) as ChatError
+    expect(err).toBeInstanceOf(ChatError)
+    expect(err.status).toBe(503)
+  })
+
+  it('downloadMissionPdfExport fetches the attachment route and saves it under the given filename', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const blob = new Blob(['%PDF-1.4'])
+    const fetchMock = vi.fn().mockResolvedValue(new Response(blob, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const createObjectURL = vi.fn(() => 'blob:mock-url')
+    const revokeObjectURL = vi.fn()
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(createObjectURL)
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(revokeObjectURL)
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    await downloadMissionPdfExport('att-1', 'notes.pdf')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/attachments/att-1')
+    expect(createObjectURL).toHaveBeenCalledWith(blob)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+
+    clickSpy.mockRestore()
+    vi.mocked(URL.createObjectURL).mockRestore?.()
+    vi.mocked(URL.revokeObjectURL).mockRestore?.()
   })
 })

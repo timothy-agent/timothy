@@ -7,13 +7,23 @@ vi.mock('../../api/client', () => ({
   listMissionFiles: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
+  downloadMissionPdfExport: vi.fn(),
+  exportMissionPdf: vi.fn(),
+  getSettings: vi.fn(),
   fetchMissionFileBlob: vi.fn(),
   fetchAttachmentBlob: vi.fn(),
   missionFilePreviewCap: 1_000_000,
   MissionFileTooLargeError: class MissionFileTooLargeError extends Error {},
 }))
 
-import { fetchAttachmentBlob, fetchMissionFileBlob, listMissionFiles } from '../../api/client'
+import {
+  downloadMissionPdfExport,
+  exportMissionPdf,
+  fetchAttachmentBlob,
+  fetchMissionFileBlob,
+  getSettings,
+  listMissionFiles,
+} from '../../api/client'
 
 afterEach(cleanup)
 beforeEach(() => {
@@ -21,6 +31,7 @@ beforeEach(() => {
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
   vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['hello']))
   vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['hello']))
+  vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
 })
 
 const refs: MediaRef[] = [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }]
@@ -76,7 +87,9 @@ describe('ArtifactsSection', () => {
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
     await screen.findByText('big.bin')
     expect(screen.getByText('Artifacts')).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Download all/ })).not.toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Download the workspace as a zip archive' }),
+    ).not.toBeDisabled()
   })
 
   it('shows a truncated hint only when the listing was truncated', async () => {
@@ -114,19 +127,20 @@ describe('ArtifactsSection', () => {
     expect(listMissionFiles).not.toHaveBeenCalled()
   })
 
-  it('integrates refs chips into the workspace panel header', async () => {
+  it('does not duplicate refs chips inside the workspace panel', async () => {
     vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
     await screen.findByText('big.bin')
     expect(screen.getAllByText('Artifacts')).toHaveLength(1)
-    expect(screen.getByText('report.md')).toBeInTheDocument()
+    expect(screen.queryByText('report.md')).toBeNull()
   })
 
-  it('shows chips even when the workspace has no files', async () => {
+  it('renders the panel (not chips) when the workspace has no files but has refs', async () => {
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
     await waitFor(() => expect(vi.mocked(listMissionFiles)).toHaveBeenCalled())
     expect(screen.getByText('Artifacts')).toBeInTheDocument()
-    expect(screen.getByText('report.md')).toBeInTheDocument()
+    expect(screen.getByText('No files yet.')).toBeInTheDocument()
+    expect(screen.queryByText('report.md')).toBeNull()
   })
 
   it('renders nothing when there is no workspace and no refs', () => {
@@ -134,5 +148,44 @@ describe('ArtifactsSection', () => {
       <ArtifactsSection missionId="m1" phase="execute" workspace={undefined} refs={[]} />,
     )
     expect(container.firstChild).toBeNull()
+  })
+
+  const filesWithMarkdown: MissionFile[] = [
+    ...files,
+    { path: 'README.md', size: 100, mtime: '2026-01-01T00:00:00Z', declared: false },
+  ]
+
+  it('hides Export all as PDF when pdf_export_enabled is false', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({ files: filesWithMarkdown, truncated: false })
+    render(<ArtifactsSection missionId="m2" phase="execute" workspace="ws-2" />)
+    await screen.findByText('README.md')
+    expect(
+      screen.queryByRole('button', { name: 'Export all workspace markdown as one merged PDF' }),
+    ).toBeNull()
+  })
+
+  it('hides Export all as PDF when no markdown files exist, even if enabled', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { pdf_export_enabled: true }, values: {} })
+    vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
+    render(<ArtifactsSection missionId="m3" phase="execute" workspace="ws-3" />)
+    await screen.findByText('big.bin')
+    expect(
+      screen.queryByRole('button', { name: 'Export all workspace markdown as one merged PDF' }),
+    ).toBeNull()
+  })
+
+  it('shows Export all as PDF when enabled and markdown exists, downloading on click', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { pdf_export_enabled: true }, values: {} })
+    vi.mocked(listMissionFiles).mockResolvedValue({ files: filesWithMarkdown, truncated: false })
+    vi.mocked(exportMissionPdf).mockResolvedValue({ attachment_id: 'att-9', cached: true })
+    vi.mocked(downloadMissionPdfExport).mockResolvedValue(undefined)
+    render(<ArtifactsSection missionId="m4" missionName="My Mission" phase="execute" workspace="ws-4" />)
+
+    const btn = await screen.findByRole('button', { name: 'Export all workspace markdown as one merged PDF' })
+    fireEvent.click(btn)
+
+    expect(exportMissionPdf).toHaveBeenCalledWith('m4')
+    await screen.findByRole('button', { name: 'Export all workspace markdown as one merged PDF' })
+    expect(downloadMissionPdfExport).toHaveBeenCalledWith('att-9', 'My Mission.pdf')
   })
 })

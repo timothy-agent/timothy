@@ -572,8 +572,8 @@ func main() {
 	}
 
 	// pdfService is nil-gated on both PDFGEN_URL and attachmentStore
-	// (ATTACHMENTS_DIR) — no endpoints consume it yet (#379/#380/#381),
-	// it's built here so those issues have it ready via app wiring.
+	// (ATTACHMENTS_DIR) — backs POST /v1/missions/{id}/export-pdf (#379)
+	// and the derived pdf_export_enabled setting.
 	var pdfService *pdfgen.Service
 	if pdfgenURL != "" && attachmentStore != nil {
 		pdfService = pdfgen.New(pdfgenclient.New(pdfgenURL), app.DB, attachmentStore)
@@ -674,7 +674,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), destinationStore, destinationTest, workflowStore, workflowEngine)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), destinationStore, destinationTest, workflowStore, workflowEngine, pdfService)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

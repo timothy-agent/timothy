@@ -57,7 +57,7 @@ import { cn } from './lib/utils'
 import { useSessions } from './lib/sessions'
 import { usePendingMemories } from './lib/memory'
 import { playAlertSound, unlockAudio } from './lib/alertSound'
-import { newlySeen, usePendingPermissions } from './lib/permissions'
+import { newlySeen, toastSessionLabel, usePendingPermissions } from './lib/permissions'
 import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
@@ -408,7 +408,7 @@ function App() {
       if (getNotificationSoundEnabled()) playAlertSound()
       for (const p of fresh) {
         toast(`${p.tool} needs your approval`, {
-          description: p.session_title || 'Untitled session',
+          description: toastSessionLabel(p),
           duration: Infinity,
           action: {
             label: 'Review',
