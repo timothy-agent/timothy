@@ -32,6 +32,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
@@ -45,6 +46,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
+	pdfgenclient "github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
@@ -184,6 +186,10 @@ func main() {
 	whisperURL := os.Getenv("WHISPER_URL")
 	if whisperURL == "" {
 		app.Log.Warn("WHISPER_URL not set; the web mic button's /v1/transcribe endpoint is unavailable")
+	}
+	pdfgenURL := os.Getenv("PDFGEN_URL")
+	if pdfgenURL == "" {
+		app.Log.Warn("PDFGEN_URL not set; PDF generation is unavailable")
 	}
 
 	toolCalls := app.Metrics.NewCounterVec("tool_calls_total",
@@ -564,6 +570,20 @@ func main() {
 	if whisperURL != "" {
 		svc.SetWhisper(whisperURL)
 	}
+
+	// pdfService is nil-gated on both PDFGEN_URL and attachmentStore
+	// (ATTACHMENTS_DIR) — no endpoints consume it yet (#379/#380/#381),
+	// it's built here so those issues have it ready via app wiring.
+	var pdfService *pdfgen.Service
+	if pdfgenURL != "" && attachmentStore != nil {
+		pdfService = pdfgen.New(pdfgenclient.New(pdfgenURL), app.DB, attachmentStore)
+	}
+	app.AddCheck("pdfgen", func() httpserver.Check {
+		if pdfService == nil {
+			return httpserver.Check{Status: "degraded", Detail: "PDFGEN_URL not set or attachments disabled"}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
 
 	// share_file: registered here, not inside buildAgent, since it
 	// needs attachmentStore (built above, after buildAgent). Nil-gated

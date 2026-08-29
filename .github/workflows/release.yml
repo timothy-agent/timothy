@@ -36,6 +36,7 @@ jobs:
       sandboxd: ${{ steps.diff.outputs.sandboxd }}
       web: ${{ steps.diff.outputs.web }}
       markitdown: ${{ steps.diff.outputs.markitdown }}
+      pdfgen: ${{ steps.diff.outputs.pdfgen }}
       whisper: ${{ steps.diff.outputs.whisper }}
       sandbox: ${{ steps.diff.outputs.sandbox }}
       prev_tag: ${{ steps.prev.outputs.tag }}
@@ -51,7 +52,7 @@ jobs:
         run: |
           if [ -z "${{ steps.prev.outputs.tag }}" ]; then
             echo "no previous release tag; building everything"
-            for name in brain gateway memoryd sandboxd web markitdown whisper sandbox; do
+            for name in brain gateway memoryd sandboxd web markitdown pdfgen whisper sandbox; do
               echo "$name=true" >> "$GITHUB_OUTPUT"
             done
             exit 0
@@ -64,6 +65,7 @@ jobs:
           done
           changed '^web/' && echo "web=true" >> "$GITHUB_OUTPUT" || echo "web=false" >> "$GITHUB_OUTPUT"
           changed '^markitdown-svc/' && echo "markitdown=true" >> "$GITHUB_OUTPUT" || echo "markitdown=false" >> "$GITHUB_OUTPUT"
+          changed '^pdfgen-svc/' && echo "pdfgen=true" >> "$GITHUB_OUTPUT" || echo "pdfgen=false" >> "$GITHUB_OUTPUT"
           changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
           changed '^deploy/sandbox-.*\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
 
@@ -103,6 +105,9 @@ jobs:
           - name: markitdown
             context: markitdown-svc
             dockerfile: markitdown-svc/Dockerfile
+          - name: pdfgen
+            context: pdfgen-svc
+            dockerfile: pdfgen-svc/Dockerfile
           - name: whisper
             context: whisper-svc
             dockerfile: whisper-svc/Dockerfile

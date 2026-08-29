@@ -56,6 +56,13 @@ services:
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng.
 
+  pdfgen:
+    <<: *service
+    build:
+      context: ../pdfgen-svc
+    # internal-only: no published ports, no auth; brain is the sole
+    # caller, same trust boundary as searxng/markitdown.
+
   whisper:
     <<: *service
     profiles: [whisper]
@@ -128,6 +135,9 @@ services:
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to
       # markdown/text; compose-internal only.
       MARKITDOWN_URL: http://markitdown:8000
+      # Renders markdown to PDF (mission export, chat export, PDF
+      # tool); compose-internal only.
+      PDFGEN_URL: http://pdfgen:8000
       # Local speech-to-text for the web mic button; compose-internal
       # only, audio never leaves the box. Empty by default (feature
       # off) since whisper itself defaults off — see its service
