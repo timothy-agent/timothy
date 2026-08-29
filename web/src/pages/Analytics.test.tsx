@@ -304,7 +304,7 @@ describe('Analytics chart legend selection', () => {
     )
     renderPage()
 
-    const chart = (await screen.findByText('Spend over time')).closest('section')
+    const chart = (await screen.findByText('Spend by provider')).closest('section')
     if (!chart) throw new Error('chart section not found')
     // StatsLegend renders the series name as a plain text node with no
     // className, distinct from the "By provider"-style breakdown table
@@ -326,7 +326,7 @@ describe('Analytics chart legend selection', () => {
 
   it('ctrl-click toggles just that entry, independent of other legends', async () => {
     renderPage()
-    const chart = (await screen.findByText('Tokens in / out')).closest('section')
+    const chart = (await screen.findByText('Token consumption')).closest('section')
     if (!chart) throw new Error('chart section not found')
     const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
     if (!inputEntry) throw new Error('legend entry not found')
@@ -368,7 +368,7 @@ describe('Analytics bars/lines view toggle', () => {
       group === 'provider' ? [providerTotal] : [],
     )
     renderPage()
-    const chart = (await screen.findByText('Spend over time')).closest('section')
+    const chart = (await screen.findByText('Spend by provider')).closest('section')
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -379,7 +379,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('defaults to lines and switches the tokens-in/out chart to bars on click', async () => {
     renderPage()
-    const chart = (await screen.findByText('Tokens in / out')).closest('section')
+    const chart = (await screen.findByText('Token consumption')).closest('section')
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -412,16 +412,16 @@ describe('Analytics bars/lines view toggle', () => {
 })
 
 describe('Analytics panel layout', () => {
-  it('orders chart panels: spend, tokens, cost by model, tokens per model, latency/spend share, requests & errors', async () => {
+  it('orders chart panels: spend by provider, spend by model, tokens per model, token consumption, latency/spend share, requests & errors', async () => {
     renderPage()
     const headings = (await screen.findAllByRole('heading', { level: 2 })).map((h) => h.textContent)
     const chartHeadings = [
-      'Spend over time',
-      'Tokens in / out',
-      'Cost by model',
+      'Spend by provider',
+      'Spend by model',
       'Tokens per model',
+      'Token consumption',
       'Latency per provider',
-      'Spend share',
+      'Spend share by provider',
       'Requests & errors over time',
     ]
     const positions = chartHeadings.map((h) => headings.indexOf(h))
@@ -489,7 +489,7 @@ describe('Analytics zero-cost exclusion', () => {
     )
     renderPage()
 
-    const modelCostChart = (await screen.findByText('Cost by model')).closest('section')
+    const modelCostChart = (await screen.findByText('Spend by model')).closest('section')
     if (!modelCostChart) throw new Error('model cost chart section not found')
     expect(await within(modelCostChart).findByText('gpt-5.6-sol')).toBeInTheDocument()
     expect(within(modelCostChart).queryByText('local-llama')).toBeNull()

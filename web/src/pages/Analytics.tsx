@@ -395,7 +395,7 @@ export function Analytics() {
   const budgetHint = (w?: { limit: { amount: number; currency: string } | null }) =>
     w?.limit != null ? `of ${money(w.limit.amount, w.limit.currency)} budget` : undefined
   const spendLabel =
-    range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : 'Spend this month'
+    range === 'today' ? 'Spend today' : range === '7d' ? 'Spend this week' : range === '30d' ? 'Spend this month' : 'Spend this quarter'
   const spendHint = range === 'today' ? budgetHint(budget?.day) : range === '30d' ? budgetHint(budget?.month) : undefined
   const spendOriginal = s ? secondaryMoney(s, s.cost) : undefined
   // unbilledAnnotation is the muted "+amount" note beside the spend
@@ -542,7 +542,7 @@ export function Analytics() {
 
         <section className="mt-6 rounded-xl border border-border p-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Spend over time</h2>
+            <h2 className="text-sm font-medium">Spend by provider</h2>
             <ViewToggle view={costView} onChange={setCostView} />
           </div>
           <div className="mt-3">
@@ -569,34 +569,7 @@ export function Analytics() {
 
         <section className="mt-6 rounded-xl border border-border p-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Tokens in / out</h2>
-            <ViewToggle view={tokensView} onChange={setTokensView} />
-          </div>
-          <div className="mt-3">
-            <EChart
-              option={(tokensView === 'bars' ? stackedBarsOption : areaLinesOption)(
-                tokens as unknown as Record<string, number | string>[],
-                ['input', 'output'],
-                tokensLegend.hidden,
-                (g) => (g === 'input' ? palette[0] : palette[2]),
-                (v) => bucketLabel(v, bucket),
-                compact,
-              )}
-            />
-          </div>
-          <StatsLegend
-            rows={tokens as unknown as Record<string, number | string>[]}
-            groups={['input', 'output']}
-            colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
-            hidden={tokensLegend.hidden}
-            onSelect={tokensLegend.onSelect}
-            valueLabel={compact}
-          />
-        </section>
-
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Cost by model</h2>
+            <h2 className="text-sm font-medium">Spend by model</h2>
             <ViewToggle view={modelCostView} onChange={setModelCostView} />
           </div>
           <div className="mt-3">
@@ -653,6 +626,33 @@ export function Analytics() {
           />
         </section>
 
+        <section className="mt-6 rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">Token consumption</h2>
+            <ViewToggle view={tokensView} onChange={setTokensView} />
+          </div>
+          <div className="mt-3">
+            <EChart
+              option={(tokensView === 'bars' ? stackedBarsOption : areaLinesOption)(
+                tokens as unknown as Record<string, number | string>[],
+                ['input', 'output'],
+                tokensLegend.hidden,
+                (g) => (g === 'input' ? palette[0] : palette[2]),
+                (v) => bucketLabel(v, bucket),
+                compact,
+              )}
+            />
+          </div>
+          <StatsLegend
+            rows={tokens as unknown as Record<string, number | string>[]}
+            groups={['input', 'output']}
+            colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
+            hidden={tokensLegend.hidden}
+            onSelect={tokensLegend.onSelect}
+            valueLabel={compact}
+          />
+        </section>
+
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="flex flex-col rounded-xl border border-border p-4">
             <h2 className="text-sm font-medium">Latency per provider</h2>
@@ -673,7 +673,7 @@ export function Analytics() {
           </section>
 
           <section className="flex flex-col rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Spend share</h2>
+            <h2 className="text-sm font-medium">Spend share by provider</h2>
             <div className="mt-3 min-h-[240px] flex-1">
               <EChart
                 fill
