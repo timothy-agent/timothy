@@ -3,9 +3,10 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { downloadMissionArchive, listMissionFiles } from '../../api/client'
-import type { MissionFile } from '../../api/types'
+import type { MediaRef, MissionFile } from '../../api/types'
 import { errText } from '../settings/util'
 import { Button } from '../ui/button'
+import { ArtifactRefChips } from './ArtifactRefsSection'
 import { buildFileTree, type FileTreeNode } from './fileTree'
 import { FileTreeView } from './FileTreeView'
 import { FileViewer } from './FileViewer'
@@ -15,10 +16,12 @@ export function ArtifactsSection({
   missionId,
   phase,
   workspace,
+  refs = [],
 }: {
   missionId: string
   phase: string
   workspace?: string
+  refs?: MediaRef[]
 }) {
   const [files, setFiles] = useState<MissionFile[]>([])
   const [truncated, setTruncated] = useState(false)
@@ -40,11 +43,12 @@ export function ArtifactsSection({
 
   const tree = useMemo(() => buildFileTree(files), [files])
 
-  // No workspace, or a workspace with nothing in it (and no fetch error
-  // worth surfacing): the whole section disappears rather than showing
-  // an empty shell.
-  if (!workspace) return null
-  if (files.length === 0 && !error) return null
+  // No workspace and no refs, or a workspace with nothing in it and no
+  // refs (and no fetch error worth surfacing): the whole section
+  // disappears rather than showing an empty shell.
+  const hasWorkspace = Boolean(workspace)
+  if (!hasWorkspace && refs.length === 0) return null
+  if (hasWorkspace && files.length === 0 && !error && refs.length === 0) return null
 
   const downloadAll = () => {
     downloadMissionArchive(missionId).catch((err: unknown) =>
@@ -54,6 +58,16 @@ export function ArtifactsSection({
 
   const selectNode = (node: FileTreeNode) => {
     if (node.file) setSelected(node.file)
+  }
+
+  // No live workspace: render the refs chips alone, no panel chrome.
+  if (!hasWorkspace) {
+    return (
+      <section>
+        <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
+        <ArtifactRefChips refs={refs} />
+      </section>
+    )
   }
 
   const panel = (
@@ -76,6 +90,11 @@ export function ArtifactsSection({
           <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
         </div>
       </div>
+      {refs.length > 0 && (
+        <div className="border-b border-border px-3 py-2">
+          <ArtifactRefChips refs={refs} />
+        </div>
+      )}
       {files.length === 0 ? (
         <p className="p-3 text-sm text-muted-foreground">No files yet.</p>
       ) : (

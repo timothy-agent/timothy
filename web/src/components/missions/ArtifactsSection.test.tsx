@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MissionFile } from '../../api/types'
+import type { MediaRef, MissionFile } from '../../api/types'
 import { ArtifactsSection } from './ArtifactsSection'
 
 vi.mock('../../api/client', () => ({
@@ -8,18 +8,22 @@ vi.mock('../../api/client', () => ({
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
   fetchMissionFileBlob: vi.fn(),
+  fetchAttachmentBlob: vi.fn(),
   missionFilePreviewCap: 1_000_000,
   MissionFileTooLargeError: class MissionFileTooLargeError extends Error {},
 }))
 
-import { fetchMissionFileBlob, listMissionFiles } from '../../api/client'
+import { fetchAttachmentBlob, fetchMissionFileBlob, listMissionFiles } from '../../api/client'
 
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
   vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['hello']))
+  vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['hello']))
 })
+
+const refs: MediaRef[] = [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }]
 
 const files: MissionFile[] = [
   { path: 'src/a.txt', size: 512, mtime: '2026-01-01T00:00:00Z', declared: false },
@@ -101,5 +105,34 @@ describe('ArtifactsSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }))
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('renders refs chips alone when the workspace is gone', () => {
+    render(<ArtifactsSection missionId="m1" phase="terminal" workspace={undefined} refs={refs} />)
+    expect(screen.getByText('Artifacts')).toBeInTheDocument()
+    expect(screen.getByText('report.md')).toBeInTheDocument()
+    expect(listMissionFiles).not.toHaveBeenCalled()
+  })
+
+  it('integrates refs chips into the workspace panel header', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
+    await screen.findByText('big.bin')
+    expect(screen.getAllByText('Artifacts')).toHaveLength(1)
+    expect(screen.getByText('report.md')).toBeInTheDocument()
+  })
+
+  it('shows chips even when the workspace has no files', async () => {
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
+    await waitFor(() => expect(vi.mocked(listMissionFiles)).toHaveBeenCalled())
+    expect(screen.getByText('Artifacts')).toBeInTheDocument()
+    expect(screen.getByText('report.md')).toBeInTheDocument()
+  })
+
+  it('renders nothing when there is no workspace and no refs', () => {
+    const { container } = render(
+      <ArtifactsSection missionId="m1" phase="execute" workspace={undefined} refs={[]} />,
+    )
+    expect(container.firstChild).toBeNull()
   })
 })

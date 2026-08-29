@@ -13,17 +13,16 @@ function artifactChipIcon(mime: string) {
   return Pdf02Icon
 }
 
-// ArtifactRefsSection renders a terminal mission's artifact-store refs
+// ArtifactRefChips renders a terminal mission's artifact-store refs
 // (mission.artifact_refs) as clickable chips through AttachmentViewer —
-// unlike ArtifactsSection (which browses the live workspace and
-// disappears once it's deleted), these refs are durable copies that
-// keep working after mission/workspace cleanup.
-export function ArtifactRefsSection({ refs }: { refs: MediaRef[] }) {
+// durable copies that keep working after mission/workspace cleanup,
+// integrated into ArtifactsSection's panel (or rendered alone when the
+// workspace is gone).
+export function ArtifactRefChips({ refs }: { refs: MediaRef[] }) {
   const [viewerAttachment, setViewerAttachment] = useState<MediaRef | null>(null)
   if (refs.length === 0) return null
   return (
-    <section>
-      <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
+    <>
       <div className="flex flex-wrap gap-1.5">
         {refs.map((ref) => (
           <button
@@ -45,6 +44,6 @@ export function ArtifactRefsSection({ refs }: { refs: MediaRef[] }) {
         }}
         attachment={viewerAttachment}
       />
-    </section>
+    </>
   )
 }
