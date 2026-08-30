@@ -313,13 +313,15 @@ func (h *kbAPI) finishIngest(w http.ResponseWriter, r *http.Request, collectionI
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 		return
 	}
-	h.startIngest(docID, title)
-
+	// Read the document back before kicking off ingestion so the
+	// response deterministically reports the created "pending" state
+	// instead of racing the background ingest goroutine.
 	doc, err := h.store.GetDocument(r.Context(), docID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 		return
 	}
+	h.startIngest(docID, title)
 	writeJSON(w, http.StatusCreated, sanitizeDocument(doc))
 }
 
@@ -438,12 +440,12 @@ func (h *kbAPI) refreshOrCreate(w http.ResponseWriter, r *http.Request, resolveC
 			failKB(w, err)
 			return
 		}
-		h.startIngest(existing.ID, title)
 		doc, err := h.store.GetDocument(r.Context(), existing.ID)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 			return
 		}
+		h.startIngest(existing.ID, title)
 		writeJSON(w, http.StatusOK, sanitizeDocument(doc))
 	}
 }
@@ -598,12 +600,12 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 			return
 		}
-		h.startIngest(docID, title)
 		doc, err := h.store.GetDocument(r.Context(), docID)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 			return
 		}
+		h.startIngest(docID, title)
 		writeJSON(w, http.StatusAccepted, sanitizeDocument(doc))
 	case err != nil:
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
@@ -615,12 +617,12 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 			failKB(w, err)
 			return
 		}
-		h.startIngest(existing.ID, title)
 		doc, err := h.store.GetDocument(r.Context(), existing.ID)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 			return
 		}
+		h.startIngest(existing.ID, title)
 		writeJSON(w, http.StatusAccepted, sanitizeDocument(doc))
 	}
 }

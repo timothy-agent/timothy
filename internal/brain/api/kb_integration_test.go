@@ -60,12 +60,17 @@ func testKBStore(t *testing.T) *kb.Store {
 		t.Skip("DATABASE_URL not set; skipping integration test")
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// Background, not t.Context(): the pool closes its connections the
-	// moment its context is Done — the cleanup delete below would
-	// silently no-op, leaking itest-% collections that collide across
-	// tests sharing fixedClassifier's name. Same reasoning as
-	// testMissionStore's pool.
-	pool := pgpool.New(context.Background(), dsn, log)
+	// The pool must outlive t.Context(), which is already done when
+	// t.Cleanup fires — a t.Context()-scoped pool silently no-ops the
+	// cleanup delete below, leaking itest-% collections that collide
+	// across tests sharing fixedClassifier's name. A plain Background
+	// pool leaks connections instead (pgpool has no Close), so use a
+	// cancelable context released by the LAST cleanup: t.Cleanup runs
+	// LIFO, so registering the cancel before the delete keeps the pool
+	// alive for the delete and closes it right after.
+	poolCtx, poolCancel := context.WithCancel(context.Background())
+	t.Cleanup(poolCancel)
+	pool := pgpool.New(poolCtx, dsn, log)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	if err := pool.WaitHealthy(ctx); err != nil {

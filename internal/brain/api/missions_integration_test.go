@@ -64,12 +64,16 @@ func testMissionStore(t *testing.T) *missions.Store {
 		t.Skip("DATABASE_URL not set; skipping integration test")
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// context.Background(), not t.Context(): t.Context() cancels BEFORE
-	// t.Cleanup callbacks run, and the pool closes its connection the
-	// moment its context is Done — the cleanup delete below would
-	// silently no-op (it did, leaking itest mission rows on every run).
-	// Same reasoning as testConnectorsManager's pool.
-	pool := pgpool.New(context.Background(), dsn, log)
+	// The pool must outlive t.Context(), which cancels BEFORE t.Cleanup
+	// callbacks run — a t.Context()-scoped pool silently no-ops the
+	// cleanup delete below (it did, leaking itest mission rows on every
+	// run). A plain Background pool never releases its connections
+	// (pgpool has no Close) and exhausts Postgres across many tests, so
+	// use a cancelable context released by the LAST cleanup (t.Cleanup
+	// runs LIFO: delete first, then cancel).
+	poolCtx, poolCancel := context.WithCancel(context.Background())
+	t.Cleanup(poolCancel)
+	pool := pgpool.New(poolCtx, dsn, log)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	if err := pool.WaitHealthy(ctx); err != nil {
