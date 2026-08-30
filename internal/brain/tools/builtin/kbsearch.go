@@ -28,11 +28,11 @@ type KBSearchHit struct {
 	SourceRef     string
 }
 
-// KBSearchFunc runs one hybrid/semantic/keyword search scoped to
-// collections; main curries memclient.Client.KBSearch in with the
-// calling agent's collection allowlist already bound — collections are
-// NEVER a model-controlled argument (D-060: enforced in Go, not a
-// prompt).
+// KBSearchFunc runs one hybrid/semantic/keyword search over the whole
+// knowledge base; main curries memclient.Client.KBSearch in with the
+// calling agent's Knowledge collections already bound as a ranking
+// boost: collections are NEVER a model-controlled argument (D-078,
+// issue #368: enforced in Go, not a prompt).
 type KBSearchFunc func(ctx context.Context, query, mode string, k int) ([]KBSearchHit, error)
 
 type kbSearchArgs struct {
@@ -41,18 +41,18 @@ type kbSearchArgs struct {
 	K     *int   `json:"k"`
 }
 
-// KBSearch lets the model search one agent's allowed knowledge-base
-// collections. search is built per-agent, per-turn (see chat.go) with
-// the collection set already bound — this constructor never sees or
-// accepts collection names itself.
+// KBSearch lets the model search the whole knowledge base. search is
+// built per-agent, per-turn (see chat.go) with the agent's own
+// collections already bound as a ranking boost: this constructor never
+// sees or accepts collection names itself.
 func KBSearch(search KBSearchFunc) *tools.Tool {
 	return &tools.Tool{
 		Name: "search_kb",
-		Description: `Searches this agent's knowledge base collections and returns matching passages with their source.
+		Description: `Searches the knowledge base and returns matching passages with their source.
 
 Use when the user asks about something that might be documented in the
-agent's configured knowledge base — internal docs, reference material,
-uploaded files — rather than general knowledge or long-term memory.
+knowledge base (internal docs, reference material, uploaded files)
+rather than general knowledge or long-term memory.
 
 Arguments:
 - query (string, required): what to search for.

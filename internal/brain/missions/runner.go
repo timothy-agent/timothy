@@ -137,7 +137,7 @@ func (p *StorePermissionParker) OnToolCall(ctx context.Context, missionID, phase
 type parkNotifier interface {
 	OnPermissionParked(ctx context.Context, missionID, permissionID, tool, args, danger, rationale string)
 	OnPermissionCleared(ctx context.Context, missionID string)
-	// OnPermissionDenied reports a tool result that came back denied —
+	// OnPermissionDenied reports a tool result that came back denied:
 	// most often the unattended-turn automatic denial (D-039), but any
 	// denial qualifies. Best-effort like the two methods above.
 	OnPermissionDenied(ctx context.Context, missionID, tool, digest string)
@@ -311,16 +311,16 @@ func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 	r.connectorReads = resolve
 }
 
-// KBSearchFunc runs one search_kb call scoped to collectionNames: main
-// curries memclient.Client.KBSearch in, same shape as chat.go's
-// KBSearch type. collectionNames travels on every call (the mission's
-// own Knowledge snapshot), never bound once, since the same func serves
-// every mission.
-type KBSearchFunc func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
+// KBSearchFunc runs one search_kb call over the whole KB, boosted
+// toward boostCollections: main curries memclient.Client.KBSearch in,
+// same shape as chat.go's KBSearch type. boostCollections travels on
+// every call (the mission's own Knowledge snapshot), never bound once,
+// since the same func serves every mission (D-078, issue #368).
+type KBSearchFunc func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
-// KBReadFunc loads one kb document scoped to collectionNames: same
-// travel-on-every-call contract as KBSearchFunc.
-type KBReadFunc func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error)
+// KBReadFunc loads one kb document by id, unscoped by collection
+// (D-078: collections no longer gate read access: issue #368).
+type KBReadFunc func(ctx context.Context, documentID string) (builtin.KBDocument, error)
 
 // NewNativeRunner wraps a production *loop.Agent as a Runner. The
 // agent instance is expected to be brain's existing chat agent: a
@@ -345,22 +345,23 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, kbRead: kbRead, log: log}
 }
 
-// kbSearchTool builds this turn's search_kb ExtraTool bound to m's own
-// Knowledge snapshot, or nil when search_kb must not be offered: no
-// backend wired, or the mission's creating agent named no collections
-// (empty Knowledge = no search_kb, same opt-in-only contract as
-// chat.go's kbSearchTool, which this mirrors exactly). A non-nil sink
-// records every returned document at execution time: the harness's
-// citation evidence must come from here, not from the rendered tool
-// result: digests cap at digestCeiling and offload past 8KiB, so a
-// full search_kb result never survives into the digest text.
+// kbSearchTool builds this turn's search_kb ExtraTool, boosted toward
+// m's own Knowledge snapshot, or nil when no backend is wired (KB
+// feature off entirely). m.Knowledge is never a gate: every mission
+// gets whole-KB search_kb once a backend exists, empty Knowledge or not
+// (D-078, issue #368): Knowledge only reorders results toward those
+// collections. A non-nil sink records every returned document at
+// execution time: the harness's citation evidence must come from here,
+// not from the rendered tool result: digests cap at digestCeiling and
+// offload past 8KiB, so a full search_kb result never survives into the
+// digest text.
 func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
-	if r.kbSearch == nil || len(m.Knowledge) == 0 {
+	if r.kbSearch == nil {
 		return nil
 	}
-	collections := slices.Clone(m.Knowledge)
+	boost := slices.Clone(m.Knowledge)
 	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
-		hits, err := r.kbSearch(ctx, query, collections, mode, k)
+		hits, err := r.kbSearch(ctx, query, boost, mode, k)
 		if err == nil && sink != nil {
 			sink.record(hits)
 		}
@@ -369,15 +370,13 @@ func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
 }
 
 // kbReadTool builds this turn's read_kb ExtraTool, gated exactly like
-// kbSearchTool: no backend, or an empty Knowledge snapshot, means the
-// tool is not offered.
+// kbSearchTool: no backend wired means the tool is not offered.
 func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
-	if r.kbRead == nil || len(m.Knowledge) == 0 {
+	if r.kbRead == nil {
 		return nil
 	}
-	collections := slices.Clone(m.Knowledge)
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
-		return r.kbRead(ctx, documentID, collections)
+		return r.kbRead(ctx, documentID)
 	})
 }
 
@@ -417,7 +416,7 @@ func (s *kbRefSink) all() []string {
 
 // missionTools builds the turn-scoped file tools rooted in the
 // mission's OWN directory (worktree for coding, workspace otherwise):
-// a shell that replaces the global workspace-rooted one for the turn —
+// a shell that replaces the global workspace-rooted one for the turn:
 // the root cause of a whole failure family was workers writing into
 // the shared root while verify_cmd and the reviewer looked in the
 // per-mission directory: and write_file, so artifact writes never go
@@ -580,7 +579,7 @@ func toolCallDigest(args json.RawMessage) string {
 func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string, phase Phase) (turnResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
-	// D-075: the sentinel call's successful execution ends the turn —
+	// D-075: the sentinel call's successful execution ends the turn:
 	// every mission phase (worker/explore/plan/review) goes through
 	// this one call site.
 	req.EndTurnTools = []string{sentinelTool}
@@ -616,7 +615,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.ToolCall != nil && ev.ToolCall.Name == "fetch_url" {
 				seenURLs = append(seenURLs, webFetchArgURL(ev.ToolCall.Input)...)
 			}
-			// Any tool call OTHER than the sentinel is mid-turn activity —
+			// Any tool call OTHER than the sentinel is mid-turn activity:
 			// the text written before it is stale narration, not the
 			// deliverable. The sentinel call itself carries no assistant
 			// text of its own, so it must not reset finalSeg.
@@ -800,7 +799,7 @@ func oversightModel(m Mission) string {
 }
 
 // reviewModel is reviewRoute's model-pin counterpart. Precedence tracks
-// reviewRoute exactly: ReviewRouteModel > PlanRouteModel > RouteModel —
+// reviewRoute exactly: ReviewRouteModel > PlanRouteModel > RouteModel:
 // otherwise a mission with only PlanRouteModel set would run review on
 // the (correctly inherited) plan_route but an unpinned model within it.
 func reviewModel(m Mission) string {
@@ -813,7 +812,7 @@ func reviewModel(m Mission) string {
 // RunWorker seeds a fresh session (packet only, no prior transcript)
 // and enforces the sentinel ladder: a present, well-formed
 // mission_status call is trusted directly; a missing or invalid one
-// triggers one recovery re-run, then falls back to bail detection —
+// triggers one recovery re-run, then falls back to bail detection:
 // either path that doesn't yield a trusted verdict becomes a forced
 // retry, never a silent accept.
 func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {

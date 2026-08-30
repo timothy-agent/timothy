@@ -61,7 +61,7 @@ func testStore(t *testing.T) *Store {
 }
 
 // execer is the shared Exec surface between a pool connection and a
-// one-shot pgx.Conn — lets sweep run identically at setup (via the
+// one-shot pgx.Conn: lets sweep run identically at setup (via the
 // pool) and teardown (via a fresh connection, since the pool dies with
 // t.Context()).
 type execer interface {
@@ -70,12 +70,12 @@ type execer interface {
 
 // sweep clears every fixture row this package's tests create. Missions
 // spawned by a test schedule carry the schedule's mission_template
-// goal verbatim, not the marker prefix — delete them via the schedule
+// goal verbatim, not the marker prefix: delete them via the schedule
 // join FIRST, before deleting schedules (whose FK would otherwise
 // orphan them under ON DELETE CASCADE at an unpredictable order
 // relative to a concurrently running test). Schedule NAMES can't carry
 // marker verbatim (it has a trailing space; schedule names must be a
-// slug — see schedules_integration_test.go's slugMarker), so schedule
+// slug: see schedules_integration_test.go's slugMarker), so schedule
 // rows are also swept by the slug form.
 func sweep(ctx context.Context, db execer) {
 	slug := strings.TrimSpace(marker)
@@ -207,7 +207,7 @@ func TestMissionReferencedContextRoundTrips(t *testing.T) {
 
 // TestMissionDelete covers Store.Delete's three outcomes: unknown id
 // (ErrNotFound), a live (non-terminal) mission (ErrNotTerminal), and a
-// terminal mission — which must actually remove the row, and its
+// terminal mission: which must actually remove the row, and its
 // mission_events via the ON DELETE CASCADE migrations 0025/0027 rely
 // on.
 func TestMissionDelete(t *testing.T) {
@@ -258,7 +258,7 @@ func TestMissionDelete(t *testing.T) {
 // TestMissionParentLineageRoundTrips covers the follow-up columns:
 // parent_mission_id/parent_context round-trip through Create/Get, and
 // deleting the (terminal) parent SETs NULL rather than blocking or
-// cascading — the child mission stays valid with an empty
+// cascading: the child mission stays valid with an empty
 // ParentMissionID afterward.
 func TestMissionParentLineageRoundTrips(t *testing.T) {
 	s := testStore(t)
@@ -368,7 +368,7 @@ func TestMissionPromptOverlayRoundTrips(t *testing.T) {
 		t.Fatalf("PromptOverlay = %q, want it to round-trip unchanged", m.PromptOverlay)
 	}
 
-	// Absent means "no agent overlay" (the general agent, e.g.) — must
+	// Absent means "no agent overlay" (the general agent, e.g.): must
 	// stay empty, not some driver default.
 	id2, err := s.Create(ctx, Mission{Goal: marker + "no-overlay", Kind: "general", Route: "default"})
 	if err != nil {
@@ -405,8 +405,9 @@ func TestMissionKnowledgeRoundTrips(t *testing.T) {
 		t.Fatalf("Knowledge = %v, want it to round-trip unchanged", m.Knowledge)
 	}
 
-	// Absent means "search_kb never offered" — must stay empty, not some
-	// driver default.
+	// Absent means "no boost collections" (search_kb still gets
+	// offered, whole-KB, by the runner: issue #368): must stay empty,
+	// not some driver default.
 	id2, err := s.Create(ctx, Mission{Goal: marker + "no-knowledge", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -422,7 +423,7 @@ func TestMissionKnowledgeRoundTrips(t *testing.T) {
 
 // TestMissionHarnessRoundTrips covers D-051: harness is a first-class
 // column snapshotted at create time, same shape as PromptOverlay above
-// — "" (native) is the default when a mission omits it.
+//: "" (native) is the default when a mission omits it.
 func TestMissionHarnessRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -455,7 +456,7 @@ func TestMissionHarnessRoundTrips(t *testing.T) {
 }
 
 // TestMissionModelPinsRoundTrip covers route_model/plan_route_model/
-// review_route_model (D-078) — same shape as TestMissionHarnessRoundTrips:
+// review_route_model (D-078): same shape as TestMissionHarnessRoundTrips:
 // set on create, read back verbatim; unset stays empty.
 func TestMissionModelPinsRoundTrip(t *testing.T) {
 	s := testStore(t)
@@ -496,7 +497,7 @@ func TestMissionModelPinsRoundTrip(t *testing.T) {
 }
 
 // TestMissionLightAndFinalOutputRoundTrip covers light (D-069, born
-// phase=execute) and SetFinalOutput — same shape as
+// phase=execute) and SetFinalOutput: same shape as
 // TestMissionHarnessRoundTrips above, plus the setter mission state
 // (not an event) is written and read back correctly.
 func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
@@ -549,7 +550,7 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 }
 
 // TestMissionOnCompleteRoundTrips covers on_complete: a first-class
-// column snapshotted at create time, same shape as Harness above — ""
+// column snapshotted at create time, same shape as Harness above: ""
 // (do nothing) is the default when a mission omits it.
 func TestMissionOnCompleteRoundTrips(t *testing.T) {
 	s := testStore(t)
@@ -585,7 +586,7 @@ func TestMissionOnCompleteRoundTrips(t *testing.T) {
 
 // TestMissionGitStrategyRoundTrips covers branch_pattern/commit_style:
 // first-class columns snapshotted at create time, same shape as Harness
-// above — "" (use the settings default) is the default when a mission
+// above: "" (use the settings default) is the default when a mission
 // omits them.
 func TestMissionGitStrategyRoundTrips(t *testing.T) {
 	s := testStore(t)
@@ -813,7 +814,7 @@ func TestApplyTransitionAndEvents(t *testing.T) {
 
 // TestApplyTransitionClearsPendingPermissionOnTerminal reproduces a
 // real bug: cancelling (or otherwise terminating) a mission parked on
-// a permission left the pending_permission_* columns populated —
+// a permission left the pending_permission_* columns populated:
 // the mission was dead, but its "Allow" banner kept showing in the
 // UI since nothing ever cleared them on the terminal transition.
 func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
@@ -828,7 +829,7 @@ func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
 		t.Fatalf("SetPendingPermission: %v", err)
 	}
 
-	// Non-terminal transition must NOT clear it — only a terminal one.
+	// Non-terminal transition must NOT clear it: only a terminal one.
 	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8}}); err != nil {
 		t.Fatalf("ApplyTransition (non-terminal): %v", err)
 	}
@@ -858,7 +859,7 @@ func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
 
 // TestApplyTransitionRejectsWriteOnTerminalMission reproduces a real
 // bug: a mission cancelled (terminal phase persisted) while a Drive
-// loop's turn was in flight — the turn's own ApplyTransition,
+// loop's turn was in flight: the turn's own ApplyTransition,
 // operating on a stale pre-cancel snapshot, must not be allowed to
 // overwrite the terminal row and resurrect the mission.
 func TestApplyTransitionRejectsWriteOnTerminalMission(t *testing.T) {
@@ -877,7 +878,7 @@ func TestApplyTransitionRejectsWriteOnTerminalMission(t *testing.T) {
 	}
 
 	// A stale in-flight turn's transition arrives after cancel already
-	// landed — must be rejected, not written over the terminal row.
+	// landed: must be rejected, not written over the terminal row.
 	err = s.ApplyTransition(ctx, id, Transition{
 		Next:   StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8},
 		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "execute"}}},
@@ -985,7 +986,7 @@ func TestApplyTransitionCancelThenDoubleCancel(t *testing.T) {
 }
 
 // TestAppendEventSeqMonotonic drives concurrent appends to the SAME
-// mission and asserts seq is a gap-free 1..N sequence — the FOR UPDATE
+// mission and asserts seq is a gap-free 1..N sequence: the FOR UPDATE
 // lock on the mission row must serialize these, not merely avoid a
 // crash.
 func TestAppendEventSeqMonotonic(t *testing.T) {
@@ -1077,7 +1078,7 @@ func TestSetProvisionedBranchCollision(t *testing.T) {
 
 // TestClaimWorkSlotConcurrencyCap fires more concurrent claimants than
 // the slot cap and asserts the number actually flipped to working
-// never exceeds max — the advisory lock must make the
+// never exceeds max: the advisory lock must make the
 // count-then-update atomic, not just individually safe.
 func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 	s := testStore(t)
@@ -1086,7 +1087,7 @@ func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 	const total, max = 10, 3
 	// The cap is global across the shared database: any real mission
 	// already 'working' (the suite runs against a live stack) consumes
-	// a slot, so the expected claim count is max minus that baseline —
+	// a slot, so the expected claim count is max minus that baseline:
 	// asserting a bare max flakes whenever a live mission is running.
 	db, err := s.db.Get()
 	if err != nil {
@@ -1138,7 +1139,7 @@ func TestClaimWorkSlotConcurrencyCap(t *testing.T) {
 
 	// ClaimWorkSlot takes the oldest idle mission GLOBALLY, so in a
 	// shared database an older foreign idle row may be claimed instead
-	// of this test's fixtures — the invariant under test is the global
+	// of this test's fixtures: the invariant under test is the global
 	// cap, not which rows filled the slots.
 	var working int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE status = 'working'`).Scan(&working); err != nil {
@@ -1335,7 +1336,7 @@ func TestBackoffPausedAndCountBackoffPauses(t *testing.T) {
 		t.Fatalf("CountBackoffPauses after 1 pause = %d, want 1", n)
 	}
 
-	// Resume, then pause for backoff again — count must accumulate.
+	// Resume, then pause for backoff again: count must accumulate.
 	if err := s.ApplyTransition(ctx, backoffID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusIdle}}); err != nil {
 		t.Fatalf("ApplyTransition resume: %v", err)
 	}

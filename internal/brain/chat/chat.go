@@ -1,7 +1,7 @@
 // Package chat orchestrates one conversation turn: project the
 // session's event log into context, stream through the gateway,
 // persist the turn as events (with distilled residue), and keep the
-// projection under budget. State lives in the log — a restart loses
+// projection under budget. State lives in the log: a restart loses
 // nothing (D-006).
 package chat
 
@@ -54,7 +54,7 @@ const (
 	compactBudget = 150 * time.Second
 	titleTimeout  = 15 * time.Second
 	// approvalGrantTTL matches missions/driver.go's missionGrantTTL and
-	// loop's own sessionGrantTTL (12h) — a chat session idle longer than
+	// loop's own sessionGrantTTL (12h): a chat session idle longer than
 	// that just re-seeds the grant on its next turn, same degrade as a
 	// mission outliving its grant.
 	approvalGrantTTL = 12 * time.Hour
@@ -66,7 +66,7 @@ var ErrBadRequest = errors.New("bad request")
 
 // Gateway is the slice of the gateway client chat needs. RouteForRole
 // resolves which route currently serves one of the 4 roles Timothy
-// requires to work (D-049) — chat/turnmemory/compactor call it instead
+// requires to work (D-049): chat/turnmemory/compactor call it instead
 // of hardcoding a route name.
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
@@ -89,7 +89,7 @@ type SessionLog interface {
 // Distill extracts turn residue; loop.DistillTurn curried with the
 // gateway in main, stubbed in tests. May return nil. route is "" for
 // the normal side-call route, or the sensitive route pin when the turn
-// executed a sensitive tool — same convention as MemoryExtract's route.
+// executed a sensitive tool: same convention as MemoryExtract's route.
 type Distill func(ctx context.Context, sessionID, turnText, route string) *session.TurnMemory
 
 // Compactor keeps a session's projection under budget.
@@ -107,21 +107,21 @@ type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text s
 
 // MemoryRetrieve returns the rendered long-term memory block for a
 // user message, or "" for nothing relevant. The wrapper owns timeout
-// and error handling; a failure returns "" — a turn without memories
+// and error handling; a failure returns "": a turn without memories
 // beats no turn.
 type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
 
 // AttachmentStore is the slice of *attachments.Store chat needs: Get
 // validates a ref exists (400 before any event append), Open resolves
 // its bytes to base64 at request-build time. Nil disables attachments
-// — a Request naming any Attachments id gets ErrBadRequest.
+//: a Request naming any Attachments id gets ErrBadRequest.
 type AttachmentStore interface {
 	Get(ctx context.Context, id string) (attachments.Attachment, error)
 	Open(ctx context.Context, id string) (io.ReadCloser, attachments.Attachment, error)
 }
 
 // Granter is the narrow slice of *tools.Permissions chat needs to seed
-// standing grants for a serving agent's ApprovalAllowlist — the same
+// standing grants for a serving agent's ApprovalAllowlist: the same
 // shape missions/driver.go's sessionGranter uses against the same
 // session_grants table, so a grant recorded here is visible to (and
 // glob-matched by) the exact same Permissions.Resolve chain a mission
@@ -154,8 +154,8 @@ type Service struct {
 	markitdownHTTP *http.Client                         // shared client for the markitdown sidecar call
 	whisperURL     string                               // "": audio attachments attach without a transcript (WHISPER_URL unset)
 	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
-	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config
-	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config
+	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config; whole-KB by default, agent Knowledge only boosts ranking
+	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config; reaches any document, not just the agent's Knowledge collections
 	missions       MissionStore                         // nil: mission #-mention references never resolve
 	kbDocs         KBDocStore                           // nil: kb doc #-mention references never resolve
 	logger         *slog.Logger
@@ -173,7 +173,7 @@ type Service struct {
 
 	// turns is the live-turn broadcaster registry (broadcast.go): a
 	// session ID present here means that session has a turn in flight,
-	// full stop. There is no separate turn_active bool anywhere — the
+	// full stop. There is no separate turn_active bool anywhere: the
 	// GET /v1/sessions/{id} handler and the live-reattach endpoint both
 	// read this same map through TurnActive/Subscribe, so the flag and
 	// the broadcaster can never disagree about whether a turn is
@@ -188,7 +188,7 @@ type Service struct {
 
 // roleRoute resolves the route currently bound to one of the 4 roles
 // Timothy requires to work (D-049): "default" or "vision". Returns ""
-// on any failure (role unbound, gateway unreachable) — callers must
+// on any failure (role unbound, gateway unreachable): callers must
 // never hard-fail a turn over this; an empty route falls through to
 // the gateway's own no_route error same as an unconfigured route
 // always has.
@@ -216,14 +216,14 @@ func (s *Service) SetSessionHub(publish func(sessionID string)) {
 // SetPermissionHub wires the "permission" signal push: fires once a
 // permission_request or permission_resolved event is durable (see
 // notePermission), same pattern and same nil-safe default as
-// SetSessionHub above — main wires both to the same missions.Hub, just
+// SetSessionHub above: main wires both to the same missions.Hub, just
 // a different Signal.Kind, so the web's one global /v1/events stream
 // carries both without a second transport.
 func (s *Service) SetPermissionHub(publish func(sessionID string)) {
 	s.publishPermission = publish
 }
 
-// SetMemoryExtract wires the memoryd hook. Optional — nil leaves
+// SetMemoryExtract wires the memoryd hook. Optional: nil leaves
 // long-term memory off.
 func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
 
@@ -232,16 +232,16 @@ func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
 
 // SetSensitiveTools wires the sensitive-tool route pin for side-calls
 // (memory extraction): a turn that executed a matching tool sends its
-// extraction on t.Route instead of memoryd's own default. Optional —
+// extraction on t.Route instead of memoryd's own default. Optional:
 // nil leaves every turn's side-calls on today's behavior.
 func (s *Service) SetSensitiveTools(t *session.SensitiveTools) { s.sensitive = t }
 
-// SetAttachments wires the attachment store (D-045). Optional — nil
+// SetAttachments wires the attachment store (D-045). Optional: nil
 // (ATTACHMENTS_DIR unset) rejects any Request naming Attachments ids.
 func (s *Service) SetAttachments(store AttachmentStore) { s.attachments = store }
 
 // SetMarkitdown wires the markitdown sidecar's base URL for PDF
-// attachment conversion. Optional — empty (MARKITDOWN_URL unset)
+// attachment conversion. Optional: empty (MARKITDOWN_URL unset)
 // rejects any PDF attachment ref with ErrBadRequest.
 func (s *Service) SetMarkitdown(url string) {
 	s.markitdownURL = url
@@ -251,7 +251,7 @@ func (s *Service) SetMarkitdown(url string) {
 }
 
 // SetWhisper wires the whisper sidecar's base URL for audio attachment
-// transcription. Optional — empty (WHISPER_URL unset) attaches audio
+// transcription. Optional: empty (WHISPER_URL unset) attaches audio
 // with no transcript rather than rejecting it (attach-only fallback).
 func (s *Service) SetWhisper(url string) {
 	s.whisperURL = url
@@ -260,62 +260,59 @@ func (s *Service) SetWhisper(url string) {
 	}
 }
 
-// KBSearch runs one knowledge-base search scoped to collectionNames —
-// main curries memclient.Client.KBSearch in; collectionNames travels
-// on every call, never bound once, since the same func serves every
-// agent and each turn's collections are the SERVING agent's own
-// Knowledge list (D-060: enforced here in Go, never a prompt).
-type KBSearch func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
+// KBSearch runs one knowledge-base search over the whole KB, boosted
+// toward boostCollections: main curries memclient.Client.KBSearch in;
+// boostCollections travels on every call, never bound once, since the
+// same func serves every agent and each turn's boost set is the SERVING
+// agent's own Knowledge list (D-078: collections rank-boost, they never
+// gate access: issue #368).
+type KBSearch func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
 // SetKBSearch wires the search_kb tool's backing search call. Optional
-// — nil means search_kb is never offered on any turn, regardless of an
+//: nil means search_kb is never offered on any turn, regardless of an
 // agent's Knowledge list (same "the dependency's absence turns the
 // feature off entirely" contract as SetMemoryRetrieve/SetAttachments).
 func (s *Service) SetKBSearch(fn KBSearch) { s.kbSearch = fn }
 
-// kbSearchTool builds this turn's search_kb ExtraTool bound to
-// collections (the serving agent's Knowledge unioned with the
-// session's own pinned list), or nil when search_kb must not be
-// offered: no backing search call wired, or collections is empty
-// (opt-in-only, same contract as Skills/Tools — this is the "exclude
-// from the turn" choice, matching load_skill's precedent of leaving a
-// tool off the offered surface entirely rather than having it answer
-// with an error).
-func (s *Service) kbSearchTool(collections []string) *tools.Tool {
-	if s.kbSearch == nil || len(collections) == 0 {
+// kbSearchTool builds this turn's search_kb ExtraTool, or nil when no
+// backing search call is wired (KB feature off entirely). boost (the
+// serving agent's Knowledge unioned with the session's own pinned list)
+// is never a gate: every agent gets whole-KB search_kb once a backend
+// exists, empty boost or not (D-078, issue #368): boost only reorders
+// results toward those collections.
+func (s *Service) kbSearchTool(boost []string) *tools.Tool {
+	if s.kbSearch == nil {
 		return nil
 	}
-	collections = slices.Clone(collections)
+	boost = slices.Clone(boost)
 	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
-		return s.kbSearch(ctx, query, collections, mode, k)
+		return s.kbSearch(ctx, query, boost, mode, k)
 	})
 }
 
-// KBRead loads one knowledge-base document scoped to collectionNames —
-// same contract as KBSearch: collectionNames travels on every call and
-// is the serving agent's own Knowledge list.
-type KBRead func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error)
+// KBRead loads one knowledge-base document by id, unscoped by
+// collection (D-078: collections no longer gate read access either:
+// issue #368).
+type KBRead func(ctx context.Context, documentID string) (builtin.KBDocument, error)
 
-// SetKBRead wires the read_kb tool's backing lookup. Optional — same
+// SetKBRead wires the read_kb tool's backing lookup. Optional: same
 // nil contract as SetKBSearch.
 func (s *Service) SetKBRead(fn KBRead) { s.kbRead = fn }
 
 // kbReadTool builds this turn's read_kb ExtraTool, gated exactly like
-// kbSearchTool: no backend or empty collections means the tool is not
-// offered.
-func (s *Service) kbReadTool(collections []string) *tools.Tool {
-	if s.kbRead == nil || len(collections) == 0 {
+// kbSearchTool: no backend wired means the tool is not offered.
+func (s *Service) kbReadTool() *tools.Tool {
+	if s.kbRead == nil {
 		return nil
 	}
-	collections = slices.Clone(collections)
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
-		return s.kbRead(ctx, documentID, collections)
+		return s.kbRead(ctx, documentID)
 	})
 }
 
 // SetAutoDispatch wires auto agent dispatch (D-034 follow-up): a
 // request naming the autoAgentName sentinel resolves through candidates
-// and classify instead of the named agent. Optional — nil candidates
+// and classify instead of the named agent. Optional: nil candidates
 // or classify makes the sentinel resolve to the default agent, same as
 // an empty name.
 func (s *Service) SetAutoDispatch(candidates AgentCandidates, classify agents.Classify) {
@@ -326,17 +323,17 @@ func (s *Service) SetAutoDispatch(candidates AgentCandidates, classify agents.Cl
 // turn served by an agent with a non-empty ApprovalAllowlist gets
 // those tools granted for its session before the turn runs, extending
 // the user's Settings-authored per-agent consent to interactive chat.
-// Optional — nil (today's default) leaves every allowlisted tool
+// Optional: nil (today's default) leaves every allowlisted tool
 // asking on its first chat call, exactly like before this existed.
 //
 // Safety framing (D-010 chain, see tools/permissions.go): this only
 // ever ADDS a session_grants row that Permissions.Resolve already knew
-// how to consult — it does not change the chain itself. Destructive-
+// how to consult: it does not change the chain itself. Destructive-
 // classified shell commands still hard-force DecisionAsk before any
 // grant (session or allowlist-seeded) is even looked at, so an
 // allowlisted destructive command parks exactly as it would for a
 // mission. The allowlist is user-authored config (Settings' per-agent
-// editor), not a model choice — seeding it as grants widens nothing
+// editor), not a model choice: seeding it as grants widens nothing
 // beyond what the user already consented to for that agent.
 func (s *Service) SetApprovalGrants(g Granter) {
 	s.grants = g
@@ -346,7 +343,7 @@ func (s *Service) SetApprovalGrants(g Granter) {
 }
 
 // seedApprovalGrants grants every tool in profile's ApprovalAllowlist
-// for sessionID, once per (session, agent) — an agent switch mid-
+// for sessionID, once per (session, agent): an agent switch mid-
 // session (a new profile.ID) seeds again, since the key includes it.
 // Best-effort and fire-and-forget on error, same convention as
 // missions/driver.go's grantSessionDefaults: a failed grant just means
@@ -421,7 +418,7 @@ func (s *Service) SetTurnTimeout(d time.Duration) error {
 
 // dispatchAgent resolves the "auto" sentinel to a real agent name via
 // agents.Dispatch. classify is built here (not injected verbatim as
-// Classify) so it always drains through this service's own Gateway —
+// Classify) so it always drains through this service's own Gateway:
 // a fresh call, not a lingering handle from setup time.
 func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 	if s.candidates == nil || s.classify == nil {
@@ -432,13 +429,13 @@ func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 }
 
 // ClassifyOverGateway builds an agents.Classify that asks the
-// "summarize" role's route for a one-shot text reply — the same cheap
+// "summarize" role's route for a one-shot text reply: the same cheap
 // side-call shape distillation and extraction already ride, resolved
 // dynamically by role (D-049) rather than a hardcoded route name:
 // a fixed name like "local" 502s with no_route on every install that
 // never seeded a route by that exact name. "summarize" over "default"
 // because the classification prompt carries the same message content
-// distillation/extraction already send there — the old "local for
+// distillation/extraction already send there: the old "local for
 // privacy" rationale doesn't add anything a cheap cloud role doesn't
 // already get. When the role is unbound (or the gateway lookup fails),
 // this returns an error without calling Stream at all; agents.Dispatch
@@ -479,7 +476,7 @@ func ClassifyOverGateway(gw Gateway) agents.Classify {
 }
 
 // titleChatterPrefixes are stock openers a model reaches for when it
-// answers or comments on the request instead of naming it — rejected
+// answers or comments on the request instead of naming it: rejected
 // case-insensitively, but only as whole leading words: "Okta setup"
 // must not trip on "ok".
 var titleChatterPrefixes = []string{
@@ -489,7 +486,7 @@ var titleChatterPrefixes = []string{
 
 // validTitle rejects anything that isn't a short, plain name: empty,
 // over 8 words, over 60 runes, carrying a newline/backtick/code fence,
-// or opening with a chatter prefix — the shape of a model answering or
+// or opening with a chatter prefix: the shape of a model answering or
 // commenting on the request instead of naming it.
 func validTitle(s string) bool {
 	if s == "" || utf8.RuneCountInString(s) > 60 {
@@ -510,7 +507,7 @@ func validTitle(s string) bool {
 	return true
 }
 
-// isWordChar reports whether b continues a word — used to bound a
+// isWordChar reports whether b continues a word: used to bound a
 // chatter-prefix match at a word boundary.
 func isWordChar(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '\''
@@ -518,18 +515,18 @@ func isWordChar(b byte) bool {
 
 // TitleOverGateway mirrors autoTitle's mechanism (same system-prompt/
 // MaxTokens-headroom/rune-safe-truncation shape) as a standalone
-// one-shot call — for callers outside chat (missions naming a mission
+// one-shot call: for callers outside chat (missions naming a mission
 // from its goal) that want a short display name generated the same
 // way a session's title is, without the session/reply/sensitive-route
 // ceremony a live chat turn carries. Titles are summarize-class work
 // (D-049): routed by the "summarize" role, falling back to "default"
 // when unbound, rather than burning the default chain's big model. A
 // rejected reply (validTitle) retries once with the same params;
-// still-invalid or any gateway failure returns "" (never an error) —
+// still-invalid or any gateway failure returns "" (never an error):
 // best-effort, exactly like autoTitle's own logged-and-dropped failure
 // path; the caller decides what "no name yet" means for its own
 // fallback rendering. Every failure path logs through log (message
-// prefix "title") so a silently-unnamed mission is diagnosable — log
+// prefix "title") so a silently-unnamed mission is diagnosable: log
 // must be non-nil, same as Service's own s.logger.
 func TitleOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, input string) string {
 	return func(ctx context.Context, input string) string {
@@ -592,7 +589,7 @@ func TitleOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, in
 }
 
 // collectionClassifyDocRunes caps how much document text rides into the
-// classify prompt — the model only needs the gist to pick a topic, not
+// classify prompt: the model only needs the gist to pick a topic, not
 // the full document (which can run to markitdown.TruncateMarkdown's own
 // 128KB cap).
 const collectionClassifyDocRunes = 4000
@@ -608,7 +605,7 @@ type CollectionChoice struct {
 
 // unsortedCollectionName is the fallback CollectionChoice when
 // classification can't be trusted (gateway error, empty/malformed
-// reply) — a document must land somewhere, so it lands in a generic
+// reply): a document must land somewhere, so it lands in a generic
 // catch-all rather than blocking ingest on a model failure.
 const unsortedCollectionName = "Unsorted"
 
@@ -616,14 +613,14 @@ const unsortedCollectionName = "Unsorted"
 // (same route resolution, same Stream-and-drain, same never-errors
 // contract) for a different one-shot job: given a document's title/text
 // and the existing knowledge-base collections, pick the best matching
-// collection or propose a new one. Free-text protocol, not JSON — this
+// collection or propose a new one. Free-text protocol, not JSON: this
 // codebase has no precedent for parsing prose-as-JSON from a model
 // reply (every json.Unmarshal on model output elsewhere unmarshals
 // provider-structured tool-call arguments, never free text), so the
 // model is asked for exactly one line: either a bare collection ID from
 // the list, or "NEW: <name> | <description>". Any reply that doesn't
 // parse cleanly (gateway error, empty stream, malformed line) falls
-// back to unsortedCollectionName — the one guaranteed outcome, since
+// back to unsortedCollectionName: the one guaranteed outcome, since
 // auto-classify ingest has no path to ask the user instead.
 func ClassifyCollectionOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, docTitle, docText string, collections []kb.Collection) CollectionChoice {
 	return func(ctx context.Context, docTitle, docText string, collections []kb.Collection) CollectionChoice {
@@ -735,7 +732,7 @@ func profileAllowsSkill(allow []string, name string) bool {
 
 // retrieveOutputTool and loadSkillTool are the builtin tools' exact
 // registered names (internal/brain/tools/builtin/retrieve.go,
-// internal/brain/skills/tool.go) — not imported as constants to avoid
+// internal/brain/skills/tool.go): not imported as constants to avoid
 // pulling chat into the builtin package's dependency graph for two
 // literal strings, same convention as the sensitive-tool suffixes in
 // cmd/brain/main.go.
@@ -748,7 +745,7 @@ const (
 // loop from the serving agent's config: empty means no tools (an
 // agent must opt into tools explicitly), the same flip as skills.
 // Two exemptions, independent of the agent's own list:
-//   - retrieve_output always stays available — it is how the model
+//   - retrieve_output always stays available: it is how the model
 //     reads back its own offloaded tool results (D-019); filtering it
 //     out would silently strand any result too big to inline.
 //   - load_skill follows the SKILLS allowlist, not the tools one: it
@@ -757,7 +754,7 @@ const (
 //     omitting it saves its schema's tokens on every skill-less turn).
 //
 // Both exemptions are enforced whether or not the agent authored a
-// tool list — an agent that picks tools in the UI should not silently
+// tool list: an agent that picks tools in the UI should not silently
 // lose offload retrieval or skill loading by not knowing the infra
 // names. profile.Tools itself is never mutated.
 func resolveToolAllow(profile agents.Agent) []string {
@@ -787,20 +784,20 @@ type Request struct {
 	Agent     string `json:"agent,omitempty"`
 	Route     string `json:"route,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
-	// SkillHint names a skill pack to force-load for this turn — set
+	// SkillHint names a skill pack to force-load for this turn: set
 	// when the user picked one explicitly (a UI chip, not parsed
 	// text). Unlike load_skill, this is not a choice the model can
 	// skip: the pack's body is in the system prompt before the first
 	// token streams.
 	SkillHint string `json:"skill_hint,omitempty"`
 	// Attachments name already-uploaded attachments (internal/brain/
-	// attachments) the user attached to this message — refs only,
+	// attachments) the user attached to this message: refs only,
 	// resolved into base64 (images) or transcript/markdown text
 	// (documents) at request-build time (D-045). Name is the original
 	// filename, display-only: the store itself doesn't carry one.
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
 	// Knowledge names kb collections the user pinned to this turn's
-	// session (composer # mentions) — unioned into the session's
+	// session (composer # mentions): unioned into the session's
 	// stored knowledge list before the turn runs.
 	Knowledge []string `json:"knowledge,omitempty"`
 	// References names individual missions/sessions/kb documents the
@@ -853,7 +850,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	// to the vision route, then the agent's route, then the default chain
 	// (sensitive-pin below still overrides all of this).
 	route := req.Route
-	// Only images flip to the vision route — documents are converted to
+	// Only images flip to the vision route: documents are converted to
 	// plain markdown text, not something the model needs vision
 	// capability to read.
 	if route == "" && len(images) > 0 {
@@ -931,7 +928,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 // resolveImages fills each message's Images from its ImageRefs
 // in-place, reading each attachment's bytes and base64-encoding them.
 // The only call site (runTurn, immediately before the gateway request
-// is built) — nothing else in the turn's lifecycle ever needs bytes
+// is built): nothing else in the turn's lifecycle ever needs bytes
 // (D-045). A no-op when nothing carries refs (the common case). Once
 // resolved, ImageRefs is cleared: it never crosses the gwclient wire
 // anyway (json:"-"), but clearing avoids holding two views of the same
@@ -976,13 +973,13 @@ func (s *Service) readAttachment(ctx context.Context, id string) (string, error)
 // BEFORE the turn's exclusivity is won or anything is appended (D-042:
 // store lookups are read-only and safe before turnBegin, but a bad ref
 // must 400 before even the user_message persists). Empty refs returns
-// nil, nil, nil without touching the store — attachments stay off when
+// nil, nil, nil without touching the store: attachments stay off when
 // unconfigured, and a message with none never needs it wired.
 //
 // PDFs/text/audio are converted to markdown (or transcript) here,
 // once, at send time (not lazily per turn like images): re-converting
 // on every turn would re-call the sidecar every turn, and any output
-// drift would rewrite an earlier projected message — breaking
+// drift would rewrite an earlier projected message: breaking
 // LLMContext's prefix stability that provider prompt caches depend on.
 // A conversion failure is the sidecar's fault, not the client's, so it
 // returns a plain wrapped error rather than ErrBadRequest.
@@ -1029,7 +1026,7 @@ func (s *Service) validateAttachments(ctx context.Context, refs []AttachmentRef)
 			}
 			documents = append(documents, doc)
 		case strings.HasPrefix(att.Mime, "video/"):
-			// Never converted or sent as content — projection.go renders
+			// Never converted or sent as content: projection.go renders
 			// an empty-markdown document as a neutralized attach-only
 			// note instead.
 			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Name: ref.Name})
@@ -1057,7 +1054,7 @@ func (s *Service) readAttachmentBytes(ctx context.Context, id string) ([]byte, e
 // transcribeAudioAttachment sends an audio attachment's bytes through
 // the whisper sidecar and returns a DocumentRef carrying the
 // transcript. When whisper isn't configured (WHISPER_URL unset), the
-// attachment is kept but with no transcript — attach-only, never
+// attachment is kept but with no transcript: attach-only, never
 // silently dropped.
 func (s *Service) transcribeAudioAttachment(ctx context.Context, att attachments.Attachment, name string) (session.DocumentRef, error) {
 	if s.whisperURL == "" {
@@ -1078,7 +1075,7 @@ func (s *Service) transcribeAudioAttachment(ctx context.Context, att attachments
 // turn-scoped one (SetForceRoute/turnSensitive): once ANY prior turn in
 // the session has executed a sensitive tool, the email/etc. content it
 // pulled into context is still there on every LATER turn even though
-// this turn ran no sensitive tool itself — so every subsequent turn
+// this turn ran no sensitive tool itself: so every subsequent turn
 // must start on the sensitive route, not just the turn that triggered
 // it. Overrides the route picker, the agent's own route, and the
 // default alike (same "safety floor beats user choice" rule the in-turn
@@ -1086,7 +1083,7 @@ func (s *Service) transcribeAudioAttachment(ctx context.Context, att attachments
 // SetForceRoute does: a hint outranks the route at the gateway's
 // Resolve, so a surviving hint would let the model bypass the pinned
 // route's chain entirely. A no-op whenever sensitive-tool routing is
-// unconfigured (s.sensitive nil or its Route resolves empty) — current
+// unconfigured (s.sensitive nil or its Route resolves empty): current
 // behavior everywhere until an operator sets sensitive_tool_route.
 func (s *Service) pinSensitiveRoute(ctx context.Context, events []session.Event, route, modelHint string) (string, string) {
 	if s.sensitive == nil || s.sensitive.Route == nil {
@@ -1102,7 +1099,7 @@ func (s *Service) pinSensitiveRoute(ctx context.Context, events []session.Event,
 }
 
 // ErrNoRetryableTurn marks a Retry call whose session isn't in a
-// retryable state — its last user_message already has a completed
+// retryable state: its last user_message already has a completed
 // (assistant_turn) turn after it, or there's no user_message at all.
 var ErrNoRetryableTurn = errors.New("no retryable turn")
 
@@ -1111,8 +1108,8 @@ var ErrNoRetryableTurn = errors.New("no retryable turn")
 // (line above), so a failed attempt already leaves that message durable
 // with no assistant_turn after it. A dead attempt (brain restart mid-turn)
 // can also leave trailing tool_execution/pending_state/permission events
-// after that message — lastUserMessage looks past those; only a
-// completed turn blocks retry. Retry reuses the message verbatim — same
+// after that message: lastUserMessage looks past those; only a
+// completed turn blocks retry. Retry reuses the message verbatim: same
 // route/agent/model_hint the original request resolved to, since those
 // live on the persisted UserMessage, not the transient Request. A
 // skill_hint is NOT persisted (it's a rare, deliberate one-off pick),
@@ -1145,13 +1142,13 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 
 	// Same exclusivity acquisition as Chat (D-042): Retry appends no new
 	// user_message of its own, but it must still win the slot before
-	// runTurn can touch the log — a losing Retry racing a Chat (or
+	// runTurn can touch the log: a losing Retry racing a Chat (or
 	// another Retry) must not interleave events with the winner's turn.
 	bc, err := s.turnBegin(sessionID)
 	if err != nil {
 		return sessionID, nil, err
 	}
-	// Detached turn context — same reasoning as Chat's (see there).
+	// Detached turn context: same reasoning as Chat's (see there).
 	turnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.turnTimeout)
 	bc.setCancel(cancel)
 	return s.runTurn(turnCtx, ctx, sessionID, last.Text, modelHint, "", "", route, profile, needsTitle, bc)
@@ -1160,29 +1157,29 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 // runTurn is the shared tail of Chat and Retry: compact, project
 // context, assemble the system prompt, stream, and relay. The caller
 // has already ensured exactly the right user_message sits durable at
-// the end of the log — this never appends one itself. bc is this
+// the end of the log: this never appends one itself. bc is this
 // turn's broadcaster, already registered by the caller's turnBegin
-// (D-042) — runTurn must free it (turnDone) on every path that returns
+// (D-042): runTurn must free it (turnDone) on every path that returns
 // before the relay goroutine takes ownership of that responsibility,
 // so a setup failure here can never wedge the session's slot.
 //
 // turnCtx is the detached, session-owned context (survives the client
-// disconnecting) that everything in this function — and the whole tool
-// loop underneath gw.Stream — runs on. reqCtx is the original HTTP
+// disconnecting) that everything in this function: and the whole tool
+// loop underneath gw.Stream: runs on. reqCtx is the original HTTP
 // request's context; it is only handed to relay, which uses it solely
 // to decide whether the ORIGINAL client is still there to stream to
 // (see relay's doc comment).
 func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, modelHint, skillHint, skillBody, route string, profile agents.Agent, needsTitle bool, bc *turnBroadcaster) (string, <-chan stream.StreamEvent, error) {
 	// start marks the turn's wall-clock beginning for the stats line's
 	// duration: here, not Chat/Retry's entry, so a retried turn's
-	// duration covers only the retried run — the dead attempt's gap
+	// duration covers only the retried run: the dead attempt's gap
 	// never counts (runTurn is the shared tail both call fresh).
 	start := time.Now()
 	s.seedApprovalGrants(turnCtx, sessionID, profile)
 	// Pre-send guarantee: the context actually sent to the provider
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
-	// this is a cheap no-op except on the crossing turn; best-effort —
+	// this is a cheap no-op except on the crossing turn; best-effort:
 	// an oversized context beats no answer.
 	if s.compactor != nil {
 		cctx, cancel := context.WithTimeout(turnCtx, compactBudget)
@@ -1212,7 +1209,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	// sessionSensitive reuses this same fetch: a session pinned by a
 	// PRIOR turn still carries that turn's sensitive content in the
 	// context just projected above, even when THIS turn runs no
-	// sensitive tool itself — so persistTurn's side-calls (distill,
+	// sensitive tool itself: so persistTurn's side-calls (distill,
 	// extraction) must be pinned too, same as turnSensitive.
 	sessionSensitive := s.sensitive.SessionSensitive(turnCtx, events)
 
@@ -1242,38 +1239,39 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 		}
 	}
 
-	// Collections offered this turn: the serving agent's own Knowledge
+	// Boost collections for this turn: the serving agent's own Knowledge
 	// list unioned with the session's pinned list (composer # mentions).
-	// The session lookup is best-effort — a failure must not kill the
-	// turn, it just falls back to the agent's list alone. Fetched here
-	// (not just before extraTools) so the same result also backs the
-	// pinned-knowledge system prompt block below.
-	collections := slices.Clone(profile.Knowledge)
+	// search_kb always searches the whole KB (D-078, issue #368); this
+	// set only reorders results toward these collections, never filters
+	// them. The session lookup is best-effort: a failure must not kill
+	// the turn, it just falls back to the agent's list alone. Fetched
+	// here (not just before extraTools) so the same result also backs
+	// the pinned-knowledge system prompt block below.
+	boost := slices.Clone(profile.Knowledge)
 	sk, skErr := s.log.Knowledge(turnCtx, sessionID)
 	if skErr != nil {
 		s.logger.Warn("session knowledge lookup", "session_id", sessionID, "error", skErr)
 	} else {
 		for _, name := range sk {
-			if !slices.Contains(collections, name) {
-				collections = append(collections, name)
+			if !slices.Contains(boost, name) {
+				boost = append(boost, name)
 			}
 		}
 	}
 
 	// A pinned collection is an explicit user signal to search it, not
-	// just a passive tool grant — but only when search_kb will actually
-	// be offered (skErr nil, s.kbSearch wired, union non-empty): a
-	// pinned name with no backend must never promise a tool that isn't
-	// there.
-	if skErr == nil && len(sk) > 0 && s.kbSearch != nil && len(collections) > 0 {
+	// just a passive tool grant: but only when search_kb will actually
+	// be offered (skErr nil, s.kbSearch wired): a pinned name with no
+	// backend must never promise a tool that isn't there.
+	if skErr == nil && len(sk) > 0 && s.kbSearch != nil {
 		system += "\n\n# Pinned knowledge\n\nThe user pinned these knowledge collections to this session: " + strings.Join(sk, ", ") + ". This is an explicit signal: when a question could plausibly be answered by their content, call search_kb first and ground the answer in what it returns, rather than answering from general knowledge alone."
 	}
 
 	var extraTools []*tools.Tool
-	if t := s.kbSearchTool(collections); t != nil {
+	if t := s.kbSearchTool(boost); t != nil {
 		extraTools = append(extraTools, t)
 	}
-	if t := s.kbReadTool(collections); t != nil {
+	if t := s.kbReadTool(); t != nil {
 		extraTools = append(extraTools, t)
 	}
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
@@ -1293,7 +1291,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	}
 
 	// bc was registered by the caller's turnBegin before the turn's
-	// first event append (D-042) — already live the instant the turn
+	// first event append (D-042): already live the instant the turn
 	// started, not just from here on. From this point, relay's own
 	// defer-equivalent (drainAndPersist, on every exit path) owns
 	// freeing it via turnDone.
@@ -1307,18 +1305,18 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 // client disconnect or brain shutdown mid-turn must still leave a
 // durable pending_state (the kill-test contract). sessionSensitive
 // carries forward whether a PRIOR turn in this session already pinned
-// it (see runTurn) — persistTurn ORs it with this turn's own
+// it (see runTurn): persistTurn ORs it with this turn's own
 // turnSensitive flip so side-calls stay pinned on every later turn too.
 // start is runTurn's wall-clock beginning, stamped onto the terminal
 // done event's Meta (and passed to persistTurn) so live and replayed
 // stats show the same duration. bc is this turn's broadcaster
 // (registered by runTurn before this goroutine started): every event
-// this relay sees — including ones the ORIGINAL client never gets
-// because it already disconnected (drainAndPersist) — still reaches
+// this relay sees: including ones the ORIGINAL client never gets
+// because it already disconnected (drainAndPersist): still reaches
 // bc, since a GET /live subscriber may be attached independently of
 // the POST that started the turn.
 //
-// reqCtx is the ORIGINAL request's context, not the turn's — upstream
+// reqCtx is the ORIGINAL request's context, not the turn's: upstream
 // is already bound to the detached turnCtx (runTurn's gw.Stream call),
 // so it keeps producing long after reqCtx dies. reqCtx here gates only
 // whether THIS client is still around to receive forwarded events: the
@@ -1334,17 +1332,17 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 	sawDone := false
 	flushed := 0
 	// turnSensitive flips once any tool this turn executed matches
-	// s.sensitive — memory extraction then rides the sensitive route
+	// s.sensitive: memory extraction then rides the sensitive route
 	// pin instead of its own default (see persistTurn).
 	turnSensitive := false
 	// ranTool records whether ANY tool executed this turn (regardless of
-	// sensitivity) — persistTurn's empty-response guard (D-044) must not
+	// sensitivity): persistTurn's empty-response guard (D-044) must not
 	// flag a turn whose answer is entirely tool/reasoning traffic with
 	// no text.
 	ranTool := false
 	// mediaRefs accumulates every media ref a tool call emitted this
 	// turn (in call-result order), rendered as a trailing UIBlock at
-	// persist time — see noteToolResult below.
+	// persist time: see noteToolResult below.
 	var mediaRefs []session.MediaRef
 	// failure captures a terminal EventError/EventIncomplete's code and
 	// message (D-044): the relay used to just drop these on the floor
@@ -1404,7 +1402,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 	// full permissionTimeout, and the whole point of this event is that
 	// a session opened while that's happening shows the same prompt the
 	// live stream shows. Same detached-timeout, best-effort pattern as
-	// flushPending — a failed write here loses the replay prompt, never
+	// flushPending: a failed write here loses the replay prompt, never
 	// the turn itself.
 	notePermission := func(ev stream.StreamEvent) {
 		var kind string
@@ -1440,7 +1438,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 	}
 
 	// flushPending checkpoints the partial answer DURING the stream so
-	// even a SIGKILL mid-turn loses at most one flush interval — the
+	// even a SIGKILL mid-turn loses at most one flush interval: the
 	// projection splices the last pending in, and a completed turn
 	// supersedes every checkpoint (the kill-test contract).
 	flushPending := func() {
@@ -1461,7 +1459,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 		// to turnCtx (session-owned), not reqCtx, so once the client is
 		// gone it may still have minutes left to run. Closing out up
 		// front frees streamTurn's client-facing goroutine immediately
-		// instead of holding it for the remainder of the turn — any
+		// instead of holding it for the remainder of the turn: any
 		// further send() calls on a dead ResponseWriter just fail
 		// silently. The drain loop below then keeps consuming upstream
 		// (publishing every event to bc for /live subscribers) until it
@@ -1487,7 +1485,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
-		// that order — mirrors missions.Store's own "publish only after
+		// that order: mirrors missions.Store's own "publish only after
 		// commit" discipline, so a client that sees turn_active flip
 		// false (via the freed entry) or gets a session signal is
 		// guaranteed the transcript already reflects the finished turn.
@@ -1543,7 +1541,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 
 // stampDuration copies base (the gateway-attributed Meta, possibly
 // nil when no provider attempt succeeded) and sets DurationMs from
-// start — a copy because base may be a shared struct decoded once per
+// start: a copy because base may be a shared struct decoded once per
 // SSE event, not something relay owns to mutate in place.
 func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	m := stream.Meta{}
@@ -1569,10 +1567,10 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		}
 		// No partial worth keeping: a captured terminal error/incomplete
 		// (D-044) becomes durable evidence instead of the turn silently
-		// vanishing — same detached-context, best-effort append as the
+		// vanishing: same detached-context, best-effort append as the
 		// pending-state write above. No failure AND no text at all means
 		// every upstream producer lost its terminal on the way here
-		// (deadline racing the stream cut) — synthesize one rather than
+		// (deadline racing the stream cut): synthesize one rather than
 		// append nothing: a turn that ran must never leave zero events.
 		// A flushed partial (text non-empty, already checkpointed) keeps
 		// today's behavior: the pending state is the evidence.
@@ -1593,7 +1591,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	}
 
 	// A completed turn with no text, no reasoning, and no tool
-	// executions is not a success (D-044) — persist evidence instead of
+	// executions is not a success (D-044): persist evidence instead of
 	// a blank assistant_turn. Keyed on all three being empty so a
 	// tool/reasoning-only turn (a real, valid shape some providers use)
 	// stays untouched.
@@ -1658,7 +1656,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	// The assistant turn must be durable the moment the stream ends: a
 	// follow-up message can arrive within seconds, and its projection
 	// must see this turn completed (not a phantom interruption from a
-	// stale checkpoint). Distillation is an LLM call — it lands later
+	// stale checkpoint). Distillation is an LLM call: it lands later
 	// as its own turn_memory event, never on this write's clock.
 	wctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
@@ -1673,9 +1671,9 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 
 	// A turn that executed a sensitive tool itself, OR one served on an
 	// already session-pinned route (a PRIOR turn's sensitive content is
-	// still in this turn's context — see runTurn's sessionSensitive),
+	// still in this turn's context: see runTurn's sessionSensitive),
 	// pins its side-calls to the same route the loop/pin already forced
-	// the turn onto — both distillation and extraction below can see raw
+	// the turn onto: both distillation and extraction below can see raw
 	// sensitive output (e.g. email), so neither may fall back to its own
 	// cheap default.
 	sensitiveRoute := ""
@@ -1702,8 +1700,8 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	// Long-term memory extraction rides the same residue (D-007): the
 	// user's words plus the distilled turn, never the raw trace. It
 	// runs on every COMPLETED turn even when the assistant produced no
-	// text (some providers end tool turns without a message) — the
-	// user's words alone can carry facts. Detached context — the turn
+	// text (some providers end tool turns without a message): the
+	// user's words alone can carry facts. Detached context: the turn
 	// is already over.
 	if s.memory != nil && profile.Memory {
 		mtext := "user: " + userText
@@ -1734,8 +1732,8 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 // the same pin persistTurn resolved for distill/extraction above: the
 // title prompt's input includes reply (the assistant's own synthesized
 // text, truncated), which is exactly the channel a sensitive tool's
-// output can be quoted through — the same reasoning distill/extract
-// already pin on — so titling rides the identical route pin rather than
+// output can be quoted through: the same reasoning distill/extract
+// already pin on: so titling rides the identical route pin rather than
 // staying on the default role's route whenever this turn (or an
 // earlier one this session) is sensitive. An empty sensitiveRoute (the
 // common case) falls through to the default role's route exactly as
@@ -1820,7 +1818,7 @@ func collapseRepeatedTail(s string) string {
 }
 
 // hasCompletedTurn reports whether events carries at least one
-// assistant_turn — the only kind persistTurn appends on sawDone.
+// assistant_turn: the only kind persistTurn appends on sawDone.
 // Gates auto-title: a session with no completed turn yet has never had
 // a live shot at being titled (a turn that only ever failed skips
 // autoTitle entirely), so retitling keeps being attempted on every
@@ -1835,14 +1833,14 @@ func hasCompletedTurn(events []session.Event) bool {
 }
 
 // lastUserMessage returns the session's last user_message when it has
-// no completed turn after it — the signature of a turn that never
+// no completed turn after it: the signature of a turn that never
 // finished (persistTurn only appends assistant_turn on sawDone). A
 // brain restart or crash mid-turn can leave trailing tool_execution,
 // pending_state, or permission_request/resolved events after that
 // message; none of those are turn-terminal, so they must not block a
 // retry. LLMContext already treats them as inert for anything but the
 // newest pending_state (spliced in as an interrupted assistant message
-// only if still live), so replaying them costs nothing — the retried
+// only if still live), so replaying them costs nothing: the retried
 // turn's context is exactly what the dead attempt's would have been.
 func lastUserMessage(events []session.Event) (session.UserMessage, bool) {
 	var lastMsg *session.Event

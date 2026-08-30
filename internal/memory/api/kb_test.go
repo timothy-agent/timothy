@@ -24,6 +24,7 @@ type fakeKB struct {
 	searchErr  error
 	sawQuery   string
 	sawNames   []string
+	sawBoost   []string
 	sawMode    store.KBSearchMode
 	sawK       int
 	sawEmb     store.Vector
@@ -36,8 +37,8 @@ func (f *fakeKB) ReplaceChunks(_ context.Context, documentID string, chunks []st
 	return f.replaceErr
 }
 
-func (f *fakeKB) KBSearch(_ context.Context, query string, embedding store.Vector, names []string, mode store.KBSearchMode, k int) ([]store.KBSearchHit, error) {
-	f.sawQuery, f.sawEmb, f.sawNames, f.sawMode, f.sawK = query, embedding, names, mode, k
+func (f *fakeKB) KBSearch(_ context.Context, query string, embedding store.Vector, names, boost []string, mode store.KBSearchMode, k int) ([]store.KBSearchHit, error) {
+	f.sawQuery, f.sawEmb, f.sawNames, f.sawBoost, f.sawMode, f.sawK = query, embedding, names, boost, mode, k
 	return f.searchHits, f.searchErr
 }
 
@@ -237,12 +238,34 @@ func TestKBSearchKeywordModeSkipsEmbedding(t *testing.T) {
 	}
 }
 
-func TestKBSearchRequiresCollectionNames(t *testing.T) {
+// TestKBSearchEmptyCollectionNamesSearchesWholeKB pins issue #368's
+// default: collection_names is optional, and an empty/omitted list
+// reaches the store as nil (whole-KB), not a 400.
+func TestKBSearchEmptyCollectionNamesSearchesWholeKB(t *testing.T) {
 	t.Parallel()
-	a := kbAPIFor(&fakeKB{}, nil, &fakeEmbedder{})
+	kb := &fakeKB{}
+	a := kbAPIFor(kb, nil, &fakeEmbedder{})
 	rec := postJSON(t, a.handleKBSearch, "/v1/kb-search", `{"query":"x","collection_names":[]}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(kb.sawNames) != 0 {
+		t.Fatalf("sawNames = %v, want empty (whole-KB)", kb.sawNames)
+	}
+}
+
+// TestKBSearchPassesBoostCollectionsThrough pins that boost_collections
+// travels to the store call unchanged, separate from collection_names.
+func TestKBSearchPassesBoostCollectionsThrough(t *testing.T) {
+	t.Parallel()
+	kb := &fakeKB{}
+	a := kbAPIFor(kb, nil, &fakeEmbedder{})
+	rec := postJSON(t, a.handleKBSearch, "/v1/kb-search", `{"query":"x","boost_collections":["docs"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(kb.sawBoost) != 1 || kb.sawBoost[0] != "docs" {
+		t.Fatalf("sawBoost = %v, want [docs]", kb.sawBoost)
 	}
 }
 

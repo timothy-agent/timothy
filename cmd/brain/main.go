@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -61,7 +60,7 @@ const defaultTokenBudget = 60_000
 // returns: the connector reload goroutine reads it (via
 // conns.SetOnReload's closure) on its own timer, concurrently with
 // main()'s later append of the mission tools once missionStore is
-// built — a plain slice variable shared across those two goroutines
+// built: a plain slice variable shared across those two goroutines
 // would race on that append. add appends under lock and returns the
 // current snapshot for the caller to pass straight to swapAgentTools.
 type builtinToolSet struct {
@@ -92,7 +91,7 @@ const (
 	// extractBudget bounds the fire-and-forget turn-end extraction:
 	// one memoryd round trip (LLM + embed) plus slack.
 	extractBudget = 90 * time.Second
-	// retrieveBudget sits ON the turn's critical path — one embed +
+	// retrieveBudget sits ON the turn's critical path: one embed +
 	// three SQL legs, so tight.
 	retrieveBudget = 10 * time.Second
 	// preCompactExtractBudget bounds the extraction INSIDE the
@@ -100,7 +99,7 @@ const (
 	// instead of starving the summarize.
 	preCompactExtractBudget = 45 * time.Second
 	// connectorReadyWait bounds how long a turn waits at entry for the
-	// first connector load (D-043) — long enough to absorb the DB pool
+	// first connector load (D-043): long enough to absorb the DB pool
 	// warming at boot, short enough that a turn never meaningfully hangs
 	// on it.
 	connectorReadyWait = 15 * time.Second
@@ -203,7 +202,7 @@ func main() {
 		return flags.Value(ctx, settings.ValueSensitiveToolRoute)
 	}
 	// fxStore backs both the daily rate fetch (below) and
-	// convert_currency's table-first lookup (buildAgent) — one fetch,
+	// convert_currency's table-first lookup (buildAgent): one fetch,
 	// one table, shared by the live tool and by display conversion
 	// (Analytics, mission usage) elsewhere in this file.
 	fxStore := fxrates.NewStore(app.DB)
@@ -252,7 +251,7 @@ func main() {
 		})
 		// Only the first turn after boot pays this: once conns.Ready()
 		// closes, WaitReady returns instantly on every later call. Bounded
-		// so a turn NEVER blocks indefinitely — a slow/never-ready load
+		// so a turn NEVER blocks indefinitely: a slow/never-ready load
 		// degrades to builtins-only instead of hanging the turn.
 		agent.SetWaitToolsReady(func(ctx context.Context) {
 			wctx, cancel := context.WithTimeout(ctx, connectorReadyWait)
@@ -266,7 +265,7 @@ func main() {
 	// Mission shell/verify_cmd execution always runs sandboxed via
 	// sandboxd (it holds the Docker socket, brain no longer touches it
 	// directly). Brain doesn't fail closed if sandboxd itself is
-	// unreachable at boot — that surfaces as a degraded health check
+	// unreachable at boot: that surfaces as a degraded health check
 	// below, with missions failing as infra at exec time instead.
 	sandboxdURL := os.Getenv("SANDBOXD_URL")
 	if sandboxdURL == "" {
@@ -330,7 +329,7 @@ func main() {
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured
 	// destination. Registered here, not inside buildAgent, for the same
-	// reason as the mission tools below — destinationStore/Deliverer
+	// reason as the mission tools below: destinationStore/Deliverer
 	// don't exist yet at that point. Like list_missions/push_mission_branch,
 	// this reaches the live tool surface (chat + connector-reload swaps)
 	// only, never the BuiltinsOnly base surface a mission worker turn
@@ -400,7 +399,7 @@ func main() {
 	// rule) since "<connector-name>_<tool-name>" puts the connector's own
 	// name in front of every tool it serves. Computed fresh each call,
 	// not cached, so toggling a connector's sensitive flag takes effect
-	// on the next side-call without a restart — same reasoning as
+	// on the next side-call without a restart: same reasoning as
 	// sensitiveRoute above. conns is nil when the connector surface
 	// itself is disabled (no secret store).
 	sensitiveConnectorNames := func(ctx context.Context) []string {
@@ -434,7 +433,7 @@ func main() {
 	// loop's in-turn SetForceRouteByConnector pin below and this
 	// SensitiveTools value, so side-calls (extraction, compaction
 	// summarize) honor the same route floor the tool loop already
-	// pinned the turn to. Wired unconditionally — sensitiveRoute
+	// pinned the turn to. Wired unconditionally: sensitiveRoute
 	// resolving to "" at call time means the feature is currently off,
 	// same as before, but now editable at runtime from the settings UI.
 	sensitiveTools := &session.SensitiveTools{
@@ -444,7 +443,7 @@ func main() {
 	}
 	// Connector-level sensitivity's in-turn counterpart: a whole
 	// connector flagged sensitive must pin the SAME turn that calls its
-	// tool, not just every turn after (chat.pinSensitiveRoute) — without
+	// tool, not just every turn after (chat.pinSensitiveRoute): without
 	// this, a search/read tool's own results ride the turn's ORIGINAL
 	// route (e.g. a cloud default) until the NEXT turn notices the
 	// session is sensitive, one turn too late for whatever content that
@@ -458,7 +457,7 @@ func main() {
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
 	// TURN_TIMEOUT raises the detached-turn ceiling above the compiled
-	// 30m default — needed when a route serves a slow CPU-only backend
+	// 30m default: needed when a route serves a slow CPU-only backend
 	// whose provider request_timeout (D-041) would otherwise collide
 	// with the brain ceiling and manufacture a deadline-vs-terminal
 	// race at the exact same instant. Env-gated feature, default off.
@@ -485,7 +484,7 @@ func main() {
 		})
 	}
 	// Same Permissions instance (and session_grants table) the chat
-	// agent loop's own Resolve chain reads from — seeding here is
+	// agent loop's own Resolve chain reads from: seeding here is
 	// visible to that exact chain, not a parallel grant store.
 	svc.SetApprovalGrants(chatPerms)
 	compactor.SetSensitiveTools(sensitiveTools)
@@ -514,7 +513,7 @@ func main() {
 	if missionDriver != nil {
 		// Same mc.Extract entry point chat's own MemoryExtract rides,
 		// fed the mission's curated digest instead of a chat turn's
-		// residue — missions/memory.go builds the digest, this closure
+		// residue: missions/memory.go builds the digest, this closure
 		// only owns the flag gate, timeout, and error logging, exactly
 		// like chat's own wiring above.
 		missionDriver.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
@@ -559,7 +558,7 @@ func main() {
 	attachmentStore := buildAttachments(app.DB, app.Log)
 	// Nil-safe: a nil *attachments.Store boxed into the AttachmentStore
 	// interface would be a non-nil interface value, breaking chat.go's
-	// `s.attachments == nil` gate — so this only wires when non-nil,
+	// `s.attachments == nil` gate: so this only wires when non-nil,
 	// same guard shape as the missionHub check above.
 	if attachmentStore != nil {
 		svc.SetAttachments(attachmentStore)
@@ -572,7 +571,7 @@ func main() {
 	}
 
 	// pdfService is nil-gated on both PDFGEN_URL and attachmentStore
-	// (ATTACHMENTS_DIR) — backs POST /v1/missions/{id}/export-pdf (#379)
+	// (ATTACHMENTS_DIR): backs POST /v1/missions/{id}/export-pdf (#379)
 	// and the derived pdf_export_enabled setting.
 	var pdfService *pdfgen.Service
 	if pdfgenURL != "" && attachmentStore != nil {
@@ -611,7 +610,7 @@ func main() {
 	// generate_pdf: registered here, not inside buildAgent, since it
 	// needs pdfService (built above, after buildAgent). Nil-gated on
 	// pdfService, which is itself nil-gated on PDFGEN_URL and
-	// attachmentStore — no separate media-saver wiring needed, it rides
+	// attachmentStore: no separate media-saver wiring needed, it rides
 	// the same agent.SetMediaSaver call share_file just made.
 	if pdfService != nil {
 		generatePDFTool := builtin.GeneratePDF(pdfService)
@@ -626,7 +625,7 @@ func main() {
 	}
 
 	// Mission artifact copy: registered here for the same reason
-	// share_file is — needs attachmentStore, built after buildMissions.
+	// share_file is: needs attachmentStore, built after buildMissions.
 	// Nil-gated on both attachmentStore (ATTACHMENTS_DIR) and
 	// missionDriver (WORKSPACES).
 	if attachmentStore != nil && missionDriver != nil {
@@ -634,10 +633,12 @@ func main() {
 	}
 
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract
-	// above — mc satisfies IngestDocument/KBSearch unconditionally, so
+	// above: mc satisfies IngestDocument/KBSearch unconditionally, so
 	// this always wires (memoryd unreachable surfaces as a per-call
 	// error, not a nil-gate, since MEMORYD_URL always resolves to a
-	// default).
+	// default). Searches the whole KB (nil collectionNames); the
+	// serving agent's Knowledge only rides along as boostCollections
+	// (D-078, issue #368).
 	kbStore := kb.New(app.DB)
 	// Ingest goroutines die with the process; fail anything a previous
 	// run left mid-ingest so the UI offers reingest instead of an
@@ -657,8 +658,8 @@ func main() {
 			app.Log.Info("kb stale-ingest sweep", "documents_failed", n)
 		}
 	}()
-	svc.SetKBSearch(func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
-		hits, err := mc.KBSearch(ctx, query, collectionNames, mode, k)
+	svc.SetKBSearch(func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {
 			return nil, err
 		}
@@ -711,23 +712,18 @@ func main() {
 }
 
 // buildSecretStore builds brain's secret-store handle (same DB, same
-// master key as the gateway) — shared by connectors and mission push,
+// master key as the gateway): shared by connectors and mission push,
 // so it's built once here rather than each caller decoding the master
 // key independently. A nil return (with an error to log) means an
 // unusable master key or init failure; callers nil-gate on it.
 // kbReadFromStore builds the read_kb backing lookup: the full stored
-// markdown straight from brain's own kb store — no memoryd round trip.
-// A document outside the caller's allowed collections reads as not
-// found (never "forbidden": the distinction would leak that the id
-// exists).
-func kbReadFromStore(kbStore *kb.Store) func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error) {
-	return func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error) {
+// markdown straight from brain's own kb store: no memoryd round trip.
+// Reaches any document by id (D-078, issue #368: collections are no
+// longer a read access gate); an unknown id reads as not found.
+func kbReadFromStore(kbStore *kb.Store) func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
+	return func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		doc, err := kbStore.GetDocument(ctx, documentID)
 		if err != nil {
-			return builtin.KBDocument{}, fmt.Errorf("document %s not found", documentID)
-		}
-		col, err := kbStore.GetCollection(ctx, doc.CollectionID)
-		if err != nil || !slices.Contains(collectionNames, col.Name) {
 			return builtin.KBDocument{}, fmt.Errorf("document %s not found", documentID)
 		}
 		return builtin.KBDocument{Title: doc.Title, SourceRef: doc.SourceRef, Markdown: doc.Markdown}, nil
@@ -760,7 +756,7 @@ func buildAttachments(db *pgpool.Pool, log *slog.Logger) *attachments.Store {
 
 // buildConnectors wires the integration control plane. secrets is
 // brain's already-built secret-store handle (nil when unavailable,
-// e.g. no valid master key) — a nil store still nil-gates the
+// e.g. no valid master key): a nil store still nil-gates the
 // connector surface exactly as before, it's just built once in main()
 // instead of here. The Google half additionally needs
 // TIMOTHY_PUBLIC_URL for the OAuth redirect; without it google
@@ -794,7 +790,7 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 
 // buildDestinations wires the destinations control plane (store +
 // adapters + Deliverer). missionStore nil (WORKSPACES unset) disables
-// it entirely — delivery has no meaning without missions. conns/goog
+// it entirely: delivery has no meaning without missions. conns/goog
 // nil still builds the store (webhook destinations work without
 // connectors); an email destination's create/update then fails
 // validation with a clear error, same nil-gated shape as
@@ -827,7 +823,7 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 }
 
 // destinationMailSender adapts *connectors.Google's attachment type to
-// destinations' own narrow mailAttachment shape — same
+// destinations' own narrow mailAttachment shape: same
 // never-import-connectors reasoning as destinationConnectorLookup.
 type destinationMailSender struct {
 	goog *connectors.Google
@@ -854,7 +850,7 @@ func (d destinationMailSender) SendMailHTML(ctx context.Context, connectorID, to
 }
 
 // destinationConnectorLookup adapts *connectors.Manager to
-// destinations' own narrow Connector/connectorLookup shape — missions
+// destinations' own narrow Connector/connectorLookup shape: missions
 // has no compile-time dependency on the connectors package's own
 // Connector type, same reasoning as connsPRSource above. A zero value
 // (conns == nil) is never boxed here; buildDestinations only
@@ -872,7 +868,7 @@ func (d destinationConnectorLookup) Get(ctx context.Context, id string) (destina
 }
 
 // destinationLister adapts *destinations.Store.List to the deliver
-// tool's own DestinationInfo shape — builtin never imports
+// tool's own DestinationInfo shape: builtin never imports
 // destinations directly (import cycle: destinations -> missions ->
 // builtin), same reasoning as builtin.MissionRecord.
 type destinationLister struct {
@@ -892,13 +888,13 @@ func (d destinationLister) List(ctx context.Context) ([]builtin.DestinationInfo,
 }
 
 // missionWorkSlotMax bounds how many missions may be status='working'
-// at once — the absolute ceiling; in practice the D-056 memory
+// at once: the absolute ceiling; in practice the D-056 memory
 // admission gate (sandboxd's /capacity) binds first, since a host tight
 // on memory denies well before 4 concurrent missions.
 const missionWorkSlotMax = 4
 
 // missionAgentResolver adapts agentReg.ResolveByID to scheduler.go's
-// AgentResolver / driver.go's SetAgentResolver shape — both need the
+// AgentResolver / driver.go's SetAgentResolver shape: both need the
 // SAME resolution (route/review_route/prompt_overlay/
 // approval_allowlist/harness from an agents row), just at different
 // moments (schedule fire time vs mission provisioning time), so one
@@ -943,7 +939,7 @@ func missionConnectorReadsResolver(agentReg *agents.Store, conns *connectors.Man
 // every available (already ReadOnly-marked, non-MCP) tool whose name
 // tools.ToolMatches an entry in allow. Empty allow (agent has no Tools
 // at all) matches nothing, same as filterDefs' empty-allow-means-
-// everything convention does NOT apply here — an agent that has never
+// everything convention does NOT apply here: an agent that has never
 // opted into any tool gets no connector reads either.
 func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []*tools.Tool {
 	if len(allow) == 0 {
@@ -963,12 +959,12 @@ func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []
 
 // buildMissions wires the mission engine (Store, Driver, Notifier,
 // Scheduler, Hub). Gated on WORKSPACES: no workspace root configured
-// means missions stay entirely inert — no goroutines started, nothing
+// means missions stay entirely inert: no goroutines started, nothing
 // scheduled, the API surface unmounted (registerMissions 404s on a nil
 // store). agentReg is D-034's agent registry, resolved at scheduler
 // fire time and mission provisioning time (never schedule-create
 // time) so an agent edited after the fact still applies. The hub
-// lives inside the same gate as everything else here — no missions,
+// lives inside the same gate as everything else here: no missions,
 // no push events either.
 func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, packs []skills.Skill, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
 	root := os.Getenv("WORKSPACES")
@@ -998,11 +994,12 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.
 	// search_kb: nil-safe (mc is never nil, MEMORYD_URL always resolves
-	// to a default), same shape as chat's own SetKBSearch wiring — the
-	// mission's OWN Knowledge snapshot (never a live agent lookup)
-	// scopes collections per turn (missions.nativeRunner.kbSearchTool).
-	kbSearch := func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
-		hits, err := mc.KBSearch(ctx, query, collectionNames, mode, k)
+	// to a default), same shape as chat's own SetKBSearch wiring:
+	// searches the whole KB; the mission's OWN Knowledge snapshot (never
+	// a live agent lookup) only rides along as a ranking boost per turn
+	// (missions.nativeRunner.kbSearchTool, D-078, issue #368).
+	kbSearch := func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {
 			return nil, err
 		}
@@ -1022,7 +1019,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	nativeRunner.SetProgressReader(store)
 	nativeRunner.SetLocation(flags.Location)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
-	// dispatch — resolve a worker route's chain via the gateway, spawn a
+	// dispatch: resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,
 	// poll it to a verdict. Only wired when a sandbox manager is present
 	// (missions already require one for the native shell path); nativeRunner
@@ -1031,7 +1028,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
 	notifier := missions.NewNotifier(db, webhookURL, log)
 	notifier.SetHub(hub)
-	// A second tools.Permissions instance, not the one buildAgent built —
+	// A second tools.Permissions instance, not the one buildAgent built:
 	// it's stateless besides the shared db/root (Grant/Resolve hit
 	// Postgres directly), so a fresh instance behaves identically. Used
 	// only to pre-authorize a mission's hidden session at creation.
@@ -1060,7 +1057,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	if conns != nil && secrets != nil {
 		// A repo_url mission's clone token: resolve connector_id straight
 		// to its credential_ref's secret value, same as resolveSecret does
-		// for the push endpoint — no need to build a full connector
+		// for the push endpoint: no need to build a full connector
 		// Source just to read one credential.
 		driver.SetCloneTokenResolver(func(ctx context.Context, connectorID string) (string, error) {
 			c, err := conns.Store().Get(ctx, connectorID)
@@ -1118,7 +1115,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		// The auto-fire-on-done hook's push token: resolve connector_id
 		// straight to its credential_ref's secret value, same as the
 		// clone token resolver above and the push endpoint's own
-		// resolvePushToken — the on_complete path never has an explicit
+		// resolvePushToken: the on_complete path never has an explicit
 		// credential_ref override, only ever the mission's own connector.
 		resolvePushToken := func(ctx context.Context, connectorID string) (string, error) {
 			c, err := conns.Store().Get(ctx, connectorID)
@@ -1138,7 +1135,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
 	// routeExists backs DefaultCodingRoute's preference check for a
 	// coding template's route (see api/missions.go's own copy of this
-	// wiring for the create-request path) — false on any resolve error,
+	// wiring for the create-request path): false on any resolve error,
 	// never a hard failure.
 	routeExists := func(ctx context.Context, name string) bool {
 		_, err := gwc.ResolveRoute(ctx, name, "")
@@ -1151,7 +1148,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 }
 
 // connsPRSource adapts *connectors.Manager to missions.PRSource for the
-// driver's on_complete auto-fire hook — missions has no compile-time
+// driver's on_complete auto-fire hook: missions has no compile-time
 // dependency on the connectors package, same reasoning as
 // CloneTokenResolver's closure-based wiring above.
 type connsPRSource struct {
@@ -1175,7 +1172,7 @@ func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 }
 
 // toMissionRecord adapts a missions.Mission into the builtin package's
-// own MissionRecord shape — see MissionRecord's doc comment for why
+// own MissionRecord shape: see MissionRecord's doc comment for why
 // builtin can't import missions.Mission directly. NotPushable is
 // precomputed here since missions.NotPushable also lives in the
 // missions package.
@@ -1200,7 +1197,7 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 
 // missionToolStore adapts *missions.Store to the builtin package's
 // list_missions/get_mission/push_mission_branch tool interfaces
-// (missionLister, missionEventReader) — a thin translation layer since
+// (missionLister, missionEventReader): a thin translation layer since
 // builtin cannot import missions.Mission/missions.Event directly
 // (import cycle, see MissionRecord's doc comment).
 type missionToolStore struct {
@@ -1240,7 +1237,7 @@ func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]built
 }
 
 // missionCompleterAdapter adapts *missions.Completer to the builtin
-// package's missionCompleter interface — push_mission_branch's
+// package's missionCompleter interface: push_mission_branch's
 // push/PR calls go through the exact same Completer the button/
 // auto-fire paths use. It re-Gets the mission by id from the real
 // store before calling Completer, so Completer always acts on the
@@ -1268,7 +1265,7 @@ func (a missionCompleterAdapter) OpenMissionPR(ctx context.Context, id, token st
 }
 
 // missionFollowUpCreatorAdapter adapts *missions.Driver to the builtin
-// package's missionFollowUpCreator interface — followup_mission's
+// package's missionFollowUpCreator interface: followup_mission's
 // create call goes through the exact same Driver.CreateFollowUp the
 // mission-create API's own ParentMissionID branch uses.
 type missionFollowUpCreatorAdapter struct {
@@ -1280,13 +1277,13 @@ func (a missionFollowUpCreatorAdapter) CreateFollowUpMission(ctx context.Context
 }
 
 // credResolveTimeout bounds one credential_ref resolution the delegated
-// runner does before spawning a CLI executor — same 3s bound
+// runner does before spawning a CLI executor: same 3s bound
 // cmd/gateway/main.go's credentialLookup uses for the identical
 // secretstore.Resolve call.
 const credResolveTimeout = 3 * time.Second
 
 // buildDelegatedRunner wraps native with missions.NewDelegatedRunner
-// when a sandbox manager is present — missions already require one for
+// when a sandbox manager is present: missions already require one for
 // the native shell/verify_cmd path, so its absence here would mean
 // missions are disabled entirely (buildMissions already returned early
 // in that case). A nil secrets store still lets subscription-mode
@@ -1311,7 +1308,7 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd
-// verbatim — brain adds only the bearer gate. The search route maps
+// verbatim: brain adds only the bearer gate. The search route maps
 // onto memoryd's retrieve endpoint.
 func memoryProxy(memorydURL string, log *slog.Logger) http.Handler {
 	target, err := url.Parse(memorydURL)
@@ -1339,7 +1336,7 @@ func memoryProxy(memorydURL string, log *slog.Logger) http.Handler {
 // gateway's internal API: /v1/admin/usage/* maps onto
 // /internal/usage/*. Brain adds the bearer gate and, for the usage
 // sub-tree only, decorates money fields with a converted_amount in the
-// user's default_currency (usageDecorate) — the gateway itself has no
+// user's default_currency (usageDecorate): the gateway itself has no
 // settings access and no fx_rates reader (it's a separate, settings-
 // unaware service), so this is the one seam where both are already
 // available. Every other admin endpoint (providers, routes, secrets)
@@ -1356,7 +1353,7 @@ func adminProxy(gatewayURL string, usageDecorate func(*http.Response) error, log
 			r.Out.URL.Path = "/internal/admin/" + strings.TrimPrefix(r.In.URL.Path, "/v1/admin/")
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			// resp.Request is the OUTBOUND request — Rewrite above has
+			// resp.Request is the OUTBOUND request: Rewrite above has
 			// already turned /v1/admin/... into /internal/admin/..., so
 			// the scope check must match the rewritten prefix.
 			if usageDecorate == nil || !strings.HasPrefix(resp.Request.URL.Path, "/internal/admin/usage/") {
@@ -1390,7 +1387,7 @@ func (g gatedCompactor) MaybeCompact(ctx context.Context, sessionID string) erro
 // turnRouter sends chat turns through the agent loop and everything
 // else (titles, distills, compaction summaries) straight to the
 // gateway. With the tools switch off, chat turns bypass the agent
-// loop entirely — plain pass-through completion.
+// loop entirely: plain pass-through completion.
 type turnRouter struct {
 	agent *loop.Agent
 	gw    chat.Gateway
@@ -1449,7 +1446,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	broker := loop.NewPermBroker()
 	agent := loop.NewAgent(gwc, constrained, perms, outputs, tools.NewAudit(db), store, broker, defs, log)
 	// Mission-driven turns (Request.BuiltinsOnly) get this compiled-in
-	// set only — never connector tools or the chat-only mission tools
+	// set only: never connector tools or the chat-only mission tools
 	// registered later in main(), since neither exists yet at this
 	// point. This snapshot never changes at runtime, unlike the shared
 	// registry SwapTools maintains.
@@ -1459,14 +1456,14 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 	agent.SetOffloadThreshold("shell", 4<<10)
 	// Connector-level sensitivity's in-turn pin (a connector marked
 	// sensitive in the connectors settings UI, e.g. gmail) is wired
-	// later via agent.SetForceRouteByConnector, once conns exists —
+	// later via agent.SetForceRouteByConnector, once conns exists:
 	// buildAgent runs before that, so there is nothing to wire here.
 	return agent, broker, outputs, set, perms, nil
 }
 
 // compileToolset registers builtin + connector tools into a fresh
 // constrained registry. A connector tool whose name collides with an
-// existing tool is skipped with a log — a remote server must never
+// existing tool is skipped with a log: a remote server must never
 // shadow a builtin.
 func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger, toolCalls *prometheus.CounterVec) (*tools.Constrained, []provider.ToolDef, error) {
 	reg := tools.NewRegistry()
@@ -1498,7 +1495,7 @@ func compileToolset(builtins, connectorTools []*tools.Tool, log *slog.Logger, to
 // reserved set: a connector tool (MCP raw names now included, see
 // Manager.Tools) never aggregates under a name the agent already has
 // from somewhere else, so it stays namespaced instead of shadowing it.
-// A compile failure keeps the previous surface — a broken connector
+// A compile failure keeps the previous surface: a broken connector
 // schema must not take down the builtins.
 func swapAgentTools(agent *loop.Agent, builtins []*tools.Tool, conns *connectors.Manager, log *slog.Logger, toolCalls *prometheus.CounterVec) {
 	reserved := make(map[string]bool, len(builtins))
@@ -1525,7 +1522,7 @@ const initialReloadRetry = 5 * time.Second
 // poll: a DB that wasn't ready at boot, or a row edited outside the
 // admin API, converges within a minute. The first load retries on the
 // short initialReloadRetry cadence until it succeeds once, THEN falls
-// into the normal minute ticker — later reloads don't need the fast
+// into the normal minute ticker: later reloads don't need the fast
 // path since the agent already has a tool surface.
 func runConnectorReload(ctx context.Context, conns *connectors.Manager, log *slog.Logger) {
 	for {

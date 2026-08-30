@@ -170,7 +170,7 @@ func TestRunWorkerSentinelPresent(t *testing.T) {
 // light-mission delivery: a worker session with several internal
 // tool-calling rounds within ONE loop.Agent turn (draft narration, a
 // shell call, more narration, then the sentinel) must expose only the
-// text written since the last non-sentinel tool call as FinalMessage —
+// text written since the last non-sentinel tool call as FinalMessage:
 // the deliverable, not the whole session's chatter. The full text
 // return (RunWorker's second value) stays unchanged: everything, in
 // order, for progress-note/log purposes.
@@ -426,7 +426,7 @@ func TestRunReviewRecoversWhenVerdictMissingThenPresent(t *testing.T) {
 }
 
 // TestRunReviewFallsBackToTextSentinel covers the observed qwen3:30b
-// reviewer failure: prose review, never a review_verdict tool call —
+// reviewer failure: prose review, never a review_verdict tool call:
 // the runner must recover the verdict from a text-form sentinel in the
 // recovery turn instead of erroring the round out.
 func TestRunReviewFallsBackToTextSentinel(t *testing.T) {
@@ -1021,7 +1021,7 @@ func TestRunWorkerConcurrentParksClearOnlyWhenAllResolve(t *testing.T) {
 	}
 	if len(parker.resultsDeliveredAtClear) != 1 || parker.resultsDeliveredAtClear[0] != 2 {
 		// The bug this guards: the buggy single-bool version clears
-		// after resultsDelivered==1 (right after call1, prematurely) —
+		// after resultsDelivered==1 (right after call1, prematurely):
 		// this asserts the clear only happens once BOTH results (2) have
 		// actually been delivered.
 		t.Fatalf("clear fired after %v results delivered, want exactly one clear after both (2) results", parker.resultsDeliveredAtClear)
@@ -1308,7 +1308,7 @@ func TestRunWorkerGetsMissionScopedShell(t *testing.T) {
 }
 
 // TestRunWorkerIncludesConnectorReadsWhenResolverSet confirms RunWorker
-// layers the connector reads resolver's tools into ExtraTools —
+// layers the connector reads resolver's tools into ExtraTools:
 // scheduled general missions (daily inbox digest) need gmail/calendar
 // reads despite BuiltinsOnly.
 func TestRunWorkerIncludesConnectorReadsWhenResolverSet(t *testing.T) {
@@ -1338,7 +1338,7 @@ func TestRunWorkerIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 }
 
 // TestRunWorkerOmitsConnectorReadsWhenResolverUnset confirms unset
-// connectorReads (today's default) never adds connector tools —
+// connectorReads (today's default) never adds connector tools:
 // nil-safe, same as before this existed.
 func TestRunWorkerOmitsConnectorReadsWhenResolverUnset(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1502,7 +1502,7 @@ func TestRunWorkerAttendedWithoutScheduleID(t *testing.T) {
 
 // TestRunWorkerReportsPermissionDenied confirms a denied tool result
 // (the D-039 automatic unattended denial, or any other denial) reaches
-// the mission via parkNotifier as a mission.permission_denied event —
+// the mission via parkNotifier as a mission.permission_denied event:
 // without this, an unattended turn's fast-fail denials would be
 // invisible to anything watching the mission (no park event is ever
 // emitted for them, unlike the ask-and-timeout path).
@@ -2049,21 +2049,18 @@ func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
 	}
 }
 
-// kbReadTool follows kbSearchTool's opt-in-only contract exactly: no
-// backend, or an empty Knowledge snapshot, keeps the tool off the
-// offered surface; with both present it serves the bound collections.
+// kbReadTool is gated only on a backend being wired (D-078, issue
+// #368): a mission's own Knowledge no longer scopes or gates read_kb,
+// so an empty snapshot still gets the tool once a backend exists.
 func TestKBReadToolGating(t *testing.T) {
-	read := func(ctx context.Context, documentID string, collections []string) (builtin.KBDocument, error) {
-		if !slices.Equal(collections, []string{"docs"}) {
-			t.Fatalf("collections = %v, want the mission snapshot", collections)
-		}
+	read := func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return builtin.KBDocument{Title: "Runbook", Markdown: "content"}, nil
 	}
 	if tool := (&nativeRunner{log: slog.Default()}).kbReadTool(Mission{Knowledge: []string{"docs"}}); tool != nil {
 		t.Fatal("kbReadTool offered without a backend")
 	}
-	if tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{}); tool != nil {
-		t.Fatal("kbReadTool offered with empty knowledge")
+	if tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{}); tool == nil {
+		t.Fatal("kbReadTool = nil with backend wired and empty knowledge")
 	}
 	tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{Knowledge: []string{"docs"}})
 	if tool == nil {
@@ -2115,12 +2112,11 @@ func (a *kbExecutingAgent) Start(ctx context.Context, req loop.Request) (<-chan 
 	return a.scriptedAgent.Start(ctx, req)
 }
 
-// TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge covers
-// kbSearchTool's opt-in-only contract: no backend wired, or a mission
-// with an empty Knowledge snapshot, must never put search_kb on the
-// turn's offered tool surface (chat.go's kbSearchTool mirrors this
-// exactly on the chat side).
-func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
+// TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge covers
+// kbSearchTool's gate after issue #368: only a wired backend controls
+// whether search_kb is offered. A mission's own Knowledge (empty or
+// not) never withholds the tool, it only boosts ranking.
+func TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge(t *testing.T) {
 	hasKBSearch := func(req loop.Request) bool {
 		for _, tool := range req.ExtraTools {
 			if tool.Name == "search_kb" {
@@ -2142,24 +2138,24 @@ func TestRunWorkerOffersKBSearchOnlyWhenMissionHasKnowledge(t *testing.T) {
 		}
 	})
 
-	t.Run("empty mission knowledge", func(t *testing.T) {
+	t.Run("backend wired, no mission knowledge", func(t *testing.T) {
 		agent := &scriptedAgent{batches: doneBatch}
 		r := newTestRunner(agent)
-		r.kbSearch = func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 			return nil, nil
 		}
 		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
 			t.Fatalf("RunWorker: %v", err)
 		}
-		if hasKBSearch(agent.requests[0]) {
-			t.Fatal("search_kb offered with empty mission Knowledge")
+		if !hasKBSearch(agent.requests[0]) {
+			t.Fatal("search_kb not offered despite backend wired, whole-KB default (issue #368)")
 		}
 	})
 
 	t.Run("backend wired and knowledge set", func(t *testing.T) {
 		agent := &scriptedAgent{batches: doneBatch}
 		r := newTestRunner(agent)
-		r.kbSearch = func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 			return nil, nil
 		}
 		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"}); err != nil {

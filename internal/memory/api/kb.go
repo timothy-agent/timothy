@@ -15,11 +15,11 @@ import (
 // satisfies it. Nil leaves the KB routes unmounted.
 type KBManager interface {
 	ReplaceChunks(ctx context.Context, documentID string, chunks []store.KBChunk) error
-	KBSearch(ctx context.Context, query string, embedding store.Vector, collectionNames []string, mode store.KBSearchMode, k int) ([]store.KBSearchHit, error)
+	KBSearch(ctx context.Context, query string, embedding store.Vector, collectionNames, boostCollections []string, mode store.KBSearchMode, k int) ([]store.KBSearchHit, error)
 }
 
 // DocumentStatusSetter reports ingestion outcomes back onto brain's
-// kb_documents row — memoryd only ever reports ready/failed here; it
+// kb_documents row: memoryd only ever reports ready/failed here; it
 // does not own that table (internal/brain/kb does).
 type DocumentStatusSetter interface {
 	SetIngested(ctx context.Context, documentID string, chunkCount int) error
@@ -34,7 +34,7 @@ type ingestRequest struct {
 
 // handleIngest runs the synchronous ingestion pipeline: chunk, embed,
 // replace the document's existing chunks, report the outcome. Always
-// deletes-and-rewrites (ReplaceChunks) — a re-ingest is never additive.
+// deletes-and-rewrites (ReplaceChunks): a re-ingest is never additive.
 func (a *API) handleIngest(w http.ResponseWriter, r *http.Request) {
 	var req ingestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -107,10 +107,11 @@ func (a *API) reportKBFailed(ctx context.Context, documentID, msg string) {
 }
 
 type kbSearchRequest struct {
-	Query           string   `json:"query"`
-	CollectionNames []string `json:"collection_names"`
-	Mode            string   `json:"mode"`
-	K               int      `json:"k"`
+	Query            string   `json:"query"`
+	CollectionNames  []string `json:"collection_names"`
+	BoostCollections []string `json:"boost_collections"`
+	Mode             string   `json:"mode"`
+	K                int      `json:"k"`
 }
 
 type kbSearchHitJSON struct {
@@ -133,11 +134,11 @@ const (
 	kbEmbedBatchSize = 16
 )
 
-// handleKBSearch runs hybrid/semantic/keyword retrieval scoped to the
-// caller-provided collection names — collection_names is required and
-// non-empty; brain resolves it from the calling agent's Knowledge
-// allowlist before this call, but memoryd enforces the non-empty
-// requirement independently rather than trusting the caller.
+// handleKBSearch runs hybrid/semantic/keyword retrieval over the
+// knowledge base. collection_names is optional: empty searches every
+// collection, non-empty scopes to it (an explicit narrowing).
+// boost_collections never narrows the result set, it only reorders it
+// (issue #368: collections are a ranking boost, not an access gate).
 func (a *API) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 	var req kbSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -146,10 +147,6 @@ func (a *API) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Query) == "" {
 		jsonError(w, http.StatusBadRequest, "bad_request", "query is required")
-		return
-	}
-	if len(req.CollectionNames) == 0 {
-		jsonError(w, http.StatusBadRequest, "bad_request", "collection_names must be non-empty")
 		return
 	}
 	mode := store.KBSearchMode(req.Mode)
@@ -184,7 +181,7 @@ func (a *API) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hits, err := a.kb.KBSearch(r.Context(), req.Query, embedding, req.CollectionNames, mode, k)
+	hits, err := a.kb.KBSearch(r.Context(), req.Query, embedding, req.CollectionNames, req.BoostCollections, mode, k)
 	if err != nil {
 		a.log.Warn("kb search failed", "error", err)
 		jsonError(w, http.StatusInternalServerError, "search_failed", err.Error())

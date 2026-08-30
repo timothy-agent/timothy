@@ -58,12 +58,12 @@ type kbGolden struct {
 }
 
 var kbGoldens = []kbGolden{
-	// vector group — no lexical overlap
+	// vector group: no lexical overlap
 	{text: "where do the logs go?", dim: 1, want: "v-loki"},
 	{text: "how long are request journeys kept?", dim: 2, want: "v-tempo"},
 	{text: "what happens to old measurements?", dim: 3, want: "v-mimir"},
 
-	// keyword group — shared words, useless embedding
+	// keyword group: shared words, useless embedding
 	{text: "grafana alloy node exporters", dim: 900, want: "t-alloy"},
 	{text: "opentelemetry collector fans out", dim: 901, want: "t-otel"},
 	{text: "dashboards provisioning JSON", dim: 902, want: "t-dash"},
@@ -151,7 +151,7 @@ func TestKBGoldenRecall(t *testing.T) {
 	st := seedKBGolden(t)
 	hitCount := 0
 	for _, q := range kbGoldens {
-		hits, err := st.KBSearch(t.Context(), q.text, kbBasis(q.dim), []string{kbGoldenCollection}, KBSearchHybrid, 5)
+		hits, err := st.KBSearch(t.Context(), q.text, kbBasis(q.dim), []string{kbGoldenCollection}, nil, KBSearchHybrid, 5)
 		if err != nil {
 			t.Fatalf("KBSearch %q: %v", q.text, err)
 		}
@@ -172,13 +172,56 @@ func TestKBGoldenRecall(t *testing.T) {
 	}
 }
 
+// TestKBGoldenEmptyCollectionsSearchesWholeKB pins issue #368's default:
+// nil/empty collectionNames must not scope the search at all: hits
+// from both seeded collections come back for a query that matches
+// content present in both.
+func TestKBGoldenEmptyCollectionsSearchesWholeKB(t *testing.T) {
+	st := seedKBGolden(t)
+	hits, err := st.KBSearch(t.Context(), "where do the logs go?", kbBasis(1), nil, nil, KBSearchHybrid, 10)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, h := range hits {
+		seen[h.Collection] = true
+	}
+	if !seen[kbGoldenCollection] || !seen[kbGoldenOther] {
+		t.Fatalf("whole-KB search got collections %v, want both %s and %s", seen, kbGoldenCollection, kbGoldenOther)
+	}
+}
+
+// TestKBGoldenBoostRanksHigherWithoutFiltering pins the boost contract:
+// a collection in boostCollections must never hide the other
+// collection's equally-relevant chunk, it only has to rank first.
+func TestKBGoldenBoostRanksHigherWithoutFiltering(t *testing.T) {
+	st := seedKBGolden(t)
+	hits, err := st.KBSearch(t.Context(), "where do the logs go?", kbBasis(1), nil, []string{kbGoldenOther}, KBSearchHybrid, 10)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	if len(hits) < 2 {
+		t.Fatalf("got %d hits, want at least 2 (one per collection)", len(hits))
+	}
+	seen := map[string]bool{}
+	for _, h := range hits {
+		seen[h.Collection] = true
+	}
+	if !seen[kbGoldenCollection] || !seen[kbGoldenOther] {
+		t.Fatalf("boost filtered out a collection: got %v, want both present", seen)
+	}
+	if hits[0].Collection != kbGoldenOther {
+		t.Fatalf("top hit collection = %q, want boosted collection %q ranked first", hits[0].Collection, kbGoldenOther)
+	}
+}
+
 func TestKBGoldenOffTopicReturnsNothing(t *testing.T) {
 	st := seedKBGolden(t)
 	// No lexical overlap with any chunk (mind stemming: "filings"
 	// would match "files"), embedding on an unused axis: both legs
-	// must gate it out — returning nothing beats returning the k
+	// must gate it out: returning nothing beats returning the k
 	// least-far chunks.
-	hits, err := st.KBSearch(t.Context(), "quarterly marmalade recipes for zebras", kbBasis(950), []string{kbGoldenCollection}, KBSearchHybrid, 5)
+	hits, err := st.KBSearch(t.Context(), "quarterly marmalade recipes for zebras", kbBasis(950), []string{kbGoldenCollection}, nil, KBSearchHybrid, 5)
 	if err != nil {
 		t.Fatalf("KBSearch: %v", err)
 	}
@@ -191,7 +234,7 @@ func TestKBGoldenKeywordOnlyMultiTopic(t *testing.T) {
 	st := seedKBGolden(t)
 	hits, err := st.KBSearch(t.Context(),
 		"how does alloy scrape exporters and where do dashboards provision from?",
-		nil, []string{kbGoldenCollection}, KBSearchKeyword, 5)
+		nil, []string{kbGoldenCollection}, nil, KBSearchKeyword, 5)
 	if err != nil {
 		t.Fatalf("KBSearch: %v", err)
 	}
@@ -204,14 +247,14 @@ func TestKBGoldenKeywordOnlyMultiTopic(t *testing.T) {
 func TestKBGoldenSemanticFloor(t *testing.T) {
 	st := seedKBGolden(t)
 	// On-axis query hits; orthogonal query (similarity 0) must not.
-	hits, err := st.KBSearch(t.Context(), "anything", kbBasis(1), []string{kbGoldenCollection}, KBSearchSemantic, 5)
+	hits, err := st.KBSearch(t.Context(), "anything", kbBasis(1), []string{kbGoldenCollection}, nil, KBSearchSemantic, 5)
 	if err != nil {
 		t.Fatalf("KBSearch: %v", err)
 	}
 	if got := kbHitKeys(t, hits); !got["v-loki"] || len(hits) != 1 {
 		t.Fatalf("semantic on-axis: got %d hits %v, want exactly v-loki", len(hits), got)
 	}
-	hits, err = st.KBSearch(t.Context(), "anything", kbBasis(999), []string{kbGoldenCollection}, KBSearchSemantic, 5)
+	hits, err = st.KBSearch(t.Context(), "anything", kbBasis(999), []string{kbGoldenCollection}, nil, KBSearchSemantic, 5)
 	if err != nil {
 		t.Fatalf("KBSearch: %v", err)
 	}

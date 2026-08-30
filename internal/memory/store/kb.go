@@ -18,7 +18,7 @@ type KBChunk struct {
 
 // KBStore persists knowledge-base chunks (D-060) and reports ingestion
 // outcomes onto brain's kb_documents row. Collection/document CRUD is
-// brain's own (internal/brain/kb) — memoryd only writes kb_chunks and
+// brain's own (internal/brain/kb): memoryd only writes kb_chunks and
 // the narrow status/chunk_count/error columns ingestion owns, sharing
 // the one Postgres instance (D-060 doesn't split the database, just
 // the code that owns each table).
@@ -61,7 +61,7 @@ func (s *KBStore) SetFailed(ctx context.Context, documentID string, errMsg strin
 }
 
 // ReplaceChunks deletes every existing chunk for documentID and inserts
-// the new set in one transaction — re-ingest is delete-and-rewrite,
+// the new set in one transaction: re-ingest is delete-and-rewrite,
 // never an in-place update (KB documents are mutable reference data,
 // but a chunk's identity is only meaningful within one ingestion pass).
 func (s *KBStore) ReplaceChunks(ctx context.Context, documentID string, chunks []KBChunk) error {
@@ -114,7 +114,7 @@ const (
 )
 
 // legLimitLit/rrfKLit are string literals (not ints) so they concatenate
-// directly into the const SQL below — legLimit bounds each leg's
+// directly into the const SQL below: legLimit bounds each leg's
 // candidate set before RRF fusion, rrfK is the standard Reciprocal Rank
 // Fusion damping constant; both mirror the memories retrieval package's
 // own values (internal/memory/retrieval/search.go, fuse.go).
@@ -123,26 +123,33 @@ const rrfKLit = "60"
 
 // minSimilarityLit is the vector leg's relevance floor (cosine
 // similarity): below it a chunk is noise, not a match. Nearest-neighbor
-// search always returns SOMETHING — without a floor an off-topic query
+// search always returns SOMETHING: without a floor an off-topic query
 // still fills k slots with whatever is least-far away, and the model
 // may cite it. Returning nothing beats confidently-irrelevant (same
 // principle as memories retrieval). The keyword leg needs no floor: a
 // tsquery either matches lexemes or returns nothing.
 const minSimilarityLit = "0.25"
 
+// boostFactorLit multiplies a chunk's score when its collection is in
+// boostCollections (D-078: an agent's configured collections are a
+// ranking boost, not an access gate: issue #368). A plain literal, not
+// a config knob: no existing settings pattern fits one retrieval-tuning
+// constant.
+const boostFactorLit = "1.5"
+
 // KBSearch runs hybrid (vector + full-text, RRF-fused), semantic-only,
-// or keyword-only retrieval over kb_chunks, scoped to collectionNames
-// (required, non-empty — collection scoping is enforced here in SQL,
-// never left to a prompt). embedding may be nil only when mode is
+// or keyword-only retrieval over kb_chunks. Empty collectionNames
+// searches the whole knowledge base; non-empty scopes to it (an
+// explicit narrowing, still enforced here in SQL, never a prompt).
+// boostCollections gets a score multiplier at ranking time regardless
+// of collectionNames: a relevance signal, never a filter: chunks
+// outside it are still returned. embedding may be nil only when mode is
 // keyword; hybrid/semantic without an embedding return no results from
 // the vector leg (callers should not call semantic/hybrid without one).
-func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, collectionNames []string, mode KBSearchMode, k int) ([]KBSearchHit, error) {
+func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, collectionNames, boostCollections []string, mode KBSearchMode, k int) ([]KBSearchHit, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("kb search: %w", err)
-	}
-	if len(collectionNames) == 0 {
-		return nil, fmt.Errorf("kb search: collection_names is required")
 	}
 	if k <= 0 {
 		k = 8
@@ -152,11 +159,11 @@ func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, 
 	var args []any
 	switch mode {
 	case KBSearchSemantic:
-		sql, args = semanticSQL, []any{embedding.String(), collectionNames, k}
+		sql, args = semanticSQL, []any{embedding.String(), collectionNames, k, boostCollections}
 	case KBSearchKeyword:
-		sql, args = keywordSQL, []any{query, collectionNames, k}
+		sql, args = keywordSQL, []any{query, collectionNames, k, boostCollections}
 	default:
-		sql, args = hybridSQL, []any{embedding.String(), query, collectionNames, k}
+		sql, args = hybridSQL, []any{embedding.String(), query, collectionNames, k, boostCollections}
 	}
 
 	rows, err := db.Query(ctx, sql, args...)
@@ -178,13 +185,12 @@ func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, 
 }
 
 const (
-	// kbProjection joins chunk -> document -> collection, scoped by
-	// collection name — the sole point collection access control is
-	// enforced (D-060: Go code, never a prompt).
+	// kbProjection joins chunk -> document -> collection; col.name backs
+	// both the optional collection filter and the boost multiplier.
 	kbProjection = `SELECT c.id, d.id, d.title, col.name, c.breadcrumb, c.content, d.source_ref`
 
 	// kbQueryCTEq1/q2 normalize the query's lexemes and OR them
-	// together — same rationale as memories retrieval's textSQL: a
+	// together: same rationale as memories retrieval's textSQL: a
 	// multi-topic question must match each chunk that answers PART of
 	// it, which websearch/plainto AND-semantics would return nothing
 	// for. Lexemes are quoted (with '' doubling) so none can break the
@@ -197,21 +203,32 @@ const (
 			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
 		FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS lexeme`
 
-	semanticSQL = kbProjection + `, 1 - (c.embedding <=> $1::vector) AS score
+	// collectionFilter matches every row when names is empty/null
+	// (whole-KB search), or scopes to it when non-empty (an explicit
+	// narrowing, still enforced in SQL).
+	collectionFilterQ2 = `(array_length($2::text[], 1) IS NULL OR col.name = ANY($2))`
+	collectionFilterQ3 = `(array_length($3::text[], 1) IS NULL OR col.name = ANY($3))`
+
+	// boostMultiplier scores a boosted-collection chunk higher without
+	// excluding anything else: CASE, not a WHERE filter.
+	boostMultiplierQ4 = `(CASE WHEN col.name = ANY($4::text[]) THEN ` + boostFactorLit + ` ELSE 1 END)`
+	boostMultiplierQ5 = `(CASE WHEN col.name = ANY($5::text[]) THEN ` + boostFactorLit + ` ELSE 1 END)`
+
+	semanticSQL = kbProjection + `, (1 - (c.embedding <=> $1::vector)) * ` + boostMultiplierQ4 + ` AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id
-		WHERE col.name = ANY($2) AND c.embedding IS NOT NULL
+		WHERE ` + collectionFilterQ2 + ` AND c.embedding IS NOT NULL
 		  AND 1 - (c.embedding <=> $1::vector) >= ` + minSimilarityLit + `
-		ORDER BY c.embedding <=> $1::vector
+		ORDER BY score DESC
 		LIMIT $3`
 
 	keywordSQL = `WITH q AS (` + kbQueryCTEq1 + `)
-		` + kbProjection + `, ts_rank(c.tsv, q.query) AS score
+		` + kbProjection + `, ts_rank(c.tsv, q.query) * ` + boostMultiplierQ4 + ` AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id, q
-		WHERE col.name = ANY($2) AND c.tsv @@ q.query
+		WHERE ` + collectionFilterQ2 + ` AND c.tsv @@ q.query
 		ORDER BY score DESC
 		LIMIT $3`
 
@@ -219,14 +236,17 @@ const (
 	// Reciprocal Rank Fusion (k=60), same fusion constant as the
 	// memories retrieval package. Each leg carries its own relevance
 	// gate (similarity floor / lexeme match), so an off-topic query
-	// yields an empty result instead of the k least-far chunks.
-	// $1 embedding, $2 query, $3 collection names, $4 result count.
+	// yields an empty result instead of the k least-far chunks. The
+	// boost multiplies the fused score, applied once at the end (not
+	// per-leg) so it can't double-count a chunk found by both legs.
+	// $1 embedding, $2 query, $3 collection names, $4 result count,
+	// $5 boost collection names.
 	hybridSQL = `WITH q AS (` + kbQueryCTEq2 + `), vec AS (
 			SELECT c.id, row_number() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
 			FROM kb_chunks c
 			JOIN kb_documents d ON d.id = c.document_id
 			JOIN kb_collections col ON col.id = d.collection_id
-			WHERE col.name = ANY($3) AND c.embedding IS NOT NULL
+			WHERE ` + collectionFilterQ3 + ` AND c.embedding IS NOT NULL
 			  AND 1 - (c.embedding <=> $1::vector) >= ` + minSimilarityLit + `
 			ORDER BY c.embedding <=> $1::vector
 			LIMIT ` + legLimitLit + `
@@ -235,7 +255,7 @@ const (
 			FROM kb_chunks c
 			JOIN kb_documents d ON d.id = c.document_id
 			JOIN kb_collections col ON col.id = d.collection_id, q
-			WHERE col.name = ANY($3) AND c.tsv @@ q.query
+			WHERE ` + collectionFilterQ3 + ` AND c.tsv @@ q.query
 			ORDER BY rank
 			LIMIT ` + legLimitLit + `
 		), fused AS (
@@ -243,11 +263,11 @@ const (
 			FROM (SELECT id, rank FROM vec UNION ALL SELECT id, rank FROM fts) legs
 			GROUP BY id
 		)
-		` + kbProjection + `, fused.score
+		` + kbProjection + `, fused.score * ` + boostMultiplierQ5 + ` AS score
 		FROM fused
 		JOIN kb_chunks c ON c.id = fused.id
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id
-		ORDER BY fused.score DESC
+		ORDER BY score DESC
 		LIMIT $4`
 )

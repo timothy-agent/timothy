@@ -30,7 +30,7 @@ func New(baseURL string) *Client {
 }
 
 // Extract posts one extraction job and returns the inserted memory
-// ids. route overrides memoryd's own side-call route when non-empty —
+// ids. route overrides memoryd's own side-call route when non-empty:
 // set when the turn/session being extracted executed a sensitive tool
 // and must not fall back to the default side-call route. source names
 // what produced the text ("chat", "mission", "compaction") so memoryd
@@ -179,13 +179,15 @@ type KBChunkHit struct {
 	SourceRef     string  `json:"source_ref"`
 }
 
-// KBSearch asks memoryd for the top-k chunks matching query, scoped to
-// collectionNames (required, non-empty — this is the ONLY place a
-// caller can widen or narrow that scope; the tool that calls this must
-// bind names at construction, never take them from model input).
-func (c *Client) KBSearch(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]KBChunkHit, error) {
+// KBSearch asks memoryd for the top-k chunks matching query.
+// collectionNames scopes the search (empty means the whole knowledge
+// base); boostCollections reorders results toward those collections
+// without excluding anything else (issue #368). The tool that calls
+// this must bind both at construction, never take them from model
+// input.
+func (c *Client) KBSearch(ctx context.Context, query string, collectionNames, boostCollections []string, mode string, k int) ([]KBChunkHit, error) {
 	body, err := json.Marshal(map[string]any{
-		"query": query, "collection_names": collectionNames, "mode": mode, "k": k,
+		"query": query, "collection_names": collectionNames, "boost_collections": boostCollections, "mode": mode, "k": k,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("memclient: marshal: %w", err)
@@ -217,7 +219,7 @@ func (c *Client) KBSearch(ctx context.Context, query string, collectionNames []s
 // prompt tail. The preamble and the closing-tag escape are the
 // memory-poisoning defense (D-011): whatever a memory's content says,
 // it cannot close the fence or pose as instructions. Framing and
-// escaping are single-sourced from the retrieval package — memoryd's
+// escaping are single-sourced from the retrieval package: memoryd's
 // token budget is enforced against exactly these strings.
 func RenderBlock(memories []Memory) string {
 	if len(memories) == 0 {

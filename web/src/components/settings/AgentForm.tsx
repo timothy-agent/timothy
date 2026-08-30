@@ -47,7 +47,7 @@ export function useAgentForm(agent?: AdminAgent) {
   const [harness, setHarness] = useState(agent?.harness ?? '')
 
   // Edit loads its agent asynchronously, after this hook has already
-  // mounted with blank defaults — useState's initializer only runs
+  // mounted with blank defaults: useState's initializer only runs
   // once, so the fields never pick up the fetched agent without this.
   useEffect(() => {
     if (!agent) return
@@ -100,7 +100,7 @@ export function useAgentForm(agent?: AdminAgent) {
   }
 }
 
-// AgentForm renders the shared field set for both create and edit —
+// AgentForm renders the shared field set for both create and edit:
 // name is a one-time slug fixed at creation (it lives in ledger rows
 // and event payloads), so it's the only field Add shows that Edit
 // doesn't.
@@ -193,7 +193,7 @@ export function AgentForm({
       <Field label="Tools allowlist" hint="pick from the live tool surface; empty = none">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>
-      <Field label="Knowledge allowlist" hint="collections this agent can search with search_kb; empty = none">
+      <Field label="Knowledge allowlist" hint="search_kb always searches the whole knowledge base; these collections rank higher in results">
         <KnowledgePicker value={fields.knowledge} onChange={fields.setKnowledge} />
       </Field>
     </div>

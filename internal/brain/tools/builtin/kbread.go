@@ -16,11 +16,9 @@ type KBDocument struct {
 	Markdown  string
 }
 
-// KBReadFunc loads one document by id. main curries the store lookup
-// in with the calling agent's collection allowlist already bound —
-// a document outside the allowed collections reads as not found, and
-// collections are NEVER a model-controlled argument (D-060: enforced
-// in Go, not a prompt).
+// KBReadFunc loads one document by id from anywhere in the knowledge
+// base (D-078, issue #368: collections no longer gate read access,
+// they only boost search ranking).
 type KBReadFunc func(ctx context.Context, documentID string) (KBDocument, error)
 
 type kbReadArgs struct {
@@ -29,7 +27,7 @@ type kbReadArgs struct {
 
 // KBRead lets the model read a knowledge-base document in full after
 // search_kb surfaced an excerpt from it. read is built per-agent,
-// per-turn with the collection set already bound — this constructor
+// per-turn with the collection set already bound: this constructor
 // never sees or accepts collection names itself.
 func KBRead(read KBReadFunc) *tools.Tool {
 	return &tools.Tool{
@@ -38,8 +36,7 @@ func KBRead(read KBReadFunc) *tools.Tool {
 
 Use after search_kb when the returned passages are not enough — to see
 a passage's surrounding context, or to read the whole document a hit
-came from. Only documents in this agent's knowledge base collections
-are readable.
+came from.
 
 Arguments:
 - ref (string, required): the "kb://<document-id>" reference from a

@@ -39,7 +39,7 @@ type fakeLog struct {
 	knowledge map[string][]string
 	createdN  int
 	// knowledgeErr, when set, makes Knowledge fail instead of reading
-	// the map — for the session-knowledge-lookup-failure fallback test.
+	// the map: for the session-knowledge-lookup-failure fallback test.
 	knowledgeErr error
 }
 
@@ -179,7 +179,7 @@ func (g *fakeGW) lastRequest() gwclient.StreamRequest {
 }
 
 // lastChatRequest skips side-calls (title, distill, extract) that race
-// the assertion after drain — the async auto-title on a fresh session
+// the assertion after drain: the async auto-title on a fresh session
 // can land after the chat request and make lastRequest nondeterministic.
 func (g *fakeGW) lastChatRequest() gwclient.StreamRequest {
 	g.mu.Lock()
@@ -192,7 +192,7 @@ func (g *fakeGW) lastChatRequest() gwclient.StreamRequest {
 	return gwclient.StreamRequest{}
 }
 
-// erroringGW resolves any role but fails every Stream call — for
+// erroringGW resolves any role but fails every Stream call: for
 // pinning a caller's best-effort behavior on a gateway-unreachable
 // error, distinct from fakeGW's always-succeeds default.
 type erroringGW struct{}
@@ -233,7 +233,7 @@ func drain(t *testing.T, ch <-chan stream.StreamEvent) []stream.StreamEvent {
 	}
 }
 
-// waitFor polls until cond or timeout — persistence runs after the
+// waitFor polls until cond or timeout: persistence runs after the
 // client channel closes.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
@@ -364,7 +364,7 @@ func TestChatPersistsTurnCost(t *testing.T) {
 
 // TestChatPersistsTurnCostAbsentWhenUnpriced confirms an unpriced
 // model's turn persists with no cost field at all (omitempty), never a
-// guessed 0 — the replay must be able to distinguish "unpriced" from
+// guessed 0: the replay must be able to distinguish "unpriced" from
 // "free".
 func TestChatPersistsTurnCostAbsentWhenUnpriced(t *testing.T) {
 	t.Parallel()
@@ -393,7 +393,7 @@ func TestChatPersistsTurnCostAbsentWhenUnpriced(t *testing.T) {
 }
 
 // TestChatPersistsTurnDuration confirms the persisted assistant_turn
-// carries a wall-clock DurationMs covering the turn — a stand-in
+// carries a wall-clock DurationMs covering the turn: a stand-in
 // upstream delay proves it's measuring real elapsed time, not just
 // echoing a zero default.
 func TestChatPersistsTurnDuration(t *testing.T) {
@@ -424,7 +424,7 @@ func TestChatPersistsTurnDuration(t *testing.T) {
 
 // TestChatPersistsPermissionAsks confirms the relay appends
 // permission_request and permission_resolved as their own durable
-// session events the moment they cross the stream — not batched into
+// session events the moment they cross the stream: not batched into
 // persistTurn at turn end, since a parked ask is exactly the case
 // where the turn hasn't ended yet. A replay of the session must then
 // carry the resolved pair, and UITranscript must drop it once
@@ -493,7 +493,7 @@ func TestChatPersistsPermissionAsks(t *testing.T) {
 
 // TestChatReplayCarriesUnresolvedPermissionAsk confirms a session
 // whose turn is still parked on an ask exposes it in the UI transcript
-// projection — the whole point of persisting the request at all.
+// projection: the whole point of persisting the request at all.
 func TestChatReplayCarriesUnresolvedPermissionAsk(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -503,7 +503,7 @@ func TestChatReplayCarriesUnresolvedPermissionAsk(t *testing.T) {
 			ID: "perm-1", CallID: "call-1", Tool: "shell", Args: "{}",
 			Danger: "safe", Rationale: "runs a shell command",
 		}},
-		// No resolution, no terminal — the turn is still parked.
+		// No resolution, no terminal: the turn is still parked.
 	}}
 	s := newService(gw, log)
 
@@ -663,7 +663,7 @@ func TestChatAutoTitlesFirstExchange(t *testing.T) {
 }
 
 // A session whose first exchange fails outright (chain exhausted, a
-// dropped stream) never reaches autoTitle — persistTurn returns before
+// dropped stream) never reaches autoTitle: persistTurn returns before
 // it on !sawDone. The old firstExchange gate then locked the session
 // out of titling forever: it only ever fired once, keyed on "is this
 // message #1", which the SECOND message already fails. hasCompletedTurn
@@ -682,7 +682,7 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 	drain(t, ch)
 	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 }) // session_started, user_message, turn_failed
 	// The slot only frees once persistTurn returns and turnDone runs,
-	// which is not synchronous with drain returning (D-042) — even on
+	// which is not synchronous with drain returning (D-042): even on
 	// an errored turn, this must still happen so the session isn't
 	// permanently wedged.
 	waitFor(t, func() bool { return !s.TurnActive("s1") })
@@ -718,7 +718,7 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 
 // TestTerminalErrorPersistsTurnFailed pins D-044: a turn that ends on
 // a terminal EventError with no partial text must not vanish silently
-// — relay used to drop the error after streaming it to the client,
+//: relay used to drop the error after streaming it to the client,
 // leaving nothing durable. persistTurn now appends a KindTurnFailed
 // event carrying the error's code and message.
 func TestTerminalErrorPersistsTurnFailed(t *testing.T) {
@@ -753,7 +753,7 @@ func TestTerminalErrorPersistsTurnFailed(t *testing.T) {
 
 // TestEmptyResponsePersistsTurnFailed pins D-044's other half: a turn
 // that reaches a clean EventDone with no text, no reasoning, and no
-// tool executions is not a success either — persistTurn must not write
+// tool executions is not a success either: persistTurn must not write
 // a blank assistant_turn, and must instead persist evidence the model
 // answered with nothing at all.
 func TestEmptyResponsePersistsTurnFailed(t *testing.T) {
@@ -788,8 +788,8 @@ func TestEmptyResponsePersistsTurnFailed(t *testing.T) {
 
 // TestBareStreamClosePersistsTurnAborted pins the last backstop in the
 // terminal-delivery chain: when the upstream channel closes with no
-// events at all — every producer's terminal lost to the turn deadline
-// racing a stream cut — persistTurn must synthesize a turn_failed
+// events at all: every producer's terminal lost to the turn deadline
+// racing a stream cut: persistTurn must synthesize a turn_failed
 // rather than append nothing (a real ~30min turn once vanished with
 // zero session_events this way).
 func TestBareStreamClosePersistsTurnAborted(t *testing.T) {
@@ -902,7 +902,7 @@ func TestKBToolsOfferedFromSessionKnowledgeAlone(t *testing.T) {
 	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
 		return nil, nil
 	})
-	s.SetKBRead(func(context.Context, string, []string) (builtin.KBDocument, error) {
+	s.SetKBRead(func(context.Context, string) (builtin.KBDocument, error) {
 		return builtin.KBDocument{}, nil
 	})
 
@@ -915,6 +915,37 @@ func TestKBToolsOfferedFromSessionKnowledgeAlone(t *testing.T) {
 	names := extraToolNames(chatRequest(t, gw))
 	if !slices.Contains(names, "search_kb") || !slices.Contains(names, "read_kb") {
 		t.Fatalf("extra tools = %v, want search_kb and read_kb from session knowledge alone", names)
+	}
+}
+
+// TestKBToolsOfferedWithNoKnowledgeAtAll pins issue #368's default:
+// an agent with no Knowledge configured and no session pins still gets
+// search_kb/read_kb offered, once a backend is wired: whole-KB search
+// is available by default, not gated on any collection being named.
+func TestKBToolsOfferedWithNoKnowledgeAtAll(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true}, true // empty Knowledge, no session pins
+	}
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
+	s.SetKBSearch(func(context.Context, string, []string, string, int) ([]builtin.KBSearchHit, error) {
+		return nil, nil
+	})
+	s.SetKBRead(func(context.Context, string) (builtin.KBDocument, error) {
+		return builtin.KBDocument{}, nil
+	})
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	names := extraToolNames(chatRequest(t, gw))
+	if !slices.Contains(names, "search_kb") || !slices.Contains(names, "read_kb") {
+		t.Fatalf("extra tools = %v, want search_kb and read_kb offered with no knowledge configured", names)
 	}
 }
 
@@ -967,7 +998,8 @@ func TestPinnedKnowledgeNoPromptWithoutBackend(t *testing.T) {
 
 // TestKBToolsUnionDedupesAgentAndSessionCollections pins the union
 // itself: the agent's own Knowledge and the session's pinned list
-// combine without duplicates, and both feed the bound search call.
+// combine without duplicates, and both feed the bound search call as a
+// boost (never a filter: issue #368).
 func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("ok")}
@@ -978,22 +1010,22 @@ func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
 	}
 	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 
-	var gotCollections []string
-	s.SetKBSearch(func(_ context.Context, _ string, collections []string, _ string, _ int) ([]builtin.KBSearchHit, error) {
-		gotCollections = collections
+	var gotBoost []string
+	s.SetKBSearch(func(_ context.Context, _ string, boost []string, _ string, _ int) ([]builtin.KBSearchHit, error) {
+		gotBoost = boost
 		return nil, nil
 	})
 
-	collections := s.kbSearchTool([]string{"a", "b"})
-	if collections == nil {
-		t.Fatal("kbSearchTool returned nil for a non-empty union")
+	tool := s.kbSearchTool([]string{"a", "b"})
+	if tool == nil {
+		t.Fatal("kbSearchTool returned nil with a backend wired")
 	}
-	if _, err := collections.Execute(t.Context(), []byte(`{"query":"x"}`)); err != nil {
+	if _, err := tool.Execute(t.Context(), []byte(`{"query":"x"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	sort.Strings(gotCollections)
-	if !slices.Equal(gotCollections, []string{"a", "b"}) {
-		t.Fatalf("bound collections = %v, want [a b]", gotCollections)
+	sort.Strings(gotBoost)
+	if !slices.Equal(gotBoost, []string{"a", "b"}) {
+		t.Fatalf("bound boost collections = %v, want [a b]", gotBoost)
 	}
 }
 
@@ -1055,7 +1087,7 @@ func TestChatPersistsMentionedKnowledge(t *testing.T) {
 }
 
 // The runtime allowlist gates both the system-prompt skill index and
-// skill_hint, per turn — no restart, no rebuild.
+// skill_hint, per turn: no restart, no rebuild.
 func TestChatSkillAllowlistGatesIndexAndHint(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("ok")}
@@ -1093,7 +1125,7 @@ func TestChatSkillHintRefusesUnknownSkill(t *testing.T) {
 	}
 }
 
-// An agent with an empty skills allowlist gets no packs at all — the
+// An agent with an empty skills allowlist gets no packs at all: the
 // flipped semantics (empty = none, opt-in only), unlike tools' own
 // empty = none via resolveToolAllow's exemptions below.
 func TestChatEmptySkillsAllowlistDeniesEveryPack(t *testing.T) {
@@ -1108,7 +1140,7 @@ func TestChatEmptySkillsAllowlistDeniesEveryPack(t *testing.T) {
 	s := New(gw, newFakeLog(), nil, nil, staticBudget(60_000), packs, nil, nil, resolver, discard())
 
 	// skill_hint naming a pack the (empty) allowlist doesn't list must
-	// be refused, same as an unknown skill — a denied hint is never
+	// be refused, same as an unknown skill: a denied hint is never
 	// force-loaded around the allowlist.
 	if _, _, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", SkillHint: "some-skill"}); err == nil {
 		t.Fatal("skill_hint accepted for an agent with an empty skills allowlist")
@@ -1125,7 +1157,7 @@ func TestChatEmptySkillsAllowlistDeniesEveryPack(t *testing.T) {
 	}
 }
 
-// A non-empty skills allowlist admits only the packs it names — the
+// A non-empty skills allowlist admits only the packs it names: the
 // unflipped half of the same rule.
 func TestChatNonEmptySkillsAllowlistAdmitsOnlyListedPacks(t *testing.T) {
 	t.Parallel()
@@ -1338,7 +1370,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 // runs inside persistTurn, BEFORE turnDone frees the slot (see
 // relay's drainAndPersist), so a follow-up landing in that window is
 // correctly rejected with ErrTurnInFlight rather than allowed to
-// interleave — turn "done" means the slot is free, not merely that the
+// interleave: turn "done" means the slot is free, not merely that the
 // client's stream closed. (Before D-042, this test allowed that
 // follow-up to proceed immediately; that was the old
 // always-install-fresh turnBroadcast semantics this design replaces.)
@@ -1610,7 +1642,7 @@ func TestCollapseRepeatedTail(t *testing.T) {
 }
 
 // The "auto" sentinel resolves through SetAutoDispatch's candidates
-// and classify BEFORE the normal agent lookup — the resolved name (not
+// and classify BEFORE the normal agent lookup: the resolved name (not
 // "auto" itself) is what reaches the resolver, the gateway request,
 // and persistence.
 func TestChatAutoDispatchesAgent(t *testing.T) {
@@ -1664,7 +1696,7 @@ func TestChatAutoDispatchesAgent(t *testing.T) {
 }
 
 // Without SetAutoDispatch wired, the "auto" sentinel falls back to the
-// default agent — dispatch is an ergonomics layer, never a hard gate
+// default agent: dispatch is an ergonomics layer, never a hard gate
 // on serving a session; an unwired server must not turn every "Auto"
 // composer choice into a hard error.
 func TestChatAutoWithoutDispatchWiredFallsBackToDefault(t *testing.T) {
@@ -1745,7 +1777,7 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 }
 
 // A failed attempt (no EventDone) leaves the user_message durable with
-// a turn_failed event after it (D-044) — persistTurn only appends
+// a turn_failed event after it (D-044): persistTurn only appends
 // assistant_turn on sawDone. Retry must reuse that message, not append
 // a second one; turn_failed doesn't block retry (lastUserMessage only
 // stops at a completed assistant_turn).
@@ -1766,7 +1798,7 @@ func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 		t.Fatalf("kinds after failed attempt = %v, want a dangling user_message plus turn_failed", kinds)
 	}
 	// The slot only frees once turnDone runs, not synchronously with
-	// drain returning (D-042) — an errored turn must still free it so
+	// drain returning (D-042): an errored turn must still free it so
 	// Retry below isn't spuriously rejected.
 	waitFor(t, func() bool { return !s.TurnActive("s1") })
 
@@ -1802,8 +1834,8 @@ func TestRetryReusesLastUserMessageWithoutDuplicating(t *testing.T) {
 	}
 }
 
-// Retry on a session whose last event isn't a dangling user_message —
-// no messages at all, or a turn that already completed — has nothing
+// Retry on a session whose last event isn't a dangling user_message:
+// no messages at all, or a turn that already completed: has nothing
 // to retry and must reject rather than silently no-op or duplicate.
 func TestRetryRejectsWhenNothingToRetry(t *testing.T) {
 	t.Parallel()
@@ -1830,12 +1862,12 @@ func TestRetryRejectsWhenNothingToRetry(t *testing.T) {
 
 // A brain restart mid-turn can leave tool_execution/permission events
 // (and no pending_state, if the crash landed before a flush) after the
-// dangling user_message — the turn never reached persistTurn at all.
+// dangling user_message: the turn never reached persistTurn at all.
 // Retry must still treat that message as retryable: none of those
 // trailing kinds are turn-terminal, and LLMContext already excludes
 // tool_execution/permission_request/permission_resolved from the
 // model-facing projection, so the retried turn sees exactly the
-// original user message with nothing appended — a clean restart.
+// original user message with nothing appended: a clean restart.
 func TestRetrySurvivesTrailingToolAndPermissionEvents(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -1888,7 +1920,7 @@ func TestRetrySurvivesTrailingToolAndPermissionEvents(t *testing.T) {
 	}
 
 	// The context handed to the gateway must be exactly the original
-	// user message — tool_execution and permission events never enter
+	// user message: tool_execution and permission events never enter
 	// LLMContext, and there is no pending_state here to splice in as an
 	// interrupted assistant message. A clean restart, not a replay of
 	// the dead attempt's partial state.
@@ -1903,7 +1935,7 @@ func TestRetrySurvivesTrailingToolAndPermissionEvents(t *testing.T) {
 
 // A trailing pending_state (a periodic checkpoint the dead attempt
 // flushed before dying) is the one trailing kind LLMContext does splice
-// back in — as an interrupted assistant message — so the retried turn
+// back in: as an interrupted assistant message: so the retried turn
 // picks up where the checkpoint left off instead of starting blind.
 func TestRetryReplaysTrailingPendingStateAsInterrupted(t *testing.T) {
 	t.Parallel()
@@ -1983,7 +2015,7 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 // TestClassifyOverGatewayResolvesSummarizeRole for the standalone
 // TitleOverGateway constructor (missions naming reuses this instead of
 // autoTitle directly, since a mission has no session/reply at create
-// time) — titles are summarize-class work (D-049), same quote/
+// time): titles are summarize-class work (D-049), same quote/
 // whitespace trimming.
 func TestTitleOverGatewayUsesSummarizeRoleAndTrimsQuotes(t *testing.T) {
 	t.Parallel()
@@ -2008,7 +2040,7 @@ func TestTitleOverGatewayUsesSummarizeRoleAndTrimsQuotes(t *testing.T) {
 
 // TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound
 // confirms an unbound "summarize" role falls back to "default" rather
-// than giving up — a fresh install may not have seeded a summarize
+// than giving up: a fresh install may not have seeded a summarize
 // role yet.
 func TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound(t *testing.T) {
 	t.Parallel()
@@ -2033,7 +2065,7 @@ func TestTitleOverGatewayFallsBackToDefaultRoleWhenSummarizeUnbound(t *testing.T
 // TestTitleOverGatewayEmptyOnGatewayError confirms the best-effort
 // contract: any Stream error returns "" rather than propagating, so a
 // caller (missions' async naming) never has to distinguish failure
-// modes — same as autoTitle's own logged-and-dropped path.
+// modes: same as autoTitle's own logged-and-dropped path.
 func TestTitleOverGatewayEmptyOnGatewayError(t *testing.T) {
 	t.Parallel()
 	gw := &erroringGW{}
@@ -2167,7 +2199,7 @@ func TestValidTitle(t *testing.T) {
 }
 
 // titleScriptedGW returns one canned reply per Stream call, in
-// order — for proving TitleOverGateway's one-retry contract, which
+// order: for proving TitleOverGateway's one-retry contract, which
 // fakeGW's always-identical-events shape can't exercise.
 type titleScriptedGW struct {
 	fakeGW
@@ -2350,7 +2382,7 @@ func TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T)
 	}
 }
 
-// fakeGranter is an in-memory Granter that records every Grant call —
+// fakeGranter is an in-memory Granter that records every Grant call:
 // stands in for tools.Permissions in chat-level tests, which never
 // touch a real session_grants table.
 type fakeGranter struct {
@@ -2384,7 +2416,7 @@ func (g *fakeGranter) grantedTools(sessionID string) []string {
 // TestChatSeedsApprovalAllowlistAsStandingGrant proves the mechanism
 // this feature adds: a turn served by an agent with a non-empty
 // ApprovalAllowlist grants every listed tool for the session before
-// the turn runs — the same session_grants row missions/driver.go's
+// the turn runs: the same session_grants row missions/driver.go's
 // grantSessionDefaults writes, so tools.Permissions.Resolve's
 // matchGrant (D-036 suffix rule) allows the connector-namespaced call
 // without an ask on the very first turn.
@@ -2413,7 +2445,7 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 }
 
 // TestChatWithoutAllowlistGrantsNothing proves the seeder only ever
-// widens consent the agent's own config already lists — an agent with
+// widens consent the agent's own config already lists: an agent with
 // no ApprovalAllowlist gets no grants, so its tools keep asking exactly
 // like before this feature existed.
 func TestChatWithoutAllowlistGrantsNothing(t *testing.T) {
@@ -2523,7 +2555,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 // TestDistillUsesSensitiveRouteWhenTurnRanSensitiveTool mirrors the
 // memory-extract pin above: a turn that executed a sensitive tool must
 // keep its distillation on the same pinned route, not the cheap
-// "summarize" default — the turn text can quote raw sensitive output.
+// "summarize" default: the turn text can quote raw sensitive output.
 func TestDistillUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -2593,7 +2625,7 @@ func TestDistillUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T) {
 }
 
 // seedSensitiveSession pre-populates a session's log with a completed
-// turn that ran a sensitive tool — standing in for "a prior turn in
+// turn that ran a sensitive tool: standing in for "a prior turn in
 // this session already executed gmail_read", the trigger for the
 // whole-session route pin under test below.
 func seedSensitiveSession(t *testing.T, log *fakeLog, sessionID string) {
@@ -2610,7 +2642,7 @@ func seedSensitiveSession(t *testing.T, log *fakeLog, sessionID string) {
 
 // TestChatPinsSessionSensitiveRouteOnNextTurn is the feature under
 // test: once a PRIOR turn in the session executed a sensitive tool, the
-// NEXT Chat() call — which itself runs no sensitive tool — must still
+// NEXT Chat() call: which itself runs no sensitive tool: must still
 // be served on the sensitive route, with the route picker ignored and
 // the model hint dropped (a hint outranks the route at the gateway,
 // same reason the in-turn SetForceRoute pin drops it).
@@ -2774,7 +2806,7 @@ func TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive(t *testing.T) {
 }
 
 // slowGW is a Gateway whose stream keeps producing on its own schedule,
-// gated ONLY by the context passed to Stream — unlike fakeGW, its sends
+// gated ONLY by the context passed to Stream: unlike fakeGW, its sends
 // aren't wrapped in a second select that could race the caller's read.
 // Used to prove that once runTurn hands gw.Stream the detached turnCtx
 // (not the request's ctx), the upstream genuinely survives a request-
@@ -2822,7 +2854,7 @@ func (g *slowGW) Stream(ctx context.Context, _ gwclient.StreamRequest) (<-chan s
 // package exists to ship: cancelling the REQUEST context (a browser
 // nav/reload) must not cancel the turn. runTurn hands gw.Stream the
 // detached turnCtx, so slowGW here is bound to that, not to the
-// request ctx passed into Chat — the disconnect must only stop
+// request ctx passed into Chat: the disconnect must only stop
 // forwarding to the client channel, never the upstream itself.
 func TestChatSurvivesClientDisconnect(t *testing.T) {
 	t.Parallel()
@@ -2842,7 +2874,7 @@ func TestChatSurvivesClientDisconnect(t *testing.T) {
 	}
 
 	// A /live subscriber attached independently of the request that
-	// started the turn — it must still see every event, including the
+	// started the turn: it must still see every event, including the
 	// ones the disconnecting client never gets.
 	replay, live, ok := s.Subscribe("s1")
 	if !ok {
@@ -2894,8 +2926,8 @@ loop:
 		t.Fatalf("broadcaster text = %q, want full upstream text", text.String())
 	}
 
-	// The turn must persist as a completed assistant_turn — never
-	// turn_failed — despite the client having vanished mid-stream. A
+	// The turn must persist as a completed assistant_turn: never
+	// turn_failed: despite the client having vanished mid-stream. A
 	// pending_state checkpoint (flushPending, on the disconnect branch
 	// itself) may also land before it; that's an existing, harmless
 	// checkpoint superseded by the real completed turn right after.
@@ -2922,7 +2954,7 @@ loop:
 // TestStopTurnCancelsMidStream: StopTurn must let a caller (a "stop"
 // button in the UI) cancel a session's in-flight turn server-side. The
 // upstream (bound to turnCtx) winds down once cancelled, and the
-// existing abnormal-end machinery in persistTurn takes over — partial
+// existing abnormal-end machinery in persistTurn takes over: partial
 // text becomes a pending_state (the same shape a real client disconnect
 // with no terminal produces).
 func TestStopTurnCancelsMidStream(t *testing.T) {
@@ -2931,7 +2963,7 @@ func TestStopTurnCancelsMidStream(t *testing.T) {
 	// slowGW (not fakeGW): the upstream must still be live-but-idle
 	// after the first chunk, so the test can call StopTurn
 	// deterministically mid-stream rather than racing the upstream's
-	// own natural close — fakeGW's producer goroutine exits (closing
+	// own natural close: fakeGW's producer goroutine exits (closing
 	// the channel) right after its last canned event, which can beat
 	// StopTurn to the punch when there is no terminal event to hold it
 	// open. The second event is delayed well past StopTurn's cancel.
@@ -3015,7 +3047,7 @@ func TestTurnTimeoutCeilingEndsAbandonedTurn(t *testing.T) {
 	waitFor(t, func() bool { return !s.TurnActive("s1") })
 	kinds := log.kinds("s1")
 	// The ceiling fires before any chunk (500ms delay vs 30ms ceiling),
-	// so there is no partial text worth keeping — the turn ends with no
+	// so there is no partial text worth keeping: the turn ends with no
 	// assistant_turn, same shape a real abandoned/stuck upstream leaves.
 	for _, k := range kinds {
 		if k == session.KindAssistantTurn {
@@ -3070,7 +3102,7 @@ func TestClassifyOverGatewayResolvesSummarizeRole(t *testing.T) {
 }
 
 // When the "summarize" role is unbound, ClassifyOverGateway returns an
-// error WITHOUT calling Stream at all — agents.Dispatch already treats
+// error WITHOUT calling Stream at all: agents.Dispatch already treats
 // any classify error as "fall back to the default agent", so this just
 // disables auto-dispatch rather than breaking the turn or firing an
 // avoidable request.
@@ -3096,7 +3128,7 @@ func TestClassifyOverGatewaySkipsStreamWhenRoleUnbound(t *testing.T) {
 
 // Dispatch (agents package) already falls back to the default agent on
 // any classify error, so an unbound summarize role surfaces here as a
-// dispatch fallback, never a broken turn — this is the same contract
+// dispatch fallback, never a broken turn: this is the same contract
 // TestChatAutoWithoutDispatchWiredFallsBackToDefault exercises for a
 // nil classify, extended to a wired-but-erroring one.
 func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
