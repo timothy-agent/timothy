@@ -53,6 +53,10 @@ type Document struct {
 	Error      string `json:"error"`
 	Bytes      int64  `json:"bytes"`
 	ChunkCount int    `json:"chunk_count"`
+	// RetryCount/NextRetryAt back the auto-retry sweep (issue #414): a
+	// failed document with NextRetryAt set is due for another attempt.
+	RetryCount  int        `json:"retry_count"`
+	NextRetryAt *time.Time `json:"next_retry_at"`
 
 	IngestedAt *time.Time `json:"ingested_at"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -173,12 +177,12 @@ func (s *Store) DeleteCollection(ctx context.Context, id string) error {
 	return nil
 }
 
-const documentColumns = `id, collection_id, title, source_type, source_ref, provenance, status, error, bytes, chunk_count, ingested_at, created_at, markdown`
+const documentColumns = `id, collection_id, title, source_type, source_ref, provenance, status, error, bytes, chunk_count, retry_count, next_retry_at, ingested_at, created_at, markdown`
 
 func scanDocument(row pgx.Row) (Document, error) {
 	var d Document
 	err := row.Scan(&d.ID, &d.CollectionID, &d.Title, &d.SourceType, &d.SourceRef, &d.Provenance,
-		&d.Status, &d.Error, &d.Bytes, &d.ChunkCount, &d.IngestedAt, &d.CreatedAt, &d.Markdown)
+		&d.Status, &d.Error, &d.Bytes, &d.ChunkCount, &d.RetryCount, &d.NextRetryAt, &d.IngestedAt, &d.CreatedAt, &d.Markdown)
 	return d, err
 }
 
@@ -311,7 +315,7 @@ func (s *Store) SetIngesting(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("kb document %s ingesting: %w", id, err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE kb_documents SET status = 'ingesting', updated_at = now() WHERE id = $1`, id); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE kb_documents SET status = 'ingesting', next_retry_at = NULL, updated_at = now() WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("kb document %s ingesting: %w", id, err)
 	}
 	return nil
@@ -323,16 +327,60 @@ const kbErrorCap = 500
 
 // SetFailed marks a document failed: used when brain itself (not
 // memoryd) hits an error before the ingest call ever reaches memoryd,
-// e.g. memoryd unreachable.
+// e.g. memoryd unreachable. Clears any pending retry schedule: a
+// permanent error (or the retry sweep giving up) must not leave
+// next_retry_at set, or the sweep would keep picking the row back up.
 func (s *Store) SetFailed(ctx context.Context, id, errMsg string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("kb document %s failed: %w", id, err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE kb_documents SET status = 'failed', error = $2, updated_at = now() WHERE id = $1`, id, truncate(errMsg, kbErrorCap)); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE kb_documents SET status = 'failed', error = $2, next_retry_at = NULL, updated_at = now() WHERE id = $1`, id, truncate(errMsg, kbErrorCap)); err != nil {
 		return fmt.Errorf("kb document %s failed: %w", id, err)
 	}
 	return nil
+}
+
+// ScheduleRetry records a failed ingest attempt classified as
+// retryable: bumps retry_count and sets next_retry_at so the retry
+// sweep picks the document back up once the backoff elapses (issue
+// #414). The document stays status='failed' and manually reingestable
+// in the meantime, same as any other failure.
+func (s *Store) ScheduleRetry(ctx context.Context, id, errMsg string, nextRetryAt time.Time) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("kb document %s schedule retry: %w", id, err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE kb_documents
+		SET status = 'failed', error = $2, retry_count = retry_count + 1, next_retry_at = $3, updated_at = now()
+		WHERE id = $1`, id, truncate(errMsg, kbErrorCap), nextRetryAt); err != nil {
+		return fmt.Errorf("kb document %s schedule retry: %w", id, err)
+	}
+	return nil
+}
+
+// DueForRetry returns failed documents whose scheduled retry time has
+// arrived: the retry sweep's candidate set (issue #414).
+func (s *Store) DueForRetry(ctx context.Context) ([]Document, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("kb documents due for retry: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT `+documentColumns+` FROM kb_documents
+		WHERE status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= now()`)
+	if err != nil {
+		return nil, fmt.Errorf("kb documents due for retry: %w", err)
+	}
+	defer rows.Close()
+	out := []Document{}
+	for rows.Next() {
+		d, err := scanDocument(rows)
+		if err != nil {
+			return nil, fmt.Errorf("kb documents due for retry: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 func truncate(s string, n int) string {
@@ -373,6 +421,7 @@ func (s *Store) ReplaceDocumentContent(ctx context.Context, id, title, markdown 
 	}
 	tag, err := db.Exec(ctx, `UPDATE kb_documents
 		SET title = $2, markdown = $3, bytes = $4, status = 'pending', error = '',
+			retry_count = 0, next_retry_at = NULL,
 			collection_id = COALESCE(NULLIF($5, '')::uuid, collection_id), updated_at = now()
 		WHERE id = $1`, id, title, markdown, bytes, collectionID)
 	if err != nil {

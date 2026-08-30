@@ -1314,3 +1314,199 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 		t.Fatalf("document = %+v, want failed with the ingester's error", final)
 	}
 }
+
+// waitForDocument polls store.GetDocument until check reports true or
+// the deadline elapses: startIngest runs its own goroutine (kb.go), so
+// tests observe its effect asynchronously.
+func waitForDocument(t *testing.T, store *kb.Store, docID string, check func(kb.Document) bool) kb.Document {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var last kb.Document
+	for time.Now().Before(deadline) {
+		doc, err := store.GetDocument(context.Background(), docID)
+		if err != nil {
+			t.Fatalf("GetDocument: %v", err)
+		}
+		last = doc
+		if check(doc) {
+			return doc
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return last
+}
+
+// TestKBDocumentReingestRetryableErrorSchedulesRetry pins issue #414:
+// a reingest failing on a retryable error (chain_exhausted here)
+// schedules an automatic retry instead of leaving the document
+// permanently failed, bumping retry_count and setting next_retry_at.
+func TestKBDocumentReingestRetryableErrorSchedulesRetry(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{err: errors.New("every provider failed: chain_exhausted")}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-retry-schedule", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "file", "doc.md", "curated", "content", 7)
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/"+docID+"/reingest", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("reingest status = %d body %s", w.Code, w.Body)
+	}
+
+	final := waitForDocument(t, store, docID, func(d kb.Document) bool { return d.RetryCount > 0 })
+	if final.Status != "failed" {
+		t.Fatalf("status = %q, want failed", final.Status)
+	}
+	if final.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", final.RetryCount)
+	}
+	if final.NextRetryAt == nil || !final.NextRetryAt.After(time.Now()) {
+		t.Fatalf("next_retry_at = %v, want set in the future", final.NextRetryAt)
+	}
+	if !strings.Contains(final.Error, "chain_exhausted") {
+		t.Fatalf("error = %q, want the ingester's error preserved", final.Error)
+	}
+}
+
+// TestKBDocumentReingestPermanentErrorNeverSchedulesRetry pins issue
+// #414's other half: an error with no retryable marker (an unsupported
+// format here) leaves the document failed with next_retry_at unset, so
+// the retry sweep never picks it back up.
+func TestKBDocumentReingestPermanentErrorNeverSchedulesRetry(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{err: errors.New("document produced no chunks")}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-retry-permanent", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "file", "doc.md", "curated", "content", 7)
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/"+docID+"/reingest", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("reingest status = %d body %s", w.Code, w.Body)
+	}
+
+	final := waitForDocument(t, store, docID, func(d kb.Document) bool { return d.Status == "failed" })
+	if final.RetryCount != 0 {
+		t.Fatalf("retry_count = %d, want 0 (permanent error never schedules)", final.RetryCount)
+	}
+	if final.NextRetryAt != nil {
+		t.Fatalf("next_retry_at = %v, want unset for a permanent error", final.NextRetryAt)
+	}
+}
+
+// TestRunKBRetrySweepRetriesUntilBudgetExhausted pins the sweep's
+// bounded-attempts contract (issue #414): a document stuck on a
+// retryable error gets picked up and retried by RunKBRetrySweep across
+// several ticks, and once retry_count reaches kbRetryMaxAttempts the
+// next failure leaves it permanently failed (no next_retry_at), still
+// manually reingestable.
+func TestRunKBRetrySweepRetriesUntilBudgetExhausted(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{err: errors.New("gwclient: gateway http 503: service unavailable")}
+
+	collID, err := store.CreateCollection(context.Background(), "itest-retry-sweep", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "file", "doc.md", "curated", "content", 7)
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+
+	// Force every retry due immediately: this test exercises the sweep's
+	// selection/exhaustion logic, not the real backoff wait.
+	forceDue := func() {
+		conn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		if _, err := conn.Exec(context.Background(),
+			`UPDATE kb_documents SET next_retry_at = now() - interval '1 second' WHERE id = $1 AND next_retry_at IS NOT NULL`,
+			docID); err != nil {
+			t.Fatalf("force due: %v", err)
+		}
+	}
+
+	// First failure via reingest seeds retry_count=1 with a future
+	// next_retry_at; the sweep must not pick it up until it's due.
+	h := &kbAPI{store: store, ingest: ingester, log: discard()}
+	h.startIngest(docID, "Doc")
+	waitForDocument(t, store, docID, func(d kb.Document) bool { return d.RetryCount == 1 })
+
+	ctx := context.Background()
+
+	// Drive the sweep through every remaining attempt: kbRetryMaxAttempts
+	// total scheduled retries, then one more failure exhausts the budget.
+	for want := 2; want <= kbRetryMaxAttempts; want++ {
+		forceDue()
+		sweepKBRetries(ctx, store, ingester, discard())
+		waitForDocument(t, store, docID, func(d kb.Document) bool { return d.RetryCount >= want })
+	}
+	forceDue()
+	sweepKBRetries(ctx, store, ingester, discard())
+	final := waitForDocument(t, store, docID, func(d kb.Document) bool { return d.NextRetryAt == nil })
+
+	if final.Status != "failed" {
+		t.Fatalf("status = %q, want failed", final.Status)
+	}
+	if final.RetryCount != kbRetryMaxAttempts {
+		t.Fatalf("retry_count = %d, want %d (exhausted, no further bump)", final.RetryCount, kbRetryMaxAttempts)
+	}
+	if final.NextRetryAt != nil {
+		t.Fatalf("next_retry_at = %v, want unset once the retry budget is exhausted", final.NextRetryAt)
+	}
+	if !strings.Contains(final.Error, "503") {
+		t.Fatalf("error = %q, want the ingester's last error preserved", final.Error)
+	}
+
+	// Exhausted but still manually reingestable (AC): reingest must not
+	// be blocked by the spent automatic-retry budget.
+	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/"+docID+"/reingest", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("manual reingest after exhaustion status = %d body %s", w.Code, w.Body)
+	}
+}
+
+// TestSweepKBRetriesNoopIsQuiet pins the "no failed documents, no log
+// noise" acceptance criterion: an empty DueForRetry result must not
+// log anything.
+func TestSweepKBRetriesNoopIsQuiet(t *testing.T) {
+	store := testKBStore(t)
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	sweepKBRetries(context.Background(), store, &fakeIngester{}, log)
+
+	if buf.Len() != 0 {
+		t.Fatalf("sweep logged with no failed documents: %s", buf.String())
+	}
+}

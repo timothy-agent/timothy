@@ -37,7 +37,8 @@ func (s *KBStore) SetIngested(ctx context.Context, documentID string, chunkCount
 		return fmt.Errorf("kb set ingested: %w", err)
 	}
 	_, err = db.Exec(ctx, `UPDATE kb_documents
-		SET status = 'ready', chunk_count = $2, error = '', ingested_at = now(), updated_at = now()
+		SET status = 'ready', chunk_count = $2, error = '', retry_count = 0, next_retry_at = NULL,
+			ingested_at = now(), updated_at = now()
 		WHERE id = $1`, documentID, chunkCount)
 	if err != nil {
 		return fmt.Errorf("kb set ingested: %w", err)

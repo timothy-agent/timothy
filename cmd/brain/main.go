@@ -681,6 +681,9 @@ func main() {
 			app.Log.Info("kb stale-ingest sweep", "documents_failed", n)
 		}
 	}()
+	// kb retry sweep (issue #414): re-ingests documents that failed on a
+	// transient embedding/provider error, on their own backoff schedule.
+	go api.RunKBRetrySweep(ctx, kbStore, mc, app.Log)
 	svc.SetKBSearch(func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {

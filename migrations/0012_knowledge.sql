@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     error         text NOT NULL DEFAULT '',
     bytes         bigint NOT NULL DEFAULT 0,
     chunk_count   int NOT NULL DEFAULT 0,
+    -- retry_count/next_retry_at back the auto-retry sweep (issue #414):
+    -- a failed document classified as a transient error gets re-ingested
+    -- with bounded attempts and backoff; a permanent error leaves both
+    -- untouched and the document stays only manually reingestable.
+    retry_count   int NOT NULL DEFAULT 0,
+    next_retry_at timestamptz,
     ingested_at   timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now()

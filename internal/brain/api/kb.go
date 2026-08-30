@@ -42,6 +42,31 @@ var kbAllowedExt = map[string]bool{
 	".pdf": true, ".md": true, ".txt": true, ".docx": true, ".html": true,
 }
 
+// kbRetryMaxAttempts bounds how many automatic retries a transiently
+// failed document gets before it's left failed for a human (issue
+// #414): indexed by retry_count at failure time (1st, 2nd, 3rd retry).
+// kbRetryBackoff ladders the wait before each: short enough to recover
+// from a brief provider blip within the hour, capped so a persistent
+// outage doesn't hammer the gateway.
+const kbRetryMaxAttempts = 3
+
+var kbRetryBackoff = [...]time.Duration{2 * time.Minute, 10 * time.Minute, 30 * time.Minute}
+
+// kbRetryDelay returns the backoff before the next attempt, indexed by
+// retry_count after this failure (1-based: 1st scheduled retry uses
+// the first rung). Retry counts past the ladder's length reuse its
+// last (longest) rung.
+func kbRetryDelay(retryCount int) time.Duration {
+	idx := retryCount - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(kbRetryBackoff) {
+		idx = len(kbRetryBackoff) - 1
+	}
+	return kbRetryBackoff[idx]
+}
+
 // kbIngester runs memoryd's ingest pipeline for one document; nil
 // disables background ingestion (memoryd unreachable is a runtime
 // error, not a nil-gate, but MEMORYD_URL is always configured: this
@@ -727,7 +752,12 @@ func titleFromURL(u *url.URL) string {
 
 // startIngest fires the status->ingesting->memoryd->terminal sequence
 // in the background: upload/reingest both return as soon as the
-// document row exists, not once ingestion finishes.
+// document row exists, not once ingestion finishes. A failure
+// classified retryable (kb.IsRetryable) schedules an automatic retry
+// via ScheduleRetry as long as the document's retry_count is under
+// kbRetryMaxAttempts; a permanent error, or a retryable one past the
+// budget, falls back to SetFailed and stays failed until a human (or
+// this same path, called again manually) reingests it.
 func (h *kbAPI) startIngest(docID, title string) {
 	go func() {
 		ctx := context.Background()
@@ -745,6 +775,13 @@ func (h *kbAPI) startIngest(docID, title string) {
 		}
 		if _, err := h.ingest.IngestDocument(ctx, docID, title, doc.Markdown); err != nil {
 			h.log.Warn("kb ingest failed", "document_id", docID, "error", err)
+			if kb.IsRetryable(err.Error()) && doc.RetryCount < kbRetryMaxAttempts {
+				next := time.Now().Add(kbRetryDelay(doc.RetryCount + 1))
+				if serr := h.store.ScheduleRetry(ctx, docID, err.Error(), next); serr != nil {
+					h.log.Warn("kb ingest retry schedule failed", "document_id", docID, "error", serr)
+				}
+				return
+			}
 			_ = h.store.SetFailed(ctx, docID, err.Error())
 		}
 	}()
@@ -774,4 +811,50 @@ func (h *kbAPI) reingestDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	h.startIngest(docID, doc.Title)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// kbRetrySweepInterval is how often RunKBRetrySweep checks for failed
+// documents whose backoff has elapsed (issue #414).
+const kbRetrySweepInterval = time.Minute
+
+// RunKBRetrySweep periodically re-ingests failed documents scheduled
+// for automatic retry (kb.Store.DueForRetry), reusing the same
+// startIngest path as the manual POST .../reingest endpoint so the two
+// never diverge on what "retry" means. Runs until ctx is done; store
+// nil (KB unmounted) or ingest nil (memoryd not configured) makes this
+// a no-op loop.
+func RunKBRetrySweep(ctx context.Context, store *kb.Store, ingest kbIngester, log *slog.Logger) {
+	if store == nil || ingest == nil {
+		return
+	}
+	ticker := time.NewTicker(kbRetrySweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweepKBRetries(ctx, store, ingest, log)
+		}
+	}
+}
+
+// sweepKBRetries runs one retry-sweep tick: re-ingests every document
+// DueForRetry reports. Logs nothing when there is nothing due, to keep
+// the steady-state quiet (issue #414 acceptance criteria).
+func sweepKBRetries(ctx context.Context, store *kb.Store, ingest kbIngester, log *slog.Logger) {
+	docs, err := store.DueForRetry(ctx)
+	if err != nil {
+		log.Error("kb retry sweep: list failed", "error", err)
+		return
+	}
+	if len(docs) == 0 {
+		return
+	}
+	h := &kbAPI{store: store, ingest: ingest, log: log}
+	for _, doc := range docs {
+		log.Info("kb retry sweep: re-ingesting a transiently failed document",
+			"document_id", doc.ID, "retry_count", doc.RetryCount)
+		h.startIngest(doc.ID, doc.Title)
+	}
 }
