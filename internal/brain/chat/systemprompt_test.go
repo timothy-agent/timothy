@@ -76,6 +76,21 @@ func TestAssembleSystemDateLineIncludesTimezoneSteer(t *testing.T) {
 	})
 }
 
+// TestAssembleSystemIncludesKBNudge pins that the assembled prompt
+// tells the model to consult search_kb for questions that plausibly
+// overlap curated content (issue #429), matching the mission explore
+// nudge (#405) in spirit but scoped to chat's own tool guidance.
+func TestAssembleSystemIncludesKBNudge(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC)
+	got := assembleSystem("", now, nil)
+
+	want := "curated knowledge base of their own notes and reference material, reachable via search_kb"
+	if !strings.Contains(got, want) {
+		t.Fatalf("KB nudge missing:\n%s\nwant substring:\n%s", got, want)
+	}
+}
+
 func TestAssembleSystemCloseStaysLast(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC)
