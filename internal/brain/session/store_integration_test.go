@@ -87,7 +87,7 @@ func TestDeleteRemovesSessionScopedRecords(t *testing.T) {
 	for _, stmt := range []string{
 		`INSERT INTO session_grants (session_id, tool, pattern, expires) VALUES ($1, 'shell', '*', now() + interval '1 hour')`,
 		`INSERT INTO tool_audit (session_id, tool, args_digest, status, duration_ms) VALUES ($1, 'shell', 'x', 'ok', 1)`,
-		`INSERT INTO tool_outputs (session_id, tool, content, bytes) VALUES ($1, 'shell', 'out', 3)`,
+		`INSERT INTO tool_outputs (session_id, tool, content) VALUES ($1, 'shell', 'out')`,
 	} {
 		if _, err := db.Exec(ctx, stmt, id); err != nil {
 			t.Fatalf("seed %q: %v", stmt, err)
