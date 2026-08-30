@@ -23,7 +23,7 @@ import (
 )
 
 // ErrModelFloor reports that a mission turn was served by a model on
-// the runner's deny list — a fallback too weak to drive tool-using
+// the runner's deny list: a fallback too weak to drive tool-using
 // agentic turns. The driver pauses the mission immediately (infra)
 // instead of burning its iteration budget on a model that cannot
 // succeed.
@@ -31,18 +31,18 @@ var ErrModelFloor = errors.New("mission turn served by a below-floor model")
 
 // GatekeeperState is whatever a reviewer session needs to resume
 // in-memory for a delta recheck on rework, instead of cold-reanalyzing
-// from scratch. Acceptable to lose on restart — a cold reviewer just
+// from scratch. Acceptable to lose on restart: a cold reviewer just
 // re-checks everything, which is safe, just slower.
 type GatekeeperState struct {
 	Messages []provider.Message
 }
 
 // Runner executes ONE session (worker turn, reviewer turn, or planner
-// turn) and owns NO state-transition logic — it reports what happened,
+// turn) and owns NO state-transition logic: it reports what happened,
 // Driver decides what it means. A future delegated CLI executor would
 // be an alternate Runner implementation; Phase 1 ships exactly one:
 // nativeRunner, backed by loop.Agent. This interface is kept minimal
-// on purpose — no executor-selection abstraction is built until a
+// on purpose: no executor-selection abstraction is built until a
 // second implementation actually needs one.
 type Runner interface {
 	// RunWorker seeds a FRESH session from packet, runs it to
@@ -52,8 +52,8 @@ type Runner interface {
 	RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error)
 
 	// RunReview resumes (or starts, on the first round) the gatekeeper
-	// session, judging the packet — goal, plan, harness-read artifact
-	// contents, diff, evidence — and returns the verdict.
+	// session, judging the packet: goal, plan, harness-read artifact
+	// contents, diff, evidence: and returns the verdict.
 	RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error)
 
 	// PlanSession runs the planning turn that produces a Spec (the list
@@ -62,21 +62,21 @@ type Runner interface {
 
 	// ExploreSession runs the explore turn: a tool-using session that
 	// explores the workspace and (via base tools) the web, ending with an
-	// explore_notes sentinel call. Exploration is advisory — a turn that
+	// explore_notes sentinel call. Exploration is advisory: a turn that
 	// never produces the sentinel degrades to the raw turn text rather
 	// than failing the phase.
 	ExploreSession(ctx context.Context, m Mission) (string, error)
 }
 
 // agentStream is the narrow slice of *loop.Agent nativeRunner actually
-// calls — kept as an interface so tests can fake it without
+// calls: kept as an interface so tests can fake it without
 // constructing a full production Agent (permissions, audit, outputs,
 // event log).
 type agentStream interface {
 	Start(ctx context.Context, req loop.Request) (<-chan stream.StreamEvent, error)
 }
 
-// StorePermissionParker adapts *Store to parkNotifier — the production
+// StorePermissionParker adapts *Store to parkNotifier: the production
 // implementation NewNativeRunner is constructed with. Errors are
 // logged, never returned: a failed park/clear write must not abort the
 // turn it's reporting on.
@@ -105,7 +105,7 @@ func (p *StorePermissionParker) OnPermissionCleared(ctx context.Context, mission
 
 // OnPermissionDenied records that a tool call was denied (D-039: most
 // often the automatic unattended-turn denial, but any denied result
-// qualifies) — best-effort, same stance as OnPermissionParked/Cleared:
+// qualifies): best-effort, same stance as OnPermissionParked/Cleared:
 // a failed append logs and never aborts the turn it's reporting on.
 func (p *StorePermissionParker) OnPermissionDenied(ctx context.Context, missionID, tool, digest string) {
 	if err := p.Store.AppendEvent(ctx, missionID, "mission.permission_denied", map[string]any{
@@ -115,8 +115,21 @@ func (p *StorePermissionParker) OnPermissionDenied(ctx context.Context, missionI
 	}
 }
 
+// OnToolCall records one tool call from a worker/explore/plan/review
+// turn as a mission.tool_call event (issue #369): the UI's per-turn
+// trace reads these back grouped by phase, alongside the mission.turn
+// event the same runTurn call eventually produces. Best-effort like
+// the other parkNotifier methods.
+func (p *StorePermissionParker) OnToolCall(ctx context.Context, missionID, phase, tool, digest, status string, durationMs int64) {
+	if err := p.Store.AppendEvent(ctx, missionID, "mission.tool_call", map[string]any{
+		"phase": phase, "tool": tool, "args_digest": digest, "status": status, "duration_ms": durationMs,
+	}); err != nil {
+		p.Log.Error("mission: record tool call failed", "mission_id", missionID, "error", err)
+	}
+}
+
 // parkNotifier reports a mission turn parking on (and later clearing)
-// a tool-call permission prompt — without this, the same interactive
+// a tool-call permission prompt: without this, the same interactive
 // broker chat sessions use silently strands a mission worker turn for
 // the full 10-minute timeout with nothing telling the UI a decision is
 // needed. Backed by *Store in production (SetPendingPermission /
@@ -128,13 +141,18 @@ type parkNotifier interface {
 	// most often the unattended-turn automatic denial (D-039), but any
 	// denial qualifies. Best-effort like the two methods above.
 	OnPermissionDenied(ctx context.Context, missionID, tool, digest string)
+	// OnToolCall reports every tool call a worker/explore/plan/review
+	// turn made, in call order: the trace the mission detail UI shows
+	// per turn (issue #369). Best-effort, same stance as the methods
+	// above.
+	OnToolCall(ctx context.Context, missionID, phase, tool, digest, status string, durationMs int64)
 }
 
 // sandboxExec is the narrow slice of *sandboxclient.Client nativeRunner
-// needs — kept as a function type (not an import of sandboxclient) so
+// needs: kept as a function type (not an import of sandboxclient) so
 // missions has no compile-time dependency on Docker; the driver wires
 // the real *sandboxclient.Client.Exec in cmd/brain/main.go. environment
-// selects the mission's sandbox image (D-05x) — only matters on the
+// selects the mission's sandbox image (D-05x): only matters on the
 // mission's first exec, since a container's image is fixed once
 // created.
 type sandboxExec func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
@@ -155,19 +173,19 @@ type nativeRunner struct {
 	// Docker container instead of brain's own process.
 	sandbox sandboxExec
 	// kbSearch backs the per-turn search_kb ExtraTool (see kbSearchTool)
-	// — nil means search_kb is never offered on any mission turn,
+	//: nil means search_kb is never offered on any mission turn,
 	// regardless of a mission's own Knowledge snapshot (same "the
 	// dependency's absence turns the feature off entirely" contract as
 	// chat.go's SetKBSearch).
 	kbSearch KBSearchFunc
 
-	// kbRead backs the per-turn read_kb ExtraTool — same nil contract
+	// kbRead backs the per-turn read_kb ExtraTool: same nil contract
 	// as kbSearch.
 	kbRead KBReadFunc
 
 	// connectorReads resolves a mission's agent to the read-only
 	// connector tools (gmail/calendar reads) it may use on worker/explore
-	// turns (see SetConnectorReads) — nil-safe: unset means no connector
+	// turns (see SetConnectorReads): nil-safe: unset means no connector
 	// reads are offered, same as before this existed.
 	connectorReads ConnectorReadsResolver
 
@@ -261,13 +279,13 @@ func countOperatorNotes(notes []ProgressNote) int {
 }
 
 // ConnectorReadsResolver resolves an agent id to the read-only
-// connector tools a mission turn for that agent may use — the
+// connector tools a mission turn for that agent may use: the
 // intersection of the agent's Tools allowlist and every built
 // connector's ReadOnly-marked, non-MCP tools (see
 // connectors.Manager.ReadOnlyTools). Connector WRITES are never
 // included regardless of the allowlist: mission turns stay
 // BuiltinsOnly for the base surface, and this resolver only ever
-// layers reads on top via ExtraTools — a worker can never side-channel
+// layers reads on top via ExtraTools: a worker can never side-channel
 // a connector write around the worktree/human-consented push
 // pipeline. Resolved at DRIVE time (every RunWorker/ExploreSession
 // call), not cached on the mission, so an agent's allowlist or a
@@ -277,7 +295,7 @@ func countOperatorNotes(notes []ProgressNote) int {
 // tools.Permissions' exempt set (same as chat), so an unattended,
 // schedule-fired mission (Unattended: true, D-039) still needs a
 // standing grant or the call fails fast instead of parking. That grant
-// already exists — driver.go's grantSessionDefaults seeds one from the
+// already exists: driver.go's grantSessionDefaults seeds one from the
 // mission's agent's ApprovalAllowlist (a separate field from Tools) at
 // provisioning time, the same path a chat agent's connector-tool
 // grants take. An agent that wants its scheduled missions to actually
@@ -286,26 +304,26 @@ func countOperatorNotes(notes []ProgressNote) int {
 type ConnectorReadsResolver func(ctx context.Context, agentID string) []*tools.Tool
 
 // SetConnectorReads wires the resolver RunWorker/ExploreSession use to
-// layer read-only connector tools onto a mission turn — a setter (not
+// layer read-only connector tools onto a mission turn: a setter (not
 // a NewNativeRunner parameter) because cmd/brain/main.go builds the
 // runner before the connectors.Manager it closes over.
 func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 	r.connectorReads = resolve
 }
 
-// KBSearchFunc runs one search_kb call scoped to collectionNames — main
+// KBSearchFunc runs one search_kb call scoped to collectionNames: main
 // curries memclient.Client.KBSearch in, same shape as chat.go's
 // KBSearch type. collectionNames travels on every call (the mission's
 // own Knowledge snapshot), never bound once, since the same func serves
 // every mission.
 type KBSearchFunc func(ctx context.Context, query string, collectionNames []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
-// KBReadFunc loads one kb document scoped to collectionNames — same
+// KBReadFunc loads one kb document scoped to collectionNames: same
 // travel-on-every-call contract as KBSearchFunc.
 type KBReadFunc func(ctx context.Context, documentID string, collectionNames []string) (builtin.KBDocument, error)
 
 // NewNativeRunner wraps a production *loop.Agent as a Runner. The
-// agent instance is expected to be brain's existing chat agent — a
+// agent instance is expected to be brain's existing chat agent: a
 // mission worker turn is just another loop.Agent caller, not a
 // separate permission/audit/tool-execution stack. parker may be nil
 // (park events are then silently ignored, same as before this existed).
@@ -315,8 +333,8 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 
 // NewNativeRunnerWithFloor is NewNativeRunner plus a model floor deny
 // list (see nativeRunner.modelFloorDeny), a sandbox exec backend (a
-// *sandbox.Manager.Exec closure) — worker and reviewer shell calls
-// route through it instead of brain's own process — and a search_kb
+// *sandbox.Manager.Exec closure): worker and reviewer shell calls
+// route through it instead of brain's own process: and a search_kb
 // backend (nil disables search_kb on every mission turn, matching
 // SetKBSearch's nil-safe contract).
 // The return type is the unexported *nativeRunner, not Runner: callers
@@ -332,7 +350,7 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 // backend wired, or the mission's creating agent named no collections
 // (empty Knowledge = no search_kb, same opt-in-only contract as
 // chat.go's kbSearchTool, which this mirrors exactly). A non-nil sink
-// records every returned document at execution time — the harness's
+// records every returned document at execution time: the harness's
 // citation evidence must come from here, not from the rendered tool
 // result: digests cap at digestCeiling and offload past 8KiB, so a
 // full search_kb result never survives into the digest text.
@@ -364,7 +382,7 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 }
 
 // connectorReadTools resolves m's read-only connector tools (nil
-// resolver or no agent id means none) — appended to worker/explore
+// resolver or no agent id means none): appended to worker/explore
 // ExtraTools so a scheduled mission (daily inbox digest, calendar
 // summary) can read gmail/calendar without the base connector surface
 // (which BuiltinsOnly excludes) ever reopening for a write.
@@ -402,12 +420,12 @@ func (s *kbRefSink) all() []string {
 // a shell that replaces the global workspace-rooted one for the turn —
 // the root cause of a whole failure family was workers writing into
 // the shared root while verify_cmd and the reviewer looked in the
-// per-mission directory — and write_file, so artifact writes never go
+// per-mission directory: and write_file, so artifact writes never go
 // through destructive-classified shell redirects. The shell's Runner
 // routes commands into the mission's own Docker container (see
 // builtin.ShellConfig.Runner) instead of brain's own process.
 // sandboxShellMaxTimeout is the mission shell's timeout ceiling when
-// backed by a sandbox container — 120s (chat's shell ceiling) is far
+// backed by a sandbox container: 120s (chat's shell ceiling) is far
 // too tight for app-development work: package installs, builds, and
 // test suites routinely run longer. The container's own resource caps
 // (memory/CPU/pids) bound the damage a long-running command can do, so
@@ -416,8 +434,8 @@ const sandboxShellMaxTimeout = 15 * time.Minute
 
 // turnTimeout bounds one runTurn call (worker, explore, plan, or
 // review). Without this, a stream that never emits an error or
-// terminal event — no chunk, no EventDone, no EventError, just
-// silence — hangs runTurn's `for ev := range events` forever: nothing
+// terminal event: no chunk, no EventDone, no EventError, just
+// silence: hangs runTurn's `for ev := range events` forever: nothing
 // upstream aborts it, and driveTimeBound (4h) is the mission's own
 // lifetime cap, not a per-turn one. Set above sandboxShellMaxTimeout
 // (15m) plus headroom for a turn issuing several tool calls in
@@ -439,7 +457,7 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 
 // missionShell builds the turn-scoped shell tool rooted in the
 // mission's own directory, routed through the mission's sandbox
-// container — shared by missionTools (worker/reviewer, paired with
+// container: shared by missionTools (worker/reviewer, paired with
 // write_file) and ExploreSession (shell only, read-only exploration:
 // the execute phase does the actual work, so explore never gets
 // write_file). Returns nil when the mission has no work root yet
@@ -477,13 +495,13 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 	return builtin.Shell(shellCfg)
 }
 
-// shellOutputCap mirrors builtin.Shell's own output cap — the sandbox
+// shellOutputCap mirrors builtin.Shell's own output cap: the sandbox
 // backend's Runner must behave identically to the in-process path, not
 // let a runaway sandboxed command balloon memory.
 const shellOutputCap = 64 << 10
 
 // cappedStringWriter stops retaining bytes past max (writes still
-// succeed so the underlying exec can finish) — the sandbox-Runner
+// succeed so the underlying exec can finish): the sandbox-Runner
 // analog of builtin.capWriter, kept separate because that type is
 // unexported in the builtin package.
 type cappedStringWriter struct {
@@ -527,20 +545,39 @@ type turnResult struct {
 	finalSeg     string
 }
 
+// toolCallDigestCap bounds a mission.tool_call event's args digest:
+// same 2000-char cap the missions package already applies to other
+// bounded event-payload fields (pending-permission args, progress
+// notes, executor stderr tails; see truncate's other call sites). A
+// tool arg blob can be arbitrarily large; the trace only needs enough
+// to identify what was called, not a byte-for-byte replay.
+const toolCallDigestCap = 2000
+
+// toolCallDigest renders a tool call's raw JSON args as a capped
+// string for the mission.tool_call event: truncate() operates on
+// already-decoded text everywhere else it's used, so raw bytes are
+// converted first.
+func toolCallDigest(args json.RawMessage) string {
+	return truncate(string(args), toolCallDigestCap)
+}
+
 // runTurn drives one loop.Agent session to completion, capturing the
 // text of the sentinel tool call named toolName (if any) alongside the
 // full assistant text. It does not itself decide what a missing
-// sentinel means — that's the caller's job (worker vs review have
-// different enforcement/parsing needs).
+// sentinel means: that's the caller's job (worker vs review have
+// different enforcement/parsing needs). phase tags every mission.tool_call
+// event this turn emits (issue #369), so the UI can group a turn's
+// trace by phase alongside the mission.turn event Advance appends for
+// the same phase run.
 //
 // finalSeg is the assistant text written since the last non-sentinel
-// tool activity (EventToolEnd/EventToolResult) — a session can run
+// tool activity (EventToolEnd/EventToolResult): a session can run
 // several internal tool-calling rounds before its sentinel call, and
 // full is every chunk across all of them (draft narration, tool-retry
 // commentary included), while finalSeg is just what the model wrote
 // right before ending its turn. The sentinel call itself never resets
 // finalSeg (it carries no assistant text of its own to lose).
-func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string) (turnResult, error) {
+func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTool string, phase Phase) (turnResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 	// D-075: the sentinel call's successful execution ends the turn —
@@ -554,7 +591,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	var b, finalB strings.Builder
 	var sentinelArgs json.RawMessage
 	var seenURLs []string
-	// parked tracks in-flight parks by CallID, not a single flag — a
+	// parked tracks in-flight parks by CallID, not a single flag: a
 	// turn can issue concurrent tool calls (executeAll runs up to
 	// maxParallelTools at once), so a sibling call finishing first must
 	// not be mistaken for the still-blocked destructive one resolving.
@@ -565,7 +602,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	// its terminal (deadline racing a stream cut). Without this check a
 	// silent cut returned a clean empty verdict, which the caller read
 	// as a missing sentinel and burned a recovery re-run plus a forced
-	// retry — two full model turns for one infra failure.
+	// retry: two full model turns for one infra failure.
 	sawTerminal := false
 	for ev := range events {
 		switch ev.Type {
@@ -593,7 +630,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 					ev.Permission.Args, ev.Permission.Danger, ev.Permission.Rationale)
 			}
 		case stream.EventToolResult:
-			// Only the specific call that parked clears it — and only
+			// Only the specific call that parked clears it: and only
 			// once every parked call in this turn has resolved does the
 			// mission stop reporting a pending permission.
 			if ev.ToolResult != nil && parked[ev.ToolResult.ID] {
@@ -602,9 +639,9 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 					r.parker.OnPermissionCleared(ctx, req.MissionID)
 				}
 			}
-			// A denied result — most often the unattended-turn automatic
+			// A denied result: most often the unattended-turn automatic
 			// denial (D-039), which never emits EventPermissionRequest at
-			// all — is otherwise invisible to anything watching the
+			// all: is otherwise invisible to anything watching the
 			// mission; record it as an event.
 			if ev.ToolResult != nil && ev.ToolResult.Status == "denied" && r.parker != nil {
 				r.parker.OnPermissionDenied(ctx, req.MissionID, ev.ToolResult.Name, ev.ToolResult.Digest)
@@ -615,6 +652,15 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.ToolResult != nil && ev.ToolResult.Name != sentinelTool {
 				finalB.Reset()
 			}
+			// mission.tool_call trace (issue #369): one event per finished
+			// tool call, in call order: a post-hoc record only, no bearing
+			// on turn behavior. The permission-denied case above already
+			// records a denial separately with its own digest; this event
+			// records every call's outcome regardless of status.
+			if ev.ToolResult != nil && r.parker != nil {
+				r.parker.OnToolCall(ctx, req.MissionID, string(phase), ev.ToolResult.Name,
+					toolCallDigest(ev.ToolResult.Args), ev.ToolResult.Status, ev.ToolResult.DurationMs)
+			}
 		case stream.EventDone:
 			sawTerminal = true
 			if ev.Meta != nil {
@@ -622,7 +668,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			}
 		case stream.EventIncomplete:
 			// A cut-off stream is an infra failure, not a short clean
-			// answer — without this case it was indistinguishable from
+			// answer: without this case it was indistinguishable from
 			// one and flowed into sentinel parsing. Both this and the
 			// error case return directly, so only done needs to mark
 			// sawTerminal.
@@ -654,7 +700,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 }
 
 // webFetchArgURL extracts the url arg from a fetch_url call's raw
-// input — the exact field name webfetch.go's webFetchArgs decodes
+// input: the exact field name webfetch.go's webFetchArgs decodes
 // (D-059). A malformed input yields nothing rather than an error: this
 // is best-effort evidence collection, not argument validation (the
 // tool's own Execute already rejected a bad call before this point).
@@ -669,13 +715,13 @@ func webFetchArgURL(input json.RawMessage) []string {
 }
 
 // webSearchResultURLs pulls result URLs out of search_web's rendered
-// output — websearch.go's runSearch emits one blank-line-separated
+// output: websearch.go's runSearch emits one blank-line-separated
 // entry per result as "N. title\nurl\nsnippet" (D-059). Line 2 of each
 // three-line group is the URL; anything not matching that shape (the
 // "no results found" sentinel, a truncated tail) is skipped rather
 // than guessed at. Best-effort only: the digest is capped (and big
 // results offload to a stub), so URLs past the cap are lost. That is
-// deliberate lenience on top of the reliable contract — cite what you
+// deliberate lenience on top of the reliable contract: cite what you
 // fetch_url, whose args are never truncated.
 var webSearchResultHeader = regexp.MustCompile(`^\d+\.\s`)
 
@@ -683,7 +729,7 @@ func webSearchResultURLs(digest string) []string {
 	lines := strings.Split(digest, "\n")
 	var urls []string
 	for i := 0; i+1 < len(lines); i++ {
-		// A result's first line is "N. title" — only its second line
+		// A result's first line is "N. title": only its second line
 		// (the URL) is collected.
 		if !webSearchResultHeader.MatchString(lines[i]) {
 			continue
@@ -698,8 +744,8 @@ func webSearchResultURLs(digest string) []string {
 
 // workerRoute picks the route a worker turn runs on. With an
 // escalation route configured, any evidence the current model is not
-// cutting it — a worker failure or a review rework already on the
-// books — switches subsequent worker turns to it. Empty escalation
+// cutting it: a worker failure or a review rework already on the
+// books: switches subsequent worker turns to it. Empty escalation
 // route means the ladder is off and the mission's own route always
 // wins.
 func workerRoute(m Mission) string {
@@ -710,7 +756,7 @@ func workerRoute(m Mission) string {
 }
 
 // oversightRoute picks the route explore/plan/replan turns run on:
-// PlanRoute when set ("GLM plans, local executes" — oversight runs on a
+// PlanRoute when set ("GLM plans, local executes": oversight runs on a
 // stronger route while Route stays the worker's cheap/local route),
 // otherwise Route unchanged (empty PlanRoute is exact current behavior).
 func oversightRoute(m Mission) string {
@@ -732,7 +778,7 @@ func reviewRoute(m Mission) string {
 
 // workerModel is workerRoute's model-pin counterpart (D-078): RouteModel
 // pins execute turns to one chain entry in workerRoute(m). Cleared
-// whenever workerRoute has swapped to EscalationRoute — RouteModel names
+// whenever workerRoute has swapped to EscalationRoute: RouteModel names
 // an entry in the BASE route's chain, not the escalation route's, so
 // carrying it over would pin escalation to a model that may not even be
 // in that chain.
@@ -800,7 +846,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		Steering: r.steeringFor(m.ID, packet.Progress),
 	}
 
-	res, err := r.runTurn(ctx, req, missionStatusToolName)
+	res, err := r.runTurn(ctx, req, missionStatusToolName, PhaseExecute)
 	text, seenURLs := res.text, res.seenURLs
 	if err != nil {
 		return WorkerVerdict{}, text, err
@@ -817,7 +863,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one mission_status tool call: done, retry, or blocked."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName)
+	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName, PhaseExecute)
 	recoverText := recoverRes.text
 	seenURLs = append(seenURLs, recoverRes.seenURLs...)
 	if err != nil {
@@ -830,12 +876,12 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	}
 
 	// Neither turn produced a tool call: before giving up, check whether
-	// the model expressed the sentinel as TEXT instead — observed on
+	// the model expressed the sentinel as TEXT instead: observed on
 	// non-frontier models (GLM-5.2's XML-ish self-closing tag, qwen3:30b's
 	// bare "mission_status" token followed by a JSON object). A text-form
 	// verdict is trust-equivalent to the tool-call form: both are the
 	// model's own self-report, and the harness's own verify_cmd/
-	// CheckArtifacts evidence — never model output — is what actually
+	// CheckArtifacts evidence: never model output: is what actually
 	// gates a unit's Passes flag. This is strictly a fallback: the
 	// tool-call path above always wins when it succeeds.
 	combined := text + "\n" + recoverText
@@ -849,7 +895,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	}
 
 	// Still missing: bail detection informs the log, but either way this
-	// is a forced retry — detection accuracy never gates the outcome.
+	// is a forced retry: detection accuracy never gates the outcome.
 	if detectBail(combined) {
 		r.log.Warn("mission worker bailed without a sentinel call", "mission_id", m.ID)
 	} else {
@@ -863,7 +909,7 @@ func (r *nativeRunner) tryParseVerdict(args json.RawMessage) (WorkerVerdict, boo
 }
 
 // tryParseWorkerVerdict decodes args into a WorkerVerdict, ok=false on
-// empty input or a missing outcome — shared by nativeRunner's sentinel
+// empty input or a missing outcome: shared by nativeRunner's sentinel
 // ladder and delegatedRunner's result ladder (delegated.go), since both
 // read a mission_status-shaped payload from a text-form sentinel.
 func tryParseWorkerVerdict(args json.RawMessage) (WorkerVerdict, bool) {
@@ -880,7 +926,7 @@ func tryParseWorkerVerdict(args json.RawMessage) (WorkerVerdict, bool) {
 // D-074: forcedRetryVerdict builds the fabricated "retry" verdict every
 // last rung of the worker/executor verdict ladders falls back to when
 // NEITHER a tool call/schema result NOR a text-form sentinel could be
-// read — shared by nativeRunner's sentinel ladder (RunWorker, above)
+// read: shared by nativeRunner's sentinel ladder (RunWorker, above)
 // and delegatedRunner's result ladder (delegated.go's attemptResume,
 // pollToVerdict's idle-kill, finish, finishNoResult), which previously
 // each spelled out WorkerVerdict{Outcome: "retry", Forced: true, ...}
@@ -892,7 +938,7 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 
 // ExploreSession runs the mission's explore turn: explore the goal
 // before planning commits to a shape. Unlike RunWorker's sentinel
-// ladder, a missing explore_notes call never fails the phase — the
+// ladder, a missing explore_notes call never fails the phase: the
 // findings are advisory input to the planner, not a gate on progress,
 // so the ladder's last resort is the raw turn text rather than a forced
 // failure.
@@ -931,7 +977,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		Unattended:   m.ScheduleID != "",
 	}
 
-	res, err := r.runTurn(ctx, req, exploreNotesToolName)
+	res, err := r.runTurn(ctx, req, exploreNotesToolName, PhaseExplore)
 	text := res.text
 	if err != nil {
 		return "", err
@@ -946,7 +992,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one explore_notes tool call containing your findings."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, exploreNotesToolName)
+	recoverRes, err := r.runTurn(ctx, recoverReq, exploreNotesToolName, PhaseExplore)
 	recoverText := recoverRes.text
 	if err != nil {
 		return "", err
@@ -1012,13 +1058,13 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
 	}
-	res, err := r.runTurn(ctx, req, reviewVerdictToolName)
+	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseReview)
 	text, args := res.text, res.sentinelArgs
 	if err != nil {
 		return ReviewVerdict{}, nil, err
 	}
 	if len(args) == 0 {
-		// Recovery re-run: same one-shot ladder RunWorker uses — a
+		// Recovery re-run: same one-shot ladder RunWorker uses: a
 		// reviewer that ran long on analysis and didn't reach its tool
 		// call gets one more turn demanding it, instead of failing the
 		// whole review round outright.
@@ -1027,20 +1073,20 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 			provider.Message{Role: "assistant", Content: text},
 			provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one review_verdict tool call: approve or rework."},
 		)
-		recoverRes, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName)
+		recoverRes, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName, PhaseReview)
 		recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 		if err != nil {
 			return ReviewVerdict{}, nil, err
 		}
 		if len(recoverArgs) == 0 {
 			// Neither turn produced a review_verdict tool call: before
-			// failing the round, check for a text-form verdict — observed
+			// failing the round, check for a text-form verdict: observed
 			// on qwen3:30b reviewers that write prose analysis and never
 			// call the tool. Trust-equivalent to the tool-call form (see
 			// RunWorker's identical fallback above): the harness's own
 			// artifact/diff evidence, not the reviewer's self-report,
 			// decides whether a unit actually holds up. A text-form rework
-			// with no parseable findings is acceptable — GapFingerprint of
+			// with no parseable findings is acceptable: GapFingerprint of
 			// empty findings is empty, which the state machine already
 			// tolerates.
 			combined := text + "\n" + recoverText
@@ -1125,7 +1171,7 @@ func renderReviewContent(p ReviewPacket) string {
 // PlanSession runs the planning turn that produces a Spec from the
 // mission's goal and explore-phase findings. The plan is forced
 // through the submit_plan tool call (mirroring RunWorker/RunReview's
-// sentinel ladder) rather than asked for as bare JSON prose — a model
+// sentinel ladder) rather than asked for as bare JSON prose: a model
 // free to preface its reply with prose was the root cause of a real
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
@@ -1159,8 +1205,8 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		Messages:  []provider.Message{{Role: "user", Content: user}},
 		// The planner plans; it must not act. No base tool matches this
 		// allowlist (submit_plan/search_kb arrive via ExtraTools, which
-		// bypass it, and search_kb is read-only — never "acting"), so
-		// the turn's only BASE tool is none — a planner that reaches for
+		// bypass it, and search_kb is read-only: never "acting"), so
+		// the turn's only BASE tool is none: a planner that reaches for
 		// shell parked a live canary on the permission gate for ten
 		// minutes trying to do the worker's job in plan phase.
 		ToolAllow:    []string{planToolName},
@@ -1174,7 +1220,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	if len(extra) == 1 {
 		req.ForceTool = planToolName
 	}
-	res, err := r.runTurn(ctx, req, planToolName)
+	res, err := r.runTurn(ctx, req, planToolName, PhasePlan)
 	text, args := res.text, res.sentinelArgs
 	if err != nil {
 		return Spec{}, err
@@ -1186,7 +1232,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	}
 
 	// Recovery re-run: either the tool call was missing entirely, or its
-	// arguments didn't decode as a valid Spec — either way, tell the
+	// arguments didn't decode as a valid Spec: either way, tell the
 	// model exactly what was wrong instead of silently repeating the
 	// identical prompt (which previously produced the identical failure
 	// on every retry).
@@ -1201,7 +1247,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] Your last turn did not produce a usable plan: " + recoverReason + ". You must end this turn with exactly one submit_plan tool call."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, planToolName)
+	recoverRes, err := r.runTurn(ctx, recoverReq, planToolName, PhasePlan)
 	recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 	if err != nil {
 		return Spec{}, err
@@ -1219,7 +1265,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 }
 
 // execEnvironmentNote tells the planner what execution environment
-// verify_cmd and shell commands actually run in — without this, a
+// verify_cmd and shell commands actually run in: without this, a
 // planner with no sandbox has no way to know whether e.g. python3
 // exists, and can author a verify_cmd for a runtime that was never
 // there (the root cause of a real stuck mission: a plan's verify_cmd
@@ -1234,7 +1280,7 @@ func (r *nativeRunner) execEnvironmentNote(ctx context.Context) string {
 }
 
 // execEnvironmentNote is the shared wording nativeRunner (planner
-// prompt) and Driver (worker packet) both need — kept as one function
+// prompt) and Driver (worker packet) both need: kept as one function
 // so the two prompts never drift out of sync about what's actually
 // available. loc is the operator's configured timezone; nil renders
 // in UTC.
@@ -1243,7 +1289,7 @@ func execEnvironmentNote(loc *time.Location) string {
 		loc = time.UTC
 	}
 	// The date line rides along so every mission prompt (explore, plan,
-	// worker) knows "today" — a model with no other way to know it
+	// worker) knows "today": a model with no other way to know it
 	// anchors on training data or on dated examples in tool descriptions
 	// and mangles date-bounded calls (calendar windows, Gmail
 	// after:/before:). Date only, no clock time, for the same
@@ -1252,7 +1298,7 @@ func execEnvironmentNote(loc *time.Location) string {
 }
 
 // parseSpec decodes the planner's reply strictly: fences stripped,
-// unknown fields rejected — same discipline as loop/turnmemory.go's
+// unknown fields rejected: same discipline as loop/turnmemory.go's
 // distillation parsing.
 func parseSpec(raw string) (Spec, error) {
 	text := strings.TrimSpace(raw)
@@ -1278,7 +1324,7 @@ func parseSpec(raw string) (Spec, error) {
 	if len(spec.Units) == 0 {
 		return Spec{}, fmt.Errorf("mission runner: plan has no units")
 	}
-	// verify_cmd runs through RunVerify (a plain /bin/sh -c) — harness-
+	// verify_cmd runs through RunVerify (a plain /bin/sh -c): harness-
 	// side, outside the permission chain entirely, so D-050's sandbox
 	// relaxation (which only changes how a worker/reviewer's own shell
 	// TOOL CALL is classified) has no bearing here. The rejection below

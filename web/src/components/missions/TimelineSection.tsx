@@ -1,27 +1,91 @@
-import { ArrowDown01Icon, ArrowUp01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { ArrowDown01Icon, ArrowRight01Icon, ArrowUp01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useRef } from 'react'
-import type { MissionEvent } from '../../api/types'
+import { useEffect, useRef, useState } from 'react'
+import type { MissionEvent, MissionToolCallPayload } from '../../api/types'
 import { CopyButton } from '../Message'
 import { Button } from '../ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
-import { renderEvent } from './eventRenderers'
+import { renderEvent, toolCallStatusClass } from './eventRenderers'
 import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
+import { formatDuration } from '../../lib/format'
 
 // How close to the bottom (px) counts as "already following the tail"
-// — auto-scroll only kicks in within this margin, so a reader who has
+//: auto-scroll only kicks in within this margin, so a reader who has
 // scrolled up to read history never gets yanked back down by new
 // events arriving from the poll loop.
 const followThresholdPx = 48
 
 // executor.progress fires on every byte the delegated CLI executor
-// writes — rendering one row per event would flood the timeline, so
+// writes: rendering one row per event would flood the timeline, so
 // it's excluded here; MissionDetail's phase header shows the latest
-// one instead as a lightweight live indicator.
-const rowKind = (e: MissionEvent) => e.kind !== 'executor.progress'
+// one instead as a lightweight live indicator. mission.tool_call is
+// excluded the same way: it renders nested under its owning
+// mission.turn row (see turnToolCalls) instead of as its own Timeline
+// line.
+const rowKind = (e: MissionEvent) => e.kind !== 'executor.progress' && e.kind !== 'mission.tool_call'
+
+// turnToolCalls groups every mission.tool_call event by the
+// mission.turn row it belongs to: a turn's tool calls are the
+// mission.tool_call events between the PRECEDING mission.turn event
+// (exclusive) and this one (inclusive), in seq order: matching how
+// runner.go's runTurn appends one mission.tool_call per finished call
+// during the turn, then driver.go's Advance appends the mission.turn
+// summary once the turn (and any recovery re-run) completes. Keyed by
+// the mission.turn event's own seq, since that's a stable per-row key
+// already used elsewhere in this file.
+function turnToolCalls(events: MissionEvent[]): Map<number, MissionEvent[]> {
+  const byTurn = new Map<number, MissionEvent[]>()
+  let pending: MissionEvent[] = []
+  for (const e of events) {
+    if (e.kind === 'mission.tool_call') {
+      pending.push(e)
+    } else if (e.kind === 'mission.turn') {
+      byTurn.set(e.seq, pending)
+      pending = []
+    }
+  }
+  return byTurn
+}
+
+// TurnTraceToggle renders the expand/collapse control and, when
+// expanded, the ordered tool-call trace for one mission.turn row.
+function TurnTraceToggle({ calls }: { calls: MissionEvent[] }) {
+  const [open, setOpen] = useState(false)
+  if (calls.length === 0) return null
+  return (
+    <div className="mt-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1 text-zinc-500 hover:text-zinc-300"
+      >
+        <HugeiconsIcon icon={ArrowRight01Icon} className={`size-3 transition-transform ${open ? 'rotate-90' : ''}`} />
+        {calls.length} tool call{calls.length === 1 ? '' : 's'}
+      </button>
+      {open && (
+        <ol className="mt-1 space-y-0.5 border-l border-zinc-800 pl-3">
+          {calls.map((c) => {
+            const { tool, status, duration_ms, args_digest } = c.payload as MissionToolCallPayload
+            return (
+              <li key={c.seq} className="text-zinc-400">
+                <span className={toolCallStatusClass(status)}>{tool}</span> · {status} ·{' '}
+                {formatDuration(duration_ms)}
+                {args_digest && (
+                  <code className="ml-1 block truncate rounded bg-muted/20 px-1 py-0.5 text-[11px] text-zinc-500">
+                    {args_digest}
+                  </code>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </div>
+  )
+}
 
 // timelineText renders a plain-text version of the timeline for the
-// copy button — one line per row, timestamp plus event kind (the
+// copy button: one line per row, timestamp plus event kind (the
 // short, stable label; renderEvent's JSX detail is skipped, it's
 // styled markup, not plain text).
 function timelineText(rows: MissionEvent[]): string {
@@ -30,6 +94,7 @@ function timelineText(rows: MissionEvent[]): string {
 
 export function TimelineSection({ events }: { events: MissionEvent[] }) {
   const rows = events.filter(rowKind)
+  const toolCallsByTurn = turnToolCalls(events)
   const containerRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
   const { fullscreen, toggle, close } = useFullscreenPanel()
@@ -117,7 +182,10 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
                 <span className="w-24 shrink-0 whitespace-nowrap text-zinc-500">
                   {new Date(e.created_at).toLocaleTimeString()}
                 </span>
-                <span className="flex-1 break-words">{renderEvent(e, rows)}</span>
+                <span className="flex-1 break-words">
+                  {renderEvent(e, rows)}
+                  {e.kind === 'mission.turn' && <TurnTraceToggle calls={toolCallsByTurn.get(e.seq) ?? []} />}
+                </span>
               </li>
             ))}
           </ol>

@@ -901,6 +901,20 @@ export interface MissionRetryPayload {
   reason?: string
 }
 
+// MissionToolCallPayload is mission.tool_call's payload (runner.go's
+// runTurn, issue #369): one event per tool call finished during a
+// worker/explore/plan/review turn, in call order. phase matches the
+// mission.turn event for the same turn (explore/plan/execute/review),
+// so the detail page can group a turn's trace. args_digest is capped
+// server-side, never a full args blob.
+export interface MissionToolCallPayload {
+  phase: string
+  tool: string
+  args_digest?: string
+  status: string
+  duration_ms: number
+}
+
 // MissionPermissionDeniedPayload is mission.permission_denied's payload
 // (runner.go's OnPermissionDenied); tool is the denied call, detail is
 // a short digest of why (never the full args/rationale).

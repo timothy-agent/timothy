@@ -21,11 +21,11 @@ import (
 )
 
 // scriptedAgent is a fake agentStream that replays a fixed sequence of
-// event batches, one batch per call to Start — call N of Start gets
+// event batches, one batch per call to Start: call N of Start gets
 // batch N. Lets a test script "first turn has no sentinel, recovery
 // turn does" without a real gateway. The real loop.Agent guarantees
 // exactly one terminal event before close, so batches that don't end
-// on one get an EventDone appended — a bare close is the abnormal
+// on one get an EventDone appended: a bare close is the abnormal
 // shape runTurn now rejects, and only rawClose tests script it.
 type scriptedAgent struct {
 	batches  [][]stream.StreamEvent
@@ -83,11 +83,20 @@ func newTestRunnerWithParker(agent agentStream, parker parkNotifier) *nativeRunn
 }
 
 // fakeParker records park/clear calls in order for assertion, keyed by
-// mission id — a real parkNotifier for tests, not a mock of one.
+// mission id: a real parkNotifier for tests, not a mock of one.
 type fakeParker struct {
-	parked  []string // "missionID:tool:danger"
-	cleared []string // missionID
-	denied  []string // "missionID:tool:digest"
+	parked    []string // "missionID:tool:danger"
+	cleared   []string // missionID
+	denied    []string // "missionID:tool:digest"
+	toolCalls []toolCallRecord
+}
+
+// toolCallRecord captures one OnToolCall invocation for assertion:
+// order in the slice IS call order, since runTurn appends synchronously
+// off its single event-consuming loop.
+type toolCallRecord struct {
+	missionID, phase, tool, digest, status string
+	durationMs                             int64
 }
 
 func (f *fakeParker) OnPermissionParked(_ context.Context, missionID, _, tool, _, danger, _ string) {
@@ -100,6 +109,10 @@ func (f *fakeParker) OnPermissionCleared(_ context.Context, missionID string) {
 
 func (f *fakeParker) OnPermissionDenied(_ context.Context, missionID, tool, digest string) {
 	f.denied = append(f.denied, missionID+":"+tool+":"+digest)
+}
+
+func (f *fakeParker) OnToolCall(_ context.Context, missionID, phase, tool, digest, status string, durationMs int64) {
+	f.toolCalls = append(f.toolCalls, toolCallRecord{missionID, phase, tool, digest, status, durationMs})
 }
 
 func permissionRequestEvent(id, callID, tool, danger string) stream.StreamEvent {
@@ -115,6 +128,15 @@ func toolResultEvent(id string) stream.StreamEvent {
 func deniedToolResultEvent(id, name, digest string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
 		ID: id, Name: name, Status: "denied", Digest: digest,
+	}}
+}
+
+// finishedToolResultEvent builds a fully-populated tool_result event:
+// the shape mission.tool_call's OnToolCall reads from (name, status,
+// args, duration).
+func finishedToolResultEvent(id, name, status, args string, durationMs int64) stream.StreamEvent {
+	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
+		ID: id, Name: name, Status: status, Args: json.RawMessage(args), DurationMs: durationMs,
 	}}
 }
 
@@ -232,7 +254,7 @@ func TestRunWorkerFallsBackToXMLTextSentinel(t *testing.T) {
 	}
 	// The XML form arrived on the FIRST turn (no tool call at all), so the
 	// runner still needs its one recovery re-run before falling back to
-	// text extraction — that ladder order is unchanged by this fix.
+	// text extraction: that ladder order is unchanged by this fix.
 	if agent.call != 2 {
 		t.Fatalf("expected two turns (original + one recovery) before the text fallback kicks in, got %d", agent.call)
 	}
@@ -261,7 +283,7 @@ func TestRunWorkerFallsBackToTokenJSONTextSentinel(t *testing.T) {
 
 func TestRunWorkerIgnoresRepeatSentinelCalls(t *testing.T) {
 	// A worker that calls mission_status twice in one turn: the runner
-	// captures the LAST tool_end for that name in the stream loop — this
+	// captures the LAST tool_end for that name in the stream loop: this
 	// documents that behavior explicitly (loop.Agent itself is what
 	// would reject a genuine repeat via the tool's closure-flag guard in
 	// production; nativeRunner just reads what the stream reports).
@@ -330,7 +352,7 @@ func TestRunReviewRoutePrecedence(t *testing.T) {
 // research-mission review gap: reviewers used to reject every round
 // for "missing goal" / "missing artifact" because neither was in
 // their context. The packet's goal, harness-read artifact contents,
-// and the worker's evidence must all reach the reviewer — and no
+// and the worker's evidence must all reach the reviewer: and no
 // empty "Diff to review" section may appear when there is no diff.
 func TestRunReviewPacketRendersArtifactsGoalAndEvidence(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -423,7 +445,7 @@ func TestRunReviewFallsBackToTextSentinel(t *testing.T) {
 }
 
 // TestRunReviewFallsBackToTokenJSONTextSentinel mirrors the XML case
-// for the token+JSON text form, on a rework decision — findings are
+// for the token+JSON text form, on a rework decision: findings are
 // empty in the text form (acceptable: GapFingerprint of empty findings
 // is empty, which the state machine already tolerates).
 func TestRunReviewFallsBackToTokenJSONTextSentinel(t *testing.T) {
@@ -472,7 +494,7 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 // TestPlanSessionPromptsLengthAwareSplitting pins that the planner is
 // told to split a unit whose own deliverable demands a long
 // continuous generation (many chapters/sections/files) along its
-// natural boundaries, regardless of the goal's subject matter — a
+// natural boundaries, regardless of the goal's subject matter: a
 // long single-turn stream truncating mid-generation is what a
 // too-few-units plan risks (a real 12-chapter book goal collapsed
 // into one unit and truncated on a long model stream, twice).
@@ -651,7 +673,7 @@ func TestPlanSessionRejectsInfeasibleWithoutReason(t *testing.T) {
 // TestPlanSessionRejectsCommandSubstitution guards parseSpec's
 // determinism rule: verify_cmd runs harness-side via RunVerify,
 // outside the permission chain (D-050's sandbox relaxation for a
-// worker/reviewer shell CALL does not apply here) — a planner-authored
+// worker/reviewer shell CALL does not apply here): a planner-authored
 // verify_cmd containing $(...) is rejected because command
 // substitution undermines a reproducible content check, not because of
 // any permission concern. The plan should be rejected here, at
@@ -711,10 +733,10 @@ func TestPlanSessionRecoversFromCommandSubstitutionFeedback(t *testing.T) {
 }
 
 // TestPlanSessionAcceptsLegitimateVerifyCmd confirms the substitution
-// guard doesn't false-positive on real verification commands — a
+// guard doesn't false-positive on real verification commands: a
 // content-checking verify_cmd (the existing tautology guard's whole
 // point: never a bare echo) and a legitimate input redirect (<, which
-// must stay legal — only substitution is banned) both parse cleanly
+// must stay legal: only substitution is banned) both parse cleanly
 // in a single turn, no recovery needed.
 func TestPlanSessionAcceptsLegitimateVerifyCmd(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -772,8 +794,8 @@ func TestPlanSessionRejectsUnitWithNoArtifacts(t *testing.T) {
 // regardless of content, which is exactly the shape of the real
 // amazon.nova-2-lite incident (verify_cmd `echo 'Gmail API integration
 // required for actual execution'`, always passing, proving nothing).
-// A command that merely CONTAINS one of those words — as an argument,
-// or after && — must still be accepted; the deny-set only looks at
+// A command that merely CONTAINS one of those words: as an argument,
+// or after &&: must still be accepted; the deny-set only looks at
 // the first token, by design (see the scoping comment in parseSpec).
 func TestPlanSessionRejectsNoOpVerifyCmd(t *testing.T) {
 	cases := []struct {
@@ -805,7 +827,7 @@ func TestPlanSessionRejectsNoOpVerifyCmd(t *testing.T) {
 }
 
 // TestPlanSessionAcceptsVerifyCmdContainingEchoWord confirms the
-// no-op deny-set only inspects the verify_cmd's FIRST shell word — a
+// no-op deny-set only inspects the verify_cmd's FIRST shell word: a
 // real content check that happens to contain the word "echo" as an
 // argument, or a command containing "echo" later after &&, must pass.
 func TestPlanSessionAcceptsVerifyCmdContainingEchoWord(t *testing.T) {
@@ -830,7 +852,7 @@ func TestPlanSessionAcceptsVerifyCmdContainingEchoWord(t *testing.T) {
 
 // TestPlanSessionRejectsUnterminatedQuote guards D-068's POSIX shell
 // syntax gate: verify_cmd is run through the REAL /bin/sh -n (per this
-// repo's real-shell-tests convention — a fake shell would forgive
+// repo's real-shell-tests convention: a fake shell would forgive
 // exactly the quoting bugs this check exists to catch). This mirrors
 // the real amazon.nova-lite incident, whose unterminated quote burned
 // execute iterations before failing at verify time, well after the
@@ -892,7 +914,7 @@ func TestPlanSessionRejectsMalformedJSON(t *testing.T) {
 
 // TestPlanSessionRecoversWithFeedback confirms a missing/invalid
 // submit_plan call on the first turn gets ONE recovery re-run whose
-// injected message names what was wrong — not a byte-identical retry
+// injected message names what was wrong: not a byte-identical retry
 // of the original prompt, which previously produced the same failure
 // every time against a nondeterministic model.
 func TestPlanSessionRecoversWithFeedback(t *testing.T) {
@@ -922,7 +944,7 @@ func TestPlanSessionRecoversWithFeedback(t *testing.T) {
 // criterion: a tool call that parks on an interactive permission
 // prompt must reach the mission row (via parkNotifier), not vanish
 // into runTurn's event drain the way it silently did before this
-// existed — that gap is what stranded a real mission for its full
+// existed: that gap is what stranded a real mission for its full
 // 10-minute timeout with the UI showing nothing.
 func TestRunWorkerReportsPermissionParkAndClear(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
@@ -950,7 +972,7 @@ func TestRunWorkerReportsPermissionParkAndClear(t *testing.T) {
 
 // sequencingParker records, at the moment each OnPermissionCleared
 // fires, how many distinct calls had parked vs how many tool results
-// had been delivered so far — the direct signal that distinguishes
+// had been delivered so far: the direct signal that distinguishes
 // "cleared after the right call" from "cleared after the first call
 // resolved regardless of which one" (a plain clear-count is identical
 // in both the buggy and fixed behavior for two concurrent parks).
@@ -970,7 +992,7 @@ func (f *sequencingParker) OnPermissionCleared(ctx context.Context, missionID st
 // destructive tool calls, both parked. Before this fix, runTurn's
 // single shared "parked" bool cleared the mission's pending-permission
 // state as soon as the FIRST call's result arrived, even while the
-// second call was still genuinely blocked awaiting a decision — the
+// second call was still genuinely blocked awaiting a decision: the
 // UI/API then showed nothing pending while a destructive command sat
 // unresolved for up to the full 10-minute timeout.
 func TestRunWorkerConcurrentParksClearOnlyWhenAllResolve(t *testing.T) {
@@ -1007,7 +1029,7 @@ func TestRunWorkerConcurrentParksClearOnlyWhenAllResolve(t *testing.T) {
 }
 
 // countingResultAgent wraps scriptedAgent's fixed batch with a live
-// counter the test parker reads at clear-time — the pre-buffered
+// counter the test parker reads at clear-time: the pre-buffered
 // channel scriptedAgent uses can't otherwise expose "how far the
 // consumer has gotten" to a callback fired mid-drain.
 type countingResultAgent struct {
@@ -1075,7 +1097,7 @@ func TestRunWorkerModelFloor(t *testing.T) {
 }
 
 // TestRunWorkerModelFloorDisabledByDefault: no deny list, any model is
-// fine — the sentinel outcome decides.
+// fine: the sentinel outcome decides.
 func TestRunWorkerModelFloorDisabledByDefault(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`), doneEvent("amazon.nova-lite-v1:0")},
@@ -1091,7 +1113,7 @@ func TestRunWorkerModelFloorDisabledByDefault(t *testing.T) {
 }
 
 // TestRunWorkerGetsMissionScopedShell: the worker turn must carry a
-// turn-scoped shell tool rooted in the mission's own workspace — the
+// turn-scoped shell tool rooted in the mission's own workspace: the
 // root cause of the workspace-split failure family was workers running
 // shell in the shared global root while verification looked in the
 // per-mission directory.
@@ -1116,7 +1138,7 @@ func TestWorkerRoute(t *testing.T) {
 }
 
 // TestOversightRoute pins explore/plan/replan's route resolution:
-// PlanRoute wins when set, Route otherwise — exact current behavior
+// PlanRoute wins when set, Route otherwise: exact current behavior
 // when PlanRoute is empty.
 func TestOversightRoute(t *testing.T) {
 	tests := []struct {
@@ -1162,7 +1184,7 @@ func TestReviewRoute(t *testing.T) {
 
 // TestWorkerModel pins route_model's precedence: it backs execute
 // exactly like Route, but must NOT carry over once workerRoute has
-// swapped to EscalationRoute — it names an entry in the base route's
+// swapped to EscalationRoute: it names an entry in the base route's
 // chain, not the escalation route's.
 func TestWorkerModel(t *testing.T) {
 	tests := []struct {
@@ -1336,7 +1358,7 @@ func TestRunWorkerOmitsConnectorReadsWhenResolverUnset(t *testing.T) {
 
 // TestExploreSessionIncludesConnectorReadsWhenResolverSet mirrors
 // TestRunWorkerIncludesConnectorReadsWhenResolverSet for the explore
-// phase — scheduled missions may need connector reads before planning
+// phase: scheduled missions may need connector reads before planning
 // too.
 func TestExploreSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1360,7 +1382,7 @@ func TestExploreSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 }
 
 // shellExtraTool pulls the "shell" tool out of a mission's ExtraTools
-// list — helper for tests exercising missionTools' Runner wiring
+// list: helper for tests exercising missionTools' Runner wiring
 // directly, without going through a full RunWorker turn.
 func shellExtraTool(t *testing.T, extras []*tools.Tool) *tools.Tool {
 	t.Helper()
@@ -1421,7 +1443,7 @@ func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
 
 // TestMissionToolsSandboxCapsOutput confirms cappedStringWriter bounds
 // the sandbox Runner's output the same way builtin.Shell's local path
-// caps its own — a runaway sandboxed command must not balloon memory
+// caps its own: a runaway sandboxed command must not balloon memory
 // or context just because the local exec path isn't the one running.
 func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	r := newTestRunner(&scriptedAgent{})
@@ -1500,10 +1522,66 @@ func TestRunWorkerReportsPermissionDenied(t *testing.T) {
 	}
 }
 
+// TestRunWorkerEmitsToolCallTraceInOrder covers issue #369's acceptance
+// criterion 1: every finished tool call in a worker turn reaches the
+// mission via parkNotifier as a mission.tool_call trace entry, in call
+// order, tagged with the execute phase and the correct outcome
+// classification (ok/denied/error).
+func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		finishedToolResultEvent("call1", "search_kb", "ok", `{"query":"first"}`, 12),
+		finishedToolResultEvent("call2", "shell", "denied", `{"command":"rm -rf /"}`, 3),
+		finishedToolResultEvent("call3", "write_file", "error", `{"path":"x"}`, 40),
+		toolEndEvent(missionStatusToolName, `{"outcome":"retry","analysis":"blocked"}`),
+	}}}
+	parker := &fakeParker{}
+	r := newTestRunnerWithParker(agent, parker)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	want := []toolCallRecord{
+		{"m1", "execute", "search_kb", `{"query":"first"}`, "ok", 12},
+		{"m1", "execute", "shell", `{"command":"rm -rf /"}`, "denied", 3},
+		{"m1", "execute", "write_file", `{"path":"x"}`, "error", 40},
+	}
+	if len(parker.toolCalls) != len(want) {
+		t.Fatalf("toolCalls = %+v, want %d entries", parker.toolCalls, len(want))
+	}
+	for i, got := range parker.toolCalls {
+		if got != want[i] {
+			t.Fatalf("toolCalls[%d] = %+v, want %+v", i, got, want[i])
+		}
+	}
+}
+
+// TestToolCallDigestCapsLargeArgs is the digest-capping table test
+// (issue #369's cap requirement): args past toolCallDigestCap bytes are
+// truncated with an ellipsis, never carried whole into the event.
+func TestToolCallDigestCapsLargeArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want string
+	}{
+		{"empty", "", ""},
+		{"short", `{"a":1}`, `{"a":1}`},
+		{"exactly at cap", strings.Repeat("a", toolCallDigestCap), strings.Repeat("a", toolCallDigestCap)},
+		{"over cap", strings.Repeat("a", toolCallDigestCap+500), strings.Repeat("a", toolCallDigestCap) + "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toolCallDigest(json.RawMessage(tt.args))
+			if got != tt.want {
+				t.Fatalf("toolCallDigest(%d bytes) len=%d, want len=%d", len(tt.args), len(got), len(tt.want))
+			}
+		})
+	}
+}
+
 // TestRunTurnBareCloseIsError pins the missions half of D-044: a loop
 // channel that closes with no terminal event at all (every producer
 // lost it to the turn deadline racing a stream cut) must surface as an
-// infra error — previously it returned a clean empty verdict, which
+// infra error: previously it returned a clean empty verdict, which
 // the caller read as a missing sentinel and burned a recovery re-run
 // plus a forced retry for one silent infra failure.
 // TestExploreSessionSentinelPresent mirrors TestRunWorkerSentinelPresent:
@@ -1625,7 +1703,7 @@ func TestExploreSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {
 
 // TestExploreSessionFallsBackToTextSentinel covers a explore turn
 // that expresses explore_notes as text (XML-ish tag), never as a tool
-// call — same fallback RunWorker/RunReview already rely on.
+// call: same fallback RunWorker/RunReview already rely on.
 func TestExploreSessionFallsBackToTextSentinel(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("no tool call here")},
@@ -1643,7 +1721,7 @@ func TestExploreSessionFallsBackToTextSentinel(t *testing.T) {
 
 // TestExploreSessionFallsBackToRawText is the advisory-phase contract:
 // when NEITHER turn produces an explore_notes call in any form, the raw
-// turn text becomes the notes — never an error, since explore findings
+// turn text becomes the notes: never an error, since explore findings
 // are advisory input to the planner, not a gate on mission progress.
 func TestExploreSessionFallsBackToRawText(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1679,7 +1757,7 @@ func TestExploreSessionStreamErrorPropagates(t *testing.T) {
 
 // TestExploreSessionGetsShellButNotWriteFile confirms the explore
 // turn's ExtraTools include a mission-scoped shell (for read-only
-// exploration) but never write_file — the execute phase does the
+// exploration) but never write_file: the execute phase does the
 // actual work, explore must not create or modify files.
 func TestExploreSessionGetsShellButNotWriteFile(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1713,7 +1791,7 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 		textEvent("partial work"),
 	}}}
 	r := newTestRunner(agent)
-	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute)
 	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
 		t.Fatalf("err = %v, want no-terminal error", err)
 	}
@@ -1723,7 +1801,7 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 }
 
 // TestRunTurnIncompleteIsError: a cut-off stream (EventIncomplete
-// terminal) is an infra failure, not a short clean answer — it must
+// terminal) is an infra failure, not a short clean answer: it must
 // not flow into sentinel parsing as if the worker finished.
 func TestRunTurnIncompleteIsError(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
@@ -1731,7 +1809,7 @@ func TestRunTurnIncompleteIsError(t *testing.T) {
 		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
 		t.Fatalf("err = %v, want incomplete-stream error", err)
 	}
 }
@@ -1744,13 +1822,13 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		{Type: stream.EventError},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute); err == nil || !strings.Contains(err.Error(), "provider stream error") {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
 
 // hangingAgent is a fake agentStream whose Start never sends and never
-// closes its channel on its own — it only closes once ctx is
+// closes its channel on its own: it only closes once ctx is
 // cancelled, modeling a stream that emits no chunk, no terminal, and
 // no error (the observed production hang: a worker turn silently wedged
 // for 35+ minutes with driveTimeBound, at 4h, nowhere near catching it).
@@ -1766,7 +1844,7 @@ func (hangingAgent) Start(ctx context.Context, req loop.Request) (<-chan stream.
 }
 
 // TestRunTurnTimesOutOnHungStream: runTurn must not block forever on a
-// stream that never emits anything — turnTimeout bounds it, and the
+// stream that never emits anything: turnTimeout bounds it, and the
 // resulting bare channel close falls into the same "stream ended
 // without a terminal event" retryable-failure path as a real stream
 // cut, rather than hanging the driver's Drive goroutine.
@@ -1779,7 +1857,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 	done := make(chan struct{})
 	var err error
 	go func() {
-		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName)
+		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute)
 		close(done)
 	}()
 	select {
@@ -1793,8 +1871,8 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 }
 
 // TestMissionRunnerRequestsAreBuiltinsOnly guards the security fix:
-// every loop.Request the native runner builds — worker, explorer,
-// reviewer, planner — must set BuiltinsOnly, so a mission turn's base
+// every loop.Request the native runner builds: worker, explorer,
+// reviewer, planner: must set BuiltinsOnly, so a mission turn's base
 // tool surface never includes connector tools (e.g. a write-capable
 // GitHub MCP token) or the chat-only mission list/get/push tools. A
 // missed phase here would silently reopen the side-channel the fix
@@ -1846,7 +1924,7 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 }
 
 // okToolResultEvent is toolResultEvent's ok-status counterpart with a
-// name and digest — search_web's rendered results ride the digest,
+// name and digest: search_web's rendered results ride the digest,
 // never a separate raw-result field (D-059).
 func okToolResultEvent(id, name, digest string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
@@ -1916,7 +1994,7 @@ func TestWebSearchResultURLs(t *testing.T) {
 // end-to-end wiring check (D-059): a worker turn that calls fetch_url
 // and search_web must surface both URLs on the returned verdict, so
 // the driver's citations check has real harness evidence to compare
-// against — never the model's own claim.
+// against: never the model's own claim.
 func TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{
@@ -2161,7 +2239,7 @@ func TestSteeringForNilWithoutProgressReader(t *testing.T) {
 
 // TestExecEnvironmentNoteIncludesTimezoneSteer pins that the date line
 // carries the timezone-presentation instruction right after the date,
-// for both an operator location and the nil (UTC) default — a global
+// for both an operator location and the nil (UTC) default: a global
 // harness instruction instead of per-prompt boilerplate.
 func TestExecEnvironmentNoteIncludesTimezoneSteer(t *testing.T) {
 	want := "Present all dates and times in this timezone unless the goal asks otherwise."

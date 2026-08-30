@@ -11,13 +11,14 @@ import type {
   MissionPROpenedPayload,
   MissionRetryPayload,
   MissionSteeredPayload,
+  MissionToolCallPayload,
   MissionTurnPayload,
 } from '../../api/types'
 import { formatDuration } from '../../lib/format'
 
 // eventRenderers maps a mission_events kind to a short, human-readable
 // summary of its payload. Unrecognized kinds fall back to the generic
-// renderer below — forward-compatible with new event kinds the web
+// renderer below: forward-compatible with new event kinds the web
 // hasn't been updated to render specifically, rather than rendering
 // blank.
 const renderers: Record<string, (payload: unknown) => ReactNode> = {
@@ -61,6 +62,14 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return (
       <span className="text-red-400" title={reason}>
         {base}: {truncateForDisplay(reason, 160)}
+      </span>
+    )
+  },
+  'mission.tool_call': (p) => {
+    const { tool, status, duration_ms } = p as MissionToolCallPayload
+    return (
+      <span className={toolCallStatusClass(status)}>
+        {tool} · {status} · {formatDuration(duration_ms)}
       </span>
     )
   },
@@ -195,13 +204,13 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
 
 // formatExecutorCost renders executor.result's usage.cost_usd.
 // cost_usd_billed=true means this figure is the SAME one the cost
-// ledger booked as real spend (Anthropic first-party api_key) — shown
+// ledger booked as real spend (Anthropic first-party api_key): shown
 // as the billed truth, unchanged from before. Everything else is the
 // CLI's own harness-reported figure, never booked as-is: subscription/
 // oauth_token auth (never billed at all) or a non-anthropic provider
-// (priced against Anthropic's table, fiction for that provider — the
+// (priced against Anthropic's table, fiction for that provider: the
 // ledger prices it from that provider's own rows instead, or leaves it
-// unpriced) — labeled so it's never mistaken for real marginal spend.
+// unpriced): labeled so it's never mistaken for real marginal spend.
 // Absent + subscription auth means cost is genuinely untracked (older
 // run, before this CLI reported it); absent otherwise is unreported.
 function formatExecutorCost(costUsd: number | null | undefined, billed: boolean, subscriptionAuth?: boolean): string {
@@ -213,12 +222,22 @@ function formatExecutorCost(costUsd: number | null | undefined, billed: boolean,
   return subscriptionAuth ? 'subscription — cost untracked' : 'cost unreported'
 }
 
+// toolCallStatusClass colors a tool call trace entry by outcome:
+// shared between the plain Timeline row above and TimelineSection's
+// per-turn trace, so a tool call reads the same color wherever it's
+// shown.
+export function toolCallStatusClass(status: string): string {
+  if (status === 'ok') return 'text-green-400'
+  if (status === 'denied') return 'text-amber-400'
+  return 'text-red-400'
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {}
 }
 
 // truncateForDisplay caps an inline Timeline snippet well below the
-// backend's own 2000-char event cap — a full shell command belongs in
+// backend's own 2000-char event cap: a full shell command belongs in
 // the (already truncated) event payload, not a single Timeline row.
 function truncateForDisplay(s: string, n = 200): string {
   return s.length <= n ? s : s.slice(0, n) + '…'
@@ -228,7 +247,7 @@ function truncateForDisplay(s: string, n = 200): string {
 // kinds fall back to the raw kind string rather than rendering blank.
 // allEvents carries the full timeline so executor.result (below) can
 // look back to the run's executor.spawned for context its own payload
-// doesn't repeat (auth_mode) — every other kind ignores it.
+// doesn't repeat (auth_mode): every other kind ignores it.
 export function renderEvent(event: MissionEvent, allEvents: MissionEvent[] = [event]): ReactNode {
   if (event.kind === 'executor.result') return renderExecutorResult(event, allEvents)
   const render = renderers[event.kind]
@@ -237,7 +256,7 @@ export function renderEvent(event: MissionEvent, allEvents: MissionEvent[] = [ev
 }
 
 function renderExecutorResult(event: MissionEvent, allEvents: MissionEvent[]): ReactNode {
-  // denials/usage are omitted from the payload when empty — never
+  // denials/usage are omitted from the payload when empty: never
   // assume presence, a TypeError here blanks the whole detail page.
   const { status, duration_ms, exit_code, denials = [], usage } = event.payload as ExecutorResultPayload
   const spawn = [...allEvents]

@@ -88,3 +88,91 @@ describe('TimelineSection', () => {
     expect(screen.getAllByText('1 event')).toHaveLength(1)
   })
 })
+
+// toolCallTraceEvents builds a mission.turn row preceded by three
+// mission.tool_call events, ordered as runner.go's runTurn appends
+// them: the shape a per-turn trace toggle groups (issue #369).
+const toolCallTraceEvents: MissionEvent[] = [
+  {
+    mission_id: 'm1',
+    seq: 1,
+    kind: 'mission.tool_call',
+    payload: { phase: 'execute', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
+    provenance: 'harness',
+    created_at: '2026-01-01T00:00:00Z',
+  },
+  {
+    mission_id: 'm1',
+    seq: 2,
+    kind: 'mission.tool_call',
+    payload: { phase: 'execute', tool: 'shell', args_digest: '{"command":"ls"}', status: 'denied', duration_ms: 3 },
+    provenance: 'harness',
+    created_at: '2026-01-01T00:00:01Z',
+  },
+  {
+    mission_id: 'm1',
+    seq: 3,
+    kind: 'mission.tool_call',
+    payload: { phase: 'execute', tool: 'write_file', args_digest: '{"path":"x"}', status: 'error', duration_ms: 40 },
+    provenance: 'harness',
+    created_at: '2026-01-01T00:00:02Z',
+  },
+  {
+    mission_id: 'm1',
+    seq: 4,
+    kind: 'mission.turn',
+    payload: { phase: 'execute', duration_ms: 500, ok: true, input: 'worker_done' },
+    provenance: 'harness',
+    created_at: '2026-01-01T00:00:03Z',
+  },
+]
+
+describe('TimelineSection tool call trace', () => {
+  it('excludes mission.tool_call events from the plain row count', () => {
+    render(<TimelineSection events={toolCallTraceEvents} />)
+    // Only the mission.turn row counts as an event; its three tool
+    // calls are nested, not separate rows.
+    expect(screen.getAllByText('1 event')).toHaveLength(1)
+  })
+
+  it('shows the trace collapsed by default, with a toggle naming the count', () => {
+    render(<TimelineSection events={toolCallTraceEvents} />)
+    expect(screen.getByText('3 tool calls')).toBeTruthy()
+    expect(screen.queryByText('search_kb')).toBeNull()
+  })
+
+  it('expands to show the ordered tool-call trace with outcome and duration', () => {
+    render(<TimelineSection events={toolCallTraceEvents} />)
+    fireEvent.click(screen.getByText('3 tool calls'))
+
+    const names = screen.getAllByText(/search_kb|shell|write_file/).map((el) => el.textContent)
+    expect(names).toEqual(['search_kb', 'shell', 'write_file'])
+    expect(screen.getByText('{"query":"first"}')).toBeTruthy()
+    expect(screen.getByText('{"command":"ls"}')).toBeTruthy()
+    expect(screen.getByText('{"path":"x"}')).toBeTruthy()
+  })
+
+  it('collapses again on a second toggle click', () => {
+    render(<TimelineSection events={toolCallTraceEvents} />)
+    const toggle = screen.getByText('3 tool calls')
+    fireEvent.click(toggle)
+    expect(screen.getByText('search_kb')).toBeTruthy()
+    fireEvent.click(toggle)
+    expect(screen.queryByText('search_kb')).toBeNull()
+  })
+
+  it('shows no toggle for a turn with no tool calls', () => {
+    const noCalls: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.turn',
+        payload: { phase: 'plan', duration_ms: 200, ok: true, input: 'plan_created' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ]
+    render(<TimelineSection events={noCalls} />)
+    expect(screen.queryByText(/tool call/)).toBeNull()
+  })
+})
