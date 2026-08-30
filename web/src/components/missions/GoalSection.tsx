@@ -9,8 +9,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 // markdown — same shape as ExploreSection, since the header only shows
 // the mission's name (or a truncated goal fallback) and the full text
 // moves here. Plain-text goals render unchanged: markdown of a plain
-// paragraph is a no-op. The copy button sits inside the content block,
-// same placement as ExploreSection/ResultSection's.
+// paragraph is a no-op. The copy button overlays the content block's
+// top-right corner, same placement as ExploreSection/ResultSection's.
 export function GoalSection({ goal }: { goal: string }) {
   return (
     <TooltipProvider>
@@ -19,8 +19,8 @@ export function GoalSection({ goal }: { goal: string }) {
           Show goal
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-2 rounded-lg border border-border bg-muted/30">
-            <div className="flex items-center justify-end px-3 pt-2">
+          <div className="relative mt-2 rounded-lg border border-border bg-muted/30">
+            <div className="absolute right-2 top-2">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex">
@@ -30,7 +30,7 @@ export function GoalSection({ goal }: { goal: string }) {
                 <TooltipContent>Copy</TooltipContent>
               </Tooltip>
             </div>
-            <div className="prose prose-sm max-h-64 max-w-none overflow-y-auto p-3 pt-1 dark:prose-invert">
+            <div className="prose prose-sm max-h-64 max-w-none overflow-y-auto p-3 pr-10 dark:prose-invert">
               <ReactMarkdown
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={rehypePlugins}

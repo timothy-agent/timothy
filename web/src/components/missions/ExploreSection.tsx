@@ -21,8 +21,8 @@ export function ExploreSection({ notes }: { notes: string }) {
           Show exploration
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-2 rounded-lg border border-border bg-muted/30">
-            <div className="flex items-center justify-end px-3 pt-2">
+          <div className="relative mt-2 rounded-lg border border-border bg-muted/30">
+            <div className="absolute right-2 top-2">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex">
@@ -32,7 +32,7 @@ export function ExploreSection({ notes }: { notes: string }) {
                 <TooltipContent>Copy</TooltipContent>
               </Tooltip>
             </div>
-            <div className="prose prose-sm max-h-64 max-w-none overflow-y-auto p-3 pt-1 dark:prose-invert">
+            <div className="prose prose-sm max-h-64 max-w-none overflow-y-auto p-3 pr-10 dark:prose-invert">
               <ReactMarkdown
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={rehypePlugins}

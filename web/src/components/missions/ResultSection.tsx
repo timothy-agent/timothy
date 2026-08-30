@@ -9,8 +9,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 export function ResultSection({ evidence }: { evidence: string }) {
   return (
     <TooltipProvider>
-      <div className="rounded-lg border border-border bg-muted/30">
-        <div className="flex items-center justify-end px-3 pt-2">
+      <div className="relative rounded-lg border border-border bg-muted/30">
+        <div className="absolute right-2 top-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex">
@@ -20,7 +20,7 @@ export function ResultSection({ evidence }: { evidence: string }) {
             <TooltipContent>Copy</TooltipContent>
           </Tooltip>
         </div>
-        <div className="prose prose-sm max-w-none p-3 pt-1 dark:prose-invert">
+        <div className="prose prose-sm max-w-none p-3 pr-10 dark:prose-invert">
           <ReactMarkdown
             remarkPlugins={remarkPlugins}
             rehypePlugins={rehypePlugins}
