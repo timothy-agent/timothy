@@ -1,0 +1,30 @@
+# Retrieval eval query set (issue #412). Flat, line-oriented format
+# parsed by a small python3 block in kb-eval.sh: no YAML dependency.
+#
+# Each query is a block starting with "query:" and ending at the next
+# "query:" or end of file. Fields:
+#   query: <text>              the search string
+#   expect: <document title>   one line per expected document (repeatable)
+#   negative: true             marks a query that must return zero hits
+#
+# Document titles must match the fixture filenames' derived titles
+# (filename without extension, as kb upload assigns).
+
+query: service mesh pay off small kubernetes cluster migration risks
+expect: mesh-migration-risks
+expect: mesh-when-it-pays-off
+
+query: how should I chunk documents for retrieval augmented generation
+expect: rag-chunking-strategy
+
+query: caching strategies to speed up a slow CI pipeline
+expect: cicd-pipeline-caching
+
+query: how do I choose which database columns to index
+expect: database-index-selection
+
+query: watercolor painting technique wet on wet blending
+negative: true
+
+query: fermenting kimchi at home with napa cabbage
+negative: true

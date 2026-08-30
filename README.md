@@ -201,7 +201,7 @@ Frontend development with hot reload:
 make dev   # Vite dev server on :3301, proxies /v1 to brain
 ```
 
-`make test-integration` and `make canary` need the compose stack up (`make up` first).
+`make test-integration`, `make canary`, and `make kb-eval` (retrieval eval harness, `scripts/kb-eval/`) need the compose stack up (`make up` first).
 
 Design decisions are documented as `D-0XX` markers in code comments next to the code they explain.
 

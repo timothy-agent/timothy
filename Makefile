@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen sandboxd dev canary canary-coding canary-research canary-executor canary-impossible sandbox-image
+	brain gateway memoryd web markitdown pdfgen sandboxd dev canary canary-coding canary-research canary-executor canary-impossible kb-eval sandbox-image
 
 build:
 	$(GO_RUN) go build ./...
@@ -132,6 +132,15 @@ canary-executor:
 # `make sandbox-image` run first.
 canary-impossible:
 	./scripts/canary-impossible.sh
+
+# Retrieval regression gate (issue #412): ingests a curated fixture set
+# into a dedicated collection, runs a fixed query set through the real
+# hybrid retrieval path, scores recall@5 and MRR, then deletes the
+# collection. Independent of make canary: the mission harness gate and
+# the retrieval gate must be able to fail on their own. Needs the stack
+# up. Override the pass threshold with KB_EVAL_MIN_RECALL (default 0.8).
+kb-eval:
+	./scripts/kb-eval/kb-eval.sh
 
 # Builds the per-mission sandbox images: the base (python3/node/git/
 # bash — deploy/sandbox-base.Dockerfile) plus one variant per
