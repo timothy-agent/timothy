@@ -26,6 +26,7 @@ type KBSearchHit struct {
 	Breadcrumb    string
 	Content       string
 	SourceRef     string
+	Score         float64
 }
 
 // KBSearchFunc runs one hybrid/semantic/keyword search over the whole
@@ -134,9 +135,7 @@ func formatKBHits(hits []KBSearchHit) string {
 		}
 		b.WriteString("\n")
 		if h.DocumentID != "" {
-			b.WriteString("Source: kb://")
-			b.WriteString(h.DocumentID)
-			b.WriteString("\n")
+			fmt.Fprintf(&b, "Source: kb://%s (score %.4f)\n", h.DocumentID, h.Score)
 		}
 		b.WriteString(h.Content)
 		b.WriteString("\n\n")

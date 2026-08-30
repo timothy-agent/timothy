@@ -690,7 +690,7 @@ func main() {
 		for i, h := range hits {
 			out[i] = builtin.KBSearchHit{
 				DocumentID: h.DocumentID, DocumentTitle: h.DocumentTitle, Breadcrumb: h.Breadcrumb,
-				Content: h.Content, SourceRef: h.SourceRef,
+				Content: h.Content, SourceRef: h.SourceRef, Score: h.Score,
 			}
 		}
 		return out, nil
@@ -1030,7 +1030,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		for i, h := range hits {
 			out[i] = builtin.KBSearchHit{
 				DocumentID: h.DocumentID, DocumentTitle: h.DocumentTitle, Breadcrumb: h.Breadcrumb,
-				Content: h.Content, SourceRef: h.SourceRef,
+				Content: h.Content, SourceRef: h.SourceRef, Score: h.Score,
 			}
 		}
 		return out, nil

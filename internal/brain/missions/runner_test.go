@@ -97,6 +97,7 @@ type fakeParker struct {
 type toolCallRecord struct {
 	missionID, phase, tool, digest, status string
 	durationMs                             int64
+	kbHits                                 []KBHitTrace
 }
 
 func (f *fakeParker) OnPermissionParked(_ context.Context, missionID, _, tool, _, danger, _ string) {
@@ -111,8 +112,8 @@ func (f *fakeParker) OnPermissionDenied(_ context.Context, missionID, tool, dige
 	f.denied = append(f.denied, missionID+":"+tool+":"+digest)
 }
 
-func (f *fakeParker) OnToolCall(_ context.Context, missionID, phase, tool, digest, status string, durationMs int64) {
-	f.toolCalls = append(f.toolCalls, toolCallRecord{missionID, phase, tool, digest, status, durationMs})
+func (f *fakeParker) OnToolCall(_ context.Context, missionID, phase, tool, digest, status string, durationMs int64, kbHits []KBHitTrace) {
+	f.toolCalls = append(f.toolCalls, toolCallRecord{missionID, phase, tool, digest, status, durationMs, kbHits})
 }
 
 func permissionRequestEvent(id, callID, tool, danger string) stream.StreamEvent {
@@ -1540,18 +1541,27 @@ func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
 		t.Fatalf("RunWorker: %v", err)
 	}
 	want := []toolCallRecord{
-		{"m1", "execute", "search_kb", `{"query":"first"}`, "ok", 12},
-		{"m1", "execute", "shell", `{"command":"rm -rf /"}`, "denied", 3},
-		{"m1", "execute", "write_file", `{"path":"x"}`, "error", 40},
+		{"m1", "execute", "search_kb", `{"query":"first"}`, "ok", 12, nil},
+		{"m1", "execute", "shell", `{"command":"rm -rf /"}`, "denied", 3, nil},
+		{"m1", "execute", "write_file", `{"path":"x"}`, "error", 40, nil},
 	}
 	if len(parker.toolCalls) != len(want) {
 		t.Fatalf("toolCalls = %+v, want %d entries", parker.toolCalls, len(want))
 	}
 	for i, got := range parker.toolCalls {
-		if got != want[i] {
+		if !toolCallRecordsEqual(got, want[i]) {
 			t.Fatalf("toolCalls[%d] = %+v, want %+v", i, got, want[i])
 		}
 	}
+}
+
+// toolCallRecordsEqual compares two toolCallRecord values: kbHits is a
+// slice (not comparable with ==), so this stands in for a plain struct
+// equality check.
+func toolCallRecordsEqual(a, b toolCallRecord) bool {
+	return a.missionID == b.missionID && a.phase == b.phase && a.tool == b.tool &&
+		a.digest == b.digest && a.status == b.status && a.durationMs == b.durationMs &&
+		slices.Equal(a.kbHits, b.kbHits)
 }
 
 // TestToolCallDigestCapsLargeArgs is the digest-capping table test
@@ -1575,6 +1585,20 @@ func TestToolCallDigestCapsLargeArgs(t *testing.T) {
 				t.Fatalf("toolCallDigest(%d bytes) len=%d, want len=%d", len(tt.args), len(got), len(tt.want))
 			}
 		})
+	}
+}
+
+// TestKBSearchHitTraceCapsHitCount covers issue #413's bounding
+// requirement: kbSearchHitTrace never records more than kbSearchHitCap
+// hits, even given a malformed or unexpectedly long digest.
+func TestKBSearchHitTraceCapsHitCount(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= kbSearchHitCap+5; i++ {
+		fmt.Fprintf(&b, "%d. Doc %d\nSource: kb://doc-%d (score 0.5)\ncontent\n\n", i, i, i)
+	}
+	got := kbSearchHitTrace(b.String())
+	if len(got) != kbSearchHitCap {
+		t.Fatalf("len(kbSearchHitTrace(...)) = %d, want %d", len(got), kbSearchHitCap)
 	}
 }
 
@@ -2046,6 +2070,120 @@ func TestWebSearchResultURLs(t *testing.T) {
 				t.Fatalf("webSearchResultURLs(%q) = %v, want %v", tc.digest, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestKBSearchHitTrace covers issue #413: search_kb's rendered digest
+// (kbsearch.go's formatKBHits) parses back into document ids, titles,
+// and fused scores for the mission.tool_call trace.
+func TestKBSearchHitTrace(t *testing.T) {
+	cases := []struct {
+		name   string
+		digest string
+		want   []KBHitTrace
+	}{
+		{
+			name:   "no matching passages found sentinel yields an explicit empty result",
+			digest: "no matching passages found",
+			want:   []KBHitTrace{},
+		},
+		{
+			name: "single hit",
+			digest: "1. Runbook — Runbook > Deploy (runbook.md)\n" +
+				"Source: kb://doc-abc-123 (score 0.8123)\n" +
+				"Run make deploy.",
+			want: []KBHitTrace{{DocumentID: "doc-abc-123", DocumentTitle: "Runbook", Score: 0.8123}},
+		},
+		{
+			name: "multiple hits, one with no breadcrumb or source ref",
+			digest: "1. Runbook — Runbook > Deploy (runbook.md)\n" +
+				"Source: kb://doc-1 (score 0.9)\n" +
+				"Run make deploy.\n\n" +
+				"2. FAQ\n" +
+				"Source: kb://doc-2 (score 0.4)\n" +
+				"Ask ops.",
+			want: []KBHitTrace{
+				{DocumentID: "doc-1", DocumentTitle: "Runbook", Score: 0.9},
+				{DocumentID: "doc-2", DocumentTitle: "FAQ", Score: 0.4},
+			},
+		},
+		{
+			name:   "hit with no document id has no source line to match",
+			digest: "1. FAQ\nAsk ops.",
+			want:   nil,
+		},
+		{
+			name:   "malformed digest yields nothing",
+			digest: "not a search_kb result at all",
+			want:   nil,
+		},
+		{
+			name:   "empty digest yields nothing",
+			digest: "",
+			want:   nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := kbSearchHitTrace(tc.digest)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("kbSearchHitTrace(%q) = %+v, want %+v", tc.digest, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunWorkerEmitsKBSearchHitsInTrace is the end-to-end wiring check
+// for issue #413: a worker turn's search_kb call reaches the
+// mission.tool_call trace with the returned document ids/titles/scores,
+// while an unrelated tool call's kbHits stays nil.
+func TestRunWorkerEmitsKBSearchHitsInTrace(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		toolEndEvent("search_kb", `{"query":"deploy"}`),
+		okToolResultEvent("call-1", "search_kb",
+			"1. Runbook — Runbook > Deploy (runbook.md)\nSource: kb://doc-abc-123 (score 0.8123)\nRun make deploy."),
+		toolEndEvent("shell", `{"command":"ls"}`),
+		finishedToolResultEvent("call-2", "shell", "ok", `{"command":"ls"}`, 5),
+		toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"deployed"}`),
+	}}}
+	parker := &fakeParker{}
+	r := newTestRunnerWithParker(agent, parker)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if len(parker.toolCalls) != 2 {
+		t.Fatalf("toolCalls = %+v, want 2 entries", parker.toolCalls)
+	}
+	kbCall := parker.toolCalls[0]
+	want := []KBHitTrace{{DocumentID: "doc-abc-123", DocumentTitle: "Runbook", Score: 0.8123}}
+	if kbCall.tool != "search_kb" || !slices.Equal(kbCall.kbHits, want) {
+		t.Fatalf("search_kb toolCall = %+v, want kbHits %+v", kbCall, want)
+	}
+	if shellCall := parker.toolCalls[1]; shellCall.kbHits != nil {
+		t.Fatalf("shell toolCall.kbHits = %+v, want nil", shellCall.kbHits)
+	}
+}
+
+// TestRunWorkerEmitsEmptyKBSearchHitsExplicitly covers issue #413's
+// empty-result acceptance criterion: a search_kb call with no hits
+// still records a non-nil empty kbHits slice, distinguishing "searched,
+// found nothing" from "not a search_kb call".
+func TestRunWorkerEmitsEmptyKBSearchHitsExplicitly(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		toolEndEvent("search_kb", `{"query":"nothing"}`),
+		okToolResultEvent("call-1", "search_kb", "no matching passages found"),
+		toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"searched, found nothing"}`),
+	}}}
+	parker := &fakeParker{}
+	r := newTestRunnerWithParker(agent, parker)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if len(parker.toolCalls) != 1 {
+		t.Fatalf("toolCalls = %+v, want 1 entry", parker.toolCalls)
+	}
+	if kbHits := parker.toolCalls[0].kbHits; kbHits == nil || len(kbHits) != 0 {
+		t.Fatalf("kbHits = %+v, want a non-nil empty slice", kbHits)
 	}
 }
 

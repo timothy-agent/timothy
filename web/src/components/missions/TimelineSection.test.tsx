@@ -161,6 +161,75 @@ describe('TimelineSection tool call trace', () => {
     expect(screen.queryByText('search_kb')).toBeNull()
   })
 
+  it('shows the hit list with title and score when a search_kb call is expanded', () => {
+    const withHits: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.tool_call',
+        payload: {
+          phase: 'execute',
+          tool: 'search_kb',
+          args_digest: '{"query":"deploy"}',
+          status: 'ok',
+          duration_ms: 12,
+          kb_hits: [{ document_id: 'doc-1', document_title: 'Runbook', score: 0.8123 }],
+        },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.turn',
+        payload: { phase: 'execute', duration_ms: 500, ok: true, input: 'worker_done' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:01Z',
+      },
+    ]
+    render(<TimelineSection events={withHits} />)
+    fireEvent.click(screen.getByText('1 tool call'))
+    expect(screen.getByText('Runbook · score 0.8123')).toBeTruthy()
+  })
+
+  it('shows an explicit "no hits" line for a search_kb call with an empty result', () => {
+    const noHits: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.tool_call',
+        payload: {
+          phase: 'execute',
+          tool: 'search_kb',
+          args_digest: '{"query":"nothing"}',
+          status: 'ok',
+          duration_ms: 5,
+          kb_hits: [],
+        },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.turn',
+        payload: { phase: 'execute', duration_ms: 200, ok: true, input: 'worker_done' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:01Z',
+      },
+    ]
+    render(<TimelineSection events={noHits} />)
+    fireEvent.click(screen.getByText('1 tool call'))
+    expect(screen.getByText('no hits')).toBeTruthy()
+  })
+
+  it('shows no hit list for a non-search_kb tool call', () => {
+    render(<TimelineSection events={toolCallTraceEvents} />)
+    fireEvent.click(screen.getByText('3 tool calls'))
+    expect(screen.queryByText('no hits')).toBeNull()
+    expect(screen.queryByText(/score/)).toBeNull()
+  })
+
   it('shows no toggle for a turn with no tool calls', () => {
     const noCalls: MissionEvent[] = [
       {

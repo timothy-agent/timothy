@@ -929,13 +929,25 @@ export interface MissionRetryPayload {
 // worker/explore/plan/review turn, in call order. phase matches the
 // mission.turn event for the same turn (explore/plan/execute/review),
 // so the detail page can group a turn's trace. args_digest is capped
-// server-side, never a full args blob.
+// server-side, never a full args blob. kb_hits is set only for a
+// search_kb call (issue #413): an empty array means the search ran and
+// found nothing, undefined means this call wasn't search_kb at all.
 export interface MissionToolCallPayload {
   phase: string
   tool: string
   args_digest?: string
   status: string
   duration_ms: number
+  kb_hits?: MissionKBHit[]
+}
+
+// MissionKBHit is one search_kb hit on a mission.tool_call event
+// (runner.go's KBHitTrace, issue #413): document id/title and fused
+// score only, never chunk content.
+export interface MissionKBHit {
+  document_id: string
+  document_title?: string
+  score: number
 }
 
 // MissionPermissionDeniedPayload is mission.permission_denied's payload
