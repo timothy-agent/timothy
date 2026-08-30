@@ -129,7 +129,11 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	// Signal(InputResume) below fires Drive in a background goroutine
+	// that outlives this test; a nil runner panics there once it
+	// reaches runExecute, surfacing as an async crash during package
+	// teardown instead of a normal test failure.
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
@@ -197,7 +201,9 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	// Signal(InputResume) fires Drive in a background goroutine that
+	// outlives this test (same reason as TestMissionsResumeWithAnswerReachesWorker).
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
