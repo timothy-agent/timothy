@@ -44,19 +44,19 @@ var kbAllowedExt = map[string]bool{
 
 // kbIngester runs memoryd's ingest pipeline for one document; nil
 // disables background ingestion (memoryd unreachable is a runtime
-// error, not a nil-gate, but MEMORYD_URL is always configured — this
+// error, not a nil-gate, but MEMORYD_URL is always configured: this
 // interface exists so tests can fake it).
 type kbIngester interface {
 	IngestDocument(ctx context.Context, documentID, title, markdown string) (int, error)
 }
 
 // kbClassifier picks (or proposes) a collection for a document at
-// auto-ingest time — chat.ClassifyCollectionOverGateway in production,
+// auto-ingest time: chat.ClassifyCollectionOverGateway in production,
 // faked in tests. Never errors (same best-effort contract as the
 // classifier itself): a document must always resolve to some choice.
 type kbClassifier func(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice
 
-// kbTitler generates a document title from a markdown excerpt —
+// kbTitler generates a document title from a markdown excerpt:
 // chat.TitleOverGateway in production, faked in tests. Never errors;
 // an empty return means the caller falls back to titleFromURL.
 type kbTitler func(ctx context.Context, input string) string
@@ -106,7 +106,7 @@ type kbAPI struct {
 // resolveCollection runs the auto-classify path shared by
 // uploadDocumentAuto/addDocumentFromURLAuto: lists existing collections,
 // classifies the document against them, and creates a new collection
-// when the classifier proposes one. Never fails outright — a
+// when the classifier proposes one. Never fails outright: a
 // CreateCollection error just logs and falls through to "Unsorted" via
 // a second attempt, since ingest must not block on this step.
 func (h *kbAPI) resolveCollection(ctx context.Context, title, markdownText string) (string, error) {
@@ -141,7 +141,7 @@ func failKB(w http.ResponseWriter, err error) {
 }
 
 // sanitizeDocument clears Markdown before a document ever reaches
-// writeJSON — the field stays populated in the struct (reingest reads
+// writeJSON: the field stays populated in the struct (reingest reads
 // it back) but never rides the wire, mirroring sanitizeMission's
 // attachment-markdown strip in missions.go.
 func sanitizeDocument(d kb.Document) kb.Document {
@@ -189,7 +189,7 @@ func (h *kbAPI) getCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateCollection renames a collection and/or replaces its
-// description — absent fields stay untouched (pointer-decoded PATCH,
+// description: absent fields stay untouched (pointer-decoded PATCH,
 // same shape the settings handlers use).
 func (h *kbAPI) updateCollection(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -260,7 +260,7 @@ func (h *kbAPI) searchDocuments(w http.ResponseWriter, r *http.Request) {
 }
 
 // decodedUpload is one multipart file field, parsed and converted to
-// markdown — shared by uploadDocument (collection given) and
+// markdown: shared by uploadDocument (collection given) and
 // uploadDocumentAuto (collection classified after this step).
 type decodedUpload struct {
 	title, filename, markdown string
@@ -324,10 +324,13 @@ func (h *kbAPI) decodeUpload(w http.ResponseWriter, r *http.Request) (decodedUpl
 }
 
 // finishIngest creates the pending document row, fires the background
-// ingest goroutine, and writes the created document back — the shared
-// tail of every ingest entry point (scoped and auto alike).
+// ingest goroutine, and writes the created document back: the shared
+// tail of every ingest entry point (scoped and auto alike). Every
+// caller is operator-driven (file upload or URL fetch), so provenance
+// is always 'curated' (D-080); the browser-extension clip path
+// bypasses finishIngest and sets 'web' directly.
 func (h *kbAPI) finishIngest(w http.ResponseWriter, r *http.Request, collectionID, title, sourceType, sourceRef, markdownText string, size int64) {
-	docID, err := h.store.CreateDocument(r.Context(), collectionID, title, sourceType, sourceRef, markdownText, size)
+	docID, err := h.store.CreateDocument(r.Context(), collectionID, title, sourceType, sourceRef, "curated", markdownText, size)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 		return
@@ -389,7 +392,7 @@ type kbURLRequest struct {
 	Title string `json:"title"`
 }
 
-// decodedURL is one fetched-and-converted URL — shared by
+// decodedURL is one fetched-and-converted URL: shared by
 // addDocumentFromURL (collection given) and addDocumentFromURLAuto
 // (collection classified after this step).
 type decodedURL struct {
@@ -397,7 +400,7 @@ type decodedURL struct {
 	rawBytes             int64
 }
 
-// decodeURL parses req.URL, fetches it (public addresses only — the
+// decodeURL parses req.URL, fetches it (public addresses only: the
 // client dials through netguard), and converts the response to
 // markdown the same way upload does (HTML/PDF via markitdown, plain
 // text and markdown taken as-is).
@@ -614,7 +617,7 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		docID, err := h.store.CreateDocument(r.Context(), collectionID, title, "clip", sourceRef, markdownText, int64(len(markdownText)))
+		docID, err := h.store.CreateDocument(r.Context(), collectionID, title, "clip", sourceRef, "web", markdownText, int64(len(markdownText)))
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 			return
@@ -663,7 +666,7 @@ func (h *kbAPI) fetchURL(ctx context.Context, u *url.URL) ([]byte, string, error
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Bot-block statuses: LinkedIn's 999, plus the usual challenge
-		// responses — a raw status code reads like our bug when it's the
+		// responses: a raw status code reads like our bug when it's the
 		// site refusing automated clients.
 		switch resp.StatusCode {
 		case 999, http.StatusForbidden, http.StatusTooManyRequests:

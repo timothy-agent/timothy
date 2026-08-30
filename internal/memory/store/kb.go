@@ -102,6 +102,7 @@ type KBSearchHit struct {
 	Content       string
 	Score         float64
 	SourceRef     string
+	Provenance    string
 }
 
 // KBSearchMode selects which leg(s) KBSearch runs.
@@ -136,6 +137,23 @@ const minSimilarityLit = "0.25"
 // a config knob: no existing settings pattern fits one retrieval-tuning
 // constant.
 const boostFactorLit = "1.5"
+
+// provenanceWeight*Lit multiply a chunk's score by its document's
+// provenance tier (D-080, issue #372): curated (operator-vetted) stays
+// at parity, mission-generated content is discounted, web-clipped
+// content discounted further, so a comparably-relevant model-written
+// or web-clipped doc never silently outranks a curated one and the
+// KB can't reinforce its own errors. Values are spaced widely enough
+// to reorder same-relevance docs across tiers (fused RRF scores for
+// hits at similar ranks differ by a few percent at most, see the
+// golden tests) but not so steep that an off-tier doc with a
+// meaningfully higher fused score gets buried under an unrelated
+// curated one.
+const (
+	provenanceWeightCuratedLit = "1.0"
+	provenanceWeightMissionLit = "0.8"
+	provenanceWeightWebLit     = "0.6"
+)
 
 // KBSearch runs hybrid (vector + full-text, RRF-fused), semantic-only,
 // or keyword-only retrieval over kb_chunks. Empty collectionNames
@@ -176,7 +194,7 @@ func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, 
 	for rows.Next() {
 		var h KBSearchHit
 		if err := rows.Scan(&h.ChunkID, &h.DocumentID, &h.DocumentTitle, &h.Collection,
-			&h.Breadcrumb, &h.Content, &h.SourceRef, &h.Score); err != nil {
+			&h.Breadcrumb, &h.Content, &h.SourceRef, &h.Provenance, &h.Score); err != nil {
 			return nil, fmt.Errorf("kb search: %w", err)
 		}
 		out = append(out, h)
@@ -187,7 +205,7 @@ func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, 
 const (
 	// kbProjection joins chunk -> document -> collection; col.name backs
 	// both the optional collection filter and the boost multiplier.
-	kbProjection = `SELECT c.id, d.id, d.title, col.name, c.breadcrumb, c.content, d.source_ref`
+	kbProjection = `SELECT c.id, d.id, d.title, col.name, c.breadcrumb, c.content, d.source_ref, d.provenance`
 
 	// kbQueryCTEq1/q2 normalize the query's lexemes and OR them
 	// together: same rationale as memories retrieval's textSQL: a
@@ -214,7 +232,15 @@ const (
 	boostMultiplierQ4 = `(CASE WHEN col.name = ANY($4::text[]) THEN ` + boostFactorLit + ` ELSE 1 END)`
 	boostMultiplierQ5 = `(CASE WHEN col.name = ANY($5::text[]) THEN ` + boostFactorLit + ` ELSE 1 END)`
 
-	semanticSQL = kbProjection + `, (1 - (c.embedding <=> $1::vector)) * ` + boostMultiplierQ4 + ` AS score
+	// provenanceMultiplier weights by document provenance (D-080):
+	// composes with boostMultiplier by plain multiplication, applied
+	// once post-fusion alongside it, same as the boost.
+	provenanceMultiplier = `(CASE d.provenance
+		WHEN 'mission' THEN ` + provenanceWeightMissionLit + `
+		WHEN 'web' THEN ` + provenanceWeightWebLit + `
+		ELSE ` + provenanceWeightCuratedLit + ` END)`
+
+	semanticSQL = kbProjection + `, (1 - (c.embedding <=> $1::vector)) * ` + boostMultiplierQ4 + ` * ` + provenanceMultiplier + ` AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id
@@ -224,7 +250,7 @@ const (
 		LIMIT $3`
 
 	keywordSQL = `WITH q AS (` + kbQueryCTEq1 + `)
-		` + kbProjection + `, ts_rank(c.tsv, q.query) * ` + boostMultiplierQ4 + ` AS score
+		` + kbProjection + `, ts_rank(c.tsv, q.query) * ` + boostMultiplierQ4 + ` * ` + provenanceMultiplier + ` AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id, q
@@ -263,7 +289,7 @@ const (
 			FROM (SELECT id, rank FROM vec UNION ALL SELECT id, rank FROM fts) legs
 			GROUP BY id
 		)
-		` + kbProjection + `, fused.score * ` + boostMultiplierQ5 + ` AS score
+		` + kbProjection + `, fused.score * ` + boostMultiplierQ5 + ` * ` + provenanceMultiplier + ` AS score
 		FROM fused
 		JOIN kb_chunks c ON c.id = fused.id
 		JOIN kb_documents d ON d.id = c.document_id

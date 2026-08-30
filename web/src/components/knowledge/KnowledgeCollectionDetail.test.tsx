@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KbDocument } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
-import { SourceBadge } from './KnowledgeCollectionDetail'
+import { ProvenanceBadge, SourceBadge } from './KnowledgeCollectionDetail'
 
 afterEach(cleanup)
 
@@ -12,6 +12,7 @@ const baseDoc: KbDocument = {
   title: 'notes',
   source_type: 'file',
   source_ref: 'notes.md',
+  provenance: 'curated',
   status: 'pending',
   error: '',
   chunk_count: 0,
@@ -51,5 +52,14 @@ describe('SourceBadge', () => {
     renderBadge(baseDoc)
     expect(screen.queryByRole('link')).not.toBeInTheDocument()
     expect(screen.getByText('file')).toBeInTheDocument()
+  })
+})
+
+describe('ProvenanceBadge', () => {
+  afterEach(cleanup)
+
+  it('shows the provenance tier label', () => {
+    render(<ProvenanceBadge doc={{ ...baseDoc, provenance: 'mission' }} />)
+    expect(screen.getByText('Mission')).toBeInTheDocument()
   })
 })

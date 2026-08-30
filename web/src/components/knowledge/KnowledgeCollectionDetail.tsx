@@ -66,6 +66,23 @@ export function SourceBadge({ doc }: { doc: KbDocument }) {
   )
 }
 
+const provenanceLabel: Record<KbDocument['provenance'], string> = {
+  curated: 'Curated',
+  mission: 'Mission',
+  web: 'Web',
+}
+
+// ProvenanceBadge shows the retrieval-ranking tier (curated > mission >
+// web; see internal/memory/store/kb.go KBSearch) read-only, next to
+// SourceBadge's ingestion mechanism.
+export function ProvenanceBadge({ doc }: { doc: KbDocument }) {
+  return (
+    <span className="rounded border border-border px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+      {provenanceLabel[doc.provenance]}
+    </span>
+  )
+}
+
 const statusStyle: Record<KbDocument['status'], string> = {
   pending: 'bg-muted text-muted-foreground',
   ingesting: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
@@ -249,7 +266,10 @@ export function KnowledgeCollectionDetail() {
                       <span className="truncate">{doc.title}</span>
                     </td>
                     <td className="px-3 py-2">
-                      <SourceBadge doc={doc} />
+                      <div className="flex items-center gap-1.5">
+                        <SourceBadge doc={doc} />
+                        <ProvenanceBadge doc={doc} />
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       <StatusBadge doc={doc} />

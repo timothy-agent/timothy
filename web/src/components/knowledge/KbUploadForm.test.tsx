@@ -11,6 +11,7 @@ const doc: KbDocument = {
   title: 'notes',
   source_type: 'file',
   source_ref: 'notes.md',
+  provenance: 'curated',
   status: 'pending',
   error: '',
   chunk_count: 0,

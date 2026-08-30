@@ -61,7 +61,7 @@ func testKBStore(t *testing.T) *kb.Store {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	// The pool must outlive t.Context(), which is already done when
-	// t.Cleanup fires — a t.Context()-scoped pool silently no-ops the
+	// t.Cleanup fires: a t.Context()-scoped pool silently no-ops the
 	// cleanup delete below, leaking itest-% collections that collide
 	// across tests sharing fixedClassifier's name. A plain Background
 	// pool leaks connections instead (pgpool has no Close), so use a
@@ -96,7 +96,7 @@ func testKBStore(t *testing.T) *kb.Store {
 // fakeIngester never calls memoryd; tests only exercise brain's own
 // CRUD/upload surface, not the memoryd round trip (covered separately
 // in internal/memory/api). Ingestion runs on brain's own background
-// goroutine (kb.go's startIngest), so calls needs its own lock — the
+// goroutine (kb.go's startIngest), so calls needs its own lock: the
 // test polls it from the main goroutine while the fake is invoked from
 // that background one.
 type fakeIngester struct {
@@ -119,7 +119,7 @@ func (f *fakeIngester) callCount() int {
 	return f.calls
 }
 
-// fixedClassifier always proposes the same new collection — these
+// fixedClassifier always proposes the same new collection: these
 // integration tests exercise brain's own CRUD/upload surface, not the
 // classify prompt itself (covered in internal/brain/chat).
 func fixedClassifier(ctx context.Context, docTitle, docText string, collections []kb.Collection) chat.CollectionChoice {
@@ -181,8 +181,8 @@ func TestKBCollectionsCRUD(t *testing.T) {
 	}
 
 	// A failed document counts toward failed_count but not the base
-	// doc/chunk story — GetCollection picks it up via collectionColumns.
-	docID, err := store.CreateDocument(context.Background(), created.ID, "Doc", "file", "doc.md", "content", 7)
+	// doc/chunk story: GetCollection picks it up via collectionColumns.
+	docID, err := store.CreateDocument(context.Background(), created.ID, "Doc", "file", "doc.md", "curated", "content", 7)
 	if err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 
 	// The real terminal flip (ingesting -> ready/failed) is memoryd's
 	// own report via SetIngested/SetFailed (internal/memory/store/kb.go)
-	// after a real ReplaceChunks — this fake ingester only stands in for
+	// after a real ReplaceChunks: this fake ingester only stands in for
 	// the memclient round trip, so the document parks at "ingesting"
 	// here; poll for that and confirm the fake was actually reached with
 	// the stored markdown.
@@ -272,6 +272,9 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	if final.Markdown != "# Title\nsome content" {
 		t.Fatalf("stored markdown = %q", final.Markdown)
 	}
+	if final.Provenance != "curated" {
+		t.Fatalf("provenance = %q, want curated (D-080: operator upload)", final.Provenance)
+	}
 }
 
 // TestKBSearchDocumentsCrossCollectionTitleMatch covers GET
@@ -293,13 +296,13 @@ func TestKBSearchDocumentsCrossCollectionTitleMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	if _, err := store.CreateDocument(context.Background(), collA, "Runbook QUERYTAG", "file", "a.md", "content a", 9); err != nil {
+	if _, err := store.CreateDocument(context.Background(), collA, "Runbook QUERYTAG", "file", "a.md", "curated", "content a", 9); err != nil {
 		t.Fatalf("CreateDocument a: %v", err)
 	}
-	if _, err := store.CreateDocument(context.Background(), collB, "querytag onboarding", "file", "b.md", "content b", 9); err != nil {
+	if _, err := store.CreateDocument(context.Background(), collB, "querytag onboarding", "file", "b.md", "curated", "content b", 9); err != nil {
 		t.Fatalf("CreateDocument b: %v", err)
 	}
-	if _, err := store.CreateDocument(context.Background(), collB, "unrelated notes", "file", "c.md", "content c", 9); err != nil {
+	if _, err := store.CreateDocument(context.Background(), collB, "unrelated notes", "file", "c.md", "curated", "content c", 9); err != nil {
 		t.Fatalf("CreateDocument c: %v", err)
 	}
 
@@ -406,7 +409,7 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 	defer page.Close()
 
 	// httptest listens on loopback, which the production netguard
-	// transport refuses — swap in an unguarded one for this test.
+	// transport refuses: swap in an unguarded one for this test.
 	saved := kbFetchTransport
 	kbFetchTransport = http.DefaultTransport
 	defer func() { kbFetchTransport = saved }()
@@ -463,6 +466,9 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 	}
 	if got := ingester.callCount(); got != 1 {
 		t.Fatalf("ingester calls = %d, want 1", got)
+	}
+	if final.Provenance != "curated" {
+		t.Fatalf("provenance = %q, want curated (D-080: operator-fetched URL, distinct from a Pounce clip)", final.Provenance)
 	}
 }
 
@@ -787,11 +793,11 @@ func TestKBSweepStaleFailsStuckDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	pendingID, err := store.CreateDocument(ctx, collID, "Stuck pending", "file", "a.md", "content", 7)
+	pendingID, err := store.CreateDocument(ctx, collID, "Stuck pending", "file", "a.md", "curated", "content", 7)
 	if err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
-	ingestingID, err := store.CreateDocument(ctx, collID, "Stuck ingesting", "file", "b.md", "content", 7)
+	ingestingID, err := store.CreateDocument(ctx, collID, "Stuck ingesting", "file", "b.md", "curated", "content", 7)
 	if err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
@@ -938,6 +944,7 @@ func TestKBClipNewDocumentAutoClassifiesAndNormalizesURL(t *testing.T) {
 		CollectionID string `json:"collection_id"`
 		SourceType   string `json:"source_type"`
 		SourceRef    string `json:"source_ref"`
+		Provenance   string `json:"provenance"`
 		Status       string `json:"status"`
 	}
 	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
@@ -948,6 +955,9 @@ func TestKBClipNewDocumentAutoClassifiesAndNormalizesURL(t *testing.T) {
 	}
 	if doc.SourceRef != "https://example.com/article?x=1" {
 		t.Fatalf("source_ref = %q, want tracking params stripped and fragment dropped", doc.SourceRef)
+	}
+	if doc.Provenance != "web" {
+		t.Fatalf("provenance = %q, want web (D-080: browser-extension clip)", doc.Provenance)
 	}
 	coll, err := store.GetCollection(context.Background(), doc.CollectionID)
 	if err != nil {
@@ -1272,7 +1282,7 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "file", "doc.md", "content", 7)
+	docID, err := store.CreateDocument(context.Background(), collID, "Doc", "file", "doc.md", "curated", "content", 7)
 	if err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}

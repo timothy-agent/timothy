@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +242,198 @@ func TestKBGoldenKeywordOnlyMultiTopic(t *testing.T) {
 	got := kbHitKeys(t, hits)
 	if !got["t-alloy"] || !got["t-dash"] {
 		t.Fatalf("multi-topic keyword search missed a partial answer: got %v", got)
+	}
+}
+
+// D-080 (issue #372): provenance-weighted ranking.
+const kbProvenanceCollection = "itest-kbprov"
+
+// seedKBProvenancePool opens (and migrates) the shared test pool, and
+// registers itest-kbprov% cleanup, without seeding any fixture rows:
+// shared by every provenance test below so each can seed its own
+// collections.
+func seedKBProvenancePool(t *testing.T) *pgpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, _ = db.Exec(ctx, "DELETE FROM kb_collections WHERE name LIKE 'itest-kbprov%'")
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM kb_collections WHERE name LIKE 'itest-kbprov%'")
+	})
+	return pool
+}
+
+// seedKBProvenanceDoc inserts one collection (if not already present),
+// one document at the given provenance tier, and a single chunk.
+func seedKBProvenanceDoc(t *testing.T, st *KBStore, collection, docTitle, provenance, content string, emb Vector) string {
+	t.Helper()
+	ctx := t.Context()
+	db, err := st.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var collID string
+	err = db.QueryRow(ctx, "SELECT id FROM kb_collections WHERE name = $1", collection).Scan(&collID)
+	if err != nil {
+		if err := db.QueryRow(ctx, "INSERT INTO kb_collections (name) VALUES ($1) RETURNING id",
+			collection).Scan(&collID); err != nil {
+			t.Fatalf("insert collection %s: %v", collection, err)
+		}
+	}
+	var docID string
+	if err := db.QueryRow(ctx, `INSERT INTO kb_documents (collection_id, title, provenance, status)
+		VALUES ($1, $2, $3, 'ready') RETURNING id`, collID, docTitle, provenance).Scan(&docID); err != nil {
+		t.Fatalf("insert document %s: %v", docTitle, err)
+	}
+	if err := st.ReplaceChunks(ctx, docID, []KBChunk{
+		{Seq: 0, Content: content, Embedding: emb, EmbeddingModel: "itest"},
+	}); err != nil {
+		t.Fatalf("ReplaceChunks %s: %v", docTitle, err)
+	}
+	return docID
+}
+
+// seedKBProvenance builds three documents in one collection, one per
+// tier, each with a single chunk on the same basis dimension (dim
+// 500, so relevance never interferes with tier ordering), plus two
+// curated chunks at different relevance to pin within-tier ordering
+// stays untouched. The less relevant chunk shares the query axis at
+// similarity 0.6 rather than sitting on an orthogonal basis: fully
+// orthogonal would fall below the semantic similarity floor (0.25)
+// and never return at all.
+func seedKBProvenance(t *testing.T) *KBStore {
+	t.Helper()
+	pool := seedKBProvenancePool(t)
+	st := NewKBStore(pool)
+
+	for _, tier := range []string{"curated", "mission", "web"} {
+		seedKBProvenanceDoc(t, st, kbProvenanceCollection, tier+"-doc", tier,
+			tier+" tier content about widgets", kbBasis(500))
+	}
+	lessRelevant := make(Vector, 1024)
+	lessRelevant[600] = 0.6
+	lessRelevant[601] = 0.8
+	seedKBProvenanceDoc(t, st, kbProvenanceCollection, "within-tier-doc-a", "curated",
+		"more relevant curated chunk", kbBasis(600))
+	seedKBProvenanceDoc(t, st, kbProvenanceCollection, "within-tier-doc-b", "curated",
+		"less relevant curated chunk", lessRelevant)
+
+	return st
+}
+
+// TestKBGoldenProvenanceOrdering pins AC1: with comparable relevance,
+// curated ranks above mission, mission above web.
+func TestKBGoldenProvenanceOrdering(t *testing.T) {
+	st := seedKBProvenance(t)
+	hits, err := st.KBSearch(t.Context(), "widgets", kbBasis(500), []string{kbProvenanceCollection}, nil, KBSearchHybrid, 10)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	var order []string
+	for _, h := range hits {
+		if h.Content == "curated tier content about widgets" ||
+			h.Content == "mission tier content about widgets" ||
+			h.Content == "web tier content about widgets" {
+			order = append(order, strings.Fields(h.Content)[0])
+		}
+	}
+	if len(order) != 3 {
+		t.Fatalf("got %d tier hits, want 3 (order %v)", len(order), order)
+	}
+	if order[0] != "curated" || order[1] != "mission" || order[2] != "web" {
+		t.Fatalf("tier order = %v, want [curated mission web]", order)
+	}
+}
+
+// TestKBGoldenProvenanceWithinTierUnchanged pins AC2: within one
+// provenance tier, relevance still decides order (the multiplier is
+// identical for both chunks so it can't reorder them).
+func TestKBGoldenProvenanceWithinTierUnchanged(t *testing.T) {
+	st := seedKBProvenance(t)
+	hits, err := st.KBSearch(t.Context(), "widgets", kbBasis(600), []string{kbProvenanceCollection}, nil, KBSearchSemantic, 10)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	var order []string
+	for _, h := range hits {
+		if h.Content == "more relevant curated chunk" || h.Content == "less relevant curated chunk" {
+			order = append(order, h.Content)
+		}
+	}
+	if len(order) != 2 {
+		t.Fatalf("got %d within-tier hits, want 2", len(order))
+	}
+	if order[0] != "more relevant curated chunk" {
+		t.Fatalf("within-tier order = %v, want the on-axis chunk first", order)
+	}
+}
+
+// TestKBGoldenProvenanceComposesWithBoost pins the interplay
+// requirement: the collection boost (1.5x) and the provenance weight
+// (curated 1.0x, mission 0.8x) both apply post-fusion and compose by
+// multiplication, not by one overriding the other. A curated doc in an
+// unboosted collection scores base*1.0; the same content as a
+// mission-tier doc in a boosted collection scores base*1.5*0.8 = 1.2x
+// base: strictly above the curated baseline. That only holds if the
+// two multipliers actually multiply together: an override (whichever
+// factor "wins") or a component missing from the product would not
+// reproduce this exact ratio.
+func TestKBGoldenProvenanceComposesWithBoost(t *testing.T) {
+	st := NewKBStore(seedKBProvenancePool(t))
+
+	const boostedCollection = "itest-kbprov-boosted"
+	const plainCollection = "itest-kbprov-plain"
+	seedKBProvenanceDoc(t, st, boostedCollection, "boosted-mission-doc", "mission", "widgets everywhere", kbBasis(700))
+	seedKBProvenanceDoc(t, st, plainCollection, "plain-curated-doc", "curated", "widgets everywhere", kbBasis(700))
+
+	hits, err := st.KBSearch(t.Context(), "widgets", kbBasis(700),
+		[]string{boostedCollection, plainCollection}, []string{boostedCollection}, KBSearchSemantic, 10)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("got %d hits, want 2 (one per collection): %+v", len(hits), hits)
+	}
+	var boostedScore, plainScore float64
+	for _, h := range hits {
+		switch h.Collection {
+		case boostedCollection:
+			boostedScore = h.Score
+		case plainCollection:
+			plainScore = h.Score
+		}
+	}
+	if boostedScore == 0 || plainScore == 0 {
+		t.Fatalf("missing expected collection in hits: %+v", hits)
+	}
+	const wantRatio = 1.5 * 0.8 // boostFactorLit * provenanceWeightMissionLit
+	gotRatio := boostedScore / plainScore
+	if diff := gotRatio - wantRatio; diff > 0.01 || diff < -0.01 {
+		t.Fatalf("boosted/plain score ratio = %.4f, want %.4f (boost * provenance weight composed by multiplication)", gotRatio, wantRatio)
 	}
 }
 

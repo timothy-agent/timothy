@@ -350,6 +350,7 @@ describe('MissionForm: # references', () => {
         title: 'A document',
         source_type: 'file',
         source_ref: '',
+        provenance: 'curated',
         status: 'ready',
         error: '',
         chunk_count: 1,

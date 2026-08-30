@@ -1,7 +1,7 @@
 // Package kb is brain's knowledge-base control plane (D-060):
 // collection and document CRUD, upload-time markitdown conversion, and
 // the background ingest handoff to memoryd. Chunk storage and search
-// live in memoryd (internal/memory/store, internal/memory/api) — this
+// live in memoryd (internal/memory/store, internal/memory/api): this
 // package only owns kb_collections and kb_documents.
 package kb
 
@@ -36,22 +36,27 @@ type Collection struct {
 }
 
 // Document is one ingested file within a collection. Markdown is
-// deliberately excluded from this struct's JSON — API handlers strip
+// deliberately excluded from this struct's JSON: API handlers strip
 // it before serving (mirrors mission attachments, D-05x); it still
 // lives in the row for reingest to reuse without re-converting.
 type Document struct {
-	ID           string     `json:"id"`
-	CollectionID string     `json:"collection_id"`
-	Title        string     `json:"title"`
-	SourceType   string     `json:"source_type"`
-	SourceRef    string     `json:"source_ref"`
-	Status       string     `json:"status"`
-	Error        string     `json:"error"`
-	Bytes        int64      `json:"bytes"`
-	ChunkCount   int        `json:"chunk_count"`
-	IngestedAt   *time.Time `json:"ingested_at"`
-	CreatedAt    time.Time  `json:"created_at"`
-	// Markdown is the markitdown-converted document body — never
+	ID           string `json:"id"`
+	CollectionID string `json:"collection_id"`
+	Title        string `json:"title"`
+	SourceType   string `json:"source_type"`
+	SourceRef    string `json:"source_ref"`
+	// Provenance ranks retrieval (D-080, issue #372): curated (operator
+	// upload/URL fetch) outranks mission (model-authored, promoted from
+	// a mission artifact, #370) outranks web (browser-extension clip).
+	Provenance string `json:"provenance"`
+	Status     string `json:"status"`
+	Error      string `json:"error"`
+	Bytes      int64  `json:"bytes"`
+	ChunkCount int    `json:"chunk_count"`
+
+	IngestedAt *time.Time `json:"ingested_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	// Markdown is the markitdown-converted document body: never
 	// serialized in API responses (handlers zero it before writeJSON);
 	// present here only so reingest can read it back without a
 	// separate query.
@@ -168,11 +173,11 @@ func (s *Store) DeleteCollection(ctx context.Context, id string) error {
 	return nil
 }
 
-const documentColumns = `id, collection_id, title, source_type, source_ref, status, error, bytes, chunk_count, ingested_at, created_at, markdown`
+const documentColumns = `id, collection_id, title, source_type, source_ref, provenance, status, error, bytes, chunk_count, ingested_at, created_at, markdown`
 
 func scanDocument(row pgx.Row) (Document, error) {
 	var d Document
-	err := row.Scan(&d.ID, &d.CollectionID, &d.Title, &d.SourceType, &d.SourceRef,
+	err := row.Scan(&d.ID, &d.CollectionID, &d.Title, &d.SourceType, &d.SourceRef, &d.Provenance,
 		&d.Status, &d.Error, &d.Bytes, &d.ChunkCount, &d.IngestedAt, &d.CreatedAt, &d.Markdown)
 	return d, err
 }
@@ -257,17 +262,17 @@ func (s *Store) GetDocument(ctx context.Context, id string) (Document, error) {
 // markitdown conversion done once at upload/fetch time (or the raw
 // content for markdown/plain text, which skip conversion); sourceType
 // is 'file' or 'url'; sourceRef names the uploaded filename or the
-// fetched URL.
-func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceType, sourceRef, markdown string, bytes int64) (string, error) {
+// fetched URL; provenance is 'curated', 'mission', or 'web' (D-080).
+func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceType, sourceRef, provenance, markdown string, bytes int64) (string, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("kb documents create: %w", err)
 	}
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO kb_documents
-		(collection_id, title, source_type, source_ref, markdown, status, bytes)
-		VALUES ($1, $2, $3, $4, $5, 'pending', $6) RETURNING id`,
-		collectionID, title, sourceType, sourceRef, markdown, bytes).Scan(&id)
+		(collection_id, title, source_type, source_ref, provenance, markdown, status, bytes)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7) RETURNING id`,
+		collectionID, title, sourceType, sourceRef, provenance, markdown, bytes).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("kb documents create: %w", err)
 	}
@@ -277,7 +282,7 @@ func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceT
 // SweepStale fails documents parked at pending/ingesting. Ingest runs
 // on a fire-and-forget goroutine (api's startIngest), so a brain
 // restart mid-ingest strands the row in a non-terminal status forever
-// — the UI polls a spinner that never resolves. Called once at boot on
+//: the UI polls a spinner that never resolves. Called once at boot on
 // its own goroutine, which races the freshly started API server: the
 // 30-second grace window keeps a legitimately in-flight upload from
 // being swept. The stored markdown survives, so reingest recovers the
@@ -298,7 +303,7 @@ func (s *Store) SweepStale(ctx context.Context) (int64, error) {
 }
 
 // SetIngesting flips a document to the ingesting phase right before
-// the memoryd call — the background goroutine's own status update,
+// the memoryd call: the background goroutine's own status update,
 // distinct from memoryd's own ready/failed report (store.KBStore.
 // SetIngested/SetFailed in internal/memory/store/kb.go).
 func (s *Store) SetIngesting(ctx context.Context, id string) error {
@@ -312,7 +317,7 @@ func (s *Store) SetIngesting(ctx context.Context, id string) error {
 	return nil
 }
 
-// SetFailed marks a document failed — used when brain itself (not
+// SetFailed marks a document failed: used when brain itself (not
 // memoryd) hits an error before the ingest call ever reaches memoryd,
 // e.g. memoryd unreachable.
 func (s *Store) SetFailed(ctx context.Context, id, errMsg string) error {
@@ -327,7 +332,7 @@ func (s *Store) SetFailed(ctx context.Context, id, errMsg string) error {
 }
 
 // FindDocumentBySource looks up a document by its dedup key
-// (source_type, source_ref) — used by clip ingestion to tell a fresh
+// (source_type, source_ref): used by clip ingestion to tell a fresh
 // clip from a re-clip of the same URL.
 func (s *Store) FindDocumentBySource(ctx context.Context, sourceType, sourceRef string) (Document, error) {
 	db, err := s.db.Get()

@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     title         text NOT NULL,
     source_type   text NOT NULL DEFAULT 'file',
     source_ref    text NOT NULL DEFAULT '',
+    -- D-080: provenance ranks operator-vetted content above
+    -- model-written content at retrieval time (issue #372), distinct
+    -- from source_type (which names the ingestion mechanism, not who
+    -- authored the content). source_ref already carries a reference
+    -- (URL, mission:<id> once #370 promotes mission artifacts) usable
+    -- alongside it.
+    provenance    text NOT NULL DEFAULT 'curated'
+        CHECK (provenance IN ('curated', 'mission', 'web')),
     content_hash  text NOT NULL DEFAULT '',
     -- markdown is the markitdown conversion of the uploaded file,
     -- persisted so a re-ingest never re-calls the sidecar (mirrors

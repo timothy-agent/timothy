@@ -647,6 +647,9 @@ export interface KbDocument {
   title: string
   source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip'
   source_ref: string
+  // provenance weights retrieval ranking (curated > mission > web): see
+  // internal/memory/store/kb.go KBSearch.
+  provenance: 'curated' | 'mission' | 'web'
   status: 'pending' | 'ingesting' | 'ready' | 'failed'
   error: string
   chunk_count: number
