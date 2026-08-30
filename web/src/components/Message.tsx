@@ -13,7 +13,6 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { fetchAttachmentBlob } from '../api/client'
 import type { ImageRef, MediaRef } from '../api/types'
 import { ActivityLine } from './Activity'
@@ -25,6 +24,7 @@ import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import { attachmentURLCache } from '../lib/attachmentCache'
 import type { AssistantState } from '../lib/chat'
 import { compact, formatDuration, money } from '../lib/format'
+import { rehypePlugins, remarkPlugins } from '../lib/markdown'
 import { cn } from '../lib/utils'
 
 // AuthedImage renders one attachment thumbnail. GET
@@ -319,7 +319,9 @@ export function UserMessage({
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
           <div className="prose prose-sm prose-invert max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 text-white prose-pre:bg-blue-700">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+              {text}
+            </ReactMarkdown>
           </div>
         )}
       </div>
@@ -360,7 +362,11 @@ export function InterruptedMessage({ text }: { text: string }) {
   return (
     <div className="group/message flex w-full flex-col items-start gap-2" data-testid="interrupted">
       <div className="prose prose-sm w-full max-w-none dark:prose-invert">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={{ pre: CodeBlock }}
+        >
           {text}
         </ReactMarkdown>
       </div>
@@ -467,7 +473,11 @@ export function AssistantMessage({
       )}
 
       <div className="prose prose-sm w-full max-w-none dark:prose-invert">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={{ pre: CodeBlock }}
+        >
           {body}
         </ReactMarkdown>
         {msg.streaming && msg.permissions.length === 0 && <span className="animate-pulse">▍</span>}

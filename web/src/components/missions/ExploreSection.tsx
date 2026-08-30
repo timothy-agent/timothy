@@ -1,7 +1,7 @@
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { CodeBlock } from '../CodeBlock'
 import { CopyButton } from '../Message'
+import { rehypePlugins, remarkPlugins } from '../../lib/markdown'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
@@ -33,7 +33,11 @@ export function ExploreSection({ notes }: { notes: string }) {
               </Tooltip>
             </div>
             <div className="prose prose-sm max-h-64 max-w-none overflow-y-auto p-3 pt-1 dark:prose-invert">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+              <ReactMarkdown
+                remarkPlugins={remarkPlugins}
+                rehypePlugins={rehypePlugins}
+                components={{ pre: CodeBlock }}
+              >
                 {notes}
               </ReactMarkdown>
             </div>

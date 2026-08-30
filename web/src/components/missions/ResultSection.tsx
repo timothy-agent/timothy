@@ -1,7 +1,7 @@
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { CodeBlock } from '../CodeBlock'
 import { CopyButton } from '../Message'
+import { rehypePlugins, remarkPlugins } from '../../lib/markdown'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 // Uses CodeBlock (not the plain MarkdownPre) so fenced code gets the
@@ -21,7 +21,11 @@ export function ResultSection({ evidence }: { evidence: string }) {
           </Tooltip>
         </div>
         <div className="prose prose-sm max-w-none p-3 pt-1 dark:prose-invert">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+          <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            components={{ pre: CodeBlock }}
+          >
             {evidence}
           </ReactMarkdown>
         </div>
