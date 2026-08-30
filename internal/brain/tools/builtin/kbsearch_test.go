@@ -24,7 +24,7 @@ func (f *fakeKBSearch) search(_ context.Context, query, mode string, k int) ([]K
 func TestKBSearchFormatsHits(t *testing.T) {
 	t.Parallel()
 	fk := &fakeKBSearch{hits: []KBSearchHit{
-		{DocumentID: "doc-abc-123", DocumentTitle: "Runbook", Breadcrumb: "Runbook > Deploy", Content: "Run make deploy.", SourceRef: "runbook.md"},
+		{DocumentID: "doc-abc-123", DocumentTitle: "Runbook", Breadcrumb: "Runbook > Deploy", Content: "Run make deploy.", SourceRef: "runbook.md", Score: 0.8123},
 		{DocumentTitle: "FAQ", Content: "Ask ops."},
 	}}
 	tool := KBSearch(fk.search)
@@ -33,7 +33,7 @@ func TestKBSearchFormatsHits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	for _, want := range []string{"1. Runbook", "Runbook > Deploy", "runbook.md", "Source: kb://doc-abc-123", "Run make deploy.", "2. FAQ", "Ask ops."} {
+	for _, want := range []string{"1. Runbook", "Runbook > Deploy", "runbook.md", "Source: kb://doc-abc-123 (score 0.8123)", "Run make deploy.", "2. FAQ", "Ask ops."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}

@@ -1,7 +1,7 @@
 import { ArrowDown01Icon, ArrowRight01Icon, ArrowUp01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
-import type { MissionEvent, MissionToolCallPayload } from '../../api/types'
+import type { MissionEvent, MissionKBHit, MissionToolCallPayload } from '../../api/types'
 import { CopyButton } from '../Message'
 import { Button } from '../ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
@@ -65,7 +65,7 @@ function TurnTraceToggle({ calls }: { calls: MissionEvent[] }) {
       {open && (
         <ol className="mt-1 space-y-0.5 border-l border-zinc-800 pl-3">
           {calls.map((c) => {
-            const { tool, status, duration_ms, args_digest } = c.payload as MissionToolCallPayload
+            const { tool, status, duration_ms, args_digest, kb_hits } = c.payload as MissionToolCallPayload
             return (
               <li key={c.seq} className="text-zinc-400">
                 <span className={toolCallStatusClass(status)}>{tool}</span> · {status} ·{' '}
@@ -75,12 +75,32 @@ function TurnTraceToggle({ calls }: { calls: MissionEvent[] }) {
                     {args_digest}
                   </code>
                 )}
+                {kb_hits && <KBHitList hits={kb_hits} />}
               </li>
             )
           })}
         </ol>
       )}
     </div>
+  )
+}
+
+// KBHitList renders a search_kb call's returned hits (issue #413):
+// document title/id and fused score, or an explicit "no hits" line for
+// an empty result: a bare-blank block there would be indistinguishable
+// from a search that simply hasn't finished rendering.
+function KBHitList({ hits }: { hits: MissionKBHit[] }) {
+  if (hits.length === 0) {
+    return <div className="ml-1 mt-0.5 rounded bg-muted/20 px-1 py-0.5 text-[11px] text-zinc-500">no hits</div>
+  }
+  return (
+    <ol className="ml-1 mt-0.5 space-y-0.5 rounded bg-muted/20 px-1 py-0.5 text-[11px] text-zinc-500">
+      {hits.map((h) => (
+        <li key={h.document_id} className="truncate">
+          {h.document_title || h.document_id} · score {h.score.toFixed(4)}
+        </li>
+      ))}
+    </ol>
   )
 }
 

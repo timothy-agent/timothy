@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,11 +120,18 @@ func (p *StorePermissionParker) OnPermissionDenied(ctx context.Context, missionI
 // turn as a mission.tool_call event (issue #369): the UI's per-turn
 // trace reads these back grouped by phase, alongside the mission.turn
 // event the same runTurn call eventually produces. Best-effort like
-// the other parkNotifier methods.
-func (p *StorePermissionParker) OnToolCall(ctx context.Context, missionID, phase, tool, digest, status string, durationMs int64) {
-	if err := p.Store.AppendEvent(ctx, missionID, "mission.tool_call", map[string]any{
+// the other parkNotifier methods. kbHits carries search_kb's returned
+// document ids/titles/scores (issue #413), nil for every other tool;
+// an empty non-nil slice (search_kb returned no hits) still renders
+// explicitly, since the event payload only omits the field when nil.
+func (p *StorePermissionParker) OnToolCall(ctx context.Context, missionID, phase, tool, digest, status string, durationMs int64, kbHits []KBHitTrace) {
+	payload := map[string]any{
 		"phase": phase, "tool": tool, "args_digest": digest, "status": status, "duration_ms": durationMs,
-	}); err != nil {
+	}
+	if kbHits != nil {
+		payload["kb_hits"] = kbHits
+	}
+	if err := p.Store.AppendEvent(ctx, missionID, "mission.tool_call", payload); err != nil {
 		p.Log.Error("mission: record tool call failed", "mission_id", missionID, "error", err)
 	}
 }
@@ -144,8 +152,9 @@ type parkNotifier interface {
 	// OnToolCall reports every tool call a worker/explore/plan/review
 	// turn made, in call order: the trace the mission detail UI shows
 	// per turn (issue #369). Best-effort, same stance as the methods
-	// above.
-	OnToolCall(ctx context.Context, missionID, phase, tool, digest, status string, durationMs int64)
+	// above. kbHits is search_kb's returned hit trace (issue #413), nil
+	// for every other tool.
+	OnToolCall(ctx context.Context, missionID, phase, tool, digest, status string, durationMs int64, kbHits []KBHitTrace)
 }
 
 // sandboxExec is the narrow slice of *sandboxclient.Client nativeRunner
@@ -676,8 +685,12 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			// records a denial separately with its own digest; this event
 			// records every call's outcome regardless of status.
 			if ev.ToolResult != nil && r.parker != nil {
+				var kbHits []KBHitTrace
+				if ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "search_kb" {
+					kbHits = kbSearchHitTrace(ev.ToolResult.Digest)
+				}
 				r.parker.OnToolCall(ctx, req.MissionID, string(phase), ev.ToolResult.Name,
-					toolCallDigest(ev.ToolResult.Args), ev.ToolResult.Status, ev.ToolResult.DurationMs)
+					toolCallDigest(ev.ToolResult.Args), ev.ToolResult.Status, ev.ToolResult.DurationMs, kbHits)
 			}
 		case stream.EventDone:
 			sawTerminal = true
@@ -758,6 +771,84 @@ func webSearchResultURLs(digest string) []string {
 		}
 	}
 	return urls
+}
+
+// KBHitTrace is one search_kb hit as recorded on a mission.tool_call
+// event (issue #413): document id, title, and fused score only, never
+// chunk content, matching kbSearchHits' out-of-scope note.
+type KBHitTrace struct {
+	DocumentID    string  `json:"document_id"`
+	DocumentTitle string  `json:"document_title,omitempty"`
+	Score         float64 `json:"score"`
+}
+
+// kbSearchHitCap bounds how many hits kbSearchHitTrace records on one
+// mission.tool_call event: search_kb already caps k at 10 (kbSearchMaxK),
+// so this is a defensive ceiling, not an expected truncation.
+const kbSearchHitCap = 10
+
+// kbSearchNoHits marks kbsearch.go's formatKBHits empty-result sentinel,
+// checked verbatim rather than by regexp: it's a fixed literal, not a
+// pattern.
+const kbSearchNoHits = "no matching passages found"
+
+// kbSearchSourceLine matches formatKBHits' "Source: kb://ID (score
+// X.XXXX)" line: the only line in a search_kb result that carries a
+// document id and its fused score together.
+var kbSearchSourceLine = regexp.MustCompile(`^Source: kb://(\S+) \(score ([-\d.]+)\)$`)
+
+// kbSearchHitTrace pulls document ids, titles, and fused scores out of
+// search_kb's rendered digest (kbsearch.go's formatKBHits), the same
+// parse-the-rendered-output approach webSearchResultURLs uses for
+// search_web: the digest is the only structured evidence runTurn has
+// for what a tool call returned. Returns a non-nil empty slice for the
+// explicit no-hits sentinel, so the mission.tool_call event's kb_hits
+// field renders "no hits" rather than being absent; returns nil only
+// when the digest doesn't look like a search_kb result at all (already
+// offloaded past the digest cap, or malformed), so an event field
+// omission doesn't get misread as a confirmed empty result.
+func kbSearchHitTrace(digest string) []KBHitTrace {
+	if strings.TrimSpace(digest) == kbSearchNoHits {
+		return []KBHitTrace{}
+	}
+	lines := strings.Split(digest, "\n")
+	var hits []KBHitTrace
+	for i := 0; i+1 < len(lines) && len(hits) < kbSearchHitCap; i++ {
+		m := kbSearchSourceLine.FindStringSubmatch(strings.TrimSpace(lines[i]))
+		if m == nil {
+			continue
+		}
+		score, err := strconv.ParseFloat(m[2], 64)
+		if err != nil {
+			continue
+		}
+		title := ""
+		if i > 0 {
+			title = kbSearchTitleFromHeader(lines[i-1])
+		}
+		hits = append(hits, KBHitTrace{DocumentID: m[1], DocumentTitle: title, Score: score})
+	}
+	if hits == nil {
+		return nil
+	}
+	return hits
+}
+
+// kbSearchTitleFromHeader strips formatKBHits' "N. " numbering and any
+// breadcrumb (" - text") or source_ref (" (text)") suffix from a hit's
+// header line, leaving just the document title.
+func kbSearchTitleFromHeader(line string) string {
+	line = strings.TrimSpace(line)
+	if m := webSearchResultHeader.FindString(line); m != "" {
+		line = line[len(m):]
+	}
+	if i := strings.Index(line, " — "); i >= 0 {
+		line = line[:i]
+	}
+	if i := strings.Index(line, " ("); i >= 0 {
+		line = line[:i]
+	}
+	return strings.TrimSpace(line)
 }
 
 // workerRoute picks the route a worker turn runs on. With an
