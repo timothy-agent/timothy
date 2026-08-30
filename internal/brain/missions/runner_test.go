@@ -1786,6 +1786,65 @@ func TestExploreSessionGetsShellButNotWriteFile(t *testing.T) {
 	}
 }
 
+// TestExploreSessionKBNudge pins issue #367: the explorer's system
+// prompt nudges it to search_kb before declaring a goal self-contained,
+// exactly when search_kb is offered (kbSearch wired); attached
+// Knowledge collections are named as operator-prioritized; no backend
+// means no mention of a tool the model doesn't have.
+func TestExploreSessionKBNudge(t *testing.T) {
+	notesBatch := [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"nothing notable"}`)},
+	}
+
+	t.Run("no backend wired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: notesBatch}
+		r := newTestRunner(agent)
+		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("ExploreSession: %v", err)
+		}
+		if strings.Contains(agent.requests[0].System, "search_kb") {
+			t.Fatalf("explore system prompt mentions search_kb with no backend wired: %s", agent.requests[0].System)
+		}
+	})
+
+	t.Run("backend wired, no mission knowledge", func(t *testing.T) {
+		agent := &scriptedAgent{batches: notesBatch}
+		r := newTestRunner(agent)
+		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+			return nil, nil
+		}
+		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("ExploreSession: %v", err)
+		}
+		system := agent.requests[0].System
+		if !strings.Contains(system, "search_kb") {
+			t.Fatalf("explore system prompt missing search_kb nudge with backend wired: %s", system)
+		}
+		if strings.Contains(system, "operator attached") {
+			t.Fatalf("explore system prompt names attached collections with none set: %s", system)
+		}
+	})
+
+	t.Run("backend wired and knowledge set", func(t *testing.T) {
+		agent := &scriptedAgent{batches: notesBatch}
+		r := newTestRunner(agent)
+		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
+			return nil, nil
+		}
+		m := Mission{ID: "m1", Route: "default", Goal: "test", Knowledge: []string{"System Design"}}
+		if _, err := r.ExploreSession(context.Background(), m); err != nil {
+			t.Fatalf("ExploreSession: %v", err)
+		}
+		system := agent.requests[0].System
+		if !strings.Contains(system, "search_kb") {
+			t.Fatalf("explore system prompt missing search_kb nudge: %s", system)
+		}
+		if !strings.Contains(system, "operator attached") || !strings.Contains(system, "System Design") {
+			t.Fatalf("explore system prompt doesn't name attached collection: %s", system)
+		}
+	})
+}
+
 func TestRunTurnBareCloseIsError(t *testing.T) {
 	agent := &scriptedAgent{rawClose: true, batches: [][]stream.StreamEvent{{
 		textEvent("partial work"),

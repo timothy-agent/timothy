@@ -380,6 +380,25 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 	})
 }
 
+// kbExploreNudge tells the explorer a curated knowledge base is
+// available and to search it before concluding no research is needed
+// (issue #367): explore turns were finishing in seconds with zero
+// search_kb calls, silently skipping directly relevant curated
+// articles. Empty when no KB backend is wired, so the tool-absent case
+// never mentions a tool the model doesn't have. When the mission has
+// its own Knowledge collections, they are named as operator-attached
+// and prioritized (they already boost search_kb ranking, D-078).
+func (r *nativeRunner) kbExploreNudge(m Mission) string {
+	if r.kbSearch == nil {
+		return ""
+	}
+	nudge := " A curated knowledge base is available via search_kb: search it for anything relevant to the goal before concluding no research is needed."
+	if len(m.Knowledge) > 0 {
+		nudge += " The operator attached these collections, prioritized in results: " + strings.Join(m.Knowledge, ", ") + "."
+	}
+	return nudge
+}
+
 // connectorReadTools resolves m's read-only connector tools (nil
 // resolver or no agent id means none): appended to worker/explore
 // ExtraTools so a scheduled mission (daily inbox digest, calendar
@@ -942,7 +961,7 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 // so the ladder's last resort is the raw turn text rather than a forced
 // failure.
 func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
-	system := "You are exploring one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only — do not create or modify files; the execute phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one explore_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + r.execEnvironmentNote(ctx)
+	system := "You are exploring one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only — do not create or modify files; the execute phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one explore_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + r.kbExploreNudge(m) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
