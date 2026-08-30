@@ -674,7 +674,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 				r.parker.OnPermissionDenied(ctx, req.MissionID, ev.ToolResult.Name, ev.ToolResult.Digest)
 			}
 			if ev.ToolResult != nil && ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "search_web" {
-				seenURLs = append(seenURLs, webSearchResultURLs(ev.ToolResult.Digest)...)
+				seenURLs = append(seenURLs, webSearchResultURLs(ev.ToolResult.Content)...)
 			}
 			if ev.ToolResult != nil && ev.ToolResult.Name != sentinelTool {
 				finalB.Reset()
@@ -687,7 +687,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.ToolResult != nil && r.parker != nil {
 				var kbHits []KBHitTrace
 				if ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "search_kb" {
-					kbHits = kbSearchHitTrace(ev.ToolResult.Digest)
+					kbHits = kbSearchHitTrace(ev.ToolResult.Content)
 				}
 				r.parker.OnToolCall(ctx, req.MissionID, string(phase), ev.ToolResult.Name,
 					toolCallDigest(ev.ToolResult.Args), ev.ToolResult.Status, ev.ToolResult.DurationMs, kbHits)
@@ -749,15 +749,17 @@ func webFetchArgURL(input json.RawMessage) []string {
 // output: websearch.go's runSearch emits one blank-line-separated
 // entry per result as "N. title\nurl\nsnippet" (D-059). Line 2 of each
 // three-line group is the URL; anything not matching that shape (the
-// "no results found" sentinel, a truncated tail) is skipped rather
-// than guessed at. Best-effort only: the digest is capped (and big
-// results offload to a stub), so URLs past the cap are lost. That is
-// deliberate lenience on top of the reliable contract: cite what you
-// fetch_url, whose args are never truncated.
+// "no results found" sentinel) is skipped rather than guessed at.
+// Parses the tool result's full untruncated content (issue #418), not
+// the capped mission.tool_call digest; a result over the loop's 8KB
+// offload threshold still collapses to a stub, so URLs past that
+// (much higher) point are lost. That is deliberate lenience on top of
+// the reliable contract: cite what you fetch_url, whose args are
+// never truncated.
 var webSearchResultHeader = regexp.MustCompile(`^\d+\.\s`)
 
-func webSearchResultURLs(digest string) []string {
-	lines := strings.Split(digest, "\n")
+func webSearchResultURLs(content string) []string {
+	lines := strings.Split(content, "\n")
 	var urls []string
 	for i := 0; i+1 < len(lines); i++ {
 		// A result's first line is "N. title": only its second line
@@ -798,20 +800,23 @@ const kbSearchNoHits = "no matching passages found"
 var kbSearchSourceLine = regexp.MustCompile(`^Source: kb://(\S+) \(score ([-\d.]+)\)$`)
 
 // kbSearchHitTrace pulls document ids, titles, and fused scores out of
-// search_kb's rendered digest (kbsearch.go's formatKBHits), the same
+// search_kb's rendered result (kbsearch.go's formatKBHits), the same
 // parse-the-rendered-output approach webSearchResultURLs uses for
-// search_web: the digest is the only structured evidence runTurn has
-// for what a tool call returned. Returns a non-nil empty slice for the
+// search_web. Parses the tool result's full untruncated content (issue
+// #418), not the capped mission.tool_call digest, so a hit past the
+// first is never lost to that cap; a result over the loop's 8KB
+// offload threshold still collapses to a stub, an existing, separate
+// limit this does not address. Returns a non-nil empty slice for the
 // explicit no-hits sentinel, so the mission.tool_call event's kb_hits
 // field renders "no hits" rather than being absent; returns nil only
-// when the digest doesn't look like a search_kb result at all (already
-// offloaded past the digest cap, or malformed), so an event field
-// omission doesn't get misread as a confirmed empty result.
-func kbSearchHitTrace(digest string) []KBHitTrace {
-	if strings.TrimSpace(digest) == kbSearchNoHits {
+// when the content doesn't look like a search_kb result at all
+// (already offloaded past the threshold, or malformed), so an event
+// field omission doesn't get misread as a confirmed empty result.
+func kbSearchHitTrace(content string) []KBHitTrace {
+	if strings.TrimSpace(content) == kbSearchNoHits {
 		return []KBHitTrace{}
 	}
-	lines := strings.Split(digest, "\n")
+	lines := strings.Split(content, "\n")
 	var hits []KBHitTrace
 	for i := 0; i+1 < len(lines) && len(hits) < kbSearchHitCap; i++ {
 		m := kbSearchSourceLine.FindStringSubmatch(strings.TrimSpace(lines[i]))

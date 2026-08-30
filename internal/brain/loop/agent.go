@@ -782,7 +782,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 	// load_skill's result is the pack's full rule text — useful to the
 	// model, never to the client. Every other tool's result is fair to
 	// show (truncated) in the audit trail and the UI.
-	var digest string
+	var digest, traceContent string
 	if call.Name == "load_skill" {
 		digest = "skill loaded"
 	} else {
@@ -790,6 +790,10 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 		if len(digest) > digestCeiling {
 			digest = digest[:digestCeiling] + "…"
 		}
+		// traceContent is the untruncated result, for missions' own trace
+		// parsing (kb_hits, search_web URLs): Digest is capped well below
+		// where a multi-hit result's later hits live (issue #418).
+		traceContent = content
 	}
 
 	// Bookkeeping uses a detached context: a client disconnect must
@@ -820,7 +824,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 	emit(stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
 		ID: call.ID, Name: call.Name, Status: status,
 		Digest: digest, DurationMs: duration.Milliseconds(), Args: call.Input,
-		Media: streamMedia,
+		Media: streamMedia, Content: traceContent,
 	}})
 
 	return provider.ToolResult{ID: call.ID, Content: content, IsError: isError}

@@ -65,6 +65,12 @@ type ToolResultEvent struct {
 	// resolve which account a unified aggregate tool call (e.g.
 	// search_mail) actually routed to (session.SensitiveTools.Matches).
 	Args json.RawMessage `json:"-"`
+	// Content is the tool's full, untruncated result text, brain-internal
+	// only (json:"-": never reaches the client wire, Digest is what's
+	// shown there). Missions' trace parsing (kb_hits, search_web URLs)
+	// needs the full text: Digest is capped well below where a
+	// multi-hit result's later hits live (issue #418).
+	Content string `json:"-"`
 }
 
 // MediaRef points at one attachment-store item a tool generated during

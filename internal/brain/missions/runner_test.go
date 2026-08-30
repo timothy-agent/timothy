@@ -2007,11 +2007,13 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 }
 
 // okToolResultEvent is toolResultEvent's ok-status counterpart with a
-// name and digest: search_web's rendered results ride the digest,
-// never a separate raw-result field (D-059).
-func okToolResultEvent(id, name, digest string) stream.StreamEvent {
+// name and result text. Content is what runner.go's trace parsing
+// (kb_hits, search_web URLs) reads (issue #418); Digest mirrors it
+// here since the loop only diverges the two when Digest is truncated,
+// which this fixed-text helper never triggers.
+func okToolResultEvent(id, name, content string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
-		ID: id, Name: name, Status: "ok", Digest: digest,
+		ID: id, Name: name, Status: "ok", Digest: content, Content: content,
 	}}
 }
 
@@ -2133,6 +2135,37 @@ func TestKBSearchHitTrace(t *testing.T) {
 	}
 }
 
+// TestKBSearchHitTraceSurvivesOversizedFirstHit covers issue #418: the
+// mission.tool_call digest caps at 2000 chars (toolCallDigestCap), so a
+// first hit whose own chunk content alone exceeds that would push every
+// later hit past a capped string before it's ever parsed. Since
+// kbSearchHitTrace now runs against the tool result's full untruncated
+// content (runner.go passes ev.ToolResult.Content, not .Digest), all 10
+// hits survive regardless of how large the first hit's content is.
+func TestKBSearchHitTraceSurvivesOversizedFirstHit(t *testing.T) {
+	oversized := strings.Repeat("x", toolCallDigestCap+500)
+	var b strings.Builder
+	want := make([]KBHitTrace, 0, kbSearchHitCap)
+	for i := 1; i <= kbSearchHitCap; i++ {
+		docID := fmt.Sprintf("doc-%d", i)
+		title := fmt.Sprintf("Doc %d", i)
+		content := "short content"
+		if i == 1 {
+			content = oversized
+		}
+		fmt.Fprintf(&b, "%d. %s\nSource: kb://%s (score %.4f)\n%s\n\n", i, title, docID, float64(i)/10, content)
+		want = append(want, KBHitTrace{DocumentID: docID, DocumentTitle: title, Score: float64(i) / 10})
+	}
+	full := strings.TrimSpace(b.String())
+	if len(full) <= toolCallDigestCap {
+		t.Fatalf("test fixture too small: %d chars, want > %d", len(full), toolCallDigestCap)
+	}
+	got := kbSearchHitTrace(full)
+	if !slices.Equal(got, want) {
+		t.Fatalf("kbSearchHitTrace on %d-char content = %+v, want %d hits", len(full), got, len(want))
+	}
+}
+
 // TestRunWorkerEmitsKBSearchHitsInTrace is the end-to-end wiring check
 // for issue #413: a worker turn's search_kb call reaches the
 // mission.tool_call trace with the returned document ids/titles/scores,
@@ -2161,6 +2194,49 @@ func TestRunWorkerEmitsKBSearchHitsInTrace(t *testing.T) {
 	}
 	if shellCall := parker.toolCalls[1]; shellCall.kbHits != nil {
 		t.Fatalf("shell toolCall.kbHits = %+v, want nil", shellCall.kbHits)
+	}
+}
+
+// TestRunWorkerEmitsAllKBHitsPastOversizedFirstHit covers issue #418
+// end-to-end: a search_kb result whose first hit's chunk content alone
+// exceeds the mission.tool_call digest cap (toolCallDigestCap) must
+// still land every hit (up to kbSearchHitCap) in the trace, because
+// runner.go now parses the tool result's full content rather than its
+// capped digest.
+func TestRunWorkerEmitsAllKBHitsPastOversizedFirstHit(t *testing.T) {
+	oversized := strings.Repeat("x", toolCallDigestCap+500)
+	var b strings.Builder
+	want := make([]KBHitTrace, 0, kbSearchHitCap)
+	for i := 1; i <= kbSearchHitCap; i++ {
+		docID := fmt.Sprintf("doc-%d", i)
+		title := fmt.Sprintf("Doc %d", i)
+		content := "short content"
+		if i == 1 {
+			content = oversized
+		}
+		fmt.Fprintf(&b, "%d. %s\nSource: kb://%s (score %.4f)\n%s\n\n", i, title, docID, float64(i)/10, content)
+		want = append(want, KBHitTrace{DocumentID: docID, DocumentTitle: title, Score: float64(i) / 10})
+	}
+	full := strings.TrimSpace(b.String())
+	if len(full) <= toolCallDigestCap {
+		t.Fatalf("test fixture too small: %d chars, want > %d", len(full), toolCallDigestCap)
+	}
+
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		toolEndEvent("search_kb", `{"query":"deploy"}`),
+		okToolResultEvent("call-1", "search_kb", full),
+		toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"deployed"}`),
+	}}}
+	parker := &fakeParker{}
+	r := newTestRunnerWithParker(agent, parker)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if len(parker.toolCalls) != 1 {
+		t.Fatalf("toolCalls = %+v, want 1 entry", parker.toolCalls)
+	}
+	if got := parker.toolCalls[0].kbHits; !slices.Equal(got, want) {
+		t.Fatalf("search_kb toolCall.kbHits = %+v (%d), want %d hits", got, len(got), len(want))
 	}
 }
 
