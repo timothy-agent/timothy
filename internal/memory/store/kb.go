@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -156,6 +157,19 @@ const (
 	provenanceWeightWebLit     = "0.6"
 )
 
+// kbPerDocumentCap bounds how many chunks of one document can land in
+// top-k (D-082, issue #419): fusion is per chunk, so a long relevant
+// document can fill every slot and starve the rest of the corpus. Cap
+// drops, never reorders; freed slots go to the next-ranked chunks of
+// other documents, and a two-pass backfill still fills k when the
+// corpus is too narrow to satisfy the cap.
+const kbPerDocumentCap = 2
+
+// kbCandidateFetchMultiplier over-fetches from SQL so the Go-side cap
+// has enough lower-ranked candidates to promote after dropping
+// over-cap chunks, without a second round trip.
+const kbCandidateFetchMultiplier = 3
+
 // KBSearch runs hybrid (vector + full-text, RRF-fused), semantic-only,
 // or keyword-only retrieval over kb_chunks. Empty collectionNames
 // searches the whole knowledge base; non-empty scopes to it (an
@@ -165,6 +179,8 @@ const (
 // outside it are still returned. embedding may be nil only when mode is
 // keyword; hybrid/semantic without an embedding return no results from
 // the vector leg (callers should not call semantic/hybrid without one).
+// Results are capped at kbPerDocumentCap chunks per document (D-082),
+// backfilled to k when the corpus can't otherwise fill it.
 func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, collectionNames, boostCollections []string, mode KBSearchMode, k int) ([]KBSearchHit, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -173,16 +189,17 @@ func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, 
 	if k <= 0 {
 		k = 8
 	}
+	fetchN := k * kbCandidateFetchMultiplier
 
 	var sql string
 	var args []any
 	switch mode {
 	case KBSearchSemantic:
-		sql, args = semanticSQL, []any{embedding.String(), collectionNames, k, boostCollections}
+		sql, args = semanticSQL, []any{embedding.String(), collectionNames, fetchN, boostCollections}
 	case KBSearchKeyword:
-		sql, args = keywordSQL, []any{query, collectionNames, k, boostCollections}
+		sql, args = keywordSQL, []any{query, collectionNames, fetchN, boostCollections}
 	default:
-		sql, args = hybridSQL, []any{embedding.String(), query, collectionNames, k, boostCollections}
+		sql, args = hybridSQL, []any{embedding.String(), query, collectionNames, fetchN, boostCollections}
 	}
 
 	rows, err := db.Query(ctx, sql, args...)
@@ -191,16 +208,56 @@ func (s *KBStore) KBSearch(ctx context.Context, query string, embedding Vector, 
 	}
 	defer rows.Close()
 
-	var out []KBSearchHit
+	var candidates []KBSearchHit
 	for rows.Next() {
 		var h KBSearchHit
 		if err := rows.Scan(&h.ChunkID, &h.DocumentID, &h.DocumentTitle, &h.Collection,
 			&h.Breadcrumb, &h.Content, &h.SourceRef, &h.Provenance, &h.Score); err != nil {
 			return nil, fmt.Errorf("kb search: %w", err)
 		}
-		out = append(out, h)
+		candidates = append(candidates, h)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return applyPerDocumentCap(candidates, k), nil
+}
+
+// applyPerDocumentCap takes candidates (already score-descending) and
+// selects up to k, never more than kbPerDocumentCap per document. First
+// pass: walk candidates in order, keep a hit if its document is still
+// under cap. Second pass: if the cap left fewer than min(k, len(candidates))
+// selected, backfill remaining slots from the leftover candidates in
+// score order regardless of document. Both passes preserve the input's
+// score-descending order within their own selections; the final result
+// is re-sorted by score so backfilled hits merge in at the right rank.
+func applyPerDocumentCap(candidates []KBSearchHit, k int) []KBSearchHit {
+	if len(candidates) == 0 {
+		return nil
+	}
+	perDoc := make(map[string]int, len(candidates))
+	selected := make([]KBSearchHit, 0, k)
+	var leftover []KBSearchHit
+	for _, h := range candidates {
+		if len(selected) < k && perDoc[h.DocumentID] < kbPerDocumentCap {
+			selected = append(selected, h)
+			perDoc[h.DocumentID]++
+		} else {
+			leftover = append(leftover, h)
+		}
+	}
+	want := k
+	if len(candidates) < want {
+		want = len(candidates)
+	}
+	for _, h := range leftover {
+		if len(selected) >= want {
+			break
+		}
+		selected = append(selected, h)
+	}
+	sort.SliceStable(selected, func(i, j int) bool { return selected[i].Score > selected[j].Score })
+	return selected
 }
 
 const (

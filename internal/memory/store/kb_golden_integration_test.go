@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -434,6 +435,142 @@ func TestKBGoldenProvenanceComposesWithBoost(t *testing.T) {
 	gotRatio := boostedScore / plainScore
 	if diff := gotRatio - wantRatio; diff > 0.01 || diff < -0.01 {
 		t.Fatalf("boosted/plain score ratio = %.4f, want %.4f (boost * provenance weight composed by multiplication)", gotRatio, wantRatio)
+	}
+}
+
+// D-082 (issue #419): per-document chunk cap for result diversity.
+const kbDiversityCollection = "itest-kbdiversity"
+
+// seedKBDiversity builds one dominant document with 5 chunks all on the
+// query's basis dimension (so every chunk fuses to a similar high score
+// and would otherwise fill top-k alone), plus one chunk each in three
+// other documents on the same dimension: enough non-dominant chunks
+// (3) that capping the dominant document to kbPerDocumentCap (2) still
+// fills k=5 without needing to backfill into the dominant document.
+func seedKBDiversity(t *testing.T) *KBStore {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, _ = db.Exec(ctx, "DELETE FROM kb_collections WHERE name = $1", kbDiversityCollection)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM kb_collections WHERE name = $1", kbDiversityCollection)
+	})
+
+	st := NewKBStore(pool)
+	var collID string
+	if err := db.QueryRow(ctx,
+		"INSERT INTO kb_collections (name) VALUES ($1) RETURNING id", kbDiversityCollection).Scan(&collID); err != nil {
+		t.Fatalf("insert collection: %v", err)
+	}
+
+	// Dominant document: 5 chunks, all on-axis (similarity 1.0).
+	var dominantID string
+	if err := db.QueryRow(ctx, `INSERT INTO kb_documents (collection_id, title, status)
+		VALUES ($1, 'dominant', 'ready') RETURNING id`, collID).Scan(&dominantID); err != nil {
+		t.Fatalf("insert dominant document: %v", err)
+	}
+	dominantChunks := make([]KBChunk, 5)
+	for i := range dominantChunks {
+		dominantChunks[i] = KBChunk{Seq: i, Content: fmt.Sprintf("dominant chunk %d about widgets", i), Embedding: kbBasis(700), EmbeddingModel: "itest"}
+	}
+	if err := st.ReplaceChunks(ctx, dominantID, dominantChunks); err != nil {
+		t.Fatalf("ReplaceChunks dominant: %v", err)
+	}
+
+	// Three other documents, one chunk each, still on-axis so they rank
+	// below the dominant document's chunks purely by keyword overlap
+	// (fewer shared lexemes) but clear the semantic floor identically.
+	for _, title := range []string{"other-a", "other-b", "other-c"} {
+		var docID string
+		if err := db.QueryRow(ctx, `INSERT INTO kb_documents (collection_id, title, status)
+			VALUES ($1, $2, 'ready') RETURNING id`, collID, title).Scan(&docID); err != nil {
+			t.Fatalf("insert document %s: %v", title, err)
+		}
+		if err := st.ReplaceChunks(ctx, docID, []KBChunk{
+			{Seq: 0, Content: title + " widgets", Embedding: kbBasis(700), EmbeddingModel: "itest"},
+		}); err != nil {
+			t.Fatalf("ReplaceChunks %s: %v", title, err)
+		}
+	}
+	return st
+}
+
+// TestKBGoldenPerDocumentCapDiversifies pins AC1: a dominant document's
+// fused chunks would otherwise fill every slot; the cap limits it to
+// kbPerDocumentCap and the freed slots surface the other documents.
+func TestKBGoldenPerDocumentCapDiversifies(t *testing.T) {
+	st := seedKBDiversity(t)
+	hits, err := st.KBSearch(t.Context(), "widgets", kbBasis(700), []string{kbDiversityCollection}, nil, KBSearchHybrid, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	if len(hits) != 5 {
+		t.Fatalf("got %d hits, want 5", len(hits))
+	}
+	docCounts := map[string]int{}
+	for _, h := range hits {
+		docCounts[h.DocumentTitle]++
+	}
+	if docCounts["dominant"] != kbPerDocumentCap {
+		t.Fatalf("dominant document contributed %d chunks, want %d (cap)", docCounts["dominant"], kbPerDocumentCap)
+	}
+	if docCounts["other-a"] == 0 || docCounts["other-b"] == 0 || docCounts["other-c"] == 0 {
+		t.Fatalf("expected all three other documents to surface via freed slots, got %+v", docCounts)
+	}
+	for i := 1; i < len(hits); i++ {
+		if hits[i].Score > hits[i-1].Score {
+			t.Fatalf("hits not score-descending at index %d: %+v", i, hits)
+		}
+	}
+}
+
+// TestKBGoldenPerDocumentCapBackfillsSingleDoc pins AC2: with only one
+// matching document, the cap must not starve k below the available hit
+// count; slots backfill with that document's own chunks.
+func TestKBGoldenPerDocumentCapBackfillsSingleDoc(t *testing.T) {
+	st := seedKBDiversity(t)
+	hits, err := st.KBSearch(t.Context(), "dominant chunk", kbBasis(700), []string{kbDiversityCollection}, nil, KBSearchKeyword, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	// Keyword mode only matches chunks sharing the "dominant"/"chunk"
+	// lexemes, unique to the dominant document's 5 chunks: the cap must
+	// still backfill all 5 rather than stopping at kbPerDocumentCap.
+	docCounts := map[string]int{}
+	for _, h := range hits {
+		docCounts[h.DocumentTitle]++
+	}
+	if docCounts["dominant"] != 5 {
+		t.Fatalf("dominant document contributed %d chunks, want 5 (backfilled, single matching doc)", docCounts["dominant"])
+	}
+	for i := 1; i < len(hits); i++ {
+		if hits[i].Score > hits[i-1].Score {
+			t.Fatalf("hits not score-descending at index %d: %+v", i, hits)
+		}
 	}
 }
 
