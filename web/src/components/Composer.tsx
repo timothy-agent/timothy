@@ -12,11 +12,19 @@ import {
   Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
-import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent, KeyboardEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { getSettings, listKbCollections, transcribe, uploadAttachment } from '../api/client'
-import type { KbCollection } from '../api/types'
+import type { KbCollection, Reference } from '../api/types'
+import {
+  addReference,
+  groupReferenceOptions,
+  maxReferences,
+  referenceKindLabel,
+  removeReference,
+  useReferenceSearch,
+} from '../lib/references'
 import { skillLabels } from '../lib/skills'
 import {
   getTranscribeLanguage,
@@ -33,7 +41,7 @@ import {
 
 // PendingAttachment is one upload in flight or done, owned by the
 // page (same pattern as `draft`) so the send flow can read and clear
-// it. previewUrl is a local object URL — revoked on removal/send.
+// it. previewUrl is a local object URL: revoked on removal/send.
 export interface PendingAttachment {
   id: string
   mime: string
@@ -80,7 +88,7 @@ function documentChipIcon(mime: string) {
 }
 
 // isAllowedFile accepts a file when its reported type is in
-// allowedMimes, or (for .md/.txt) by extension — browsers report
+// allowedMimes, or (for .md/.txt) by extension: browsers report
 // markdown files inconsistently: empty type, text/markdown, or
 // text/plain depending on OS/browser.
 export function isAllowedFile(file: File): boolean {
@@ -89,7 +97,7 @@ export function isAllowedFile(file: File): boolean {
 }
 
 // isDocumentFile is isAllowedFile narrowed to document types (PDF,
-// Markdown, text) — used where only documents are accepted, e.g.
+// Markdown, text): used where only documents are accepted, e.g.
 // mission attachments. Video/audio are chat-only (explicit decision):
 // excluded here even though allowedMimes carries them for the composer.
 export function isDocumentFile(file: File): boolean {
@@ -138,6 +146,8 @@ export function Composer({
   knowledge,
   onKnowledge,
   agentKnowledge,
+  references,
+  onReferences,
 }: {
   draft: string
   onDraft: (v: string) => void
@@ -151,7 +161,7 @@ export function Composer({
   onRemoveSkillHint?: () => void
   disabled?: boolean
   // streaming/onStop swap the send button for a stop control while a
-  // turn is in flight — the turn now runs detached server-side (see
+  // turn is in flight: the turn now runs detached server-side (see
   // chat.Service.StopTurn), so unmounting or navigating away no longer
   // stops it; this is the explicit way to.
   streaming?: boolean
@@ -166,9 +176,15 @@ export function Composer({
   knowledge?: string[]
   onKnowledge?: (next: string[]) => void
   // Collections the serving agent always searches (agents' `knowledge`
-  // field) — shown as muted, non-removable chips and excluded from the
+  // field): shown as muted, non-removable chips and excluded from the
   // mention popup since pinning them is redundant.
   agentKnowledge?: string[]
+  // references/onReferences enable `#mission`/`#chat`/`#document`
+  // mentions alongside `#collection` in the same popup: picking one
+  // inserts a removable chip, capped at maxReferences. Omitting them
+  // disables reference mentions for that composer instance.
+  references?: Reference[]
+  onReferences?: (next: Reference[]) => void
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -176,7 +192,7 @@ export function Composer({
   const chunksRef = useRef<BlobPart[]>([])
   // The attachments array is owned by the page, but the upload flow
   // needs the latest value inside async callbacks that started before
-  // a later render — same stale-closure guard as draftRef below.
+  // a later render: same stale-closure guard as draftRef below.
   const attachmentsRef = useRef(attachments)
   attachmentsRef.current = attachments
   // The recorder's onstop closure outlives renders; read the draft
@@ -205,7 +221,7 @@ export function Composer({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [mentionOptions, setMentionOptions] = useState<KbCollection[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
-  // The knowledge array the mention popup filters against — read
+  // The knowledge array the mention popup filters against: read
   // through a ref so the async collections fetch and keydown handler
   // (closures that can outlive a render) see the latest chip list.
   const knowledgeRef = useRef(knowledge ?? [])
@@ -220,7 +236,29 @@ export function Composer({
   // (retry on the next `#`) without also racing a second fetch.
   const collectionsFetchingRef = useRef(false)
 
+  // #mission/#chat/#document reference mention state: generalizes the
+  // collection mention above onto individual missions/chats/kb
+  // documents (D-069-style additive feature, same `#` trigger, same
+  // popup). referenceQuery mirrors mentionQuery but debounced through
+  // useReferenceSearch, since these hit three list/search endpoints
+  // per keystroke pause rather than one cached-after-first-fetch list.
+  const [referenceQuery, setReferenceQuery] = useState<string | null>(null)
+  const referenceOptionsRaw = useReferenceSearch(onReferences ? referenceQuery : null)
+  const referencesRef = useRef(references ?? [])
+  referencesRef.current = references ?? []
+  const referenceOptions = referenceOptionsRaw.filter(
+    (o) => !referencesRef.current.some((r) => r.kind === o.kind && r.id === o.id),
+  )
+  const referenceGroups = groupReferenceOptions(referenceOptions)
+  const atCap = (references ?? []).length >= maxReferences
+
   const mentionRe = /(^|\s)#([a-zA-Z0-9_-]*)$/
+
+  function optionClassName(highlighted: boolean): string {
+    return highlighted
+      ? 'block w-full truncate px-3 py-1.5 text-left text-sm bg-zinc-100 text-zinc-900 dark:bg-zinc-700 dark:text-white'
+      : 'block w-full truncate px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-700/50'
+  }
 
   function filterOptions(cols: KbCollection[], query: string): KbCollection[] {
     return cols.filter(
@@ -232,19 +270,22 @@ export function Composer({
   }
 
   // updateMention re-derives the popup from the text before the caret
-  // on every draft/selection change. Only active when onKnowledge is
-  // given — mentions are opt-in per composer instance.
+  // on every draft/selection change. Only active when onKnowledge or
+  // onReferences is given: mentions are opt-in per composer instance.
   function updateMention(text: string, caret: number) {
-    if (!onKnowledge) return
+    if (!onKnowledge && !onReferences) return
     const before = text.slice(0, caret)
     const match = mentionRe.exec(before)
     if (!match) {
       setMentionQuery(null)
+      setReferenceQuery(null)
       return
     }
     const query = match[2].toLowerCase()
-    setMentionQuery(query)
     setMentionIndex(0)
+    if (onReferences) setReferenceQuery(query)
+    if (!onKnowledge) return
+    setMentionQuery(query)
     if (collectionsRef.current === null) {
       if (collectionsFetchingRef.current) return
       collectionsFetchingRef.current = true
@@ -267,47 +308,129 @@ export function Composer({
     setMentionOptions(filterOptions(collectionsRef.current, query))
   }
 
-  // selectMention strips the `#prefix` token from the draft and adds
-  // the collection name as a chip.
-  function selectMention(name: string) {
+  // clearMentionToken strips the `#prefix` token from the draft and
+  // closes both popups: shared by selectMention and selectReference.
+  function clearMentionToken(): boolean {
     const el = inputRef.current
-    if (!el || !onKnowledge) return
+    if (!el) return false
     const caret = el.selectionStart ?? draft.length
     const before = draft.slice(0, caret)
     const match = mentionRe.exec(before)
-    if (!match) return
+    if (!match) return false
     const start = caret - match[2].length - 1
     const next = draft.slice(0, start) + draft.slice(caret)
     onDraft(next)
     setMentionQuery(null)
-    if (!(knowledge ?? []).includes(name)) onKnowledge([...(knowledge ?? []), name])
+    setReferenceQuery(null)
     requestAnimationFrame(() => el.setSelectionRange(start, start))
+    return true
+  }
+
+  // selectMention strips the `#prefix` token from the draft and adds
+  // the collection name as a chip.
+  function selectMention(name: string) {
+    if (!onKnowledge) return
+    if (!clearMentionToken()) return
+    if (!(knowledge ?? []).includes(name)) onKnowledge([...(knowledge ?? []), name])
   }
 
   function removeKnowledge(name: string) {
     onKnowledge?.((knowledge ?? []).filter((n) => n !== name))
   }
 
+  // selectReference adds a mission/chat/document reference chip, no-op
+  // past maxReferences (the popup already hides options at the cap, so
+  // this only guards a race).
+  function selectReference(option: { kind: Reference['kind']; id: string; name: string }) {
+    if (!onReferences || atCap) return
+    if (!clearMentionToken()) return
+    onReferences(addReference(references ?? [], option))
+  }
+
+  function removeReferenceChip(kind: Reference['kind'], id: string) {
+    onReferences?.(removeReference(references ?? [], kind, id))
+  }
+
+  // combinedOptions flattens the collection list and the grouped
+  // reference lists into one selectable sequence, collections first:
+  // ArrowUp/ArrowDown, Enter/Tab, and Escape all operate on this single
+  // index regardless of which source an option came from. header is
+  // set on a group's first row only, so the popup can render a section
+  // label without breaking the flat index math keyboard nav relies on.
+  const combinedOptions: {
+    select: () => void
+    header?: string
+    render: (highlighted: boolean) => ReactNode
+  }[] = []
+  if (onKnowledge) {
+    for (const c of mentionOptions) {
+      combinedOptions.push({
+        select: () => selectMention(c.name),
+        render: (highlighted) => (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => selectMention(c.name)}
+            className={optionClassName(highlighted)}
+          >
+            #{c.name}
+          </button>
+        ),
+      })
+    }
+  }
+  if (onReferences && !atCap) {
+    for (const group of referenceGroups) {
+      group.options.forEach((o, i) => {
+        combinedOptions.push({
+          select: () => selectReference(o),
+          header: i === 0 ? referenceKindLabel[group.kind] : undefined,
+          render: (highlighted) => (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => selectReference(o)}
+              className={optionClassName(highlighted)}
+            >
+              {o.name}
+            </button>
+          ),
+        })
+      })
+    }
+  }
+
+  const popupOpen = combinedOptions.length > 0 && (mentionQuery !== null || referenceQuery !== null)
+
   function handleMentionKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): boolean {
-    if (mentionQuery === null || mentionOptions.length === 0) return false
+    if (!popupOpen) {
+      if (e.key === 'Escape' && (mentionQuery !== null || referenceQuery !== null)) {
+        e.preventDefault()
+        setMentionQuery(null)
+        setReferenceQuery(null)
+        return true
+      }
+      return false
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setMentionIndex((i) => (i + 1) % mentionOptions.length)
+      setMentionIndex((i) => (i + 1) % combinedOptions.length)
       return true
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length)
+      setMentionIndex((i) => (i - 1 + combinedOptions.length) % combinedOptions.length)
       return true
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      selectMention(mentionOptions[mentionIndex].name)
+      combinedOptions[Math.min(mentionIndex, combinedOptions.length - 1)].select()
       return true
     }
     if (e.key === 'Escape') {
       e.preventDefault()
       setMentionQuery(null)
+      setReferenceQuery(null)
       return true
     }
     return false
@@ -376,14 +499,14 @@ export function Composer({
   }
 
   // Stop cleanly if the composer unmounts mid-recording (e.g. route
-  // change) — the MediaRecorder and its track must not keep running.
+  // change): the MediaRecorder and its track must not keep running.
   useEffect(() => () => recorderRef.current?.stop(), [])
 
   // uploadFiles validates each file client-side (type, size, cap) then
   // uploads it, adding a chip immediately in an "uploading" state so
   // the spinner overlay has something to render, and swapping it for
   // the real id on success or dropping it on failure. previewUrl uses
-  // the local file directly — no need to round-trip through the
+  // the local file directly: no need to round-trip through the
   // server just to show a thumbnail.
   async function uploadFiles(files: File[]) {
     if (!onAttachments) return
@@ -449,7 +572,7 @@ export function Composer({
   }
 
   // Muted chips: agent-bound collections not already pinned by the
-  // user. A name in both wins as the removable violet chip only — no
+  // user. A name in both wins as the removable violet chip only: no
   // duplicate muted chip alongside it.
   const agentOnlyKnowledge = (agentKnowledge ?? []).filter((name) => !(knowledge ?? []).includes(name))
 
@@ -459,22 +582,17 @@ export function Composer({
       onDrop={handleDrop}
       className="relative rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40"
     >
-      {onKnowledge && mentionQuery !== null && mentionOptions.length > 0 && (
-        <div className="absolute bottom-full left-2 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-zinc-950/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-zinc-800">
-          {mentionOptions.map((c, i) => (
-            <button
-              key={c.id}
-              type="button"
-              onMouseDown={(e) => e.preventDefault()} // keep textarea focus
-              onClick={() => selectMention(c.name)}
-              className={
-                i === mentionIndex
-                  ? 'block w-full truncate px-3 py-1.5 text-left text-sm bg-zinc-100 text-zinc-900 dark:bg-zinc-700 dark:text-white'
-                  : 'block w-full truncate px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-700/50'
-              }
-            >
-              #{c.name}
-            </button>
+      {popupOpen && (
+        <div className="absolute bottom-full left-2 z-10 mb-1 max-h-72 w-64 overflow-y-auto rounded-lg border border-zinc-950/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-zinc-800">
+          {combinedOptions.map((opt, i) => (
+            <div key={i}>
+              {opt.header && (
+                <div className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500">
+                  {opt.header}
+                </div>
+              )}
+              {opt.render(i === mentionIndex)}
+            </div>
           ))}
         </div>
       )}
@@ -500,6 +618,28 @@ export function Composer({
                 onClick={() => removeKnowledge(name)}
                 aria-label={`Remove ${name} knowledge`}
                 className="flex size-4 items-center justify-center rounded-full text-violet-700/70 hover:bg-violet-100 hover:text-violet-900 dark:text-violet-300/70 dark:hover:bg-violet-500/20 dark:hover:text-violet-100"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {references && references.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 px-3 pt-2.5">
+          {references.map((r) => (
+            <span
+              key={`${r.kind}-${r.id}`}
+              className="inline-flex max-w-48 items-center gap-1 rounded-full bg-blue-50 py-1 pr-1.5 pl-2.5 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300"
+            >
+              <span className="truncate">
+                {referenceKindLabel[r.kind].replace(/s$/, '')}: {r.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeReferenceChip(r.kind, r.id)}
+                aria-label={`Remove ${r.name} reference`}
+                className="flex size-4 shrink-0 items-center justify-center rounded-full text-blue-700/70 hover:bg-blue-100 hover:text-blue-900 dark:text-blue-300/70 dark:hover:bg-blue-500/20 dark:hover:text-blue-100"
               >
                 <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
               </button>

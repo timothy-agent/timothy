@@ -1,5 +1,5 @@
 // Mirrors the brain's SSE wire contract: normalized gateway events
-// followed by exactly one terminal meta event — read until meta.
+// followed by exactly one terminal meta event: read until meta.
 
 export interface Usage {
   input_tokens: number
@@ -15,7 +15,7 @@ export interface ToolCallEvent {
 }
 
 // MediaRef points at one attachment-store item a tool generated during
-// a call — id, mime, and an optional display name, never bytes.
+// a call: id, mime, and an optional display name, never bytes.
 export interface MediaRef {
   id: string
   mime: string
@@ -87,7 +87,7 @@ export interface MetaEvent {
   ledger_id?: string
   duration_ms?: number
   // cost is null/absent when the gateway had no price for the serving
-  // model — unknown price is never guessed (D-013); currency is blank
+  // model: unknown price is never guessed (D-013); currency is blank
   // in that case too.
   cost?: number | null
   currency?: string
@@ -116,6 +116,21 @@ export interface ChatRequest {
   // knowledge is the set of kb collection names pinned for this turn;
   // the server unions them into the session's knowledge list.
   knowledge?: string[]
+  // references name individual missions/chats/kb documents picked via
+  // composer # mentions, resolved server-side into this turn's
+  // documents (generalizes knowledge, which only covers collections).
+  references?: { kind: ReferenceKind; id: string }[]
+}
+
+// ReferenceKind names what a composer #-mention reference points at.
+export type ReferenceKind = 'mission' | 'session' | 'kb_doc'
+
+// Reference is one composer #-mention pick, kept client-side as chip
+// state: name is display-only, never sent to the server.
+export interface Reference {
+  kind: ReferenceKind
+  id: string
+  name: string
 }
 
 // --- session management (mirrors brain's /v1/sessions surface) ---
@@ -138,7 +153,7 @@ export interface UIBlock {
   media?: MediaRef[]
 }
 
-// ImageRef is one attachment carried by a user transcript item — the
+// ImageRef is one attachment carried by a user transcript item: the
 // attachment's id (content hash) and MIME type, never the bytes. name
 // is the original filename; absent on events persisted before
 // filename threading shipped.
@@ -168,7 +183,7 @@ export interface TranscriptItem {
   text?: string
   blocks?: UIBlock[]
   images?: ImageRef[]
-  // documents are attached PDFs, refs only (id+mime) — the converted
+  // documents are attached PDFs, refs only (id+mime): the converted
   // markdown never rides this payload.
   documents?: ImageRef[]
   tool?: ToolExecution
@@ -178,7 +193,7 @@ export interface TranscriptItem {
   usage?: Usage
   duration_ms?: number
   // cost is null/absent when the gateway had no price for the serving
-  // model — unknown price is never guessed (D-013); currency is blank
+  // model: unknown price is never guessed (D-013); currency is blank
   // in that case too.
   cost?: number | null
   currency?: string
@@ -194,13 +209,13 @@ export interface Transcript {
   session: SessionMeta
   items: TranscriptItem[]
   // Whether a turn is currently streaming for this session server-side
-  // — sourced from chat.Service's own turn registry, not a client
+  //: sourced from chat.Service's own turn registry, not a client
   // guess. Lets a tab that opens a session mid-turn know to attach
   // streamLive instead of rendering the last event as stale/interrupted.
   turn_active: boolean
 }
 
-// One unresolved permission ask, from GET /v1/permissions/pending —
+// One unresolved permission ask, from GET /v1/permissions/pending:
 // scoped server-side to sessions with a currently active turn.
 export interface PendingPermission {
   session_id: string
@@ -258,14 +273,14 @@ export interface EntityGraphData {
 // present only when a stored fx rate exists for the row's currency
 // (never a guess) and it differs from the target. The original
 // cost/currency fields are always left exactly as the ledger recorded
-// them (D-013) — these are purely additive display fields.
+// them (D-013): these are purely additive display fields.
 export interface ConvertedMoney {
   converted_amount?: number
   converted_currency?: string
   rate_as_of?: string
 }
 
-// Usage aggregates served by /v1/admin/usage/* — chart-ready, never
+// Usage aggregates served by /v1/admin/usage/*: chart-ready, never
 // raw ledger rows. Money fields are grouped by billing currency (no FX
 // conversion anywhere): a range spanning more than one currency comes
 // back as multiple rows, one per currency, never summed together.
@@ -273,11 +288,11 @@ export interface UsageSummary extends ConvertedMoney {
   currency: string
   cost: number
   // unbilled_cost is the metered-price equivalent of spend billed
-  // through a subscription/oauth_token executor (D-051) — real spend
+  // through a subscription/oauth_token executor (D-051): real spend
   // was $0, excluded from cost, never folded into it.
   unbilled_cost: number
   // converted_unbilled_cost mirrors converted_amount, same mechanism
-  // (usage.go's decorator), for unbilled_cost specifically — present
+  // (usage.go's decorator), for unbilled_cost specifically: present
   // only when a stored fx rate exists and unbilled_cost is nonzero.
   converted_unbilled_cost?: number
   input_tokens: number
@@ -296,7 +311,7 @@ export interface UsagePoint extends ConvertedMoney {
   group: string
   currency: string
   cost: number
-  // unbilled_cost mirrors UsageSummary's field — excluded from cost.
+  // unbilled_cost mirrors UsageSummary's field: excluded from cost.
   unbilled_cost: number
   // converted_unbilled_cost mirrors UsageSummary's field.
   converted_unbilled_cost?: number
@@ -308,7 +323,7 @@ export interface UsagePoint extends ConvertedMoney {
   unpriced_output_tokens: number
 }
 
-// GroupTotal is one group's totals over a whole range — the
+// GroupTotal is one group's totals over a whole range: the
 // non-time-bucketed sibling of UsagePoint, for tables/charts that rank
 // groups rather than plot them over time.
 export interface GroupTotal extends ConvertedMoney {
@@ -323,7 +338,7 @@ export interface GroupTotal extends ConvertedMoney {
 }
 
 // UnpricedGroup is one (provider, model) pair's unpriced-token totals
-// over a range (GET /v1/admin/usage/unpriced) — grouped by provider
+// over a range (GET /v1/admin/usage/unpriced): grouped by provider
 // alongside model so the catalog estimate (catalogPrices) can resolve
 // each pair against that provider's own catalog candidates only.
 export interface UnpricedGroup {
@@ -334,13 +349,13 @@ export interface UnpricedGroup {
 }
 
 // One mission's total ledger footprint. unpriced_requests counts turns
-// whose cost is unknown (NULL in the ledger) — cost_by_currency is
+// whose cost is unknown (NULL in the ledger): cost_by_currency is
 // then a floor per currency, not the whole bill.
 export interface ModelUsed {
   provider: string
   model: string
   // harness is true when this row is the delegated CLI executor's own
-  // calls (purpose='executor', D-051) rather than brain's direct ones —
+  // calls (purpose='executor', D-051) rather than brain's direct ones:
   // a model used by both sides yields two separate rows.
   harness: boolean
   requests: number
@@ -349,13 +364,13 @@ export interface ModelUsed {
 
 export interface MissionUsage {
   mission_id: string
-  // cost_by_currency is billed spend only — unbilled (subscription-
+  // cost_by_currency is billed spend only: unbilled (subscription-
   // billed) rows are excluded, so this is the mission's true bill.
   // Equals billed_brain_by_currency + billed_harness_by_currency.
   cost_by_currency: Record<string, number>
   // converted_cost_by_currency mirrors cost_by_currency, converted into
   // default_currency, present only when at least one entry had a
-  // usable stored fx rate — an entry with no rate is simply omitted,
+  // usable stored fx rate: an entry with no rate is simply omitted,
   // so this map's total can be a floor, not the whole bill.
   converted_cost_by_currency?: Record<string, number>
   // billed_brain_by_currency/billed_harness_by_currency split billed
@@ -365,7 +380,7 @@ export interface MissionUsage {
   billed_brain_by_currency?: Record<string, number>
   billed_harness_by_currency?: Record<string, number>
   // unbilled_cost_by_currency is the API-equivalent price of rows
-  // billed through a subscription/oauth_token executor (D-051) —
+  // billed through a subscription/oauth_token executor (D-051):
   // real spend was $0, this is what the same work would have cost
   // metered.
   unbilled_cost_by_currency?: Record<string, number>
@@ -414,15 +429,15 @@ export interface BudgetStatus {
 }
 
 // Control-plane shapes (/v1/admin/*). credential_ref is a NAME the
-// secret is stored under (in whichever backend is default) — secret
+// secret is stored under (in whichever backend is default): secret
 // values never travel.
 
 // CatalogModel is one model_catalog row (GET /v1/admin/catalog/models)
-// — LiteLLM's synced pricing/context data. Prices are per MILLION
+//: LiteLLM's synced pricing/context data. Prices are per MILLION
 // tokens (Timothy's convention); absent means unknown, never guessed.
 // id is the id the provider's own API actually accepts: model_key with
 // LiteLLM's namespacing provider prefix stripped server-side
-// (gateway/catalog.StripOwnPrefix) — model_key is kept alongside for
+// (gateway/catalog.StripOwnPrefix): model_key is kept alongside for
 // reference/debug, but a picker must display and commit id, never
 // model_key.
 export interface CatalogModel {
@@ -439,7 +454,7 @@ export interface CatalogModel {
 }
 
 // CatalogPriceQuery is one (provider, model) pair POST
-// /v1/admin/catalog/prices resolves — provider is a providers row's
+// /v1/admin/catalog/prices resolves: provider is a providers row's
 // name exactly as recorded in cost_ledger.provider (UnpricedGroup's own
 // field), so a caller reading unpriced usage can pass its rows straight
 // through.
@@ -449,7 +464,7 @@ export interface CatalogPriceQuery {
 }
 
 // CatalogPrice is one requested (provider, model) pair's resolved
-// catalog price from POST /v1/admin/catalog/prices — provider/model
+// catalog price from POST /v1/admin/catalog/prices: provider/model
 // echo the request pair back; price is null when the provider name is
 // unknown or the model has no match within that provider's catalog
 // candidates (never matched against another vendor's catalog rows).
@@ -495,11 +510,11 @@ export interface ChainEntry {
 // RouteEntryStatus is the router's live view of one chain entry: the
 // usability gate verdict plus the ledger stats and normalized factors
 // behind scored strategies. Numeric fields are absent when the ledger
-// has no data (or the model is unpriced) — never a guessed 0.
+// has no data (or the model is unpriced): never a guessed 0.
 export interface RouteEntryStatus {
   provider_id: string
   provider_name?: string
-  // provider_kind is 'api' | 'cli' — 'cli' rows are mission-only
+  // provider_kind is 'api' | 'cli': 'cli' rows are mission-only
   // executor providers (D-051), never built into a chat client.
   provider_kind?: string
   model: string
@@ -529,7 +544,7 @@ export interface AdminRoute {
   // work: 'default' | 'embedding' | 'vision' | 'summarize'. Absent for
   // a plain, user-owned route.
   role?: string
-  // Router try order with live stats — present for enabled routes once
+  // Router try order with live stats: present for enabled routes once
   // a snapshot is loaded. serving is the first usable resolved entry.
   resolved?: RouteEntryStatus[]
   serving?: ChainEntry
@@ -549,7 +564,7 @@ export interface TestResult {
   model: string
   detail?: string
   // responses_ok: whether the endpoint serves POST /responses (the
-  // OpenAI Responses API codex-cli requires) — absent when unprobed or
+  // OpenAI Responses API codex-cli requires): absent when unprobed or
   // the probe outcome was ambiguous, never affects ok.
   responses_ok?: boolean
 }
@@ -580,7 +595,7 @@ export interface AdminAgent {
   // Optional: the backend doesn't send it yet, so callers default to
   // [] when absent.
   knowledge?: string[]
-  // Mission-only fields (internal/brain/missions) — meaningless to a
+  // Mission-only fields (internal/brain/missions): meaningless to a
   // chat-only agent, absent or at zero values for one. Optional here
   // since most call sites (chat agent picker etc.) never populate
   // them.
@@ -593,14 +608,14 @@ export interface AdminAgent {
 }
 
 // AdminTool is one entry of the live tool surface (builtins +
-// connector tools) — feeds the agent editor's tools allowlist picker
+// connector tools): feeds the agent editor's tools allowlist picker
 // so a name is chosen from what actually exists, never typed blind.
 export interface AdminTool {
   name: string
   description: string
 }
 
-// AdminSkill is one loaded skill pack — feeds the agent editor's
+// AdminSkill is one loaded skill pack: feeds the agent editor's
 // skills allowlist picker so a name is chosen from what actually
 // exists, never typed blind.
 export interface AdminSkill {
@@ -609,7 +624,7 @@ export interface AdminSkill {
 }
 
 // KbCollection is one document collection agents can search with
-// search_kb — a named group of ingested documents.
+// search_kb: a named group of ingested documents.
 export interface KbCollection {
   id: string
   name: string
@@ -661,7 +676,7 @@ export interface Mission {
   id: string
   goal: string
   // name is a short display name generated once from goal, the same
-  // way a chat session's title is — empty until generation lands (or
+  // way a chat session's title is: empty until generation lands (or
   // for a mission predating this field); the UI falls back to a
   // truncated goal.
   name?: string
@@ -670,8 +685,8 @@ export interface Mission {
   phase: 'explore' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
   // failure_reason is derived server-side (Store.List/Get) from this
-  // mission's latest mission.failed event's payload.reason —
-  // "cancelled" or "max_iterations" — set only when phase is 'failed'.
+  // mission's latest mission.failed event's payload.reason:
+  // "cancelled" or "max_iterations": set only when phase is 'failed'.
   failure_reason?: string
   pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | ''
   pause_message?: string
@@ -680,7 +695,7 @@ export interface Mission {
   branch?: string
   base_commit?: string
   // repo_url is the GitHub repo this coding mission was cloned from
-  // (https clone URL) — absent means the self-init'd empty repo.
+  // (https clone URL): absent means the self-init'd empty repo.
   // connector_id names the github-kind connector whose PAT
   // authenticated the clone; only present alongside repo_url.
   repo_url?: string
@@ -691,7 +706,7 @@ export interface Mission {
   // pull request. Only ever set at create time, never by the model.
   on_complete?: '' | 'push' | 'push_pr'
   // explore_notes is set once, at the end of the explore phase
-  // (driver.go's runExplore) — absent/empty for a mission created
+  // (driver.go's runExplore): absent/empty for a mission created
   // before the explore phase existed, or one that hasn't reached it
   // yet.
   explore_notes?: string
@@ -707,12 +722,12 @@ export interface Mission {
   route: string
   review_route: string
   // plan_route, when set, is the route explore/plan/replan/review run
-  // on instead of route — "" means route covers everything.
+  // on instead of route: "" means route covers everything.
   plan_route?: string
   escalation_route?: string
   // route_model/plan_route_model/review_route_model pin one phase axis
   // to one exact chain entry ("provider name/model") in the route it
-  // would otherwise resolve — "" or absent keeps the first-usable walk.
+  // would otherwise resolve: "" or absent keeps the first-usable walk.
   // Precedence mirrors the route fields: route_model backs execute,
   // plan_route_model backs explore/plan, review_route_model falls back
   // review_route_model > plan_route_model > route_model.
@@ -727,7 +742,7 @@ export interface Mission {
   last_evidence?: string
   auto_approve_safe: boolean
   // environment is the sandbox image key (D-05x) this coding mission's
-  // container runs — "" means base, resolved server-side at create
+  // container runs: "" means base, resolved server-side at create
   // time (explicit request > repo markers > goal keyword > base).
   // General missions never set this.
   environment?: string
@@ -743,28 +758,28 @@ export interface Mission {
   commit_style?: string
   // top_model/top_model_provider are decorated onto the list/get
   // response from the cost ledger's top-served-model-per-mission
-  // lookup (internal/brain/api/missions.go's decorateTopModels) — the
+  // lookup (internal/brain/api/missions.go's decorateTopModels): the
   // model that actually served this mission, by request count. Absent
   // for a mission with no ledger rows yet.
   top_model?: string
   top_model_provider?: string
   schedule_id?: string
   // parent_mission_id names the terminal mission this one follows up
-  // on — absent for an ordinary mission. parent_context is that
+  // on: absent for an ordinary mission. parent_context is that
   // parent's outcome digest, snapshotted at follow-up create time.
   parent_mission_id?: string
   parent_context?: string
-  // attachments are PDF documents attached at create time — markdown is
+  // attachments are PDF documents attached at create time: markdown is
   // never sent over the wire (see api/missions.go's sanitizeMission).
   attachments?: { id: string; mime: string; name?: string }[]
   // destination_ids names operator-created destinations (email,
   // webhook) this mission delivers its outcome digest to on the
   // terminal done transition. Validated against the destinations table
-  // at create time — never model-decided.
+  // at create time: never model-decided.
   destination_ids?: string[]
   // light marks a mission that skips explore/plan/review (D-069):
   // kind=general only, born in phase=execute, one bare worker turn.
-  // final_output is that worker's verbatim final message — the
+  // final_output is that worker's verbatim final message: the
   // deliverable itself, absent/empty until the mission reaches done.
   // Invariant: final_output is only ever populated when light is true;
   // a non-light mission's Result comes from last_evidence instead (see
@@ -773,7 +788,7 @@ export interface Mission {
   final_output?: string
   // artifact_refs are this mission's declared artifact files, best-
   // effort copied into the attachment store on the terminal done
-  // transition — survive workspace deletion, unlike the live-workspace
+  // transition: survive workspace deletion, unlike the live-workspace
   // files ArtifactsSection browses. Absent/empty until that copy runs.
   artifact_refs?: MediaRef[]
   created_at: string
@@ -781,7 +796,7 @@ export interface Mission {
 }
 
 // Destination is one operator-created outbound sink for mission
-// results (internal/brain/destinations.Destination) — Settings →
+// results (internal/brain/destinations.Destination): Settings →
 // Destinations CRUD, and the mission form's destinations multi-select.
 export interface Destination {
   id: string
@@ -806,13 +821,13 @@ export interface MissionEvent {
 
 // ExecutorUsage is executor.result's token/cost usage block. cost_usd
 // is null when the run authenticated via a subscription or oauth_token
-// (no per-call price) rather than metered API billing — never a
+// (no per-call price) rather than metered API billing: never a
 // guessed 0 (D-013). cost_usd_billed is true only when cost_usd is the
 // SAME figure the cost ledger booked as real spend (Anthropic
-// first-party api_key) — false whenever cost_usd is merely the CLI's
+// first-party api_key): false whenever cost_usd is merely the CLI's
 // own harness-reported figure: subscription/oauth_token (never billed)
 // or a non-anthropic provider (priced against Anthropic's table, which
-// is fiction for that provider — the ledger prices it separately from
+// is fiction for that provider: the ledger prices it separately from
 // that provider's own rows, or leaves it unpriced).
 export interface ExecutorUsage {
   input_tokens: number
@@ -875,7 +890,7 @@ export interface ExecutorSkippedPayload {
   skip_reasons?: string[]
 }
 
-// MissionSteeredPayload is mission.steered's payload — operator
+// MissionSteeredPayload is mission.steered's payload: operator
 // guidance injected into a running mission via POST .../note.
 export interface MissionSteeredPayload {
   note: string
@@ -909,7 +924,7 @@ export interface MissionPermissionDeniedPayload {
   detail?: string
 }
 
-// MissionPROpenedPayload is mission.pr_opened's payload — recorded by
+// MissionPROpenedPayload is mission.pr_opened's payload: recorded by
 // POST .../pr once a pull request is opened (or an existing one for
 // the same head is found instead).
 export interface MissionPROpenedPayload {
@@ -937,8 +952,8 @@ export interface Notification {
 }
 
 // AdminConnector is one third-party integration the agent can call as
-// tools (MCP server, Google account, or Microsoft account), or — for
-// kind 'github' — an identity/credential connector with no tools of
+// tools (MCP server, Google account, or Microsoft account), or: for
+// kind 'github': an identity/credential connector with no tools of
 // its own (mission flows and Settings resolve a GitHub identity from
 // its PAT; chat tools stay on the MCP-based GitHub connector). config
 // is kind-specific; the credential_ref names where its secret/tokens live.
@@ -951,7 +966,7 @@ export interface AdminConnector {
   enabled: boolean
   // sensitive pins every tool this connector serves onto the
   // privacy-floor route (session.SensitiveTools), same as gmail_read
-  // is pinned today — additive, connector-wide, no code change needed.
+  // is pinned today: additive, connector-wide, no code change needed.
   sensitive: boolean
 }
 
@@ -965,7 +980,7 @@ export interface GitHubIdentity {
 }
 
 // GitHubRepo is one repo a github-kind connector's PAT can see or
-// create (GET/POST /v1/admin/connectors/:id/repos) — the mission
+// create (GET/POST /v1/admin/connectors/:id/repos): the mission
 // create form's repo picker/create-new flow.
 export interface GitHubRepo {
   full_name: string
@@ -977,7 +992,7 @@ export interface GitHubRepo {
 }
 
 // MissionTemplate is the frozen mission-creation payload a schedule
-// fires at each tick (internal/brain/missions.MissionTemplate) — same
+// fires at each tick (internal/brain/missions.MissionTemplate): same
 // shape as CreateMissionInput.
 export interface MissionTemplate {
   goal: string
@@ -986,7 +1001,7 @@ export interface MissionTemplate {
   route?: string
   review_route?: string
   // plan_route, when set, is the route explore/plan/replan/review run
-  // on instead of route — "" means route covers everything.
+  // on instead of route: "" means route covers everything.
   plan_route?: string
   max_iterations?: number
   budget_amount?: number
@@ -998,7 +1013,7 @@ export interface MissionTemplate {
   commit_style?: string
   // destination_ids names operator-created destinations this template's
   // fired missions deliver their outcome digest to. Re-validated at
-  // fire time — a destination deleted or disabled since the schedule
+  // fire time: a destination deleted or disabled since the schedule
   // was created is dropped silently rather than failing the fire.
   destination_ids?: string[]
   // light marks a mission that skips explore/plan/review (D-069);

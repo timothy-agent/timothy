@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Reference } from '../api/types'
 import { Composer, type PendingAttachment } from './Composer'
 
 vi.mock('../api/client', () => ({
@@ -10,6 +11,9 @@ vi.mock('../api/client', () => ({
   uploadAttachment: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: true }, values: {} }),
   listKbCollections: vi.fn().mockResolvedValue([]),
+  listMissions: vi.fn().mockResolvedValue([]),
+  listSessions: vi.fn().mockResolvedValue([]),
+  searchKbDocuments: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('sonner', () => ({
@@ -751,5 +755,143 @@ describe('Composer agent-bound knowledge chips', () => {
     // Only the removable violet chip renders, not a second muted one.
     expect(screen.getByRole('button', { name: 'Remove runbooks knowledge' })).toBeTruthy()
     expect(screen.getAllByText('#runbooks')).toHaveLength(1)
+  })
+})
+
+// StatefulComposerWithReferences owns draft/references state itself,
+// same rationale as StatefulComposer above: a test drives real typing
+// and sees the popup/chips update.
+function StatefulComposerWithReferences({ onSend = vi.fn() }: { onSend?: () => void }) {
+  const [draft, setDraft] = useState('')
+  const [references, setReferences] = useState<Reference[]>([])
+  return (
+    <Composer
+      {...baseProps()}
+      draft={draft}
+      onDraft={setDraft}
+      onSend={onSend}
+      references={references}
+      onReferences={setReferences}
+    />
+  )
+}
+
+describe('Composer reference mentions', () => {
+  it('does not show a popup when onReferences is omitted', async () => {
+    render(<Composer {...baseProps()} draft="#fix" />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    fireEvent.change(input, { target: { value: '#fix' } })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(screen.queryByText('Missions')).toBeNull()
+  })
+
+  it('debounces the search and fires it once per pause in typing', async () => {
+    const client = await import('../api/client')
+    render(<StatefulComposerWithReferences />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+
+    fireEvent.change(input, { target: { value: '#f' } })
+    fireEvent.change(input, { target: { value: '#fi' } })
+    fireEvent.change(input, { target: { value: '#fix' } })
+
+    await new Promise((r) => setTimeout(r, 100))
+    expect(client.listMissions).not.toHaveBeenCalled()
+
+    await waitFor(() => expect(client.listMissions).toHaveBeenCalledTimes(1))
+    expect(client.listMissions).toHaveBeenCalledWith({ query: 'fix', limit: 8 })
+  })
+
+  it('shows a grouped popup, picks an entry, and strips the token', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listMissions).mockResolvedValue([
+      { id: 'mi1', name: 'Fix the bug', goal: 'Fix the bug' } as never,
+    ])
+    render(<StatefulComposerWithReferences />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: 'please #fix' } })
+
+    await screen.findByText('Missions')
+    fireEvent.click(screen.getByText('Fix the bug'))
+
+    expect(input.value).toBe('please ')
+    expect(screen.queryByText('Missions')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Remove Fix the bug reference' })).toBeTruthy()
+  })
+
+  it('removes a reference chip via its remove button', () => {
+    const onReferences = vi.fn()
+    render(
+      <Composer
+        {...baseProps()}
+        draft=""
+        references={[{ kind: 'mission', id: 'mi1', name: 'Fix the bug' }]}
+        onReferences={onReferences}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Fix the bug reference' }))
+    expect(onReferences).toHaveBeenCalledWith([])
+  })
+
+  it('sends payload-shaped references (kind/id only rides the wire, name is chip-only)', () => {
+    const references: Reference[] = [{ kind: 'kb_doc', id: 'd1', name: 'Runbook' }]
+    render(<Composer {...baseProps()} draft="" references={references} onReferences={vi.fn()} />)
+    expect(screen.getByText(/Runbook/)).toBeTruthy()
+  })
+
+  it('does not add a reference past the cap of 8', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listMissions).mockResolvedValue([
+      { id: 'mi9', name: 'Ninth mission', goal: 'Ninth mission' } as never,
+    ])
+    const eight: Reference[] = Array.from({ length: 8 }, (_, i) => ({
+      kind: 'mission' as const,
+      id: `m${i}`,
+      name: `Mission ${i}`,
+    }))
+    const onReferences = vi.fn()
+    function StatefulAtCap() {
+      const [draft, setDraft] = useState('')
+      return (
+        <Composer
+          {...baseProps()}
+          draft={draft}
+          onDraft={setDraft}
+          references={eight}
+          onReferences={onReferences}
+        />
+      )
+    }
+    render(<StatefulAtCap />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+
+    fireEvent.change(input, { target: { value: '#ninth' } })
+    await new Promise((r) => setTimeout(r, 300))
+
+    expect(screen.queryByText('Missions')).toBeNull()
+    expect(onReferences).not.toHaveBeenCalled()
+  })
+
+  it('cycles the highlighted option with ArrowDown/ArrowUp across groups', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.listMissions).mockResolvedValue([
+      { id: 'mi1', name: 'Fix the bug', goal: 'Fix the bug' } as never,
+    ])
+    vi.mocked(client.listSessions).mockResolvedValue([
+      { id: 'se1', title: 'Old chat', archived: false, created_at: '', updated_at: '' },
+    ])
+    render(<StatefulComposerWithReferences />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+
+    fireEvent.change(input, { target: { value: '#' } })
+    await screen.findByText('Fix the bug')
+    await screen.findByText('Old chat')
+
+    const highlighted = () =>
+      screen.getByText('Fix the bug').className.includes('bg-zinc-100') ? 'mission' : 'chat'
+    expect(highlighted()).toBe('mission')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(highlighted()).toBe('chat')
   })
 })

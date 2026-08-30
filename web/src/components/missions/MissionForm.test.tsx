@@ -20,6 +20,9 @@ vi.mock('../../api/client', () => ({
   testConnector: vi.fn().mockResolvedValue({ ok: true }),
   uploadAttachment: vi.fn(),
   listDestinations: vi.fn().mockResolvedValue([]),
+  listMissions: vi.fn().mockResolvedValue([]),
+  listSessions: vi.fn().mockResolvedValue([]),
+  searchKbDocuments: vi.fn().mockResolvedValue([]),
 }))
 
 import {
@@ -34,13 +37,16 @@ import {
   listConnectorRepos,
   listConnectors,
   listDestinations,
+  listMissions,
   listRoutes,
+  listSessions,
   patchSchedule,
+  searchKbDocuments,
   uploadAttachment,
 } from '../../api/client'
 import type { Destination, ExecutionPlanPhase } from '../../api/types'
 
-// renderForm wraps MissionForm in a MemoryRouter — the repository
+// renderForm wraps MissionForm in a MemoryRouter: the repository
 // section's "no connectors" hint links to Settings → Connectors, which
 // needs router context even when that section never renders.
 function renderForm(el: React.ReactElement) {
@@ -139,7 +145,7 @@ beforeEach(() => {
   vi.mocked(listConnectors).mockResolvedValue([])
 })
 
-describe('MissionForm — create mode, one-off mission', () => {
+describe('MissionForm: create mode, one-off mission', () => {
   it('submits a general mission with the entered goal', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     const onDone = vi.fn()
@@ -278,6 +284,121 @@ describe('MissionForm — create mode, one-off mission', () => {
   })
 })
 
+describe('MissionForm: # references', () => {
+  it('opens a grouped picker on #, picks a mission, and strips the token', async () => {
+    vi.mocked(listMissions).mockResolvedValue([
+      { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as Mission,
+    ])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
+    fireEvent.change(goal, { target: { value: 'See #fix' } })
+
+    await screen.findByText('Missions')
+    const option = await screen.findByText('Fix the flaky test')
+    fireEvent.click(option)
+
+    expect(goal.value).toBe('See ')
+    expect(screen.getByText('Mission: Fix the flaky test')).toBeTruthy()
+    expect(screen.queryByText('Fix the flaky test', { selector: 'button' })).toBeNull()
+  })
+
+  it('submits the picked references on create', async () => {
+    vi.mocked(listMissions).mockResolvedValue([
+      { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as Mission,
+    ])
+    vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
+    fireEvent.change(goal, { target: { value: 'See #fix' } })
+    fireEvent.click(await screen.findByText('Fix the flaky test'))
+    fireEvent.change(goal, { target: { value: `${goal.value}more context` } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ references: [{ kind: 'mission', id: 'mi1' }] }),
+      ),
+    )
+  })
+
+  it('removes a reference chip via its remove button', async () => {
+    vi.mocked(listMissions).mockResolvedValue([
+      { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as Mission,
+    ])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
+    fireEvent.change(goal, { target: { value: '#fix' } })
+    fireEvent.click(await screen.findByText('Fix the flaky test'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Fix the flaky test reference' }))
+    expect(screen.queryByText('Mission: Fix the flaky test')).toBeNull()
+  })
+
+  it('groups mission, chat, and document results under separate headers', async () => {
+    vi.mocked(listMissions).mockResolvedValue([{ id: 'mi1', name: 'A mission', goal: 'A mission' } as Mission])
+    vi.mocked(listSessions).mockResolvedValue([
+      { id: 'se1', title: 'A chat', archived: false, created_at: '', updated_at: '' },
+    ])
+    vi.mocked(searchKbDocuments).mockResolvedValue([
+      {
+        id: 'd1',
+        collection_id: 'c1',
+        title: 'A document',
+        source_type: 'file',
+        source_ref: '',
+        status: 'ready',
+        error: '',
+        chunk_count: 1,
+        bytes: 10,
+        ingested_at: null,
+        created_at: '',
+      },
+    ])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: '#a' } })
+
+    await screen.findByText('Missions')
+    expect(screen.getByText('Chats')).toBeTruthy()
+    expect(screen.getByText('Documents')).toBeTruthy()
+    expect(screen.getByText('A mission')).toBeTruthy()
+    expect(screen.getByText('A chat')).toBeTruthy()
+    expect(screen.getByText('A document')).toBeTruthy()
+  })
+
+  it('disables adding a 9th reference at the cap', async () => {
+    const missions = Array.from({ length: 9 }, (_, i) => ({
+      id: `mi${i}`,
+      name: `mission${i}`,
+      goal: `mission${i}`,
+    })) as Mission[]
+    vi.mocked(listMissions).mockImplementation((opts) =>
+      Promise.resolve(missions.filter((m) => !opts?.query || m.name?.includes(opts.query))),
+    )
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const countChips = () =>
+      screen.getAllByRole('button', { name: /^Remove mission\d reference$/ }).length
+
+    const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
+    for (let i = 0; i < 8; i++) {
+      fireEvent.change(goal, { target: { value: `#mission${i}` } })
+      fireEvent.click(await screen.findByText(`mission${i}`))
+      await waitFor(() => expect(countChips()).toBe(i + 1))
+    }
+
+    fireEvent.change(goal, { target: { value: '#mission8' } })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(screen.queryByText('Missions')).toBeNull()
+    expect(screen.queryByText('mission8', { selector: 'button' })).toBeNull()
+    expect(countChips()).toBe(8)
+  })
+})
+
 const destinations: Destination[] = [
   {
     id: 'd1',
@@ -301,7 +422,7 @@ const destinations: Destination[] = [
   },
 ]
 
-describe('MissionForm — destinations multi-select', () => {
+describe('MissionForm: destinations multi-select', () => {
   it('hides the section when there are no destinations', async () => {
     vi.mocked(listDestinations).mockResolvedValue([])
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
@@ -397,7 +518,7 @@ describe('MissionForm — destinations multi-select', () => {
   })
 })
 
-describe('MissionForm — follow-up', () => {
+describe('MissionForm: follow-up', () => {
   it('submits parent_mission_id when given, and seeds kind from initial without locking goal', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm-followup' } as Mission)
     renderForm(
@@ -440,7 +561,7 @@ describe('MissionForm — follow-up', () => {
   })
 })
 
-describe('MissionForm — kind chip', () => {
+describe('MissionForm: kind chip', () => {
   beforeEach(() => {
     vi.useFakeTimers()
   })
@@ -512,7 +633,7 @@ describe('MissionForm — kind chip', () => {
   })
 })
 
-describe('MissionForm — harness select placement', () => {
+describe('MissionForm: harness select placement', () => {
   it('shows the harness select in the main form body for a coding mission, without expanding Advanced', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -548,7 +669,7 @@ describe('MissionForm — harness select placement', () => {
   })
 })
 
-describe('MissionForm — environment select', () => {
+describe('MissionForm: environment select', () => {
   it('shows the environment select for a coding mission, defaulted to Auto-detect', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -596,7 +717,7 @@ describe('MissionForm — environment select', () => {
   })
 })
 
-describe('MissionForm — light mission toggle', () => {
+describe('MissionForm: light mission toggle', () => {
   it('shows the light toggle for a general mission', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -632,7 +753,7 @@ describe('MissionForm — light mission toggle', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
-    // Explicitly check it, then immediately uncheck it — the operator's
+    // Explicitly check it, then immediately uncheck it: the operator's
     // deliberate final choice is false, which must survive the classify
     // preview resolving to light: true.
     fireEvent.click(screen.getByLabelText(/Light mission/))
@@ -672,7 +793,7 @@ describe('MissionForm — light mission toggle', () => {
   })
 })
 
-describe('MissionForm — git strategy overrides', () => {
+describe('MissionForm: git strategy overrides', () => {
   it('shows branch pattern and commit style in Advanced for a coding mission', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -770,7 +891,7 @@ async function toCodingMission() {
   expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
 }
 
-describe('MissionForm — repository source', () => {
+describe('MissionForm: repository source', () => {
   it('defaults to None and omits repo_url/connector_id from the create payload', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm8' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
@@ -916,7 +1037,7 @@ describe('MissionForm — repository source', () => {
   })
 })
 
-describe('MissionForm — deployment (on_complete)', () => {
+describe('MissionForm: deployment (on_complete)', () => {
   it('hides the Deployment section until a repo (or new-repo name) is chosen', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
@@ -985,7 +1106,7 @@ describe('MissionForm — deployment (on_complete)', () => {
   })
 })
 
-describe('MissionForm — create mode, repeat on schedule', () => {
+describe('MissionForm: create mode, repeat on schedule', () => {
   it('submits a schedule with the slugified default name, preset cron, and general kind', async () => {
     vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
     const onDone = vi.fn()
@@ -1130,7 +1251,7 @@ describe('MissionForm — create mode, repeat on schedule', () => {
   })
 })
 
-describe('MissionForm — plan route', () => {
+describe('MissionForm: plan route', () => {
   it('renders the Plan route select in Advanced, defaulted to "Same as execute route"', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -1208,7 +1329,7 @@ describe('MissionForm — plan route', () => {
   })
 })
 
-describe('MissionForm — edit mode', () => {
+describe('MissionForm: edit mode', () => {
   it('prefills from the schedule, chip locked to the template kind', async () => {
     renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -1342,7 +1463,7 @@ const fivePhases: ExecutionPlanPhase[] = [
   makePhase({ phase: 'escalate', route: '', route_source: 'off', skipped: true, skip_reason: '' }),
 ]
 
-describe('MissionForm — execution plan', () => {
+describe('MissionForm: execution plan', () => {
   it('renders the execution plan table with a harness phase label and prices', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)

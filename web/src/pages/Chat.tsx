@@ -12,7 +12,7 @@ import {
   stopTurn,
   streamLive,
 } from '../api/client'
-import type { ChatEvent } from '../api/types'
+import type { ChatEvent, Reference } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
 import { useAgents } from '../components/AgentPicker'
 import { Composer, isDocumentAttachment, type PendingAttachment } from '../components/Composer'
@@ -43,11 +43,11 @@ export function Chat({
 }: {
   onNeedToken: () => void
   // Route prefix for session-id adoption (e.g. "/research" for the
-  // locked research page) — kept in sync with the <Route> that mounts
+  // locked research page): kept in sync with the <Route> that mounts
   // this component so mid-stream URL adoption lands on the right page.
   basePath?: string
   // When set, the skill is pinned for every turn and cannot be
-  // removed or overridden by a home-screen intent — a dedicated,
+  // removed or overridden by a home-screen intent: a dedicated,
   // single-purpose page rather than general chat with a chip.
   lockedSkillHint?: string
   emptyHeading?: string
@@ -65,11 +65,11 @@ export function Chat({
   // Optimistic sends' local object URLs, keyed by chat item id, so a
   // just-sent message's thumbnails render instantly (UserMessage's
   // localUrls prop) without round-tripping through AuthedImage's
-  // authed fetch — cleared per item only on unmount of the page, since
+  // authed fetch: cleared per item only on unmount of the page, since
   // a resumed/replayed session recreates items server-side anyway.
   const localUrlsRef = useRef(new Map<string, Map<string, string>>())
   // Locked pages fix their own agent and never touch the shared
-  // localStorage preference — a research page reading (or clobbering)
+  // localStorage preference: a research page reading (or clobbering)
   // whatever agent general chat last used would be a leak either
   // direction. Empty string = the server-side default agent, the only
   // seeded one; its skills allowlist covers every shipped pack, so a
@@ -92,7 +92,11 @@ export function Chat({
   // session's `knowledge` on load; local-only until the first send on
   // a brand-new chat (no session id yet).
   const [knowledge, setKnowledge] = useState<string[]>([])
-  // The serving agent's own bound collections — always searched, never
+  // Mission/chat/document references picked via #mention chips:
+  // component state only, never persisted (unlike knowledge): cleared
+  // on send, same as attachments.
+  const [references, setReferences] = useState<Reference[]>([])
+  // The serving agent's own bound collections: always searched, never
   // pinned by the user. Re-derived from the live agent selection (not
   // snapshotted) so switching agents mid-session updates the chips.
   // Same fallback as AgentRoutePicker: an empty/unmatched agent name
@@ -121,7 +125,7 @@ export function Chat({
   // Cancel any in-flight stream when the page unmounts (route change).
   useEffect(() => () => abortRef.current?.abort(), [])
 
-  // Revoke every optimistic-send object URL when the page unmounts —
+  // Revoke every optimistic-send object URL when the page unmounts:
   // they only exist to make a just-sent thumbnail instant, and a
   // route change means AuthedImage's authed fetch takes over on
   // remount (resume replays the transcript from scratch either way).
@@ -142,7 +146,7 @@ export function Chat({
       return // our own mid-stream URL adoption, not a navigation
     }
     // Real navigation: a stream still running belongs to the previous
-    // session — kill it before it writes into this one's transcript.
+    // session: kill it before it writes into this one's transcript.
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
@@ -179,14 +183,14 @@ export function Chat({
       stale = true
     }
     // attachLive is stable across renders in effect (closes over setters
-    // only) but isn't itself memoized — omitted deliberately, same
+    // only) but isn't itself memoized: omitted deliberately, same
     // pattern as the intent-consuming effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeSession, onNeedToken])
 
   // Tier 1 fallback: while NOT attached to a live stream for the open
   // session, a "session" signal means some turn elsewhere finished (or
-  // this tab missed the transition) — refetch the transcript so a tab
+  // this tab missed the transition): refetch the transcript so a tab
   // that never got to attach live still catches up promptly instead of
   // waiting on the next navigation. Attached tabs skip this: they're
   // already getting every event live, and a mid-stream refetch would
@@ -213,7 +217,7 @@ export function Chat({
 
   // updateKnowledge handles both the mention popup's add (local only,
   // rides the next send) and a chip's remove button. A removal on an
-  // existing session also persists immediately via PUT — the chip
+  // existing session also persists immediately via PUT: the chip
   // otherwise reappears next time the session is opened.
   const updateKnowledge = (next: string[]) => {
     const removed = next.length < knowledge.length
@@ -249,7 +253,7 @@ export function Chat({
   // attachLive reattaches to a turn that was already streaming when
   // this tab opened the session (turn_active from getTranscript): a
   // trailing 'interrupted' item is the server's replay of a mid-turn
-  // pending_state checkpoint — without this it would sit there forever
+  // pending_state checkpoint: without this it would sit there forever
   // looking dead. Replacing it with a live streaming assistant item and
   // feeding streamLive's events through the SAME applyEvent reducer
   // sendMessage uses makes a reattached turn indistinguishable from one
@@ -258,7 +262,7 @@ export function Chat({
   // every chunk that built up the interrupted partial, so the new item
   // starts empty rather than double-seeding with the persisted text.
   // maxLiveReconnects caps how many times a single dropped connection
-  // retries attachLive before giving up — a turn genuinely gone (not
+  // retries attachLive before giving up: a turn genuinely gone (not
   // just this subscriber's connection) would otherwise loop forever.
   const maxLiveReconnects = 5
 
@@ -291,7 +295,7 @@ export function Chat({
         if (controller.signal.aborted) return
         // The live stream can end without a terminal meta event if this
         // subscriber got dropped for lagging (turnBroadcaster's
-        // drop-on-full) rather than the turn actually finishing — a
+        // drop-on-full) rather than the turn actually finishing: a
         // one-shot refetch recovers either way: either it shows the
         // now-completed turn, or it shows the turn still running and
         // the next session signal (Tier 1) prompts another refetch.
@@ -306,7 +310,7 @@ export function Chat({
         if (controller.signal.aborted) return
         if (err instanceof ChatError) {
           // A 404 (no_active_turn) means the turn finished in the gap
-          // between getTranscript and this attach — refetch once to pick
+          // between getTranscript and this attach: refetch once to pick
           // up the now-completed transcript rather than leaving the
           // freshly-blanked item stuck empty.
           getTranscript(sessionId)
@@ -316,7 +320,7 @@ export function Chat({
           return
         }
         // A transport-level failure (dropped connection, proxy timeout)
-        // rather than a definite server response — the turn is very
+        // rather than a definite server response: the turn is very
         // likely still running server-side (D-042), so reattach instead
         // of treating this as final. abortRef must point at the retry's
         // own controller, not get cleared by this attempt's finally.
@@ -345,15 +349,17 @@ export function Chat({
     routeName = route,
     sentAttachments: PendingAttachment[] = [],
     sentKnowledge = knowledge,
+    sentReferences = references,
   ) => {
     const message = text.trim()
-    // Uploads still in flight aren't sendable ids yet — only completed
+    // Uploads still in flight aren't sendable ids yet: only completed
     // ones ride the request; the composer's cap+toast already stops a
     // user from expecting an in-flight one to count.
     const ready = sentAttachments.filter((a) => !a.uploading)
     if ((!message && ready.length === 0) || streaming) return
     setDraft('')
     setAttachments([])
+    setReferences([])
     setStreaming(true)
     pinnedRef.current = true // sending always re-follows the answer
     const userItemId = crypto.randomUUID()
@@ -387,7 +393,7 @@ export function Chat({
       sessionRef.current = id
       adoptedRef.current = id
       // Same route pattern serves basePath and basePath/:id, so this
-      // only re-renders — the live stream keeps its component state.
+      // only re-renders: the live stream keeps its component state.
       navigate(`${basePath}/${id}`, { replace: true })
     }
     let handedOffToLive = false
@@ -402,6 +408,10 @@ export function Chat({
           attachments:
             ready.length > 0 ? ready.map((a) => ({ id: a.id, name: a.name })) : undefined,
           knowledge: sentKnowledge.length > 0 ? sentKnowledge : undefined,
+          references:
+            sentReferences.length > 0
+              ? sentReferences.map((r) => ({ kind: r.kind, id: r.id }))
+              : undefined,
         },
         (ev: ChatEvent) => {
           if (ev.type === 'meta') adoptSession(ev.session_id)
@@ -423,7 +433,7 @@ export function Chat({
           updateLast((m) => ({ ...m, streaming: false, error: errorText(err) }))
         } else if (err.status === 409 && err.code === 'turn_in_flight') {
           // Lost the race to a turn already running elsewhere (another
-          // tab, a retry) — not a failure, just attach to it like a
+          // tab, a retry): not a failure, just attach to it like a
           // page reload mid-turn would. attachLive owns streaming/abort
           // state from here, so the finally below must not touch it.
           toast.info('A reply is already in progress, reattaching')
@@ -432,7 +442,7 @@ export function Chat({
         } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
       } else if (sessionRef.current) {
         // A transport-level failure (dropped connection, proxy timeout,
-        // laptop sleep) throws a plain error, not ChatError — the turn
+        // laptop sleep) throws a plain error, not ChatError: the turn
         // itself runs detached from this request (D-042), so it's very
         // likely still alive server-side. Reattach via /live instead of
         // surfacing a false "failed" state; attachLive's own error path
@@ -454,11 +464,12 @@ export function Chat({
     }
   }
 
-  const send = () => void sendMessage(draft, agent, skillHint, route, attachments, knowledge)
+  const send = () =>
+    void sendMessage(draft, agent, skillHint, route, attachments, knowledge, references)
 
   // stop asks the server to cancel the in-flight turn (chat.Service now
   // runs it detached from this request, so abortRef.current?.abort()
-  // alone only stops this tab's rendering, never the turn itself — see
+  // alone only stops this tab's rendering, never the turn itself: see
   // stopTurn's doc comment). Fire-and-forget: the turn's abnormal-end
   // persistence and the local abort together already leave the UI in a
   // sane state regardless of whether this call lands.
@@ -507,7 +518,7 @@ export function Chat({
           updateLast((m) => ({ ...m, streaming: false, error: errorText(err) }))
         } else if (err.status === 409 && err.code === 'turn_in_flight') {
           // Same handoff as sendMessage: a turn is already running
-          // (another tab's send/retry won the race) — attach to it
+          // (another tab's send/retry won the race): attach to it
           // instead of showing a failure. attachLive owns
           // streaming/abort state from here.
           toast.info('A reply is already in progress, reattaching')
@@ -516,7 +527,7 @@ export function Chat({
         } else updateLast((m) => ({ ...m, streaming: false, error: err.message }))
       } else {
         // A transport-level failure (dropped connection, proxy timeout,
-        // laptop sleep) throws a plain error, not ChatError — the turn
+        // laptop sleep) throws a plain error, not ChatError: the turn
         // itself runs detached from this request (D-042), so it's very
         // likely still alive server-side. Reattach via /live instead of
         // surfacing a false "failed" state.
@@ -538,7 +549,7 @@ export function Chat({
   // Consume a home-screen intent exactly once: `send` fires the
   // message immediately, `draft` prefills the composer, `skillHint`
   // pins the chip. sendMessage takes hint explicitly here rather than
-  // relying on the skillHint state landing before the call — setState
+  // relying on the skillHint state landing before the call: setState
   // doesn't take effect until the next render.
   useEffect(() => {
     if (lockedSkillHint || intentConsumedRef.current) return
@@ -588,7 +599,7 @@ export function Chat({
     updateLast((m) => clearPermission(m, id))
     answerPermission(id, decision).catch((err: unknown) => {
       // A replayed ask whose turn died (brain restart) answers 404
-      // "unknown or already-answered" — the prompt is already gone
+      // "unknown or already-answered": the prompt is already gone
       // locally (above), so just tell the user why nothing happened.
       // Any other error is the same 10-minute-timeout-resolves-as-deny
       // case as before: nothing useful to render.
@@ -634,7 +645,7 @@ export function Chat({
                   documents={item.documents}
                   localUrls={localUrlsRef.current.get(item.id)}
                   // A trailing user message means the turn died before any
-                  // assistant event reached the transcript — retry re-runs
+                  // assistant event reached the transcript: retry re-runs
                   // it server-side, same trailing-only condition as above.
                   onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
                 />
@@ -650,7 +661,7 @@ export function Chat({
                   text={item.text}
                   // Same trailing-only condition as user/assistant items:
                   // a failed turn had no way back into the UI at all
-                  // without this — the user had to type the message again.
+                  // without this: the user had to type the message again.
                   onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
                 />
               )
@@ -660,7 +671,7 @@ export function Chat({
                   key={item.id}
                   msg={item}
                   // Retry only ever targets the trailing dangling turn
-                  // (the session's last event server-side) — never a
+                  // (the session's last event server-side): never a
                   // mid-transcript message.
                   onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
                   onShowActivity={() => setActivityId(item.id)}
@@ -698,6 +709,8 @@ export function Chat({
           knowledge={knowledge}
           onKnowledge={updateKnowledge}
           agentKnowledge={agentKnowledge}
+          references={references}
+          onReferences={setReferences}
         />
         <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
           Enter to send · Shift+Enter for a new line

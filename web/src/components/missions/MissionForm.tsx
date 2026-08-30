@@ -25,6 +25,7 @@ import type {
   ExecutionPlanPhase,
   GitHubIdentity,
   GitHubRepo,
+  Reference,
   Schedule,
 } from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
@@ -45,6 +46,7 @@ import { errText } from '../settings/util'
 import { envIcon } from '../icons/EnvIcons'
 import { type PendingAttachment } from '../Composer'
 import { MissionAttachments } from './MissionAttachments'
+import { GoalTextarea } from './MissionReferences'
 import { MissionExecutionPlan } from './MissionExecutionPlan'
 
 type RepoSource = 'none' | 'github'
@@ -53,7 +55,7 @@ type Kind = 'coding' | 'general'
 
 type OnComplete = '' | 'push' | 'push_pr'
 
-// Sentinel for the Deployment Select — Radix Select.Item rejects an
+// Sentinel for the Deployment Select: Radix Select.Item rejects an
 // empty string value, so the "do nothing" choice (the wire value '')
 // is represented by this sentinel on the Select itself.
 const ON_COMPLETE_NONE = '__none__'
@@ -66,7 +68,7 @@ const onCompleteChoices: { value: string; label: string }[] = [
 
 // repoFromCloneURL rebuilds a minimal GitHubRepo from a parent
 // mission's stored clone URL (mirrors MissionDetail.tsx's
-// githubFullName) — a follow-up seeds the repo picker with the
+// githubFullName): a follow-up seeds the repo picker with the
 // parent's repo, but the mission row only ever stored the clone URL,
 // not repos.list's other fields (private/default_branch/etc), which
 // this form's fields never read for an already-selected repo.
@@ -87,7 +89,7 @@ const kindCopy: Record<Kind, string> = {
 }
 
 // A schedule's mission_template carries route/review_route as explicit
-// undefined when unset (see types.ts) — "non-default" means any of
+// undefined when unset (see types.ts): "non-default" means any of
 // them, or a non-default agent, actually has a value. Budget and
 // auto-approve are always visible now, so they never force the
 // advanced section open.
@@ -132,7 +134,7 @@ export function defaultRouteLabel(
 }
 
 // resolvedDefaultRoute is defaultRouteLabel's same precedence, but
-// returns the route name (or '' when none resolves — matches the
+// returns the route name (or '' when none resolves: matches the
 // server's own '' == "no real route, gateway default chain" case)
 // instead of a display label. Used to fetch executor-options against
 // the route a create would actually use, not always the system
@@ -148,13 +150,13 @@ function resolvedDefaultRoute(
 }
 
 // Sentinel for the executor Select's "apply the settings default"
-// choice — wire value stays '' (omit harness from the create payload)
+// choice: wire value stays '' (omit harness from the create payload)
 // to match the API's own empty-means-default semantics. Exported so
 // AgentForm's Harness select can reuse the same sentinel/choice list
 // for its own "inherit" option.
 export const EXECUTOR_DEFAULT = '__default__'
 
-// executorChoices maps a harness Select value to its label — easy to
+// executorChoices maps a harness Select value to its label: easy to
 // extend as more harnesses register. Exported so MissionExecutionPlan
 // can reuse the same harness->label mapping for the axis column.
 export const executorChoices: { value: string; label: string }[] = [
@@ -168,7 +170,7 @@ export const executorChoices: { value: string; label: string }[] = [
 ]
 
 // defaultHarnessLabel names what the Harness select's "Default" choice
-// actually resolves to — mirrors defaultRouteLabel's job for Route —
+// actually resolves to: mirrors defaultRouteLabel's job for Route:
 // so an operator can tell what runs without opening Settings. Falls
 // back to the plain choice when defaultHarnessName is empty (fetch
 // failed) or names a harness not in executorChoices (native, or one
@@ -180,7 +182,7 @@ function defaultHarnessLabel(defaultHarnessName: string): string {
 }
 
 // defaultPlanRouteLabel names what leaving Plan route on "Default"
-// resolves to, read from the execution plan response's plan phase —
+// resolves to, read from the execution plan response's plan phase:
 // never recomputed client-side. Falls back to the plain hardcoded
 // string before the plan has loaded.
 function defaultPlanRouteLabel(plan: ExecutionPlanPhase[] | null): string {
@@ -190,7 +192,7 @@ function defaultPlanRouteLabel(plan: ExecutionPlanPhase[] | null): string {
 }
 
 // defaultReviewRouteLabel names what leaving Review route on
-// "Default" resolves to — either the plan or the execute route,
+// "Default" resolves to: either the plan or the execute route,
 // whichever the review phase actually inherited from.
 function defaultReviewRouteLabel(plan: ExecutionPlanPhase[] | null): string {
   const phase = plan?.find((p) => p.phase === 'review')
@@ -206,12 +208,12 @@ function defaultEscalationRouteLabel(): string {
   return 'Off (no escalation on failure)'
 }
 
-// Sentinel for the environment Select's "auto-detect" choice — wire
+// Sentinel for the environment Select's "auto-detect" choice: wire
 // value stays '' (omit environment from the create payload) to match
 // the API's own empty-means-auto-detect semantics (D-05x).
 const ENVIRONMENT_AUTO = '__auto__'
 
-// environmentChoices maps an environment Select value to its label —
+// environmentChoices maps an environment Select value to its label:
 // mirrors sandboxd's image allowlist (internal/sandboxd/manager.go).
 const environmentChoices: { value: string; label: string }[] = [
   { value: ENVIRONMENT_AUTO, label: 'Auto-detect' },
@@ -224,7 +226,7 @@ const environmentChoices: { value: string; label: string }[] = [
 ]
 
 // Sentinel for the commit-style Select's "apply the settings default"
-// choice — wire value stays '' (omit commit_style from the create
+// choice: wire value stays '' (omit commit_style from the create
 // payload) to match the API's own empty-means-default semantics.
 const COMMIT_STYLE_DEFAULT = '__default__'
 
@@ -270,7 +272,7 @@ function formatExpiresAt(v: string): string {
 // the edit-schedule page. In 'create' mode it submits a one-off
 // mission or, with "Repeat on schedule" on, a new schedule. In 'edit'
 // mode it always patches the given schedule and locks out run-once,
-// coding, and the escalation route — the same constraints
+// coding, and the escalation route: the same constraints
 // NewMissionDialog/ScheduleDialog enforced.
 export function MissionForm({
   mode,
@@ -283,12 +285,12 @@ export function MissionForm({
   mode: 'create' | 'edit'
   schedule?: Schedule
   // initial seeds the form's create-mode state from a parent mission
-  // (a follow-up) — everything except goal, which is left empty for
+  // (a follow-up): everything except goal, which is left empty for
   // the user to type. Read only once, in the useState initializers
   // below, so the caller must render this component only once initial
   // is settled (e.g. after an async parent fetch resolves).
   initial?: Partial<CreateMissionInput>
-  // parentMissionId, when set, is included on the create payload —
+  // parentMissionId, when set, is included on the create payload:
   // makes this a follow-up mission (see CreateMissionInput).
   parentMissionId?: string
   onDone: (result: { kind: 'mission' | 'schedule'; id: string }) => void
@@ -302,14 +304,17 @@ export function MissionForm({
     () => (goal.trim() === '' ? 0 : goal.trim().split(/\s+/).length),
     [goal],
   )
-  // attachments, like goal, is never seeded from initial — a follow-up
+  // attachments, like goal, is never seeded from initial: a follow-up
   // carries the parent's outcome digest as prompt context, not its
   // documents; each new mission attaches its own.
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  // references picked via the goal field's # mentions: component
+  // state only, resolved server-side at create time.
+  const [references, setReferences] = useState<Reference[]>([])
   const [kind, setKind] = useState<Kind>(initial?.kind ?? 'general')
   // kindLocked freezes kind against further auto-classify calls once
   // the user has explicitly chosen it (chip click, or the repeat-mode
-  // general override below) — cleared when the goal is emptied, which
+  // general override below): cleared when the goal is emptied, which
   // resets to auto-detect for whatever's typed next. A follow-up's
   // seeded kind counts as an explicit choice too.
   const [kindLocked, setKindLocked] = useState(!!initial?.kind)
@@ -319,9 +324,9 @@ export function MissionForm({
   const [light, setLight] = useState(initial?.light ?? false)
   const [lightTouched, setLightTouched] = useState(!!initial?.light)
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
-  // Destinations multi-select — visible, not advanced; default is
+  // Destinations multi-select: visible, not advanced; default is
   // empty (deliver nowhere). Offered for a one-off create, a new
-  // schedule (repeat on), and editing an existing schedule — fetched
+  // schedule (repeat on), and editing an existing schedule: fetched
   // once per form regardless of mode.
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
   const [destinationIDs, setDestinationIDs] = useState<string[]>([])
@@ -352,7 +357,7 @@ export function MissionForm({
   const [executionPlan, setExecutionPlan] = useState<ExecutionPlanPhase[] | null>(null)
   // defaultHarnessName is settings' coding_executor value (the harness
   // a create actually runs when the Harness select is left on
-  // "Default") — fetched once so that choice can say what it resolves
+  // "Default"): fetched once so that choice can say what it resolves
   // to, the same way the Route select's "Default" already names the
   // route it resolves to (defaultRouteLabel).
   const [defaultHarnessName, setDefaultHarnessName] = useState('')
@@ -377,7 +382,7 @@ export function MissionForm({
   const [newRepoName, setNewRepoName] = useState('')
   const [newRepoPrivate, setNewRepoPrivate] = useState(true)
 
-  // Consent-at-create for the mission's auto-completion action —
+  // Consent-at-create for the mission's auto-completion action:
   // resets whenever the GitHub source is unpicked, since on_complete is
   // only ever valid alongside repo_url/connector_id.
   const [onComplete, setOnComplete] = useState<OnComplete>(initial?.on_complete ?? '')
@@ -386,7 +391,7 @@ export function MissionForm({
   }, [repoSource])
 
   // Fetch github-kind connectors once the operator picks the GitHub
-  // source — most missions never touch this, so it's not loaded
+  // source: most missions never touch this, so it's not loaded
   // upfront with agents/routes.
   useEffect(() => {
     if (repoSource !== 'github' || githubConnectors !== null) return
@@ -395,7 +400,7 @@ export function MissionForm({
       .catch(() => setGithubConnectors([]))
   }, [repoSource, githubConnectors])
 
-  // Fetch the connector's repo list whenever it changes — best-effort,
+  // Fetch the connector's repo list whenever it changes: best-effort,
   // an error surfaces inline rather than blocking the form.
   useEffect(() => {
     if (repoSource !== 'github' || !connectorID) {
@@ -411,7 +416,7 @@ export function MissionForm({
   }, [repoSource, connectorID])
 
   // Resolve the connection's GitHub identity so the Deployment section
-  // can say who commits and PRs will be authored as — best-effort, an
+  // can say who commits and PRs will be authored as: best-effort, an
   // unresolved identity just hides the line.
   useEffect(() => {
     if (repoSource !== 'github' || !connectorID) {
@@ -434,9 +439,9 @@ export function MissionForm({
   // whenever the kind flips to coding or the route selection (explicit
   // or resolved default) changes. An explicit route override wins;
   // otherwise this asks about the same route a create would actually
-  // resolve to (resolvedDefaultRoute), not always the system default —
+  // resolve to (resolvedDefaultRoute), not always the system default:
   // else a "coding" route's own chain never gets previewed. Best-effort
-  // — a failed fetch degrades to a plain, fully-enabled select with no
+  //: a failed fetch degrades to a plain, fully-enabled select with no
   // live info, the server validates on submit anyway.
   useEffect(() => {
     if (kind !== 'coding') {
@@ -451,7 +456,7 @@ export function MissionForm({
 
   // Live execution plan: the server-resolved read-out of what each
   // phase actually runs, keyed on every field that affects resolution.
-  // Best-effort — a failed fetch just hides the table, the server is
+  // Best-effort: a failed fetch just hides the table, the server is
   // still the source of truth at create time.
   useEffect(() => {
     getMissionExecutionPlan({
@@ -484,7 +489,7 @@ export function MissionForm({
   ])
 
   // Pre-select the settings page's configured default currency for a
-  // fresh create — edit mode below overwrites this with the schedule's
+  // fresh create: edit mode below overwrites this with the schedule's
   // own saved currency once it loads.
   useEffect(() => {
     if (mode !== 'create') return
@@ -500,7 +505,7 @@ export function MissionForm({
 
   // Read-only, both modes: names the harness the settings-page
   // coding_executor value resolves to, purely for the Harness select's
-  // "Default" label. Best-effort — an empty value just shows the plain
+  // "Default" label. Best-effort: an empty value just shows the plain
   // "Default (from settings)" fallback.
   useEffect(() => {
     getSettings()
@@ -510,7 +515,7 @@ export function MissionForm({
       })
   }, [])
 
-  // Repeat-on-schedule fields — read/submitted whenever repeat is on
+  // Repeat-on-schedule fields: read/submitted whenever repeat is on
   // (create mode) or always (edit mode, which only ever edits a
   // schedule).
   const [repeat, setRepeat] = useState(mode === 'edit')
@@ -561,7 +566,7 @@ export function MissionForm({
   // Live kind inference: debounced 600ms after goal edits, skipped
   // once the user has locked a manual choice or the goal is empty.
   // Unlocking on an emptied goal happens in the textarea's onChange
-  // below (a direct user edit), not here — this effect also runs on
+  // below (a direct user edit), not here: this effect also runs on
   // mount/schedule-load with the PREVIOUS render's goal, and clearing
   // the lock from here would race the schedule-seed effect's own
   // setKindLocked(true) and stomp it back to false.
@@ -573,7 +578,7 @@ export function MissionForm({
         .then((r) => {
           setKind(r.kind)
           // light only ever defaults the toggle, never overrides an
-          // operator's own choice (lightTouched) — and only makes sense
+          // operator's own choice (lightTouched): and only makes sense
           // once the goal actually classified as general.
           if (!lightTouched) setLight(r.kind === 'general' && r.light)
         })
@@ -624,7 +629,7 @@ export function MissionForm({
     setExpiresAt(dateAndTimeToExpiresAt(date, time))
   }
 
-  // A client-side 5-field shape check only — the server is the
+  // A client-side 5-field shape check only: the server is the
   // authoritative cron validator (robfig/cron), this just catches
   // obvious typos before a round trip.
   const validCronShape = (v: string) => v.trim().split(/\s+/).length === 5
@@ -685,6 +690,8 @@ export function MissionForm({
         attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
       destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
       light: kind === 'general' ? light : undefined,
+      references:
+        references.length > 0 ? references.map((r) => ({ kind: r.kind, id: r.id })) : undefined,
     })
     toast.success('Mission created')
     onDone({ kind: 'mission', id })
@@ -786,16 +793,31 @@ export function MissionForm({
             What should this mission accomplish{repeat ? ' each time it fires' : ''}?
           </p>
         </div>
-        <Textarea
-          id="mission-goal"
-          aria-label="Goal"
-          value={goal}
-          onChange={(e) => onGoalChange(e.target.value)}
-          placeholder="What should this mission accomplish? Markdown supported."
-          rows={10}
-          autoFocus
-          className="min-h-60 resize-y text-base"
-        />
+        {mode === 'create' && !repeat ? (
+          <GoalTextarea
+            id="mission-goal"
+            aria-label="Goal"
+            value={goal}
+            onChange={onGoalChange}
+            references={references}
+            onReferences={setReferences}
+            placeholder="What should this mission accomplish? Markdown supported. Type # to reference a mission, chat, or document."
+            rows={10}
+            autoFocus
+            className="min-h-60 resize-y text-base"
+          />
+        ) : (
+          <Textarea
+            id="mission-goal"
+            aria-label="Goal"
+            value={goal}
+            onChange={(e) => onGoalChange(e.target.value)}
+            placeholder="What should this mission accomplish? Markdown supported."
+            rows={10}
+            autoFocus
+            className="min-h-60 resize-y text-base"
+          />
+        )}
         <p className="text-right text-xs text-muted-foreground">
           {goalWordCount} {goalWordCount === 1 ? 'word' : 'words'}
         </p>

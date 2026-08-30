@@ -34,6 +34,7 @@ import type {
   Notification,
   PendingPermission,
   ProviderHealth,
+  ReferenceKind,
   RetrievedMemory,
   Schedule,
   SessionMeta,
@@ -107,7 +108,7 @@ export function createSSEParser<T = ChatEvent>(onEvent: (ev: T) => void) {
 
 // ChatError is a structured request failure: match on status/code, not
 // message text. sessionId is present when brain already created a
-// session row — reuse it on retry instead of orphaning it.
+// session row: reuse it on retry instead of orphaning it.
 export class ChatError extends Error {
   readonly status: number
   readonly code?: string
@@ -192,7 +193,7 @@ export async function chatStream(
 
 // retryStream re-runs a session's last (failed) turn: the session
 // already carries the dangling user message server-side, so this
-// posts no body — retry has nothing new to say, just "try again".
+// posts no body: retry has nothing new to say, just "try again".
 export async function retryStream(
   sessionId: string,
   onEvent: (ev: ChatEvent) => void,
@@ -203,7 +204,7 @@ export async function retryStream(
 
 // stopTurn cancels a session's in-flight turn server-side: the turn now
 // runs detached from the request that started it, so aborting the
-// local fetch (AbortController) no longer stops it — this is the only
+// local fetch (AbortController) no longer stops it: this is the only
 // thing that does. A 404 (no turn running, or it already finished) is
 // a benign race from the caller's point of view, same as streamLive's.
 export async function stopTurn(sessionId: string): Promise<void> {
@@ -213,8 +214,8 @@ export async function stopTurn(sessionId: string): Promise<void> {
 // streamLive reattaches to a session's in-flight turn (Tier 2 of live
 // reattach): GET .../live replays whatever the turn already emitted
 // then follows it live until the terminal, wire-identical to
-// chatStream/retryStream's SSE frames — same createSSEParser, same
-// ChatEvent shape, same terminal meta contract — so a caller feeds
+// chatStream/retryStream's SSE frames: same createSSEParser, same
+// ChatEvent shape, same terminal meta contract: so a caller feeds
 // events through the exact same applyEvent reducer regardless of
 // which of the three started the stream. Throws ChatError(404,
 // 'no_active_turn') when nothing is running; the caller's fallback is
@@ -366,7 +367,7 @@ export async function answerPermission(
 }
 
 // listPendingPermissions returns every permission ask still awaiting a
-// decision across every session with a currently active turn — the
+// decision across every session with a currently active turn: the
 // global badge/toast's data source.
 export async function listPendingPermissions(): Promise<PendingPermission[]> {
   const { pending } = await request<{ pending: PendingPermission[] }>('/v1/permissions/pending')
@@ -394,7 +395,7 @@ export async function setSessionKnowledge(id: string, collections: string[]): Pr
 
 // transcribe posts a recorded audio clip (from the mic button) to
 // brain's local speech-to-text proxy and returns the transcript.
-// Raw bytes, not JSON — the body IS the audio, so this bypasses
+// Raw bytes, not JSON: the body IS the audio, so this bypasses
 // request()'s JSON content type. language is an optional ISO 639-1
 // code (e.g. "bn"); omitted lets the sidecar auto-detect.
 export async function transcribe(blob: Blob, language?: string): Promise<string> {
@@ -430,7 +431,7 @@ export interface AttachmentUpload {
 
 // uploadAttachment posts one file to /v1/attachments (multipart field
 // "file") and returns its stored id/mime/size. Raw multipart, not
-// JSON — same bypass of request()'s JSON content type as transcribe.
+// JSON: same bypass of request()'s JSON content type as transcribe.
 export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
   const form = new FormData()
   form.append('file', file)
@@ -454,7 +455,7 @@ export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
 }
 
 // fetchAttachmentBlob reads an uploaded attachment's bytes for inline
-// rendering (AuthedImage) — GET /v1/attachments/{id} requires the
+// rendering (AuthedImage): GET /v1/attachments/{id} requires the
 // bearer header, so a bare <img src> cannot fetch it directly.
 export async function fetchAttachmentBlob(id: string): Promise<Blob> {
   const res = await fetch(`/v1/attachments/${id}`, {
@@ -533,7 +534,7 @@ function rangeParams(from: Date, to: Date, extra: Record<string, string> = {}): 
 }
 
 // usageSummary returns one row per billing currency present in the
-// range — never summed together (D-013's spend-side sibling: no FX
+// range: never summed together (D-013's spend-side sibling: no FX
 // conversion anywhere in this codebase).
 export async function usageSummary(from: Date, to: Date): Promise<UsageSummary[]> {
   const { summaries } = await request<{ summaries: UsageSummary[] }>(
@@ -566,7 +567,7 @@ export async function usageTotals(
 }
 
 // usageUnpriced returns the (provider, model) pairs with unpriced usage
-// (cost NULL) in range — the pairs Analytics' catalog estimate needs to
+// (cost NULL) in range: the pairs Analytics' catalog estimate needs to
 // price, kept per-provider so catalogPrices resolves each pair against
 // that provider's own catalog candidates only.
 export async function usageUnpriced(from: Date, to: Date): Promise<UnpricedGroup[]> {
@@ -643,7 +644,7 @@ export async function testProvider(id: string, model?: string): Promise<TestResu
 }
 
 // validateProvider probes an UNSAVED provider config with a one-token
-// completion — the add dialog's validate-on-create. Probe failures come
+// completion: the add dialog's validate-on-create. Probe failures come
 // back as { ok: false, detail }; only invalid configs throw.
 export async function validateProvider(
   p: Partial<AdminProvider>,
@@ -657,7 +658,7 @@ export async function validateProvider(
 
 // availableModels proxies the provider's own model-listing endpoint.
 // Throws ChatError with status 422 when the driver cannot list models
-// (bedrock) — callers fall back to manual entry.
+// (bedrock): callers fall back to manual entry.
 export async function availableModels(id: string): Promise<AvailableModel[]> {
   const { models } = await request<{ models: AvailableModel[] }>(
     `/v1/admin/providers/${id}/models`,
@@ -697,7 +698,7 @@ export async function searchCatalog(
 // catalogModelsForProvider searches the synced catalog restricted to a
 // provider's candidate litellm_provider(s) (derived server-side from
 // its driver/base_url, or "anthropic" for a kind='cli' claude-cli row)
-// — the model id picker's live suggestion source, and the provider
+//: the model id picker's live suggestion source, and the provider
 // detail page's read-only Models list. q filters case-insensitive
 // substring on model_key; omitted fetches the provider's whole
 // candidate pool. limit defaults to the server's normal cap (50);
@@ -717,7 +718,7 @@ export async function catalogModelsForProvider(
 
 // catalogPrices resolves each (provider, model) pair within that
 // PROVIDER's own catalog candidates only (Analytics' unpriced-call
-// estimate) — never the whole catalog, so a model name that collides
+// estimate): never the whole catalog, so a model name that collides
 // with another vendor's catalog entry can never borrow that vendor's
 // price. price is null when the provider name is unknown or the model
 // has no match within its candidates.
@@ -759,7 +760,7 @@ export async function deleteSecret(refName: string): Promise<void> {
 }
 
 // migrateSecret moves one stored ref's value onto backend, wiping its
-// old storage — used to re-home a credential after Vault/ASM is set up.
+// old storage: used to re-home a credential after Vault/ASM is set up.
 export async function migrateSecret(refName: string, backend: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}/migrate`, {
     method: 'POST',
@@ -786,7 +787,7 @@ export async function migrateAllSecrets(backend: string): Promise<SecretMigratio
 }
 
 // SecretReference is one provider or connector naming a credential ref
-// as its credential_ref — the credentials panel's used-by chips.
+// as its credential_ref: the credentials panel's used-by chips.
 export interface SecretReference {
   kind: 'provider' | 'connector'
   name: string
@@ -795,9 +796,9 @@ export interface SecretReference {
 
 // SecretRefEntry is one stored secret's directory entry: name,
 // timestamps (when the row has them), and every referent across both
-// providers and connectors. Never a value — the credentials panel is a
+// providers and connectors. Never a value: the credentials panel is a
 // directory, not a vault viewer. system marks a configured secret
-// backend's own bootstrap credential (e.g. the vault token) — the
+// backend's own bootstrap credential (e.g. the vault token): the
 // gateway refuses to delete these regardless, but the panel hides the
 // delete action for them up front.
 export interface SecretRefEntry {
@@ -964,8 +965,17 @@ export async function listKbDocuments(collectionId: string): Promise<KbDocument[
   return documents ?? []
 }
 
+// searchKbDocuments is the cross-collection title search (the composer
+// #-mention "type to find a kb document" search): an empty q returns
+// every document.
+export async function searchKbDocuments(q = ''): Promise<KbDocument[]> {
+  const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+  const { documents } = await request<{ documents: KbDocument[] }>(`/v1/admin/kb/documents${qs}`)
+  return documents ?? []
+}
+
 // uploadKbDocument posts one file to a collection (multipart field
-// "file") — same bypass of request()'s JSON content type as
+// "file"): same bypass of request()'s JSON content type as
 // uploadAttachment, since the body is the file, not JSON.
 export async function uploadKbDocument(collectionId: string, file: File): Promise<KbDocument> {
   const form = new FormData()
@@ -1081,7 +1091,7 @@ export async function testConnector(
 
 // listConnectorRepos lists every repo a github-kind connector's PAT
 // can see (owner, collaborator, or org member), most recently pushed
-// first — the mission create form's repo picker.
+// first: the mission create form's repo picker.
 export async function listConnectorRepos(id: string): Promise<GitHubRepo[]> {
   const { repos } = await request<{ repos: GitHubRepo[] }>(`/v1/admin/connectors/${id}/repos`)
   return repos ?? []
@@ -1182,7 +1192,7 @@ export async function setRouteRole(name: string, role: string): Promise<void> {
 
 export interface AdminSettings {
   // Feature switches, plus the read-only derived transcribe_enabled
-  // key (true when WHISPER_URL is configured server-side) — the
+  // key (true when WHISPER_URL is configured server-side): the
   // Composer mic button hides itself when it's false.
   settings: Record<string, boolean>
   // Typed runtime settings; empty string means the built-in default.
@@ -1219,12 +1229,12 @@ export interface CreateMissionInput {
   route?: string
   review_route?: string
   // plan_route, when set, is the route explore/plan/replan/review run
-  // on instead of route — omit (or "") to use route for everything.
+  // on instead of route: omit (or "") to use route for everything.
   plan_route?: string
   escalation_route?: string
   // route_model/plan_route_model/review_route_model pin one phase axis
   // to one exact chain entry ("provider name/model") in the route it
-  // would otherwise resolve — omit (or "") to keep the first-usable
+  // would otherwise resolve: omit (or "") to keep the first-usable
   // walk. See ExecutionPlanEntry's provider_name+model for the pair a
   // pin names.
   route_model?: string
@@ -1235,12 +1245,12 @@ export interface CreateMissionInput {
   budget_currency?: string
   auto_approve_safe?: boolean
   // harness names the delegated coding-CLI executor a coding mission
-  // runs under — omit (or "") to apply the settings default,
+  // runs under: omit (or "") to apply the settings default,
   // "native" to force the built-in agent loop. Only valid when
   // kind === 'coding'.
   harness?: string
   // environment selects the sandbox image key (D-05x) a coding
-  // mission's container runs — omit (or "") to auto-detect (repo
+  // mission's container runs: omit (or "") to auto-detect (repo
   // markers, then a goal-keyword heuristic, falling back to base).
   // Only valid when kind === 'coding'.
   environment?: string
@@ -1268,7 +1278,7 @@ export interface CreateMissionInput {
   // outcome digest is carried into this mission's prompts.
   parent_mission_id?: string
   // attachments name already-uploaded PDFs (POST /v1/attachments) to
-  // convert to markdown once at create time — PDF only, up to 8.
+  // convert to markdown once at create time: PDF only, up to 8.
   attachments?: { id: string; name: string }[]
   // destination_ids names operator-created destinations to deliver this
   // mission's outcome digest to on the terminal done transition; omit
@@ -1278,10 +1288,13 @@ export interface CreateMissionInput {
   // single worker turn, final message delivered as the result. Only
   // valid when kind === 'general'.
   light?: boolean
+  // references name composer #-mention picks (missions/chats/kb docs)
+  // to resolve at create time into ReferencedContext.
+  references?: { kind: ReferenceKind; id: string }[]
 }
 
 // ExecutorOption is one registered harness's usability on a given
-// route (GET /v1/missions/executor-options) — usable ones carry the
+// route (GET /v1/missions/executor-options): usable ones carry the
 // provider/model they'd resolve to, unusable ones a reason why not.
 export interface ExecutorOption {
   harness: string
@@ -1336,14 +1349,17 @@ export async function getMissionExecutionPlan(params: {
 }
 
 // listMissions returns every mission by default; opts narrows to one
-// schedule's fire history (scheduleId) and/or caps the result count
-// (limit) — both map directly to the server's optional query params.
+// schedule's fire history (scheduleId), a text search (query, the
+// composer #-mention mission search), and/or caps the result count
+// (limit): all map directly to the server's optional query params.
 export async function listMissions(opts?: {
   scheduleId?: string
+  query?: string
   limit?: number
 }): Promise<Mission[]> {
   const params = new URLSearchParams()
   if (opts?.scheduleId) params.set('schedule_id', opts.scheduleId)
+  if (opts?.query) params.set('q', opts.query)
   if (opts?.limit) params.set('limit', String(opts.limit))
   const qs = params.size > 0 ? `?${params.toString()}` : ''
   const { missions } = await request<{ missions: Mission[] }>(`/v1/missions${qs}`)
@@ -1351,8 +1367,8 @@ export async function listMissions(opts?: {
 }
 
 // createMission returns the full created mission (not just its id) so
-// a server-resolved field decided at create time — e.g. auto-detected
-// environment (D-05x) — is available without a follow-up GET.
+// a server-resolved field decided at create time: e.g. auto-detected
+// environment (D-05x): is available without a follow-up GET.
 export async function createMission(input: CreateMissionInput): Promise<Mission> {
   return request<Mission>('/v1/missions', {
     method: 'POST',
@@ -1362,7 +1378,7 @@ export async function createMission(input: CreateMissionInput): Promise<Mission>
 
 // classifyMission previews the kind create() would infer for goal, and
 // (for a general goal) whether it looks like a single-pass light
-// mission — the same classifyKind/classifyLight logic the server falls
+// mission: the same classifyKind/classifyLight logic the server falls
 // back to/suggests, exposed standalone for the create form's live chip
 // and light toggle default. light is only ever a suggestion; create()
 // still requires the operator's explicit flag.
@@ -1397,7 +1413,7 @@ export async function cancelMission(id: string): Promise<void> {
 }
 
 // sendMissionNote injects operator guidance into a running mission via
-// the progress-note pipeline — no state transition, picked up by the
+// the progress-note pipeline: no state transition, picked up by the
 // next worker turn's own packet.
 export async function sendMissionNote(id: string, text: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/note`, {
@@ -1435,7 +1451,7 @@ export async function pushMission(
 }
 
 // openMissionPR pushes (idempotent re-push) then opens a pull request
-// for a github-connection mission — or returns the existing open PR
+// for a github-connection mission: or returns the existing open PR
 // for the same head if GitHub reports one already exists.
 export async function openMissionPR(id: string): Promise<{ url: string; number: number }> {
   return request<{ url: string; number: number }>(`/v1/missions/${id}/pr`, { method: 'POST' })
@@ -1462,7 +1478,7 @@ export async function listMissionFiles(
 }
 
 // fetchBlobDownload fetches an authenticated binary response and saves
-// it via a programmatic anchor click — plain hrefs can't carry the
+// it via a programmatic anchor click: plain hrefs can't carry the
 // bearer token from localStorage.
 async function fetchBlobDownload(path: string, fallbackName: string): Promise<void> {
   const res = await fetch(path, {
@@ -1518,7 +1534,7 @@ export const missionPdfPreviewCap = 25_000_000
 export class MissionFileTooLargeError extends Error {}
 
 // fetchMissionFileBlob reads a mission file's bytes for in-app
-// preview (image/text/markdown/pdf) rather than triggering a save —
+// preview (image/text/markdown/pdf) rather than triggering a save:
 // the server forces Content-Type: application/octet-stream on this
 // route deliberately (a worker-authored file could be arbitrary
 // HTML), so callers must render the bytes themselves, never navigate
@@ -1571,7 +1587,7 @@ export async function downloadMissionPdfExport(attachmentId: string, filename: s
 
 // exportMessagePDF renders one chat message's already-rendered markdown
 // into a single-chapter PDF via the pdfgen sidecar. The message content
-// travels in the body — it's already in the transcript the client
+// travels in the body: it's already in the transcript the client
 // holds, no server-side lookup needed.
 export async function exportMessagePDF(
   title: string,

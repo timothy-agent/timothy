@@ -28,6 +28,9 @@ vi.mock('../api/client', () => ({
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
   listKbCollections: vi.fn().mockResolvedValue([]),
   setSessionKnowledge: vi.fn().mockResolvedValue(undefined),
+  listMissions: vi.fn().mockResolvedValue([]),
+  listSessions: vi.fn().mockResolvedValue([]),
+  searchKbDocuments: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
@@ -40,6 +43,7 @@ import {
   chatStream,
   getTranscript,
   listAgents,
+  listMissions,
   listRoutes,
   setSessionKnowledge,
   stopTurn,
@@ -50,7 +54,7 @@ import { toast } from 'sonner'
 
 // captureSubscribe grabs the onSignal callback subscribeEvents was
 // last called with, so a test can fire a "session" signal directly
-// instead of driving a real SSE stream — same helper shape as
+// instead of driving a real SSE stream: same helper shape as
 // Missions.test.tsx's own captureSubscribe.
 function captureSubscribe() {
   return {
@@ -237,7 +241,7 @@ describe('live reattach', () => {
       turn_active: true,
     })
     // A real streamLive's promise stays pending until the stream
-    // actually ends (terminal meta) — resolve it ourselves once the
+    // actually ends (terminal meta): resolve it ourselves once the
     // test feeds that terminal event, matching that lifecycle instead
     // of settling immediately like a bare mock would.
     let feed!: (ev: ChatEvent) => void
@@ -268,7 +272,7 @@ describe('live reattach', () => {
 
     feed({ type: 'meta', session_id: 's1' })
     resolveStream()
-    // Terminal meta clears streaming — same reducer/finalization path a
+    // Terminal meta clears streaming: same reducer/finalization path a
     // locally-started turn goes through.
     await waitFor(() => expect(screen.queryByText('▍')).not.toBeInTheDocument())
   })
@@ -328,7 +332,7 @@ describe('live reattach', () => {
 
     await waitFor(() => expect(toast.info).toHaveBeenCalled())
     await waitFor(() => expect(streamLive).toHaveBeenCalled())
-    // No generic failure state rendered — the in-flight turn's own
+    // No generic failure state rendered: the in-flight turn's own
     // stream (fed below) is what populates the answer.
     expect(screen.queryByText(/turn already in flight/)).not.toBeInTheDocument()
 
@@ -341,7 +345,7 @@ describe('live reattach', () => {
   })
 
   it('reattaches via streamLive instead of showing an error on a dropped connection', async () => {
-    // A plain TypeError (network cut, proxy timeout) — not a ChatError,
+    // A plain TypeError (network cut, proxy timeout): not a ChatError,
     // so there's no definite server response to treat as a real failure.
     // Needs an already-adopted session (sessionRef populated from the
     // route param), since a transport failure carries no session_id to
@@ -407,7 +411,7 @@ describe('live reattach', () => {
 
 describe('stop turn', () => {
   it('calls stopTurn when the Stop button is clicked mid-stream', async () => {
-    // A chatStream that never resolves on its own — the turn is still
+    // A chatStream that never resolves on its own: the turn is still
     // "streaming" from the page's point of view until the test clicks
     // Stop, mirroring a real in-flight turn.
     let released!: () => void
@@ -433,7 +437,7 @@ describe('stop turn', () => {
     released() // let the pending chatStream settle so the test can end cleanly
   })
 
-  it('does NOT call stopTurn on unmount — only the local fetch is aborted', async () => {
+  it('does NOT call stopTurn on unmount: only the local fetch is aborted', async () => {
     let released!: () => void
     vi.mocked(chatStream).mockImplementation(
       async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
@@ -618,5 +622,34 @@ describe('session knowledge', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not update knowledge'))
     await screen.findByText('#observability')
+  })
+})
+
+describe('composer references', () => {
+  it('picks a mission via # and includes it in the send request, then clears the chip', async () => {
+    vi.mocked(listMissions).mockResolvedValue([
+      { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as never,
+    ])
+    renderChat()
+
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'about #fix' } })
+
+    await screen.findByText('Missions')
+    fireEvent.click(screen.getByText('Fix the flaky test'))
+    expect((input as HTMLTextAreaElement).value).toBe('about ')
+
+    fireEvent.change(input, { target: { value: 'about the fix' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(chatStream).toHaveBeenCalledWith(
+        expect.objectContaining({ references: [{ kind: 'mission', id: 'mi1' }] }),
+        expect.anything(),
+        expect.anything(),
+      ),
+    )
+    // The chip strip clears after send, same as attachments/knowledge.
+    expect(screen.queryByText(/Fix the flaky test/)).toBeNull()
   })
 })
