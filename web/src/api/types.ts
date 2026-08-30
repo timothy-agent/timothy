@@ -645,7 +645,7 @@ export interface KbDocument {
   id: string
   collection_id: string
   title: string
-  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip'
+  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip' | 'mission'
   source_ref: string
   // provenance weights retrieval ranking (curated > mission > web): see
   // internal/memory/store/kb.go KBSearch.
@@ -780,6 +780,11 @@ export interface Mission {
   // terminal done transition. Validated against the destinations table
   // at create time: never model-decided.
   destination_ids?: string[]
+  // promote_kb_collection_id names a kb collection this mission's
+  // markdown artifacts promote into on the terminal done transition
+  // (D-081, issue #370). Absent/'' promotes nothing automatically; the
+  // operator can still promote manually via POST .../promote-kb.
+  promote_kb_collection_id?: string
   // light marks a mission that skips explore/plan/review (D-069):
   // kind=general only, born in phase=execute, one bare worker turn.
   // final_output is that worker's verbatim final message: the

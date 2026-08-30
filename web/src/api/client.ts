@@ -1284,6 +1284,10 @@ export interface CreateMissionInput {
   // mission's outcome digest to on the terminal done transition; omit
   // (or empty) delivers nowhere.
   destination_ids?: string[]
+  // promote_kb_collection_id names a kb collection to promote this
+  // mission's markdown artifacts into on the terminal done transition
+  // (D-081, issue #370); omit (or "") promotes nothing automatically.
+  promote_kb_collection_id?: string
   // light requests a mission that skips explore/plan/review (D-069):
   // single worker turn, final message delivered as the result. Only
   // valid when kind === 'general'.
@@ -1583,6 +1587,20 @@ export async function exportMissionPdf(
 // saves it under the caller-supplied filename.
 export async function downloadMissionPdfExport(attachmentId: string, filename: string): Promise<void> {
   return fetchBlobDownload(`/v1/attachments/${attachmentId}`, filename)
+}
+
+// promoteMissionToKB promotes a done mission's markdown artifacts into
+// collectionId as kb documents with provenance='mission' (D-081, issue
+// #370). Done-only server-side; idempotent (re-promoting replaces
+// content rather than duplicating documents).
+export async function promoteMissionToKB(
+  id: string,
+  collectionId: string,
+): Promise<{ promoted: number; failed?: string[] }> {
+  return request<{ promoted: number; failed?: string[] }>(`/v1/missions/${id}/promote-kb`, {
+    method: 'POST',
+    body: JSON.stringify({ collection_id: collectionId }),
+  })
 }
 
 // exportMessagePDF renders one chat message's already-rendered markdown

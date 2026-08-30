@@ -136,7 +136,7 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/resume", strings.NewReader(`{"answer":"the deploy target is staging"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -206,7 +206,7 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/resume", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -250,7 +250,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":"focus on the staging config next"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -296,7 +296,7 @@ func TestMissionsNoteUnknownMission(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/00000000-0000-0000-0000-000000000000/note", strings.NewReader(`{"text":"hello"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -320,7 +320,7 @@ func TestMissionsNoteEmptyTextRejected(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":""}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -350,7 +350,7 @@ func TestMissionsNoteTerminalMissionRejected(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":"too late"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -374,7 +374,7 @@ func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"coding"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -413,7 +413,7 @@ func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission plan route round trip","kind":"general","route":"mini","plan_route":"strong"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -452,7 +452,7 @@ func TestMissionsCreateFollowUp(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	post := func(body string) (int, []byte) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -517,7 +517,7 @@ func TestMissionsCreateFollowUpUnknownParent(t *testing.T) {
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission follow-up unknown parent","kind":"general","parent_mission_id":"00000000-0000-0000-0000-000000000000"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -572,7 +572,7 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 		defer md.Close()
 
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, attStore, md.URL, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, attStore, md.URL, nil, nil, nil)
 
 		code, body := post(m, `{"goal":"itest-api-mission with attachment","kind":"general","attachments":[{"id":"`+att.ID+`","name":"spec.pdf"}]}`)
 		if code != http.StatusCreated {
@@ -637,7 +637,7 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 		defer md.Close()
 
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, attStore, md.URL, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, attStore, md.URL, nil, nil, nil)
 
 		code, body := post(m, `{"goal":"itest-api-mission with huge attachment","kind":"general","attachments":[{"id":"`+att.ID+`"}]}`)
 		if code != http.StatusCreated {
@@ -666,7 +666,7 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 		defer md.Close()
 
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, attStore, md.URL, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, attStore, md.URL, nil, nil, nil)
 
 		code, body := post(m, `{"goal":"itest-api-mission markitdown failure","kind":"general","attachments":[{"id":"`+att.ID+`"}]}`)
 		if code != http.StatusInternalServerError {
@@ -691,7 +691,7 @@ func TestMissionsCreateGeneratesNameAsync(t *testing.T) {
 	nameMission := func(ctx context.Context, goal string) string {
 		return "Parse Logs Utility"
 	}
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"general"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -739,7 +739,7 @@ func TestMissionsCreateNameFallsBackToEmptyOnGenerationFailure(t *testing.T) {
 		defer close(done)
 		return "" // simulates a gateway/timeout failure, same as TitleOverGateway
 	}
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nameMission, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"goal":"itest-api-mission a goal whose naming will fail","kind":"general"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -999,7 +999,7 @@ func TestMissionsPushResolvesConnectorToken(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/push", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1071,7 +1071,7 @@ func TestMissionsPushConnectorTable(t *testing.T) {
 
 			a := &API{token: "tok", log: discard()}
 			m := mux(a)
-			a.registerMissions(m.Handle, store, nil, nil, nil, workspace, nil, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil)
+			a.registerMissions(m.Handle, store, nil, nil, nil, workspace, nil, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil, nil, nil)
 
 			req := httptest.NewRequest("POST", "/v1/missions/"+id+"/push", strings.NewReader(`{}`))
 			req.Header.Set("Authorization", "Bearer tok")
@@ -1105,7 +1105,7 @@ func TestMissionsPushExplicitCredentialRefOverridesConnector(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/push", strings.NewReader(`{"credential_ref":"explicit-ref"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1160,7 +1160,7 @@ func TestMissionsPRHappyPath(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/pr", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1237,7 +1237,7 @@ func TestMissionsPRAlreadyExistsReturnsExisting(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, workspace, resolveSecret, nil, nil, nil, nil, nil, nil, mgr, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/pr", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1271,7 +1271,7 @@ func TestMissionsPRRejectsNonGitHubConnectionMission(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/pr", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1329,7 +1329,7 @@ func TestMissionsExportPDFBadPath(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/export-pdf", strings.NewReader(`{"path":"notes.txt"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1352,7 +1352,7 @@ func TestMissionsExportPDFTraversal(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/export-pdf", strings.NewReader(`{"path":"../../../etc/passwd.md"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1375,7 +1375,7 @@ func TestMissionsExportPDFNoMarkdownFiles(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/export-pdf", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1399,7 +1399,7 @@ func TestMissionsExportPDFOverCap(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/export-pdf", strings.NewReader(`{"path":"big.md"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1429,7 +1429,7 @@ func TestMissionsExportPDFSingleFileHappyPath(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/export-pdf", strings.NewReader(`{"path":"report.md"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1498,7 +1498,7 @@ func TestMissionsExportPDFMergedHappyPath(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", svc, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/export-pdf", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1519,4 +1519,147 @@ func TestMissionsExportPDFMergedHappyPath(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("sidecar calls = %d, want 1", calls)
 	}
+}
+
+// TestMissionsPromoteKB covers POST .../promote-kb (D-081, issue #370):
+// the done-only gate, an unknown collection_id, the happy path
+// promoting one markdown artifact ref, and idempotency (re-promoting
+// replaces content rather than duplicating the kb document).
+func TestMissionsPromoteKB(t *testing.T) {
+	store := testMissionStore(t)
+	kbStore := testKBStore(t)
+	ctx := context.Background()
+
+	collectionID, err := kbStore.CreateCollection(ctx, "itest-promote-kb", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	newMission := func(t *testing.T) string {
+		t.Helper()
+		id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission promote-kb test", Kind: "general"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		return id
+	}
+
+	fa := &fakeMissionAttachments{
+		byID: map[string]attachments.Attachment{
+			"report1": {ID: "report1", Mime: "text/plain", SizeBytes: int64(len("# Report\n\nfindings"))},
+		},
+		data: map[string][]byte{
+			"report1": []byte("# Report\n\nfindings"),
+		},
+	}
+
+	newAPI := func(t *testing.T, ingest kbIngester) *http.ServeMux {
+		t.Helper()
+		a := &API{token: "tok", log: discard()}
+		m := mux(a)
+		a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, fa, "", nil, kbStore, ingest)
+		return m
+	}
+
+	post := func(t *testing.T, m *http.ServeMux, id, body string) (int, []byte) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/v1/missions/"+id+"/promote-kb", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.Bytes()
+	}
+
+	t.Run("not done rejects", func(t *testing.T) {
+		id := newMission(t)
+		m := newAPI(t, &fakeIngester{})
+		code, body := post(t, m, id, `{"collection_id":"`+collectionID+`"}`)
+		if code != http.StatusBadRequest || !strings.Contains(string(body), "phase=done") {
+			t.Fatalf("code=%d body=%s, want 400 not-done", code, body)
+		}
+	})
+
+	t.Run("missing collection_id rejects", func(t *testing.T) {
+		id := newMission(t)
+		if err := store.ApplyTransition(ctx, id, missions.Transition{Next: missions.StepState{Phase: missions.PhaseDone, Status: missions.StatusDone}}); err != nil {
+			t.Fatalf("ApplyTransition: %v", err)
+		}
+		m := newAPI(t, &fakeIngester{})
+		code, body := post(t, m, id, `{}`)
+		if code != http.StatusBadRequest || !strings.Contains(string(body), "collection_id is required") {
+			t.Fatalf("code=%d body=%s, want 400 collection_id-required", code, body)
+		}
+	})
+
+	t.Run("unknown collection_id rejects", func(t *testing.T) {
+		id := newMission(t)
+		if err := store.ApplyTransition(ctx, id, missions.Transition{Next: missions.StepState{Phase: missions.PhaseDone, Status: missions.StatusDone}}); err != nil {
+			t.Fatalf("ApplyTransition: %v", err)
+		}
+		if err := store.SetArtifactRefs(ctx, id, []missions.ArtifactRef{{ID: "report1", Mime: "text/plain", Name: "report.md"}}); err != nil {
+			t.Fatalf("SetArtifactRefs: %v", err)
+		}
+		m := newAPI(t, &fakeIngester{})
+		code, body := post(t, m, id, `{"collection_id":"00000000-0000-0000-0000-000000000000"}`)
+		if code != http.StatusBadRequest || !strings.Contains(string(body), "unknown collection_id") {
+			t.Fatalf("code=%d body=%s, want 400 unknown-collection", code, body)
+		}
+	})
+
+	t.Run("happy path promotes and re-promoting is idempotent", func(t *testing.T) {
+		id := newMission(t)
+		if err := store.ApplyTransition(ctx, id, missions.Transition{Next: missions.StepState{Phase: missions.PhaseDone, Status: missions.StatusDone}}); err != nil {
+			t.Fatalf("ApplyTransition: %v", err)
+		}
+		if err := store.SetArtifactRefs(ctx, id, []missions.ArtifactRef{{ID: "report1", Mime: "text/plain", Name: "report.md"}}); err != nil {
+			t.Fatalf("SetArtifactRefs: %v", err)
+		}
+		ingest := &fakeIngester{}
+		m := newAPI(t, ingest)
+
+		code, body := post(t, m, id, `{"collection_id":"`+collectionID+`"}`)
+		if code != http.StatusOK {
+			t.Fatalf("promote = %d, want 200: %s", code, body)
+		}
+		var resp struct {
+			Promoted int `json:"promoted"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Promoted != 1 {
+			t.Fatalf("promoted = %d, want 1", resp.Promoted)
+		}
+
+		docs, err := kbStore.ListDocuments(ctx, collectionID)
+		if err != nil {
+			t.Fatalf("ListDocuments: %v", err)
+		}
+		if len(docs) != 1 {
+			t.Fatalf("documents = %d, want 1", len(docs))
+		}
+		if docs[0].Provenance != "mission" {
+			t.Fatalf("provenance = %q, want mission", docs[0].Provenance)
+		}
+		if docs[0].SourceRef != "mission:"+id+":report.md" {
+			t.Fatalf("source_ref = %q", docs[0].SourceRef)
+		}
+
+		// Re-promote: still exactly one document, content replaced in
+		// place rather than a duplicate row.
+		code, body = post(t, m, id, `{"collection_id":"`+collectionID+`"}`)
+		if code != http.StatusOK {
+			t.Fatalf("re-promote = %d, want 200: %s", code, body)
+		}
+		docs, err = kbStore.ListDocuments(ctx, collectionID)
+		if err != nil {
+			t.Fatalf("ListDocuments: %v", err)
+		}
+		if len(docs) != 1 {
+			t.Fatalf("documents after re-promote = %d, want 1 (idempotent)", len(docs))
+		}
+		if ingest.callCount() != 2 {
+			t.Fatalf("ingest calls = %d, want 2 (one per promote)", ingest.callCount())
+		}
+	})
 }

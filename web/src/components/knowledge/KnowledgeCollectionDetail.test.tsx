@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KbDocument } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
@@ -23,9 +24,11 @@ const baseDoc: KbDocument = {
 
 function renderBadge(doc: KbDocument) {
   return render(
-    <TooltipProvider>
-      <SourceBadge doc={doc} />
-    </TooltipProvider>,
+    <MemoryRouter>
+      <TooltipProvider>
+        <SourceBadge doc={doc} />
+      </TooltipProvider>
+    </MemoryRouter>,
   )
 }
 
@@ -52,6 +55,18 @@ describe('SourceBadge', () => {
     renderBadge(baseDoc)
     expect(screen.queryByRole('link')).not.toBeInTheDocument()
     expect(screen.getByText('file')).toBeInTheDocument()
+  })
+
+  it('links a promoted mission document to its mission detail page', () => {
+    const doc: KbDocument = {
+      ...baseDoc,
+      source_type: 'mission',
+      source_ref: 'mission:m-123:report.md',
+    }
+    renderBadge(doc)
+    const link = screen.getByRole('link')
+    expect(link).toHaveAttribute('href', '/missions/m-123')
+    expect(link).not.toHaveAttribute('target')
   })
 })
 

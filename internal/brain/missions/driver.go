@@ -215,7 +215,15 @@ type Driver struct {
 	// missions.Mission, so missions can't import workflows back.
 	onTerminal OnTerminal
 
-	// validateDeps backs ValidateCreate's store-backed checks (D-071) —
+	// promoteKB wires the kb-promotion hook fired on a mission's terminal
+	// done transition (see SetPromoteKB / promoteToKB), nil-safe: unset
+	// skips promotion entirely, same as a mission with no
+	// promote_kb_collection_id. A func type for the same import-cycle
+	// reason as deliverDestinations: promotion needs the attachment store
+	// and kb store, both out of missions' reach.
+	promoteKB PromoteKB
+
+	// validateDeps backs ValidateCreate's store-backed checks (D-071):
 	// a *ValidateDeps, not a value, so "unset" is distinguishable from
 	// "set to the zero value": nil skips ValidateCreate's call entirely
 	// (existing callers/tests that predate D-071 keep working
@@ -466,6 +474,34 @@ func (d *Driver) deliverToDestinations(m Mission, terminal Phase) {
 	go d.deliverDestinations(rctx, m, m.DestinationIDs) //nolint:gosec // G118: deliberate — the mission is already terminal, delivery must outlive whatever request/ctx observed that transition
 }
 
+// PromoteKB promotes a terminal mission's markdown artifacts into a kb
+// collection with provenance='mission': kb.PromoteMission (D-081,
+// issue #370) satisfies this signature. Fire-and-forget by contract,
+// same as DestinationDeliver: it must never return an error, block, or
+// affect mission state; failures are its own concern to log.
+type PromoteKB func(ctx context.Context, m Mission, collectionID string)
+
+// SetPromoteKB wires the kb-promotion hook fired on a mission's
+// terminal done transition (see promoteToKB): a setter for the same
+// reason SetDestinationDeliver is. Optional: nil skips promotion
+// entirely, same as a mission with no promote_kb_collection_id.
+func (d *Driver) SetPromoteKB(fn PromoteKB) {
+	d.promoteKB = fn
+}
+
+// promoteToKB fires the kb-promotion hook exactly on a transition into
+// phase=done (mirrors deliverToDestinations) and only when the mission
+// has promote_kb_collection_id set. Detached from ctx like
+// deliverToDestinations: the mission is already terminal, so promotion
+// must outlive a request that may be winding down.
+func (d *Driver) promoteToKB(m Mission, terminal Phase) {
+	if d.promoteKB == nil || terminal != PhaseDone || m.PromoteKBCollectionID == "" {
+		return
+	}
+	rctx := context.Background()
+	go d.promoteKB(rctx, m, m.PromoteKBCollectionID) //nolint:gosec // G118: deliberate: the mission is already terminal, promotion must outlive whatever request/ctx observed that transition
+}
+
 // ArtifactCopy best-effort copies a terminal mission's declared
 // artifact files into the attachment store and returns the resulting
 // refs — destinations.CopyArtifacts satisfies this signature. Must
@@ -587,9 +623,9 @@ func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) {
 //  5. artifact copy (SYNCHRONOUS, done transitions only — see
 //     copyArtifacts) — runs BEFORE the hooks below so destinations
 //     delivery's webhook payload can include the resulting refs
-//  6. memory extraction, destinations delivery, workflow onTerminal —
-//     each handed the SAME reloaded (and artifact-copy-updated)
-//     Mission, no hook reloads on its own
+//  6. memory extraction, destinations delivery, kb promotion, workflow
+//     onTerminal: each handed the SAME reloaded (and
+//     artifact-copy-updated) Mission, no hook reloads on its own
 //  7. fireOnComplete, done transitions only
 //
 // Each hook may still dispatch its own goroutine (memory/destinations/
@@ -626,6 +662,7 @@ func (d *Driver) runTerminalHooks(ctx context.Context, id string, terminal Phase
 	m = d.copyArtifacts(ctx, id, m, terminal)
 	d.extractMissionMemory(ctx, m, terminal, reason)
 	d.deliverToDestinations(m, terminal)
+	d.promoteToKB(m, terminal)
 	d.fireOnTerminal(m)
 	if terminal == PhaseDone {
 		d.fireOnComplete(ctx, id, m)

@@ -18,7 +18,9 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	pdfgenservice "github.com/SumonMSelim/timothy/internal/brain/pdfgen"
@@ -73,7 +75,7 @@ type missionAttachmentStore interface {
 // (not *attachments.Store) so the caller's own nil-box guard (a nil
 // *attachments.Store boxed here would be a non-nil interface value)
 // happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester) {
 	if store == nil {
 		return
 	}
@@ -101,7 +103,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -118,6 +120,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("GET /v1/missions/{id}/files/{path...}", a.auth(http.HandlerFunc(h.download)))
 	handle("GET /v1/missions/{id}/archive", a.auth(http.HandlerFunc(h.archive)))
 	handle("POST /v1/missions/{id}/export-pdf", a.auth(http.HandlerFunc(h.exportPDF)))
+	handle("POST /v1/missions/{id}/promote-kb", a.auth(http.HandlerFunc(h.promoteKB)))
 	handle("POST /v1/missions/{id}/push", a.auth(http.HandlerFunc(h.push)))
 	handle("POST /v1/missions/{id}/pr", a.auth(http.HandlerFunc(h.pr)))
 	handle("GET /v1/notifications", a.auth(http.HandlerFunc(h.notifications)))
@@ -196,6 +199,12 @@ type missionAPI struct {
 	// pdfService renders export-pdf requests via the pdfgen sidecar; nil
 	// (PDFGEN_URL unset or attachments disabled) 503s the endpoint.
 	pdfService *pdfgenservice.Service
+	// kbStore/kbIngest back POST .../promote-kb (D-081, issue #370): nil
+	// kbStore (kb disabled) or nil kbIngest (memoryd unreachable is a
+	// runtime error, not expected here since mc always resolves) 503s
+	// the endpoint the same way pdfService's absence does export-pdf.
+	kbStore  *kb.Store
+	kbIngest kbIngester
 	// resolveReferences resolves a create request's picked #-mention
 	// references (mission/session/kb doc) into documents: chat.Service's
 	// own resolver (chat.go's ResolveReferences), reused here so a
@@ -444,6 +453,13 @@ type createMissionRequest struct {
 	// enabled at create time (see create() below); the model never
 	// supplies or addresses a destination (D-061).
 	DestinationIDs []string `json:"destination_ids"`
+	// PromoteKBCollectionID (D-081, issue #370) names a kb collection to
+	// promote this mission's markdown artifacts into on the terminal
+	// done transition: "" (default) promotes nothing automatically;
+	// validated to exist at create time (missions.ValidateCreate), the
+	// model never supplies or addresses it, same invariant as
+	// DestinationIDs.
+	PromoteKBCollectionID string `json:"promote_kb_collection_id"`
 	// Light requests a mission that skips explore/plan/review (D-069):
 	// kind=general only, rejected outright on kind=coding (explicit or
 	// classified). Always the operator's explicit choice — the classify
@@ -617,7 +633,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
-		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, Light: req.Light,
+		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID, Light: req.Light,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
@@ -1530,6 +1546,72 @@ func (h *missionAPI) exportPDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"attachment_id": result.AttachmentID, "cached": result.Cached})
+}
+
+// promoteKB serves POST .../promote-kb: promotes a done mission's
+// markdown artifact refs into collection_id as kb documents with
+// provenance='mission' (D-081, issue #370): destinations.PromoteMission
+// does the actual work, the SAME code path the terminal-done auto-fire
+// hook (promote_kb_collection_id) uses, so a manual promote and an
+// auto-fired one can never diverge. Done-only: a failed mission's
+// artifacts are unverified (CheckArtifacts never ran to completion),
+// so promoting them would put unverified content into search results.
+// Idempotent: see PromoteMission's own doc comment.
+func (h *missionAPI) promoteKB(w http.ResponseWriter, r *http.Request) {
+	if h.kbStore == nil {
+		jsonError(w, http.StatusServiceUnavailable, "not_enabled", "knowledge base is not enabled")
+		return
+	}
+	m, err := h.store.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	if m.Phase != missions.PhaseDone {
+		jsonError(w, http.StatusBadRequest, "not_done", "only a mission in phase=done can be promoted")
+		return
+	}
+	var body struct {
+		CollectionID string `json:"collection_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with a collection_id field")
+		return
+	}
+	if body.CollectionID == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "collection_id is required")
+		return
+	}
+	if _, err := h.kbStore.GetCollection(r.Context(), body.CollectionID); err != nil {
+		if errors.Is(err, kb.ErrNotFound) {
+			jsonError(w, http.StatusBadRequest, "bad_request", "unknown collection_id")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "promote_failed", err.Error())
+		return
+	}
+	if len(m.ArtifactRefs) == 0 {
+		jsonError(w, http.StatusBadRequest, "no_artifacts", "mission has no artifacts to promote")
+		return
+	}
+	promoted, errs := destinations.PromoteMission(r.Context(), h.attachments, h.kbStore, h.kbIngest, m, body.CollectionID)
+	if promoted == 0 {
+		msg := "no markdown artifacts were promoted"
+		if len(errs) > 0 {
+			msg = errs[0].Error()
+		}
+		jsonError(w, http.StatusBadGateway, "promote_failed", msg)
+		return
+	}
+	resp := map[string]any{"promoted": promoted}
+	if len(errs) > 0 {
+		failed := make([]string, len(errs))
+		for i, e := range errs {
+			failed[i] = e.Error()
+		}
+		resp["failed"] = failed
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 var (

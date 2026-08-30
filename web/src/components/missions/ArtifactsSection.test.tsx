@@ -12,6 +12,8 @@ vi.mock('../../api/client', () => ({
   getSettings: vi.fn(),
   fetchMissionFileBlob: vi.fn(),
   fetchAttachmentBlob: vi.fn(),
+  listKbCollections: vi.fn(),
+  promoteMissionToKB: vi.fn(),
   missionFilePreviewCap: 1_000_000,
   MissionFileTooLargeError: class MissionFileTooLargeError extends Error {},
 }))
@@ -22,7 +24,9 @@ import {
   fetchAttachmentBlob,
   fetchMissionFileBlob,
   getSettings,
+  listKbCollections,
   listMissionFiles,
+  promoteMissionToKB,
 } from '../../api/client'
 
 afterEach(cleanup)
@@ -32,6 +36,7 @@ beforeEach(() => {
   vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['hello']))
   vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['hello']))
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+  vi.mocked(listKbCollections).mockResolvedValue([])
 })
 
 const refs: MediaRef[] = [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }]
@@ -187,5 +192,53 @@ describe('ArtifactsSection', () => {
     expect(exportMissionPdf).toHaveBeenCalledWith('m4')
     await screen.findByRole('button', { name: 'Export all workspace markdown as one merged PDF' })
     expect(downloadMissionPdfExport).toHaveBeenCalledWith('att-9', 'My Mission.pdf')
+  })
+
+  describe('promote to knowledge base', () => {
+    it('hides the action when the mission is not done', () => {
+      render(<ArtifactsSection missionId="m1" phase="execute" workspace={undefined} refs={refs} />)
+      expect(screen.queryByText('Promote to KB')).toBeNull()
+    })
+
+    it('hides the action when there are no markdown artifacts', () => {
+      render(
+        <ArtifactsSection
+          missionId="m1"
+          phase="done"
+          workspace={undefined}
+          refs={[{ id: 'a1', mime: 'application/pdf', name: 'chart.pdf' }]}
+        />,
+      )
+      expect(screen.queryByText('Promote to KB')).toBeNull()
+    })
+
+    it('opens a dialog with a collection picker and promotes on submit', async () => {
+      vi.mocked(listKbCollections).mockResolvedValue([
+        { id: 'c1', name: 'Reports', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      ])
+      vi.mocked(promoteMissionToKB).mockResolvedValue({ promoted: 1 })
+      render(<ArtifactsSection missionId="m1" phase="done" workspace={undefined} refs={refs} />)
+
+      fireEvent.click(screen.getByText('Promote to KB'))
+      expect(await screen.findByText('Promote to knowledge base')).toBeInTheDocument()
+
+      const select = await screen.findByLabelText('Collection')
+      fireEvent.change(select, { target: { value: 'c1' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Promote' }))
+
+      await waitFor(() => expect(promoteMissionToKB).toHaveBeenCalledWith('m1', 'c1'))
+      expect(await screen.findByText(/Promoted 1 document/)).toBeInTheDocument()
+    })
+
+    it('disables Promote until a collection is picked', async () => {
+      vi.mocked(listKbCollections).mockResolvedValue([
+        { id: 'c1', name: 'Reports', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      ])
+      render(<ArtifactsSection missionId="m1" phase="done" workspace={undefined} refs={refs} />)
+
+      fireEvent.click(screen.getByText('Promote to KB'))
+      await screen.findByText('Promote to knowledge base')
+      expect(screen.getByRole('button', { name: 'Promote' })).toBeDisabled()
+    })
   })
 })

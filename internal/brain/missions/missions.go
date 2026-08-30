@@ -189,9 +189,17 @@ type Mission struct {
 	// terminal done transition (driver.go's deliverToDestinations) —
 	// validated against the destinations table at create time
 	// (api/missions.go), never model-decided.
-	DestinationIDs []string  `json:"destination_ids,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	DestinationIDs []string `json:"destination_ids,omitempty"`
+	// PromoteKBCollectionID (D-081, issue #370) is the kb collection this
+	// mission's markdown artifacts promote into on the terminal done
+	// transition (driver.go's promoteToKB): an explicit id, same
+	// operator-owned pattern as DestinationIDs, never a model choice or
+	// an auto-created default collection. "" (default) promotes nothing
+	// automatically; the operator can still promote manually via
+	// POST .../promote-kb after the mission is done.
+	PromoteKBCollectionID string    `json:"promote_kb_collection_id,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 	// WorkflowRunID/WorkflowStep name the workflow run and step
 	// (internal/brain/workflows) this mission was spawned as, if any —
 	// empty for an ordinary mission. Set only at create time; the

@@ -180,6 +180,28 @@ func TestValidateCreate(t *testing.T) {
 			m.DestinationIDs = []string{"d1"}
 			return m
 		}, ValidateDeps{}, false},
+		{"promote_kb_collection_id exists", func(m Mission) Mission {
+			m.PromoteKBCollectionID = "c1"
+			return m
+		}, ValidateDeps{KBCollectionExists: func(ctx context.Context, id string) (bool, error) {
+			return id == "c1", nil
+		}}, false},
+		{"promote_kb_collection_id unknown", func(m Mission) Mission {
+			m.PromoteKBCollectionID = "bogus"
+			return m
+		}, ValidateDeps{KBCollectionExists: func(ctx context.Context, id string) (bool, error) {
+			return id == "c1", nil
+		}}, true},
+		{"promote_kb_collection_id lookup error", func(m Mission) Mission {
+			m.PromoteKBCollectionID = "c1"
+			return m
+		}, ValidateDeps{KBCollectionExists: func(ctx context.Context, id string) (bool, error) {
+			return false, fmt.Errorf("db unavailable")
+		}}, true},
+		{"promote_kb_collection_id unchecked when dep nil", func(m Mission) Mission {
+			m.PromoteKBCollectionID = "c1"
+			return m
+		}, ValidateDeps{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

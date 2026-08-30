@@ -159,7 +159,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if destinationStore != nil {
 		destLookup = destinationStore
 	}
-	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveRoute, nameMission, topModels, conns, missionAttachments, markitdownURL, pdfService)
+	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveRoute, nameMission, topModels, conns, missionAttachments, markitdownURL, pdfService, kbStore, kbIngest)
 	a.registerSchedules(srv.Handle, missionStore, destLookup)
 	// destinationRefs/destinationScheduleRefs are *missions.Store itself
 	// (ActiveMissionReferencesDestination / ScheduleReferencingDestinationID) —

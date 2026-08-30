@@ -38,6 +38,10 @@ type ValidateDeps struct {
 	// since a caller with no destinations wiring has nothing to check
 	// against).
 	DestinationEnabled func(ctx context.Context, id string) (bool, error)
+	// KBCollectionExists reports whether id names a real kb_collections
+	// row: nil skips promote_kb_collection_id validation entirely, same
+	// degrade-to-unchecked reasoning as DestinationEnabled.
+	KBCollectionExists func(ctx context.Context, id string) (bool, error)
 }
 
 // validModelPin reports whether pin is well-formed "provider name/model"
@@ -145,6 +149,15 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		}
 		if len(invalid) > 0 {
 			return fmt.Errorf("%w: unknown or disabled destination id(s): %s", ErrInvalidMission, strings.Join(invalid, ", "))
+		}
+	}
+	if deps.KBCollectionExists != nil && m.PromoteKBCollectionID != "" {
+		ok, err := deps.KBCollectionExists(ctx, m.PromoteKBCollectionID)
+		if err != nil {
+			return fmt.Errorf("%w: promote_kb_collection_id: %s", ErrInvalidMission, err.Error())
+		}
+		if !ok {
+			return fmt.Errorf("%w: unknown promote_kb_collection_id %q", ErrInvalidMission, m.PromoteKBCollectionID)
 		}
 	}
 	return nil

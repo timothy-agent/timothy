@@ -204,6 +204,14 @@ CREATE TABLE IF NOT EXISTS missions (
     -- api/missions.go's create validates every id against the
     -- operator-owned destinations table before it lands here.
     destination_ids       uuid[] NOT NULL DEFAULT '{}',
+    -- D-081 (issue #370): kb collection to promote this mission's
+    -- markdown artifacts into on the terminal done transition
+    -- (kb.go's promoteToKB, driver.go's fireOnComplete-style hook). ''
+    -- (default) does nothing. Explicit id, never a default "Missions"
+    -- collection auto-create, same as destination_ids above; the
+    -- operator can also promote manually via POST .../promote-kb after
+    -- the mission is done, using the same code path.
+    promote_kb_collection_id uuid,
     -- workflow_run_id/workflow_step name the workflow run and step
     -- (internal/brain/workflows) this mission was spawned as, if any.
     -- NULL/'' for an ordinary mission. The workflow engine reads these

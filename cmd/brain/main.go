@@ -286,6 +286,11 @@ func main() {
 		}
 		return name
 	}
+	// Built here, above buildMissions/ValidateDeps wiring, so the
+	// create-time promote_kb_collection_id check (KBCollectionExists
+	// below) can close over the same store the kb admin API and mission
+	// promotion hook use later in this function.
+	kbStore := kb.New(app.DB)
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, app.Log)
@@ -312,6 +317,15 @@ func main() {
 		}
 		if destinationStore != nil {
 			deps.DestinationEnabled = destinationStore.EnabledByID
+		}
+		deps.KBCollectionExists = func(ctx context.Context, id string) (bool, error) {
+			if _, err := kbStore.GetCollection(ctx, id); err != nil {
+				if errors.Is(err, kb.ErrNotFound) {
+					return false, nil
+				}
+				return false, err
+			}
+			return true, nil
 		}
 		missionDriver.SetValidateDeps(deps)
 	}
@@ -632,6 +646,16 @@ func main() {
 		missionDriver.SetArtifactCopy(destinations.CopyArtifacts(attachmentStore, app.Log))
 	}
 
+	// Mission kb promotion (D-081, issue #370): the terminal-done
+	// auto-fire hook for promote_kb_collection_id, sharing PromoteMission
+	// with the manual POST .../promote-kb endpoint so neither path can
+	// diverge on what "promote" means. Nil-gated on attachmentStore, same
+	// as artifact copy above (promotion reads from the attachment-store
+	// refs artifact copy just wrote).
+	if attachmentStore != nil && missionDriver != nil {
+		missionDriver.SetPromoteKB(destinations.PromoteKB(attachmentStore, kbStore, mc, app.Log))
+	}
+
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract
 	// above: mc satisfies IngestDocument/KBSearch unconditionally, so
 	// this always wires (memoryd unreachable surfaces as a per-call
@@ -639,7 +663,6 @@ func main() {
 	// default). Searches the whole KB (nil collectionNames); the
 	// serving agent's Knowledge only rides along as boostCollections
 	// (D-078, issue #368).
-	kbStore := kb.New(app.DB)
 	// Ingest goroutines die with the process; fail anything a previous
 	// run left mid-ingest so the UI offers reingest instead of an
 	// eternal spinner. On its own goroutine behind WaitHealthy: at this

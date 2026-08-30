@@ -39,24 +39,37 @@ import { KbUploadForm } from './KbUploadForm'
 
 const linkedSourceTypes = new Set<KbDocument['source_type']>(['url', 'clip'])
 
+// missionSourceRefRe matches a promoted mission document's source_ref
+// (D-081, issue #370): "mission:<id>" or "mission:<id>:<filename>":
+// the mission id is always the first segment.
+const missionSourceRefRe = /^mission:([^:]+)/
+
 export function SourceBadge({ doc }: { doc: KbDocument }) {
   const badge = (
     <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">
       {doc.source_type}
     </span>
   )
-  const content = linkedSourceTypes.has(doc.source_type) ? (
-    <a
-      href={doc.source_ref}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="hover:text-foreground"
-    >
-      {badge}
-    </a>
-  ) : (
-    badge
-  )
+  const missionMatch = doc.source_type === 'mission' ? missionSourceRefRe.exec(doc.source_ref) : null
+  let content = badge
+  if (linkedSourceTypes.has(doc.source_type)) {
+    content = (
+      <a
+        href={doc.source_ref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="hover:text-foreground"
+      >
+        {badge}
+      </a>
+    )
+  } else if (missionMatch) {
+    content = (
+      <Link to={`/missions/${missionMatch[1]}`} className="hover:text-foreground">
+        {badge}
+      </Link>
+    )
+  }
 
   return (
     <Tooltip>

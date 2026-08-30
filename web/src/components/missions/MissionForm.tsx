@@ -14,6 +14,7 @@ import {
   listConnectorRepos,
   listConnectors,
   listDestinations,
+  listKbCollections,
   patchSchedule,
   testConnector,
 } from '../../api/client'
@@ -25,6 +26,7 @@ import type {
   ExecutionPlanPhase,
   GitHubIdentity,
   GitHubRepo,
+  KbCollection,
   Reference,
   Schedule,
 } from '../../api/types'
@@ -336,6 +338,19 @@ export function MissionForm({
       .catch(() => {
         // Non-fatal: the section just stays hidden if this fails, same
         // degrade as any other optional list fetch in this form.
+      })
+  }, [])
+  // Promote-to-KB collection picker (D-081, issue #370): one-off create
+  // only, same visibility/fetch-failure reasoning as destinations above.
+  const [kbCollections, setKbCollections] = useState<KbCollection[] | null>(null)
+  const [promoteKBCollectionID, setPromoteKBCollectionID] = useState(
+    initial?.promote_kb_collection_id ?? '',
+  )
+  useEffect(() => {
+    listKbCollections()
+      .then(setKbCollections)
+      .catch(() => {
+        // Non-fatal: the section just stays hidden if this fails.
       })
   }, [])
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -689,6 +704,7 @@ export function MissionForm({
       attachments:
         attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
       destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
+      promote_kb_collection_id: promoteKBCollectionID || undefined,
       light: kind === 'general' ? light : undefined,
       references:
         references.length > 0 ? references.map((r) => ({ kind: r.kind, id: r.id })) : undefined,
@@ -1327,6 +1343,25 @@ export function MissionForm({
                 </label>
               ))}
             </div>
+          </div>
+        )}
+
+        {mode === 'create' && !repeat && kbCollections && kbCollections.length > 0 && (
+          <div className="space-y-1.5">
+            <Label htmlFor="mission-promote-kb">Promote to knowledge base on done</Label>
+            <select
+              id="mission-promote-kb"
+              value={promoteKBCollectionID}
+              onChange={(e) => setPromoteKBCollectionID(e.target.value)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Don't promote automatically</option>
+              {kbCollections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 

@@ -20,6 +20,7 @@ vi.mock('../../api/client', () => ({
   testConnector: vi.fn().mockResolvedValue({ ok: true }),
   uploadAttachment: vi.fn(),
   listDestinations: vi.fn().mockResolvedValue([]),
+  listKbCollections: vi.fn().mockResolvedValue([]),
   listMissions: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
   searchKbDocuments: vi.fn().mockResolvedValue([]),
