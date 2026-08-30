@@ -168,6 +168,12 @@ type Mission struct {
 	// (OutcomeDigest), snapshotted at follow-up create time — rendered
 	// into this mission's explore/plan/work prompts.
 	ParentContext string `json:"parent_context,omitempty"`
+	// ReferencedContext is the picked composer #-mention references
+	// (missions/sessions/kb docs), resolved and snapshotted at create
+	// time, rendered into this mission's explore/plan/work prompts,
+	// additive to ParentContext (a follow-up mission can also carry its
+	// own picked references).
+	ReferencedContext string `json:"referenced_context,omitempty"`
 	// Attachments are PDF documents attached at create time, each
 	// markitdown-converted ONCE (same rationale as chat's
 	// validateAttachments) and snapshotted onto the row — rendered into

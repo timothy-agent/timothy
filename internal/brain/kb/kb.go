@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -196,6 +197,44 @@ func (s *Store) ListDocuments(ctx context.Context, collectionID string) ([]Docum
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// SearchDocuments returns documents across every collection whose
+// title contains query (case-insensitive), newest first: the
+// composer #-mention "type to find a kb document" search
+// (GET /v1/admin/kb/documents?q=). Empty query returns every document.
+func (s *Store) SearchDocuments(ctx context.Context, query string) ([]Document, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("kb documents search: %w", err)
+	}
+	sql := `SELECT ` + documentColumns + ` FROM kb_documents`
+	var args []any
+	if query != "" {
+		args = append(args, "%"+escapeLike(query)+"%")
+		sql += " WHERE title ILIKE $1"
+	}
+	sql += " ORDER BY created_at DESC"
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("kb documents search: %w", err)
+	}
+	defer rows.Close()
+	out := []Document{}
+	for rows.Next() {
+		d, err := scanDocument(rows)
+		if err != nil {
+			return nil, fmt.Errorf("kb documents search: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// escapeLike escapes ILIKE wildcards in a user-supplied query so they
+// match as literals, not patterns.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 // GetDocument returns one document by id.

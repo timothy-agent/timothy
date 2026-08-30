@@ -56,6 +56,12 @@ func (f *fakeLog) Create(_ context.Context, title string) (string, error) {
 	return id, nil
 }
 
+func (f *fakeLog) Get(_ context.Context, id string) (session.Meta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return session.Meta{ID: id, Title: f.titles[id]}, nil
+}
+
 func (f *fakeLog) Events(_ context.Context, id string) ([]session.Event, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -672,6 +672,17 @@ func main() {
 		return out, nil
 	})
 	svc.SetKBRead(kbReadFromStore(kbStore))
+	svc.SetKBDocStore(kbStore)
+	// missionStore backs kind=mission #-mention references (chat.go's
+	// ResolveReferences); nil-boxing guard, same reasoning as
+	// attachmentStore/missionAttachmentStore: a nil *missions.Store cast
+	// straight to the chat.MissionStore interface would be a non-nil
+	// interface holding nil. WORKSPACES unset (missionStore == nil)
+	// just means mission references never resolve, same degrade as any
+	// other nil-gated dependency.
+	if missionStore != nil {
+		svc.SetMissionStore(missionStore)
+	}
 
 	usageDecorator := api.NewUsageDecorator(flags, fxStore)
 	// ledgerAgg backs the mission list's top_model decoration (D-05x):

@@ -559,6 +559,28 @@ func TestPlanSessionIncludesParentContext(t *testing.T) {
 	}
 }
 
+// TestPlanSessionIncludesReferencedContext confirms a mission's picked
+// composer #-mention references reach the planner's user prompt,
+// additive to (not instead of) ParentContext.
+func TestPlanSessionIncludesReferencedContext(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: the login flow uses OAuth"}
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	msgs := agent.requests[0].Messages
+	content := msgs[len(msgs)-1].Content
+	if !strings.Contains(content, "Previous mission outcome:") {
+		t.Fatalf("planner message missing parent context:\n%s", content)
+	}
+	if !strings.Contains(content, "Referenced context:") || !strings.Contains(content, "kb doc: the login flow uses OAuth") {
+		t.Fatalf("planner message missing referenced context:\n%s", content)
+	}
+}
+
 // TestPlanSessionIncludesAttachments confirms a create-time PDF
 // attachment's markdown reaches the planner's user prompt.
 func TestPlanSessionIncludesAttachments(t *testing.T) {
@@ -1535,6 +1557,28 @@ func TestExploreSessionIncludesParentContext(t *testing.T) {
 	content := msgs[len(msgs)-1].Content
 	if !strings.Contains(content, "Previous mission outcome:") || !strings.Contains(content, "prior mission fixed the signup bug") {
 		t.Fatalf("explorer message missing parent context:\n%s", content)
+	}
+}
+
+// TestExploreSessionIncludesReferencedContext confirms a mission's
+// picked composer #-mention references reach the explorer's user
+// prompt, additive to (not instead of) ParentContext.
+func TestExploreSessionIncludesReferencedContext(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "test", ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: the login flow uses OAuth"}
+	if _, err := r.ExploreSession(context.Background(), m); err != nil {
+		t.Fatalf("ExploreSession: %v", err)
+	}
+	msgs := agent.requests[0].Messages
+	content := msgs[len(msgs)-1].Content
+	if !strings.Contains(content, "Previous mission outcome:") {
+		t.Fatalf("explorer message missing parent context:\n%s", content)
+	}
+	if !strings.Contains(content, "Referenced context:") || !strings.Contains(content, "kb doc: the login flow uses OAuth") {
+		t.Fatalf("explorer message missing referenced context:\n%s", content)
 	}
 }
 

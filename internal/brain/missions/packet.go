@@ -43,6 +43,11 @@ type WorkPacket struct {
 	// for a follow-up mission (missions.Mission.ParentContext) — gives
 	// the worker the prior mission's result without reopening it.
 	ParentContext string
+	// ReferencedContext is the picked composer #-mention references
+	// (missions.Mission.ReferencedContext), additive to ParentContext:
+	// gives the worker the content of what the user explicitly pinned
+	// at create time.
+	ReferencedContext string
 	// Attachments are the mission's create-time PDF documents — reach
 	// every worker turn via Render, including a delegated executor's
 	// turn (executor packets also go through Render).
@@ -170,6 +175,12 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	if p.ParentContext != "" {
 		b.WriteString("Previous mission outcome:\n")
 		b.WriteString(NeutralizeSlot(p.ParentContext))
+		b.WriteString("\n")
+	}
+
+	if p.ReferencedContext != "" {
+		b.WriteString("Referenced context:\n")
+		b.WriteString(NeutralizeSlot(p.ReferencedContext))
 		b.WriteString("\n")
 	}
 

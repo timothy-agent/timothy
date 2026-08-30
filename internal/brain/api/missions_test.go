@@ -95,6 +95,12 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	if code := call("/v1/missions?limit=10"); code != 500 {
 		t.Fatalf("valid limit against a degraded store = %d, want 500 (passed validation)", code)
 	}
+	// ?q= (the composer #-mention mission search) has no validation of
+	// its own; any string passes straight through to List and reaches
+	// the (degraded) store the same as an unfiltered list.
+	if code := call("/v1/missions?q=fix+the+bug"); code != 500 {
+		t.Fatalf("q= against a degraded store = %d, want 500 (reached the store)", code)
+	}
 }
 
 // TestMissionsDeleteReachesStore confirms DELETE /v1/missions/{id} is
@@ -549,6 +555,56 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 		code, body := post(t, fa, "", `{"goal":"g","kind":"general","attachments":[{"id":"txt1"}]}`)
 		if code != 400 || !strings.Contains(body, "database unavailable") {
 			t.Fatalf("code=%d body=%q, want a store error (text attachments don't need the sidecar)", code, body)
+		}
+	})
+}
+
+// TestMissionsCreateReferencesValidation covers create()'s
+// referenced_context resolution: over-cap is rejected outright (mirrors
+// resolveAttachments' own cap), a resolvable kb_doc reference reaches
+// past validation into the (degraded) store, and an unresolvable
+// reference (unknown kind, or kb docs disabled) is skipped rather than
+// rejected, matching how an unknown Knowledge collection name already
+// degrades silently instead of failing the request.
+func TestMissionsCreateReferencesValidation(t *testing.T) {
+	t.Parallel()
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+
+	post := func(t *testing.T, body string) (int, string) {
+		t.Helper()
+		a, _, _ := testAPI(t, "tok", nil)
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		b, _ := io.ReadAll(w.Result().Body)
+		return w.Code, string(b)
+	}
+
+	t.Run("too many references", func(t *testing.T) {
+		// chat.maxReferences (unexported, chat/references.go) is 8.
+		refs := make([]string, 9)
+		for i := range refs {
+			refs[i] = `{"kind":"kb_doc","id":"d1"}`
+		}
+		code, body := post(t, `{"goal":"g","kind":"general","references":[`+strings.Join(refs, ",")+`]}`)
+		if code != 400 || !strings.Contains(body, "too many references") {
+			t.Fatalf("code=%d body=%q, want 400 too-many-references", code, body)
+		}
+	})
+
+	t.Run("unresolvable reference skipped, request still reaches the store", func(t *testing.T) {
+		// kb docs are never wired in this test's chat.Service, so a
+		// kb_doc reference resolves to nothing (skip+log) rather than a
+		// 400: the request proceeds to the (degraded) store, which then
+		// fails as an unrelated database error.
+		code, body := post(t, `{"goal":"g","kind":"general","references":[{"kind":"kb_doc","id":"missing"}]}`)
+		if code != 400 || !strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a store error (unresolvable reference skipped, not rejected)", code, body)
 		}
 	})
 }

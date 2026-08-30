@@ -274,6 +274,66 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	}
 }
 
+// TestKBSearchDocumentsCrossCollectionTitleMatch covers GET
+// /v1/admin/kb/documents?q=: a case-insensitive title match across
+// EVERY collection (the composer #-mention "find a kb document"
+// search), narrowing an unrelated third document out, and stripping
+// markdown from the response the same way listDocuments does.
+func TestKBSearchDocumentsCrossCollectionTitleMatch(t *testing.T) {
+	store := testKBStore(t)
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+
+	collA, err := store.CreateCollection(context.Background(), "itest-search-a", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	collB, err := store.CreateCollection(context.Background(), "itest-search-b", "")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := store.CreateDocument(context.Background(), collA, "Runbook QUERYTAG", "file", "a.md", "content a", 9); err != nil {
+		t.Fatalf("CreateDocument a: %v", err)
+	}
+	if _, err := store.CreateDocument(context.Background(), collB, "querytag onboarding", "file", "b.md", "content b", 9); err != nil {
+		t.Fatalf("CreateDocument b: %v", err)
+	}
+	if _, err := store.CreateDocument(context.Background(), collB, "unrelated notes", "file", "c.md", "content c", 9); err != nil {
+		t.Fatalf("CreateDocument c: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/v1/admin/kb/documents?q=querytag", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search status = %d body %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "content a") {
+		t.Fatal("response must not include markdown")
+	}
+
+	var resp struct {
+		Documents []struct {
+			Title string `json:"title"`
+		} `json:"documents"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var titles []string
+	for _, d := range resp.Documents {
+		titles = append(titles, d.Title)
+	}
+	if !strings.Contains(strings.Join(titles, "|"), "Runbook QUERYTAG") || !strings.Contains(strings.Join(titles, "|"), "querytag onboarding") {
+		t.Fatalf("titles = %v, want both querytag documents across collections", titles)
+	}
+	if strings.Contains(strings.Join(titles, "|"), "unrelated notes") {
+		t.Fatalf("titles = %v, want the unrelated document excluded", titles)
+	}
+}
+
 func TestKBDocumentUploadStripsNULAndInvalidUTF8(t *testing.T) {
 	store := testKBStore(t)
 	ingester := &fakeIngester{}

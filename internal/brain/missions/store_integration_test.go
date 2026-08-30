@@ -135,6 +135,76 @@ func TestMissionCRUD(t *testing.T) {
 	}
 }
 
+// TestListFilterQueryMatchesNameOrGoal covers ListFilter.Query (the
+// composer #-mention mission search, GET /v1/missions?q=): a
+// case-insensitive substring match on name OR goal, applied at the SQL
+// level (ILIKE), narrowing an unrelated third mission out.
+func TestListFilterQueryMatchesNameOrGoal(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	byGoal, err := s.Create(ctx, Mission{Goal: marker + "fix the flaky QUERYTAG upload test", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create byGoal: %v", err)
+	}
+	byName, err := s.Create(ctx, Mission{Goal: marker + "unrelated goal", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create byName: %v", err)
+	}
+	if err := s.SetNameIfEmpty(ctx, byName, "QueryTag rename"); err != nil {
+		t.Fatalf("SetNameIfEmpty: %v", err)
+	}
+	other, err := s.Create(ctx, Mission{Goal: marker + "something else entirely", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create other: %v", err)
+	}
+
+	list, err := s.List(ctx, ListFilter{Query: "querytag"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := map[string]bool{}
+	for _, m := range list {
+		got[m.ID] = true
+	}
+	if !got[byGoal] {
+		t.Fatal("List(q=querytag) did not include the mission matched by goal")
+	}
+	if !got[byName] {
+		t.Fatal("List(q=querytag) did not include the mission matched by name")
+	}
+	if got[other] {
+		t.Fatal("List(q=querytag) included an unrelated mission")
+	}
+}
+
+// TestMissionReferencedContextRoundTrips covers the referenced_context
+// column (composer #-mention references resolved at create time):
+// round-trips through Create/Get unchanged, additive to (never
+// replacing) parent_context.
+func TestMissionReferencedContextRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "referenced-context", Kind: "general",
+		ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: runbook contents",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.ReferencedContext != "kb doc: runbook contents" {
+		t.Fatalf("ReferencedContext = %q, want it to round-trip unchanged", m.ReferencedContext)
+	}
+	if m.ParentContext != "prior mission fixed the signup bug" {
+		t.Fatalf("ParentContext = %q, want ReferencedContext to be additive, not a replacement", m.ParentContext)
+	}
+}
+
 // TestMissionDelete covers Store.Delete's three outcomes: unknown id
 // (ErrNotFound), a live (non-terminal) mission (ErrNotTerminal), and a
 // terminal mission — which must actually remove the row, and its

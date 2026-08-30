@@ -79,6 +79,7 @@ func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.
 	handle("PATCH /v1/admin/kb/collections/{id}", a.auth(http.HandlerFunc(h.updateCollection)))
 	handle("DELETE /v1/admin/kb/collections/{id}", a.auth(http.HandlerFunc(h.deleteCollection)))
 	handle("GET /v1/admin/kb/collections/{id}/documents", a.auth(http.HandlerFunc(h.listDocuments)))
+	handle("GET /v1/admin/kb/documents", a.auth(http.HandlerFunc(h.searchDocuments)))
 	handle("POST /v1/admin/kb/collections/{id}/documents", a.auth(http.HandlerFunc(h.uploadDocument)))
 	handle("POST /v1/admin/kb/collections/{id}/documents/url", a.auth(http.HandlerFunc(h.addDocumentFromURL)))
 	handle("POST /v1/admin/kb/documents", a.auth(http.HandlerFunc(h.uploadDocumentAuto)))
@@ -229,6 +230,24 @@ func (h *kbAPI) deleteCollection(w http.ResponseWriter, r *http.Request) {
 
 func (h *kbAPI) listDocuments(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.ListDocuments(r.Context(), r.PathValue("id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
+		return
+	}
+	out := make([]kb.Document, len(rows))
+	for i, d := range rows {
+		out[i] = sanitizeDocument(d)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"documents": out})
+}
+
+// searchDocuments serves GET /v1/admin/kb/documents?q=<text>: a
+// cross-collection title search, the composer #-mention "type to
+// find a kb document" search. An empty/absent q returns every
+// document, same shape as listDocuments but not scoped to one
+// collection.
+func (h *kbAPI) searchDocuments(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.store.SearchDocuments(r.Context(), r.URL.Query().Get("q"))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 		return

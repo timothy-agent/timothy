@@ -16,11 +16,13 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	pdfgenservice "github.com/SumonMSelim/timothy/internal/brain/pdfgen"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
@@ -99,7 +101,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -194,6 +196,13 @@ type missionAPI struct {
 	// pdfService renders export-pdf requests via the pdfgen sidecar; nil
 	// (PDFGEN_URL unset or attachments disabled) 503s the endpoint.
 	pdfService *pdfgenservice.Service
+	// resolveReferences resolves a create request's picked #-mention
+	// references (mission/session/kb doc) into documents: chat.Service's
+	// own resolver (chat.go's ResolveReferences), reused here so a
+	// mission-create reference can never diverge from how a chat turn
+	// resolves the exact same kinds. Never nil (a.svc is never nil,
+	// Register always constructs one).
+	resolveReferences func(context.Context, []chat.Reference) ([]session.DocumentRef, error)
 	// destinations resolves a create request's destination_ids against
 	// the operator-owned destinations table (D-061's exfiltration
 	// guard: an id must exist AND be enabled) — nil (destinations
@@ -243,10 +252,12 @@ func failMission(w http.ResponseWriter, err error) {
 }
 
 // list serves GET /v1/missions, optionally narrowed by ?schedule_id=
-// (a recurring schedule's fire history: every mission it spawned)
-// and/or ?limit= (a positive result cap). Both are ignored when
-// empty/absent — the original "every mission" behavior — and a
-// malformed value is a 400 rather than a silently-empty filter.
+// (a recurring schedule's fire history: every mission it spawned),
+// ?q= (case-insensitive substring match on name or goal, the
+// composer #-mention mission search), and/or ?limit= (a positive
+// result cap). All are ignored when empty/absent, the original
+// "every mission" behavior, and a malformed value is a 400 rather
+// than a silently-empty filter.
 func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 	var filter missions.ListFilter
 	if v := r.URL.Query().Get("schedule_id"); v != "" {
@@ -256,6 +267,7 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.ScheduleID = v
 	}
+	filter.Query = r.URL.Query().Get("q")
 	if v := r.URL.Query().Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -422,6 +434,10 @@ type createMissionRequest struct {
 	// to markdown once here (see resolveAttachments); images/audio are
 	// unsupported for missions.
 	Attachments []missionAttachmentInput `json:"attachments"`
+	// References names composer #-mention picks (missions/sessions/kb
+	// docs) to resolve at create time into ReferencedContext, additive
+	// to and distinct from ParentMissionID's own single-parent lineage.
+	References []chat.Reference `json:"references"`
 	// DestinationIDs names operator-created destinations (email,
 	// webhook) to deliver this mission's outcome digest to on the
 	// terminal done transition — every id is validated to exist AND be
@@ -530,6 +546,11 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	referencedContext, err := h.resolveReferenceContext(r.Context(), req.References)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	// Resolve even with an empty AgentID: ResolveByID("") falls back to
 	// the default agent, same as chat sessions that don't pick one — a
 	// mission created without an explicit agent still needs a real
@@ -595,7 +616,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
-		ParentMissionID: parentMissionID, ParentContext: parentContext,
+		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
 		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, Light: req.Light,
 	}
 	id, err := h.driver.Create(r.Context(), m)
@@ -622,6 +643,37 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, sanitizeMission(created))
+}
+
+// resolveReferenceContext resolves a create request's picked
+// #-mention references into one ReferencedContext digest, reusing
+// chat.Service's own resolver (h.resolveReferences) so a mission
+// reference can never resolve differently than the identical chat
+// reference kind. Empty input returns "", nil without calling the
+// resolver, same zero-refs fast path as resolveAttachments. The
+// resolver itself already caps the count and skips unresolvable
+// picks (missing id, unknown kind) rather than failing; the only
+// error surfaced here is the over-cap rejection.
+func (h *missionAPI) resolveReferenceContext(ctx context.Context, refs []chat.Reference) (string, error) {
+	if len(refs) == 0 {
+		return "", nil
+	}
+	docs, err := h.resolveReferences(ctx, refs)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, d := range docs {
+		if d.Markdown == "" {
+			continue
+		}
+		name := d.Name
+		if name == "" {
+			name = d.ID
+		}
+		fmt.Fprintf(&b, "%s:\n%s\n\n", name, d.Markdown)
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
 // resolveAttachments validates and converts a create request's PDF and

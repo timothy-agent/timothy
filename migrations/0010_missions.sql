@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS missions (
     -- parent mission taken at follow-up create time (missions.OutcomeDigest)
     -- — rendered into the follow-up's explore/plan/work prompts.
     parent_context        text NOT NULL DEFAULT '',
+    -- ReferencedContext is an immutable digest of the composer #-mention
+    -- references (missions/sessions/kb docs) picked at create time,
+    -- resolved via chat.Service's reference resolver -- rendered into
+    -- explore/plan/work prompts additive to parent_context, not a
+    -- replacement for it (a mission can be both a follow-up AND carry
+    -- its own picked references).
+    referenced_context    text NOT NULL DEFAULT '',
     -- Attachments is a jsonb array of {id, mime, name, markdown}: id
     -- names an attachments-store row, markdown is the PDF's markitdown
     -- conversion snapshotted ONCE at create time — re-conversion drift

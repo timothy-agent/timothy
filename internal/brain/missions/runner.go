@@ -902,6 +902,9 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
 	}
+	if m.ReferencedContext != "" {
+		user += "\n\nReferenced context:\n" + NeutralizeSlot(m.ReferencedContext)
+	}
 	user += renderAttachments(m.Attachments)
 
 	extra := []*tools.Tool{ExploreNotesTool()}
@@ -1134,6 +1137,9 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 	}
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
+	}
+	if m.ReferencedContext != "" {
+		user += "\n\nReferenced context:\n" + NeutralizeSlot(m.ReferencedContext)
 	}
 	user += renderAttachments(m.Attachments)
 	extra := []*tools.Tool{PlanTool()}

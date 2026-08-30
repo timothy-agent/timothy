@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,7 +51,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, pending_permission_tool, pending_permission_args,
 	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
-	branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, light, final_output, created_at, updated_at,
+	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs`
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
@@ -75,7 +76,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
+		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw,
@@ -157,7 +158,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
 		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &attachmentsRaw,
+		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw); err != nil {
@@ -254,14 +255,21 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, m.Light)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30, $31, $32, NULLIF($33, '')::uuid, $34) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30, $31, $32, $33, NULLIF($34, '')::uuid, $35) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
 	}
 	return id, nil
+}
+
+// escapeLike escapes ILIKE wildcards in a user-supplied query so they
+// match as literals, not patterns (mirrors session.Store.List's own
+// escaping).
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 func orDefault(v, def int) int {
@@ -331,6 +339,10 @@ func (s *Store) Delete(ctx context.Context, id string) (Mission, error) {
 // future paginated list (?limit=), both optional.
 type ListFilter struct {
 	ScheduleID string
+	// Query, when set, keeps only missions whose name or goal contains
+	// it (case-insensitive): the composer #-mention "type to find a
+	// mission" search (GET /v1/missions?q=).
+	Query string
 	// Limit caps the result count; 0 means unlimited.
 	Limit int
 }
@@ -345,9 +357,17 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 	}
 	query := `SELECT ` + missionColumns + `, fr.reason FROM missions` + failureReasonJoin
 	var args []any
+	var where []string
 	if filter.ScheduleID != "" {
 		args = append(args, filter.ScheduleID)
-		query += fmt.Sprintf(" WHERE schedule_id = $%d", len(args))
+		where = append(where, fmt.Sprintf("schedule_id = $%d", len(args)))
+	}
+	if filter.Query != "" {
+		args = append(args, "%"+escapeLike(filter.Query)+"%")
+		where = append(where, fmt.Sprintf("(name ILIKE $%d OR goal ILIKE $%d)", len(args), len(args)))
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
 	}
 	query += " ORDER BY created_at DESC"
 	if filter.Limit > 0 {

@@ -77,6 +77,7 @@ type Gateway interface {
 // it, session.Store satisfies it.
 type SessionLog interface {
 	Create(ctx context.Context, title string) (string, error)
+	Get(ctx context.Context, id string) (session.Meta, error)
 	Events(ctx context.Context, sessionID string) ([]session.Event, error)
 	Append(ctx context.Context, sessionID, kind string, payload any) (int64, error)
 	SetTitleIfEmpty(ctx context.Context, id, title string) error
@@ -155,6 +156,8 @@ type Service struct {
 	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
 	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config
 	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config
+	missions       MissionStore                         // nil: mission #-mention references never resolve
+	kbDocs         KBDocStore                           // nil: kb doc #-mention references never resolve
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -800,6 +803,12 @@ type Request struct {
 	// session (composer # mentions) — unioned into the session's
 	// stored knowledge list before the turn runs.
 	Knowledge []string `json:"knowledge,omitempty"`
+	// References names individual missions/sessions/kb documents the
+	// user picked via composer # mentions (generalizes Knowledge, which
+	// only covers kb collections), resolved into this turn's documents
+	// exactly like attachment-derived ones, including NeutralizeSlot
+	// before rendering.
+	References []Reference `json:"references,omitempty"`
 }
 
 // Chat streams one turn. The user message is durably appended before
@@ -814,6 +823,11 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if err != nil {
 		return "", nil, err
 	}
+	referenceDocs, err := s.ResolveReferences(ctx, req.References)
+	if err != nil {
+		return "", nil, err
+	}
+	documents = append(documents, referenceDocs...)
 	agentName := req.Agent
 	if agentName == autoAgentName {
 		agentName = s.dispatchAgent(ctx, req.Message)
