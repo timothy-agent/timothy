@@ -2,6 +2,8 @@
 
 Timothy holds provider API keys, OAuth grants, and personal data, and it runs model-directed code in sandboxes. Vulnerabilities in any of that are worth reporting.
 
+The architecture's trust boundaries, attack surfaces, and known-risk dispositions are documented in [THREAT_MODEL.md](THREAT_MODEL.md).
+
 ## Reporting a vulnerability
 
 Please do **not** open a public GitHub issue for security problems.
