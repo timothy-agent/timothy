@@ -45,7 +45,7 @@ const (
 )
 
 // missionIDPattern matches exactly the UUID gen_random_uuid() produces
-// (migrations/0010_missions.sql) — checked before any Docker call, so
+// (migrations/0001_init.sql), checked before any Docker call, so
 // no mission-id-shaped input ever reaches a container name.
 var missionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 

@@ -90,8 +90,9 @@ First run: `cp deploy/env.example deploy/.env` and set
   (native runner over `loop.Agent`), `policy.go` (per-kind/light
   behavior flags), `provision.go`, `budget.go`, `verifier.go`,
   `worktree.go`, `packet.go`, `sentinel.go`, `review.go`, `verify.go`,
-  `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema: `migrations/0010_missions.sql` (edited in place
-  pre-release, never new ALTER migrations), attachments in 0011.
+  `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema:
+  `migrations/0001_init.sql` (edited in place pre-release, never new
+  ALTER migrations).
 - Light missions (D-069, kind=general only): born in phase=execute,
   skip explore/plan/review; the deliverable travels in mission_status's
   `final_output` argument (reasoning models emit tool calls with no
