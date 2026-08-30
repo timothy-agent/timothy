@@ -60,7 +60,12 @@ func testKBStore(t *testing.T) *kb.Store {
 		t.Skip("DATABASE_URL not set; skipping integration test")
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	pool := pgpool.New(t.Context(), dsn, log)
+	// Background, not t.Context(): the pool closes its connections the
+	// moment its context is Done — the cleanup delete below would
+	// silently no-op, leaking itest-% collections that collide across
+	// tests sharing fixedClassifier's name. Same reasoning as
+	// testMissionStore's pool.
+	pool := pgpool.New(context.Background(), dsn, log)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	if err := pool.WaitHealthy(ctx); err != nil {
@@ -76,7 +81,9 @@ func testKBStore(t *testing.T) *kb.Store {
 	t.Cleanup(func() {
 		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer ccancel()
-		_, _ = db.Exec(cctx, `DELETE FROM kb_collections WHERE name LIKE 'itest-%'`)
+		if _, err := db.Exec(cctx, `DELETE FROM kb_collections WHERE name LIKE 'itest-%'`); err != nil {
+			t.Logf("cleanup kb collections: %v", err)
+		}
 	})
 	return kb.New(pool)
 }
