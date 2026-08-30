@@ -608,6 +608,23 @@ func main() {
 		}
 	}
 
+	// generate_pdf: registered here, not inside buildAgent, since it
+	// needs pdfService (built above, after buildAgent). Nil-gated on
+	// pdfService, which is itself nil-gated on PDFGEN_URL and
+	// attachmentStore — no separate media-saver wiring needed, it rides
+	// the same agent.SetMediaSaver call share_file just made.
+	if pdfService != nil {
+		generatePDFTool := builtin.GeneratePDF(pdfService)
+		current := builtinSet.add(generatePDFTool)
+		if conns != nil {
+			swapAgentTools(agent, current, conns, app.Log, toolCalls)
+		} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+			app.Log.Warn("generate_pdf tool registration failed; agent keeps its previous tool surface", "error", err)
+		} else {
+			agent.SwapTools(constrained, defs)
+		}
+	}
+
 	// Mission artifact copy: registered here for the same reason
 	// share_file is — needs attachmentStore, built after buildMissions.
 	// Nil-gated on both attachmentStore (ATTACHMENTS_DIR) and

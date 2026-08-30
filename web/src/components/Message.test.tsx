@@ -6,6 +6,9 @@ import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, 
 
 vi.mock('../api/client', () => ({
   fetchAttachmentBlob: vi.fn(),
+  getSettings: vi.fn().mockResolvedValue({ settings: {}, values: {} }),
+  exportMessagePDF: vi.fn(),
+  downloadMissionPdfExport: vi.fn(),
 }))
 
 afterEach(cleanup)
@@ -279,6 +282,54 @@ describe('copy buttons', () => {
     const msg = play([{ type: 'chunk', text: 'partial' }])
     render(<AssistantMessage msg={msg} />)
     expect(screen.queryByTestId('copy-button')).toBeNull()
+  })
+
+  it('hides the export PDF button when pdf export is disabled', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.getSettings).mockResolvedValue({ settings: {}, values: {} })
+    const msg = play([
+      { type: 'chunk', text: 'the answer' },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    await waitFor(() => expect(client.getSettings).toHaveBeenCalled())
+    expect(screen.queryByTestId('export-pdf-button')).not.toBeInTheDocument()
+  })
+
+  it('shows the export PDF button and downloads the render when pdf export is enabled', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.getSettings).mockResolvedValue({
+      settings: { pdf_export_enabled: true },
+      values: {},
+    })
+    vi.mocked(client.exportMessagePDF).mockResolvedValue({ attachment_id: 'att-1', cached: false })
+    vi.mocked(client.downloadMissionPdfExport).mockResolvedValue(undefined)
+
+    const msg = play([
+      { type: 'chunk', text: 'the answer' },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    const btn = await screen.findByTestId('export-pdf-button')
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(client.exportMessagePDF).toHaveBeenCalledWith('Message', 'the answer'))
+    await waitFor(() =>
+      expect(client.downloadMissionPdfExport).toHaveBeenCalledWith('att-1', 'message.pdf'),
+    )
+  })
+
+  it('hides the export PDF button while streaming even when enabled', async () => {
+    const client = await import('../api/client')
+    vi.mocked(client.getSettings).mockResolvedValue({
+      settings: { pdf_export_enabled: true },
+      values: {},
+    })
+    const msg = play([{ type: 'chunk', text: 'partial' }])
+    render(<AssistantMessage msg={msg} />)
+    await waitFor(() => expect(client.getSettings).toHaveBeenCalled())
+    expect(screen.queryByTestId('export-pdf-button')).not.toBeInTheDocument()
   })
 
   it('copies the interrupted partial text', () => {

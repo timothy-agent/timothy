@@ -13,12 +13,19 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { fetchAttachmentBlob } from '../api/client'
+import { toast } from 'sonner'
+import {
+  downloadMissionPdfExport,
+  exportMessagePDF,
+  fetchAttachmentBlob,
+  getSettings,
+} from '../api/client'
 import type { ImageRef, MediaRef } from '../api/types'
 import { ActivityLine } from './Activity'
 import { AttachmentViewer, mimeLabel } from './AttachmentViewer'
 import { CodeBlock } from './CodeBlock'
 import { ModelBadge } from './ModelBadge'
+import { errText } from './settings/util'
 import { Badge } from './ui/badge'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import { attachmentURLCache } from '../lib/attachmentCache'
@@ -274,6 +281,33 @@ export function CopyButton({
   )
 }
 
+// ExportPDFButton renders a completed assistant message's markdown as
+// a typeset PDF via the pdfgen sidecar and downloads it. Only mounted
+// when pdf_export_enabled — the caller decides that, this component
+// just renders the button.
+function ExportPDFButton({ text }: { text: string }) {
+  const [exporting, setExporting] = useState(false)
+  const exportPdf = () => {
+    setExporting(true)
+    exportMessagePDF('Message', text)
+      .then((r) => downloadMissionPdfExport(r.attachment_id, 'message.pdf'))
+      .catch((err: unknown) => toast.error('Could not export PDF', { description: errText(err) }))
+      .finally(() => setExporting(false))
+  }
+  return (
+    <button
+      type="button"
+      aria-label="Export PDF"
+      data-testid="export-pdf-button"
+      disabled={exporting}
+      onClick={exportPdf}
+      className="rounded p-1 text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/message:opacity-100 disabled:opacity-50"
+    >
+      <HugeiconsIcon icon={exporting ? Loading03Icon : Pdf02Icon} className={cn('size-3.5', exporting && 'animate-spin')} />
+    </button>
+  )
+}
+
 export function UserMessage({
   text,
   images,
@@ -430,6 +464,12 @@ export function AssistantMessage({
   // doesn't render (there's nowhere for it to open).
   onShowActivity?: () => void
 }) {
+  const [pdfExportEnabled, setPdfExportEnabled] = useState(false)
+  useEffect(() => {
+    getSettings()
+      .then((s) => setPdfExportEnabled(s.settings.pdf_export_enabled ?? false))
+      .catch(() => setPdfExportEnabled(false))
+  }, [])
   const tokens = msg.meta?.usage
     ? `${compact(msg.meta.usage.input_tokens)}→${compact(msg.meta.usage.output_tokens)} tok`
     : null
@@ -534,6 +574,7 @@ export function AssistantMessage({
             </div>
           )}
           {msg.text !== '' && <CopyButton text={msg.text} label="Copy reply" />}
+          {msg.text !== '' && pdfExportEnabled && <ExportPDFButton text={msg.text} />}
         </div>
       )}
     </div>

@@ -82,6 +82,11 @@ type API struct {
 	// validating a knowledge PUT/chat request's names — nil when KB is
 	// disabled (no kb.Store wired), rejecting any non-empty Knowledge.
 	kbCollections func(ctx context.Context) ([]kb.Collection, error)
+
+	// pdfService backs POST /v1/chat/export-pdf (single assistant
+	// message export, #380) — nil-gated the same way missionAPI's
+	// pdfService is (PDFGEN_URL unset or attachments disabled).
+	pdfService *pdfgen.Service
 }
 
 // memoryRoutePatterns is the EXHAUSTIVE list of memoryd routes brain
@@ -103,7 +108,7 @@ var memoryRoutePatterns = []string{
 // connector control plane (nil leaves any of them unmounted).
 // whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
 func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, pdfService *pdfgen.Service) {
-	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates}
+	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService}
 	if kbStore != nil {
 		a.kbCollections = kbStore.ListCollections
 	}
@@ -193,6 +198,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	srv.Handle("GET /v1/permissions/pending", a.auth(http.HandlerFunc(a.handlePendingPermissions)))
 	// Deprecated shim: same behavior, session_id in the body.
 	srv.Handle("POST /v1/chat", a.auth(http.HandlerFunc(a.handleChatShim)))
+	srv.Handle("POST /v1/chat/export-pdf", a.auth(http.HandlerFunc(a.handleExportMessagePDF)))
 }
 
 // handlePermission answers a parked tool call: {decision: once|session|deny}.

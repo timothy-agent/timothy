@@ -1569,6 +1569,20 @@ export async function downloadMissionPdfExport(attachmentId: string, filename: s
   return fetchBlobDownload(`/v1/attachments/${attachmentId}`, filename)
 }
 
+// exportMessagePDF renders one chat message's already-rendered markdown
+// into a single-chapter PDF via the pdfgen sidecar. The message content
+// travels in the body — it's already in the transcript the client
+// holds, no server-side lookup needed.
+export async function exportMessagePDF(
+  title: string,
+  content: string,
+): Promise<{ attachment_id: string; cached: boolean }> {
+  return request<{ attachment_id: string; cached: boolean }>('/v1/chat/export-pdf', {
+    method: 'POST',
+    body: JSON.stringify({ title, content }),
+  })
+}
+
 // --- schedules (recurring cron triggers that fire mission templates) ---
 
 export interface CreateScheduleInput {
