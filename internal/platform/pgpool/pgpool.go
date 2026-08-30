@@ -80,7 +80,19 @@ func (p *Pool) connect(ctx context.Context) (*pgxpool.Pool, error) {
 	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 
-	pool, err := pgxpool.New(cctx, p.dsn)
+	cfg, err := pgxpool.ParseConfig(p.dsn)
+	if err != nil {
+		return nil, err
+	}
+	// statement_timeout bounds a single runaway query; every store's
+	// transactions in this codebase are Postgres-only (never span a
+	// network call), so idle_in_transaction_session_timeout is also
+	// safe: it only ever fires on a connection genuinely stuck idle
+	// mid-transaction, not one waiting on an LLM/HTTP call.
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "300000"
+	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "60000"
+
+	pool, err := pgxpool.NewWithConfig(cctx, cfg)
 	if err != nil {
 		return nil, err
 	}
