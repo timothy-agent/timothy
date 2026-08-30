@@ -574,6 +574,105 @@ func TestKBGoldenPerDocumentCapBackfillsSingleDoc(t *testing.T) {
 	}
 }
 
+// D-083 (issue #424): weighted RRF fusion.
+const kbFusionWeightCollection = "itest-kbfusionweight"
+
+// seedKBFusionWeight builds a bystander document that wins the
+// keyword leg outright (every query lexeme repeated, off-axis
+// embedding so the vector leg never returns it) and an on-topic
+// document that wins the vector leg (on-axis embedding) with only
+// partial lexeme overlap, so it ranks behind the bystander on the
+// keyword leg alone. Equal-weight RRF fusion lets the keyword leg's
+// win carry the bystander above the on-topic document; discounting
+// the keyword leg's contribution should let the on-topic document
+// win the fused ranking instead.
+func seedKBFusionWeight(t *testing.T) *KBStore {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, _ = db.Exec(ctx, "DELETE FROM kb_collections WHERE name = $1", kbFusionWeightCollection)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM kb_collections WHERE name = $1", kbFusionWeightCollection)
+	})
+
+	st := NewKBStore(pool)
+	var collID string
+	if err := db.QueryRow(ctx,
+		"INSERT INTO kb_collections (name) VALUES ($1) RETURNING id", kbFusionWeightCollection).Scan(&collID); err != nil {
+		t.Fatalf("insert collection: %v", err)
+	}
+
+	insert := func(title, content string, emb Vector) {
+		var docID string
+		if err := db.QueryRow(ctx, `INSERT INTO kb_documents (collection_id, title, status)
+			VALUES ($1, $2, 'ready') RETURNING id`, collID, title).Scan(&docID); err != nil {
+			t.Fatalf("insert document %s: %v", title, err)
+		}
+		if err := st.ReplaceChunks(ctx, docID, []KBChunk{
+			{Seq: 0, Content: content, Embedding: emb, EmbeddingModel: "itest"},
+		}); err != nil {
+			t.Fatalf("ReplaceChunks %s: %v", title, err)
+		}
+	}
+
+	// Bystander: every query lexeme repeated for a high ts_rank, off
+	// axis (dim 800) so it clears no similarity floor on the vector leg.
+	insert("bystander", "alpha alpha beta beta gamma gamma delta delta topic topic topic topic",
+		kbBasis(800))
+	// On-topic: on the query's axis (dim 810) so the vector leg ranks
+	// it first, with only one query lexeme ("topic") for a much lower
+	// ts_rank than the bystander.
+	insert("on-topic", "the topic under discussion here is quite relevant to what was asked",
+		kbBasis(810))
+
+	return st
+}
+
+// TestKBGoldenFusionWeightFavorsVectorLeg pins D-083: with the tuned
+// keyword-leg discount, the on-topic document (vector leg winner)
+// outranks the bystander (keyword leg winner only) in the fused
+// hybrid result, even though the bystander would win under equal
+// (1.0/1.0) leg weights.
+func TestKBGoldenFusionWeightFavorsVectorLeg(t *testing.T) {
+	st := seedKBFusionWeight(t)
+	hits, err := st.KBSearch(t.Context(), "alpha beta gamma delta topic", kbBasis(810),
+		[]string{kbFusionWeightCollection}, nil, KBSearchHybrid, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	if len(hits) < 2 {
+		t.Fatalf("got %d hits, want at least 2: %+v", len(hits), hits)
+	}
+	if hits[0].DocumentTitle != "on-topic" {
+		t.Fatalf("top hit = %q, want the on-topic (vector leg) document ranked first ahead of the keyword-only bystander: %+v",
+			hits[0].DocumentTitle, hits)
+	}
+}
+
 func TestKBGoldenSemanticFloor(t *testing.T) {
 	st := seedKBGolden(t)
 	// On-axis query hits; orthogonal query (similarity 0) must not.

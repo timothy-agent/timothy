@@ -124,6 +124,23 @@ const (
 const legLimitLit = "30"
 const rrfKLit = "60"
 
+// vecLegWeightLit/ftsLegWeightLit (D-083, issue #424) scale each leg's
+// RRF contribution before the legs sum into a fused score (KB hybrid
+// search fuses exactly these two legs, vector and keyword; there is
+// no third entity leg here, that only exists in the separate memories
+// retrieval package). The keyword (fts) leg is OR-semantics ts_rank
+// with no similarity floor (issue #425 covers the tsquery itself), so
+// generic word overlap wins it high ranks on off-topic documents;
+// discounting its contribution relative to the vector leg lets
+// on-topic documents outrank bystanders whose overlap is lexical
+// only. Equal weights (1.0/1.0) reproduce prior behavior. Tuned
+// against make kb-eval (recall@5 stays 1.0). Fusion weights only
+// re-rank across legs: a bystander chunk that also wins the raw
+// vector leg outright cannot be reversed by any leg weight, so the
+// per-document cap (D-082) remains the guard for that case.
+const vecLegWeightLit = "1.0"
+const ftsLegWeightLit = "0.1"
+
 // minSimilarityLit is the vector leg's relevance floor (cosine
 // similarity): below it a chunk is noise, not a match. Nearest-neighbor
 // search always returns SOMETHING: without a floor an off-topic query
@@ -318,11 +335,13 @@ const (
 
 	// hybridSQL fuses a vector top-30 and an FTS top-30 leg via
 	// Reciprocal Rank Fusion (k=60), same fusion constant as the
-	// memories retrieval package. Each leg carries its own relevance
-	// gate (similarity floor / lexeme match), so an off-topic query
-	// yields an empty result instead of the k least-far chunks. The
-	// boost multiplies the fused score, applied once at the end (not
-	// per-leg) so it can't double-count a chunk found by both legs.
+	// memories retrieval package, with each leg's contribution scaled
+	// by vecLegWeightLit/ftsLegWeightLit before summing (D-083). Each
+	// leg carries its own relevance gate (similarity floor / lexeme
+	// match), so an off-topic query yields an empty result instead of
+	// the k least-far chunks. The boost multiplies the fused score,
+	// applied once at the end (not per-leg) so it can't double-count a
+	// chunk found by both legs.
 	// $1 embedding, $2 query, $3 collection names, $4 result count,
 	// $5 boost collection names.
 	hybridSQL = `WITH q AS (` + kbQueryCTEq2 + `), vec AS (
@@ -343,8 +362,12 @@ const (
 			ORDER BY rank
 			LIMIT ` + legLimitLit + `
 		), fused AS (
-			SELECT id, sum(1.0 / (` + rrfKLit + ` + rank)) AS score
-			FROM (SELECT id, rank FROM vec UNION ALL SELECT id, rank FROM fts) legs
+			SELECT id, sum(weight / (` + rrfKLit + ` + rank)) AS score
+			FROM (
+				SELECT id, rank, ` + vecLegWeightLit + `::float8 AS weight FROM vec
+				UNION ALL
+				SELECT id, rank, ` + ftsLegWeightLit + `::float8 AS weight FROM fts
+			) legs
 			GROUP BY id
 		)
 		` + kbProjection + `, fused.score * ` + boostMultiplierQ5 + ` * ` + provenanceMultiplier + ` AS score
