@@ -2,7 +2,11 @@
 # Production web image: Vite build served by unprivileged nginx.
 # The HugeIcons Pro registry token is consumed as a BuildKit secret so
 # it never lands in an image layer or the build history.
-FROM node:24.18.0-alpine AS build
+# --platform=$BUILDPLATFORM: the Vite dist output is arch-independent,
+# so the build stage always runs natively. Running node under qemu for
+# the arm64 leg crashed with illegal-instruction core dumps and hung
+# release builds for hours.
+FROM --platform=$BUILDPLATFORM node:24.18.0-alpine AS build
 ARG GIT_SHA
 ARG APP_VERSION
 ENV GIT_SHA=${GIT_SHA}
