@@ -174,6 +174,30 @@ func TestIngestEmbeddingFailureReportsFailedStatus(t *testing.T) {
 	if docs.failedID != "doc-2" {
 		t.Fatalf("failure not reported: %+v", docs)
 	}
+	if !strings.Contains(docs.failedMsg, "gateway down") {
+		t.Fatalf("failedMsg = %q, want the underlying provider error", docs.failedMsg)
+	}
+}
+
+// TestIngestEmbeddingFailureTruncatesStoredError pins issue #408: a
+// chain_exhausted error carrying every attempt's provider message must
+// stay bounded to kbErrorCap before it reaches kb_documents.error.
+func TestIngestEmbeddingFailureTruncatesStoredError(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("ValidationException: 400 Bad Request: Too many input tokens. ", 20)
+	docs := &fakeDocStatus{}
+	a := kbAPIFor(&fakeKB{}, docs, &fakeEmbedder{err: errors.New(long)})
+	rec := postJSON(t, a.handleIngest, "/v1/ingest-document", `{"document_id":"doc-2b","markdown":"content"}`)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	if len(docs.failedMsg) > kbErrorCap+len("…") {
+		t.Fatalf("stored error length = %d, want <= cap %d", len(docs.failedMsg), kbErrorCap)
+	}
+	if !strings.HasPrefix(docs.failedMsg, "embedding failed: "+long[:20]) {
+		t.Fatalf("stored error lost the underlying message prefix: %q", docs.failedMsg)
+	}
 }
 
 func TestIngestStoreFailureReportsFailedStatus(t *testing.T) {

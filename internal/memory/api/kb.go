@@ -97,13 +97,25 @@ func (a *API) handleIngest(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"chunk_count": len(chunks)})
 }
 
+// kbErrorCap bounds the stored failure reason: gateway chain-exhaustion
+// errors carry every attempt's underlying provider message, which can
+// run long (issue #408).
+const kbErrorCap = 500
+
 func (a *API) reportKBFailed(ctx context.Context, documentID, msg string) {
 	if a.kbDocs == nil {
 		return
 	}
-	if err := a.kbDocs.SetFailed(ctx, documentID, msg); err != nil {
+	if err := a.kbDocs.SetFailed(ctx, documentID, truncate(msg, kbErrorCap)); err != nil {
 		a.log.Warn("kb ingest failure report failed", "document_id", documentID, "error", err)
 	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 type kbSearchRequest struct {

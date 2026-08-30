@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KbDocument } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
-import { ProvenanceBadge, SourceBadge } from './KnowledgeCollectionDetail'
+import { DocumentErrorLine, ProvenanceBadge, SourceBadge } from './KnowledgeCollectionDetail'
 
 afterEach(cleanup)
 
@@ -61,5 +61,30 @@ describe('ProvenanceBadge', () => {
   it('shows the provenance tier label', () => {
     render(<ProvenanceBadge doc={{ ...baseDoc, provenance: 'mission' }} />)
     expect(screen.getByText('Mission')).toBeInTheDocument()
+  })
+})
+
+describe('DocumentErrorLine', () => {
+  afterEach(cleanup)
+
+  it('renders the failure reason for a failed document with an error', () => {
+    const doc: KbDocument = { ...baseDoc, status: 'failed', error: 'chain_exhausted: too many input tokens' }
+    render(<DocumentErrorLine doc={doc} />)
+    const line = screen.getByText('chain_exhausted: too many input tokens')
+    expect(line).toBeInTheDocument()
+    expect(line).toHaveAttribute('title', doc.error)
+    expect(line).toHaveClass('text-red-400')
+  })
+
+  it('renders nothing for a ready document', () => {
+    const doc: KbDocument = { ...baseDoc, status: 'ready', error: '' }
+    const { container } = render(<DocumentErrorLine doc={doc} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('renders nothing for a failed document with no error text', () => {
+    const doc: KbDocument = { ...baseDoc, status: 'failed', error: '' }
+    const { container } = render(<DocumentErrorLine doc={doc} />)
+    expect(container).toBeEmptyDOMElement()
   })
 })

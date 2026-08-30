@@ -111,6 +111,18 @@ function StatusBadge({ doc }: { doc: KbDocument }) {
   )
 }
 
+// DocumentErrorLine surfaces the ingest failure reason (issue #408): a
+// one-line, title-tooltipped clamp under the title cell, matching the
+// mission failure text-red-400 + title pattern (eventRenderers.tsx).
+export function DocumentErrorLine({ doc }: { doc: KbDocument }) {
+  if (doc.status !== 'failed' || !doc.error) return null
+  return (
+    <p className="mt-0.5 truncate text-xs text-red-400" title={doc.error}>
+      {doc.error}
+    </p>
+  )
+}
+
 // pending/ingesting documents are polled every 3s until every
 // document in the collection reaches a terminal state.
 const pollMs = 3000
@@ -261,9 +273,12 @@ export function KnowledgeCollectionDetail() {
               <tbody>
                 {documents.map((doc) => (
                   <tr key={doc.id} className="border-b border-border last:border-0">
-                    <td className="flex items-center gap-2 px-3 py-2">
-                      <HugeiconsIcon icon={File02Icon} className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{doc.title}</span>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <HugeiconsIcon icon={File02Icon} className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{doc.title}</span>
+                      </div>
+                      <DocumentErrorLine doc={doc} />
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1.5">

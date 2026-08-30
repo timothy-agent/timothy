@@ -317,6 +317,10 @@ func (s *Store) SetIngesting(ctx context.Context, id string) error {
 	return nil
 }
 
+// kbErrorCap bounds the stored failure reason: memclient/gwclient
+// errors can carry a whole gateway response body (issue #408).
+const kbErrorCap = 500
+
 // SetFailed marks a document failed: used when brain itself (not
 // memoryd) hits an error before the ingest call ever reaches memoryd,
 // e.g. memoryd unreachable.
@@ -325,10 +329,17 @@ func (s *Store) SetFailed(ctx context.Context, id, errMsg string) error {
 	if err != nil {
 		return fmt.Errorf("kb document %s failed: %w", id, err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE kb_documents SET status = 'failed', error = $2, updated_at = now() WHERE id = $1`, id, errMsg); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE kb_documents SET status = 'failed', error = $2, updated_at = now() WHERE id = $1`, id, truncate(errMsg, kbErrorCap)); err != nil {
 		return fmt.Errorf("kb document %s failed: %w", id, err)
 	}
 	return nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // FindDocumentBySource looks up a document by its dedup key
