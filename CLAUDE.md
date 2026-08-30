@@ -19,6 +19,7 @@ PostgreSQL database + React web UI, run via Docker Compose
 | `searxng`      | Internal metasearch backend for the search_web tool                                                            |
 | `markitdown`   | Internal Python sidecar (`markitdown-svc/`): file→markdown                                                     |
 | `whisper`      | Internal Python sidecar (`whisper-svc/`): local speech-to-text                                                 |
+| `pdfgen`       | Internal Python sidecar (`pdfgen-svc/`): markdown→PDF via Typst                                                |
 | (local models) | Native host Ollama at host.docker.internal:11434, registered as openaicompat provider                          |
 
 ## Commands
@@ -74,8 +75,8 @@ First run: `cp deploy/env.example deploy/.env` and set
   (hybrid vector+text+entity, RRF-fused).
 - `internal/platform/`: shared: `migrate`, `pgpool`, `sse`,
   `httpserver`, `metrics`, `logging`, `config`, `service`, `netguard`
-  (SSRF-guarded outbound dialer), `markitdown`, `whisper` (sidecar
-  clients).
+  (SSRF-guarded outbound dialer), `markitdown`, `whisper`, `pdfgen`
+  (sidecar clients).
 - `migrations/`: numbered idempotent SQL, embedded via `embed.go`;
   never edit an applied migration.
 - `skills/`: skill packs baked into the brain image.
@@ -114,6 +115,12 @@ First run: `cp deploy/env.example deploy/.env` and set
   cache stability), markdown stored in the `attachments` jsonb column,
   rendered neutralized into every prompt; capped at 8; API responses
   strip the markdown. Images/audio unsupported.
+- PDF export: POST /v1/missions/{id}/export-pdf renders workspace
+  markdown (single file, or all files merged book-style) through
+  `internal/brain/pdfgen`, which caches by content hash in
+  `pdf_renders` and stores output via the attachment store; enabled
+  only when PDFGEN_URL is set (derived read-only setting
+  `pdf_export_enabled`).
 - Mission display names: generated fire-and-forget at create
   (`chat.TitleOverGateway`), backfilled once at terminal transition
   (`Driver.SetNameMission`) if still empty.

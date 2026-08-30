@@ -65,6 +65,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `searxng`    | Internal metasearch backend for the search_web tool                                           |
 | `markitdown` | Internal Python sidecar: file→markdown conversion                                             |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
+| `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst, powers mission PDF export                    |
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`.
 
@@ -161,7 +162,7 @@ make logs    # follow logs for all services
 Rebuild and restart a single service after a code change:
 
 ```sh
-make brain      # or gateway, memoryd, web, markitdown, whisper, sandboxd
+make brain      # or gateway, memoryd, web, markitdown, whisper, pdfgen, sandboxd
 ```
 
 ### Backups
@@ -206,4 +207,4 @@ Design decisions are documented as `D-0XX` markers in code comments next to the 
 
 ## License
 
-[AGPL-3.0](LICENSE).
+[AGPL-3.0](LICENSE)

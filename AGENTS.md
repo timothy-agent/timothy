@@ -18,6 +18,7 @@ PostgreSQL database + React web UI, run via Docker Compose
 | `searxng`    | Metasearch backend for search_web                                       |
 | `markitdown` | Python sidecar: file → markdown                                         |
 | `whisper`    | Python sidecar: local speech-to-text                                    |
+| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export)               |
 
 ## Commands
 
