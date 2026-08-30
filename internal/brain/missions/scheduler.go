@@ -106,14 +106,9 @@ type MissionTemplate struct {
 // api/missions.go's create-handler resolution so a scheduler-fired
 // mission gets the same defaults a UI-created one would.
 type AgentDefaults struct {
-	Route         string
-	ReviewRoute   string
-	PromptOverlay string
-	// BudgetAmount is a plain fallback number: an agent-level default
-	// carries no currency of its own, it always inherits whatever
-	// currency the firing mission/request resolves to (request's
-	// explicit budget_currency, or "USD" if that's also empty).
-	BudgetAmount      *float64
+	Route             string
+	ReviewRoute       string
+	PromptOverlay     string
 	ApprovalAllowlist []string
 	// Knowledge is the agent's kb_collections allowlist, snapshotted
 	// onto the mission the same way PromptOverlay is (see
@@ -549,9 +544,6 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			}
 			if t.ReviewRoute == "" {
 				t.ReviewRoute = defaults.ReviewRoute
-			}
-			if t.BudgetAmount == nil {
-				t.BudgetAmount = defaults.BudgetAmount
 			}
 			promptOverlay = defaults.PromptOverlay
 			knowledge = defaults.Knowledge

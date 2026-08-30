@@ -546,9 +546,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			if req.ReviewRoute == "" {
 				req.ReviewRoute = a.ReviewRoute
 			}
-			if req.BudgetAmount == nil {
-				req.BudgetAmount = a.BudgetUSD
-			}
 			promptOverlay = a.PromptOverlay
 			knowledge = a.Knowledge
 		}
@@ -907,6 +904,9 @@ func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
 // is usable).
 type executionPlanEntry struct {
 	ProviderName string              `json:"provider_name"`
+	Driver       string              `json:"driver"`
+	Kind         string              `json:"kind"`
+	BaseURL      string              `json:"base_url"`
 	Model        string              `json:"model"`
 	Usable       bool                `json:"usable"`
 	SkipReason   string              `json:"skip_reason"`
@@ -1000,6 +1000,9 @@ func (h *missionAPI) resolveEntries(ctx context.Context, route, harness, modelPi
 	for i, e := range resolved.Entries {
 		entries[i] = executionPlanEntry{
 			ProviderName: e.ProviderName,
+			Driver:       e.Driver,
+			Kind:         e.Kind,
+			BaseURL:      e.BaseURL,
 			Model:        e.Model,
 			Usable:       e.Usable,
 			SkipReason:   e.SkipReason,

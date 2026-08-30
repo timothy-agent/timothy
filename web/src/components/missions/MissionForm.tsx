@@ -605,7 +605,6 @@ export function MissionForm({
     const agent = agents.find((a) => a.id === id)
     if (agent) {
       setReviewRoute(agent.review_route ?? '')
-      if (agent.budget_usd != null) setBudget(String(agent.budget_usd))
     }
   }
 

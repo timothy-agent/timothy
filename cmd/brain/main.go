@@ -871,7 +871,7 @@ const missionWorkSlotMax = 4
 
 // missionAgentResolver adapts agentReg.ResolveByID to scheduler.go's
 // AgentResolver / driver.go's SetAgentResolver shape — both need the
-// SAME resolution (route/review_route/budget/prompt_overlay/
+// SAME resolution (route/review_route/prompt_overlay/
 // approval_allowlist/harness from an agents row), just at different
 // moments (schedule fire time vs mission provisioning time), so one
 // adapter serves both call sites.
@@ -883,8 +883,8 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 		}
 		return missions.AgentDefaults{
 			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
-			BudgetAmount: a.BudgetUSD, ApprovalAllowlist: a.ApprovalAllowlist,
-			Knowledge: a.Knowledge, Harness: a.Harness,
+			ApprovalAllowlist: a.ApprovalAllowlist,
+			Knowledge:         a.Knowledge, Harness: a.Harness,
 		}, true
 	}
 }

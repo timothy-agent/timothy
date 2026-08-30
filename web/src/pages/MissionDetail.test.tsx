@@ -175,6 +175,38 @@ describe('MissionDetail spend', () => {
     )
   })
 
+  it('uses the converted figure for budget percent when spend is in another currency', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 2, budget_currency: 'BDT' })
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      converted_cost_by_currency: { BDT: 1 },
+      input_tokens: 0,
+      output_tokens: 0,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    expect(await screen.findByText('50% of budget')).toBeTruthy()
+  })
+
+  it('hides the budget badge when spend exists only in other currencies with no converted figure', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 2, budget_currency: 'BDT' })
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 0,
+      output_tokens: 0,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    await screen.findByText('7 calls')
+    expect(screen.queryByText(/% of budget/)).toBeNull()
+  })
+
   it('omits the provider brand mark for an unrecognized provider name', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',

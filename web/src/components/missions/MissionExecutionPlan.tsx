@@ -1,6 +1,8 @@
 import type { ExecutionPlanEntry, ExecutionPlanPhase } from '../../api/types'
 import { executorChoices } from './MissionForm'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { matchPreset } from '../settings/presets'
+import { ProviderLogo } from '../settings/ProviderLogo'
 
 // MODEL_AUTO is the select's sentinel for "no pin" — Radix Select
 // rejects an empty-string item value, same convention MissionForm's
@@ -173,10 +175,12 @@ function PhaseRow({
           entries={phase.entries}
           pin={modelPinFor(phaseKey, props)}
           onChange={onChange}
+          selected={selected}
         />
       ) : selected ? (
-        <span className="font-medium">
-          {selected.provider_name} {selected.model}
+        <span className="flex items-center gap-1.5 font-medium">
+          <ProviderLogo preset={matchPreset(selected)} className="size-4" />
+          {selected.model}
         </span>
       ) : phase.entries.length > 0 ? (
         <span className="text-muted-foreground" title={phase.entries[0]?.skip_reason || undefined}>
@@ -193,20 +197,23 @@ function PhaseRow({
 }
 
 // ModelPinSelect is the resolved-model cell for a pinnable phase: a
-// select over that phase's entries, "Auto (first usable)" plus every
-// entry — unusable ones stay listed and disabled with their skip_reason
-// as a tooltip, same pattern PhaseRow already used for display-only
-// unusable counts.
+// select over that phase's entries, "Auto" plus every entry — unusable
+// ones stay listed and disabled with their skip_reason as a tooltip,
+// same pattern PhaseRow already used for display-only unusable counts.
+// The Auto item names the entry it actually resolves to when one is
+// selected and usable, so "Auto" isn't a mystery next to a picked model.
 function ModelPinSelect({
   label,
   entries,
   pin,
   onChange,
+  selected,
 }: {
   label: string
   entries: ExecutionPlanEntry[]
   pin: string
   onChange: (v: string) => void
+  selected: ExecutionPlanEntry | undefined
 }) {
   return (
     <Select
@@ -217,12 +224,23 @@ function ModelPinSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value={MODEL_AUTO}>Auto (first usable)</SelectItem>
+        <SelectItem value={MODEL_AUTO}>
+          {selected && selected.usable ? (
+            <>
+              Auto
+              <ProviderLogo preset={matchPreset(selected)} className="size-4" />
+              {selected.model}
+            </>
+          ) : (
+            'Auto (first usable)'
+          )}
+        </SelectItem>
         {entries.map((entry) => {
           const value = pinValue(entry)
           return (
             <SelectItem key={value} value={value} disabled={!entry.usable} title={entry.skip_reason || undefined}>
-              {entry.provider_name} {entry.model}
+              <ProviderLogo preset={matchPreset(entry)} className="size-4" />
+              {entry.model}
               {!entry.usable && entry.skip_reason ? ` - ${entry.skip_reason}` : ''}
             </SelectItem>
           )

@@ -169,7 +169,7 @@ type patchScheduleRequest struct {
 	Enabled         *bool                     `json:"enabled"`
 	// ExpiresAt: nil (omitted OR explicit null — encoding/json can't
 	// tell those apart through a single pointer) means "leave
-	// unchanged," same convention as agents.Patch.BudgetUSD. Clearing an
+	// unchanged," same convention as agents.Patch.ReviewRoute. Clearing an
 	// expiry entirely is not reachable through this endpoint in v1 —
 	// delete and recreate the schedule instead.
 	ExpiresAt *time.Time `json:"expires_at"`

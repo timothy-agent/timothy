@@ -1308,6 +1308,9 @@ const fivePhases: ExecutionPlanPhase[] = [
     entries: [
       {
         provider_name: 'GLM (Z.ai)',
+        driver: 'openaicompat',
+        kind: 'chat',
+        base_url: 'https://api.z.ai/api/paas/v4',
         model: 'glm-5.3',
         usable: true,
         skip_reason: '',
@@ -1325,6 +1328,9 @@ const fivePhases: ExecutionPlanPhase[] = [
     entries: [
       {
         provider_name: 'Anthropic',
+        driver: 'anthropic',
+        kind: 'chat',
+        base_url: '',
         model: 'sonnet-5',
         usable: true,
         skip_reason: '',
@@ -1345,15 +1351,15 @@ describe('MissionForm — execution plan', () => {
 
     expect(await screen.findByText('This mission will run')).toBeInTheDocument()
     expect(screen.getByText('Claude Code')).toBeInTheDocument()
-    // No pin set on either phase: the select shows "Auto (first usable)"
-    // regardless of which entry the server marked selected.
-    expect(screen.getByLabelText('Explore model')).toHaveTextContent('Auto (first usable)')
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Auto (first usable)')
+    // No pin set on either phase: the select shows "Auto" naming the
+    // entry the server marked selected.
+    expect(screen.getByLabelText('Explore model')).toHaveTextContent('Autoglm-5.3')
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Autosonnet-5')
     fireEvent.click(screen.getByLabelText('Explore model'))
-    expect(await screen.findByRole('option', { name: 'GLM (Z.ai) glm-5.3' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'glm-5.3' })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Explore model'))
     fireEvent.click(screen.getByLabelText('Execute model'))
-    expect(await screen.findByRole('option', { name: 'Anthropic sonnet-5' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'sonnet-5' })).toBeInTheDocument()
     expect(screen.getByText('$0.60/$2.20 per Mtok')).toBeInTheDocument()
     expect(screen.getByText('Naming and memory extraction use the summarize route.')).toBeInTheDocument()
   })
@@ -1378,6 +1384,9 @@ describe('MissionForm — execution plan', () => {
             entries: [
               {
                 provider_name: 'OpenAI',
+                driver: 'openaicompat',
+                kind: 'chat',
+                base_url: 'https://api.openai.com/v1',
                 model: 'gpt-5-mini',
                 usable: false,
                 skip_reason: 'cooling down',
@@ -1394,7 +1403,7 @@ describe('MissionForm — execution plan', () => {
 
     expect(await screen.findByLabelText('Explore model')).toHaveTextContent('Auto (first usable)')
     fireEvent.click(screen.getByLabelText('Explore model'))
-    const option = await screen.findByRole('option', { name: /OpenAI gpt-5-mini - cooling down/ })
+    const option = await screen.findByRole('option', { name: /gpt-5-mini - cooling down/ })
     expect(option).toHaveAttribute('aria-disabled', 'true')
   })
 
@@ -1422,8 +1431,8 @@ describe('MissionForm — execution plan', () => {
     await screen.findByLabelText('Execute model')
 
     fireEvent.click(screen.getByLabelText('Execute model'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Anthropic sonnet-5' }))
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Anthropic sonnet-5')
+    fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('sonnet-5')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
@@ -1455,12 +1464,12 @@ describe('MissionForm — execution plan', () => {
     await screen.findByLabelText('Execute model')
 
     fireEvent.click(screen.getByLabelText('Execute model'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Anthropic sonnet-5' }))
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Anthropic sonnet-5')
+    fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('sonnet-5')
 
     fireEvent.click(screen.getByLabelText('Execute model'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Auto (first usable)' }))
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Auto (first usable)')
+    fireEvent.click(await screen.findByRole('option', { name: 'Autosonnet-5' }))
+    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Autosonnet-5')
   })
 
   it('shows live default labels for plan, review, and escalation route selects', async () => {

@@ -213,10 +213,16 @@ export const providerPresets: ProviderPreset[] = [
   },
 ]
 
+// MatchPresetSource is the subset of a provider row matchPreset reads -
+// widened so it also accepts an ExecutionPlanEntry, which carries the
+// same driver/kind/base_url fields trimmed from the gateway resolve
+// response.
+export type MatchPresetSource = Pick<AdminProvider, 'kind' | 'driver' | 'base_url'>
+
 // matchPreset finds the preset a configured provider was (probably)
 // created from, for card branding: exact drivers first, then base_url
 // host, then the custom fallback.
-export function matchPreset(p: AdminProvider): ProviderPreset {
+export function matchPreset(p: MatchPresetSource): ProviderPreset {
   const custom = providerPresets.find((x) => x.id === 'custom')!
   // kind='cli' rows (D-051) are subscription auth, not a separate
   // preset per driver; branding folds into the matching CLI card

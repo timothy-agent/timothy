@@ -165,35 +165,33 @@ func TestAgentCRUDAndResolve(t *testing.T) {
 
 // TestAgentMissionColumns covers the columns missions (internal/brain/
 // missions) rely on: a chat-only agent leaves them at their zero
-// values, a mission-capable agent round-trips all three through
+// values, a mission-capable agent round-trips all of them through
 // Create, Resolve, and Patch.
 func TestAgentMissionColumns(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
 	name := marker + "mission-capable"
-	budget := 5.5
 	id, err := s.Create(ctx, Agent{
 		Name: name, Route: "default", Enabled: true,
-		ReviewRoute: "research", BudgetUSD: &budget,
+		ReviewRoute:       "research",
 		ApprovalAllowlist: []string{"shell_exec"}, Harness: "claude-cli",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	a, ok := s.Resolve(ctx, name)
-	if !ok || a.ReviewRoute != "research" || a.BudgetUSD == nil || *a.BudgetUSD != budget ||
+	if !ok || a.ReviewRoute != "research" ||
 		len(a.ApprovalAllowlist) != 1 || a.ApprovalAllowlist[0] != "shell_exec" || a.Harness != "claude-cli" {
 		t.Fatalf("Resolve = %+v ok=%v, want mission columns round-tripped", a, ok)
 	}
 
-	newBudget := 9.0
 	reviewRoute := "default"
 	newHarness := "codex-cli"
-	if err := s.Patch(ctx, id, Patch{ReviewRoute: &reviewRoute, BudgetUSD: &newBudget, Harness: &newHarness}); err != nil {
+	if err := s.Patch(ctx, id, Patch{ReviewRoute: &reviewRoute, Harness: &newHarness}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
-	if a, _ := s.Resolve(ctx, name); a.ReviewRoute != "default" || a.BudgetUSD == nil || *a.BudgetUSD != newBudget || a.Harness != "codex-cli" {
+	if a, _ := s.Resolve(ctx, name); a.ReviewRoute != "default" || a.Harness != "codex-cli" {
 		t.Fatalf("patched mission columns = %+v (cache must invalidate)", a)
 	}
 
@@ -204,7 +202,7 @@ func TestAgentMissionColumns(t *testing.T) {
 	if _, err := s.Create(ctx, Agent{Name: chatOnly, Enabled: true}); err != nil {
 		t.Fatalf("Create chat-only: %v", err)
 	}
-	if a, _ := s.Resolve(ctx, chatOnly); a.ReviewRoute != "" || a.BudgetUSD != nil || len(a.ApprovalAllowlist) != 0 || a.Harness != "" {
+	if a, _ := s.Resolve(ctx, chatOnly); a.ReviewRoute != "" || len(a.ApprovalAllowlist) != 0 || a.Harness != "" {
 		t.Fatalf("chat-only agent mission columns = %+v, want all zero", a)
 	}
 

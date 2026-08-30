@@ -585,7 +585,6 @@ export interface AdminAgent {
   // since most call sites (chat agent picker etc.) never populate
   // them.
   review_route?: string
-  budget_usd?: number
   approval_allowlist?: string[]
   // Harness this agent's coding missions delegate to when the mission
   // itself leaves harness empty (mission.harness -> agent.harness ->
@@ -1044,6 +1043,9 @@ export interface ExecutionPlanPrices {
 // entry only; nothing is selected if none are usable.
 export interface ExecutionPlanEntry {
   provider_name: string
+  driver: string
+  kind: string
+  base_url: string
   model: string
   usable: boolean
   skip_reason: string

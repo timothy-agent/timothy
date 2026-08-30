@@ -126,7 +126,6 @@ func TestDueDecisionNonUTCLocation(t *testing.T) {
 
 func TestResolveTemplateDefaults(t *testing.T) {
 	t.Parallel()
-	budget := 5.0
 
 	cases := []struct {
 		name          string
@@ -137,7 +136,6 @@ func TestResolveTemplateDefaults(t *testing.T) {
 		wantRoute     string
 		wantReview    string
 		wantPlanRoute string
-		wantBudget    *float64
 		wantOverlay   string
 		wantHarness   string
 		wantKnowledge []string
@@ -200,11 +198,10 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			name:     "empty template fields fill from resolved agent",
 			template: MissionTemplate{Goal: "g", AgentID: "briefing"},
 			resolve: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
-				return AgentDefaults{Route: "fast", ReviewRoute: "careful", BudgetAmount: &budget, PromptOverlay: "overlay text"}, true
+				return AgentDefaults{Route: "fast", ReviewRoute: "careful", PromptOverlay: "overlay text"}, true
 			},
 			wantRoute:   "fast",
 			wantReview:  "careful",
-			wantBudget:  &budget,
 			wantOverlay: "overlay text",
 		},
 		{
@@ -306,11 +303,6 @@ func TestResolveTemplateDefaults(t *testing.T) {
 			}
 			if got.PlanRoute != tc.wantPlanRoute {
 				t.Errorf("PlanRoute = %q, want %q", got.PlanRoute, tc.wantPlanRoute)
-			}
-			if (got.BudgetAmount == nil) != (tc.wantBudget == nil) {
-				t.Errorf("BudgetAmount = %v, want %v", got.BudgetAmount, tc.wantBudget)
-			} else if got.BudgetAmount != nil && *got.BudgetAmount != *tc.wantBudget {
-				t.Errorf("BudgetAmount = %v, want %v", *got.BudgetAmount, *tc.wantBudget)
 			}
 			if overlay != tc.wantOverlay {
 				t.Errorf("overlay = %q, want %q", overlay, tc.wantOverlay)

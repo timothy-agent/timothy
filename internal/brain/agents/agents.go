@@ -27,10 +27,10 @@ import (
 // output and, when Skills is non-empty, load_skill stay available
 // regardless); empty Route means the default route.
 //
-// ReviewRoute and BudgetUSD are meaningless to a chat-only agent and
-// stay at their zero values for one; a mission-capable agent
-// (internal/brain/missions) sets both — missions reference this table
-// directly rather than a parallel agent_profiles table. ApprovalAllowlist
+// ReviewRoute is meaningless to a chat-only agent and stays at its
+// zero value for one; a mission-capable agent (internal/brain/missions)
+// sets it — missions reference this table directly rather than a
+// parallel agent_profiles table. ApprovalAllowlist
 // applies to both: missions grant it at provisioning time
 // (missions/driver.go), chat seeds the same session_grants rows on a
 // session's first turn under the agent (chat.Service.SetApprovalGrants).
@@ -46,7 +46,6 @@ type Agent struct {
 	IsDefault         bool     `json:"is_default"`
 	Enabled           bool     `json:"enabled"`
 	ReviewRoute       string   `json:"review_route"`
-	BudgetUSD         *float64 `json:"budget_usd,omitempty"`
 	ApprovalAllowlist []string `json:"approval_allowlist"`
 	// Harness is the coding executor this agent's missions delegate
 	// to when the mission itself leaves harness empty (mission.harness
@@ -102,7 +101,7 @@ func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
 }
 
-const agentColumns = `id, name, description, prompt_overlay, route, skills, tools, memory, is_default, enabled, review_route, budget_usd, approval_allowlist, knowledge, harness`
+const agentColumns = `id, name, description, prompt_overlay, route, skills, tools, memory, is_default, enabled, review_route, approval_allowlist, knowledge, harness`
 
 func scanAgent(row pgx.Row) (Agent, error) {
 	var (
@@ -111,7 +110,7 @@ func scanAgent(row pgx.Row) (Agent, error) {
 	)
 	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.PromptOverlay, &a.Route,
 		&skills, &tools, &a.Memory, &a.IsDefault, &a.Enabled,
-		&a.ReviewRoute, &a.BudgetUSD, &appr, &knowledge, &a.Harness); err != nil {
+		&a.ReviewRoute, &appr, &knowledge, &a.Harness); err != nil {
 		return Agent{}, err
 	}
 	_ = json.Unmarshal(skills, &a.Skills)
@@ -266,10 +265,10 @@ func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO agents
 			(name, description, prompt_overlay, route, skills, tools, memory, enabled,
-			 review_route, budget_usd, approval_allowlist, knowledge, harness)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+			 review_route, approval_allowlist, knowledge, harness)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
 		a.Name, a.Description, a.PromptOverlay, a.Route, skills, tools, a.Memory, a.Enabled,
-		a.ReviewRoute, a.BudgetUSD, appr, knowledge, a.Harness).Scan(&id)
+		a.ReviewRoute, appr, knowledge, a.Harness).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("agents create: %w", err)
 	}
@@ -289,7 +288,6 @@ type Patch struct {
 	Memory            *bool     `json:"memory"`
 	Enabled           *bool     `json:"enabled"`
 	ReviewRoute       *string   `json:"review_route"`
-	BudgetUSD         *float64  `json:"budget_usd"`
 	ApprovalAllowlist *[]string `json:"approval_allowlist"`
 	Knowledge         *[]string `json:"knowledge"`
 	Harness           *string   `json:"harness"`
@@ -344,9 +342,6 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	if p.ReviewRoute != nil {
 		after.ReviewRoute = *p.ReviewRoute
 	}
-	if p.BudgetUSD != nil {
-		after.BudgetUSD = p.BudgetUSD
-	}
 	if p.ApprovalAllowlist != nil {
 		after.ApprovalAllowlist = *p.ApprovalAllowlist
 	}
@@ -358,12 +353,12 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	}
 	if _, err := tx.Exec(ctx, `UPDATE agents SET description = $2, prompt_overlay = $3,
 			route = $4, skills = $5, tools = $6, memory = $7, enabled = $8,
-			review_route = $9, budget_usd = $10, approval_allowlist = $11, knowledge = $12,
-			harness = $13, updated_at = now()
+			review_route = $9, approval_allowlist = $10, knowledge = $11,
+			harness = $12, updated_at = now()
 		WHERE id = $1`,
 		id, after.Description, after.PromptOverlay, after.Route,
 		jsonArr(after.Skills), jsonArr(after.Tools), after.Memory, after.Enabled,
-		after.ReviewRoute, after.BudgetUSD, jsonArr(after.ApprovalAllowlist), jsonArr(after.Knowledge),
+		after.ReviewRoute, jsonArr(after.ApprovalAllowlist), jsonArr(after.Knowledge),
 		after.Harness); err != nil {
 		return fmt.Errorf("agents patch: %w", err)
 	}

@@ -70,6 +70,24 @@ function unbilledTooltipLine(usage: MissionUsage, currency: string): string | nu
   return `+${money(amount, currency)} unbilled`
 }
 
+// budgetPercentSpent figures the "% of budget" badge value in the
+// mission's own budget currency — prefers the currency-converted spend
+// figure (matching how the cost pills already display), falling back
+// to the raw same-currency amount. Returns null when spend in the
+// budget currency can't be stated at all (no converted figure and the
+// raw bucket is zero while spend exists in other currencies) — showing
+// 0% there would be dishonest, not just imprecise.
+function budgetPercentSpent(usage: MissionUsage, budgetCurrency: string, budgetAmount: number): number | null {
+  const converted = usage.converted_cost_by_currency?.[budgetCurrency]
+  const raw = usage.cost_by_currency[budgetCurrency]
+  const amount = converted ?? raw
+  const hasOtherSpend = Object.entries(usage.cost_by_currency).some(
+    ([currency, cost]) => currency !== budgetCurrency && cost > 0,
+  )
+  if ((amount == null || amount === 0) && hasOtherSpend) return null
+  return Math.round(((amount ?? 0) / budgetAmount) * 100)
+}
+
 function formatDate(v?: string): string {
   if (!v) return 'N/A'
   return new Date(v).toLocaleString()
@@ -766,16 +784,12 @@ export function MissionDetail() {
                   {usage.unpriced_requests} unpriced call{usage.unpriced_requests === 1 ? '' : 's'}
                 </Badge>
               )}
-              {mission.budget_amount != null && mission.budget_amount > 0 && (
-                <Badge variant="secondary">
-                  {Math.round(
-                    ((usage.cost_by_currency[mission.budget_currency ?? 'USD'] ?? 0) /
-                      mission.budget_amount) *
-                      100,
-                  )}
-                  % of budget
-                </Badge>
-              )}
+              {mission.budget_amount != null &&
+                mission.budget_amount > 0 &&
+                (() => {
+                  const pct = budgetPercentSpent(usage, mission.budget_currency ?? 'USD', mission.budget_amount)
+                  return pct == null ? null : <Badge variant="secondary">{pct}% of budget</Badge>
+                })()}
             </>
           )}
         </div>
