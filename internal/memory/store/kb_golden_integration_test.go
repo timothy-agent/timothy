@@ -673,6 +673,115 @@ func TestKBGoldenFusionWeightFavorsVectorLeg(t *testing.T) {
 	}
 }
 
+// D-084 (issue #425): keyword-leg matched-lexeme floor.
+const kbKeywordGateCollection = "itest-kbkeywordgate"
+
+// seedKBKeywordGate builds one document sharing exactly one lexeme
+// ("common") with the probe query, off-axis so the vector leg never
+// returns it, and a second document sharing two lexemes ("common" and
+// "special") with a different probe query, also off-axis. A
+// single-shared-lexeme query must return nothing from the keyword leg
+// (the bug this issue fixes); a query sharing two or more lexemes with
+// a chunk must still match (the floor isn't raised so high it breaks
+// genuine partial/multi-topic matches).
+func seedKBKeywordGate(t *testing.T) *KBStore {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, _ = db.Exec(ctx, "DELETE FROM kb_collections WHERE name = $1", kbKeywordGateCollection)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM kb_collections WHERE name = $1", kbKeywordGateCollection)
+	})
+
+	st := NewKBStore(pool)
+	var collID string
+	if err := db.QueryRow(ctx,
+		"INSERT INTO kb_collections (name) VALUES ($1) RETURNING id", kbKeywordGateCollection).Scan(&collID); err != nil {
+		t.Fatalf("insert collection: %v", err)
+	}
+
+	insert := func(title, content string, emb Vector) {
+		var docID string
+		if err := db.QueryRow(ctx, `INSERT INTO kb_documents (collection_id, title, status)
+			VALUES ($1, $2, 'ready') RETURNING id`, collID, title).Scan(&docID); err != nil {
+			t.Fatalf("insert document %s: %v", title, err)
+		}
+		if err := st.ReplaceChunks(ctx, docID, []KBChunk{
+			{Seq: 0, Content: content, Embedding: emb, EmbeddingModel: "itest"},
+		}); err != nil {
+			t.Fatalf("ReplaceChunks %s: %v", title, err)
+		}
+	}
+
+	// Shares only "common" with the single-lexeme probe query; off axis
+	// so it can't clear the vector leg either.
+	insert("single-overlap", "this document only shares one common word with the query", kbBasis(820))
+	// Shares "common" and "special" with the multi-lexeme probe query;
+	// off axis for the same reason.
+	insert("double-overlap", "this document shares a common and special word with the query", kbBasis(821))
+
+	return st
+}
+
+// TestKBGoldenKeywordGateBlocksSingleLexemeOverlap pins D-084: a query
+// sharing exactly one lexeme with a chunk must not surface it via the
+// keyword leg (the bug the issue reports: any one shared word produced
+// a hit regardless of topic).
+func TestKBGoldenKeywordGateBlocksSingleLexemeOverlap(t *testing.T) {
+	st := seedKBKeywordGate(t)
+	hits, err := st.KBSearch(t.Context(), "common", nil, []string{kbKeywordGateCollection}, nil, KBSearchKeyword, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("single-lexeme query returned %d keyword-leg hits, want 0: %+v", len(hits), hits)
+	}
+}
+
+// TestKBGoldenKeywordGateAllowsTwoLexemeOverlap pins D-084's other
+// half: the floor doesn't block a genuine match sharing 2+ lexemes,
+// only a single shared lexeme.
+func TestKBGoldenKeywordGateAllowsTwoLexemeOverlap(t *testing.T) {
+	st := seedKBKeywordGate(t)
+	hits, err := st.KBSearch(t.Context(), "common special", nil, []string{kbKeywordGateCollection}, nil, KBSearchKeyword, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	found := false
+	for _, h := range hits {
+		if h.DocumentTitle == "double-overlap" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("two-lexeme query missed the double-overlap document: %+v", hits)
+	}
+}
+
 func TestKBGoldenSemanticFloor(t *testing.T) {
 	st := seedKBGolden(t)
 	// On-axis query hits; orthogonal query (similarity 0) must not.

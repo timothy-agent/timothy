@@ -28,3 +28,13 @@ negative: true
 
 query: fermenting kimchi at home with napa cabbage
 negative: true
+
+# Mild lexeme overlap negatives (issue #425): share exactly one common
+# word with the corpus ("team" with the mesh docs, "cache" with the
+# CI/CD doc) but no topical overlap. Before the keyword-leg gating fix
+# these produced keyword-leg hits on the shared word alone.
+query: organizing a office team scavenger hunt this weekend
+negative: true
+
+query: clearing out my kitchen cache of ground cinnamon
+negative: true

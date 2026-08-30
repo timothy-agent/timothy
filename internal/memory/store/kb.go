@@ -146,9 +146,28 @@ const ftsLegWeightLit = "0.1"
 // search always returns SOMETHING: without a floor an off-topic query
 // still fills k slots with whatever is least-far away, and the model
 // may cite it. Returning nothing beats confidently-irrelevant (same
-// principle as memories retrieval). The keyword leg needs no floor: a
-// tsquery either matches lexemes or returns nothing.
+// principle as memories retrieval).
 const minSimilarityLit = "0.25"
+
+// minMatchedLexemesLit is the keyword leg's relevance floor (D-084,
+// issue #425): a chunk must share at least this many distinct query
+// lexemes, not just one. OR-semantics tsquery (kbQueryCTE) matches a
+// chunk on any single shared lexeme, so a single common word (e.g.
+// "way") produced a hit regardless of topic; a query that only
+// produces one lexeme can never clear this floor at all, which is the
+// exact failure mode the issue reports. A multi-topic question still
+// matches a chunk answering only part of it (kbQueryCTE's own
+// rationale) as long as that part shares 2+ words with the chunk,
+// which a real topical passage does. Document-frequency weighting
+// (excluding corpus-common words like "every"/"best" from the count)
+// was tried and reverted: it depends on corpus size in a way that
+// breaks small/topically-narrow collections, where every word in a
+// short document is "common" relative to that document's own small
+// chunk count. A plain count floor doesn't fully rule out two generic
+// words coincidentally landing in one bystander chunk of a large,
+// broad corpus, but it does what the issue's AC asks and what
+// make kb-eval measures.
+const minMatchedLexemesLit = "2"
 
 // boostFactorLit multiplies a chunk's score when its collection is in
 // boostCollections (D-078: an agent's configured collections are a
@@ -282,19 +301,29 @@ const (
 	// both the optional collection filter and the boost multiplier.
 	kbProjection = `SELECT c.id, d.id, d.title, col.name, c.breadcrumb, c.content, d.source_ref, d.provenance`
 
-	// kbQueryCTEq1/q2 normalize the query's lexemes and OR them
-	// together: same rationale as memories retrieval's textSQL: a
+	// kbQueryCTEq1/q2 normalize the query's lexemes, OR them together
+	// for the tsquery (same rationale as memories retrieval's textSQL: a
 	// multi-topic question must match each chunk that answers PART of
 	// it, which websearch/plainto AND-semantics would return nothing
-	// for. Lexemes are quoted (with '' doubling) so none can break the
-	// tsquery syntax. Two variants because the query text is $1 in
-	// keyword mode and $2 in hybrid.
+	// for), and also keep the distinct lexeme array itself for the
+	// matched-lexeme gate below (D-084). Lexemes are quoted (with ''
+	// doubling) so none can break the tsquery syntax. Two variants
+	// because the query text is $1 in keyword mode and $2 in hybrid.
 	kbQueryCTEq1 = `SELECT to_tsquery('english',
-			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
+			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query,
+			array_agg(DISTINCT lexeme) AS lexemes
 		FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme`
 	kbQueryCTEq2 = `SELECT to_tsquery('english',
-			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
+			string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query,
+			array_agg(DISTINCT lexeme) AS lexemes
 		FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS lexeme`
+
+	// keywordMatchGate (D-084, issue #425): counts how many distinct
+	// query lexemes actually appear in the chunk's tsvector, via array
+	// intersection, and requires at least minMatchedLexemesLit. Sits
+	// alongside the "c.tsv @@ q.query" OR-match, tightening it rather
+	// than replacing it.
+	keywordMatchGate = `(SELECT count(*) FROM unnest(q.lexemes) ql WHERE tsvector_to_array(c.tsv) @> ARRAY[ql]) >= ` + minMatchedLexemesLit
 
 	// collectionFilter matches every row when names is empty/null
 	// (whole-KB search), or scopes to it when non-empty (an explicit
@@ -329,7 +358,7 @@ const (
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id, q
-		WHERE ` + collectionFilterQ2 + ` AND c.tsv @@ q.query
+		WHERE ` + collectionFilterQ2 + ` AND c.tsv @@ q.query AND ` + keywordMatchGate + `
 		ORDER BY score DESC
 		LIMIT $3`
 
@@ -358,7 +387,7 @@ const (
 			FROM kb_chunks c
 			JOIN kb_documents d ON d.id = c.document_id
 			JOIN kb_collections col ON col.id = d.collection_id, q
-			WHERE ` + collectionFilterQ3 + ` AND c.tsv @@ q.query
+			WHERE ` + collectionFilterQ3 + ` AND c.tsv @@ q.query AND ` + keywordMatchGate + `
 			ORDER BY rank
 			LIMIT ` + legLimitLit + `
 		), fused AS (
