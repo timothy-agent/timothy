@@ -48,11 +48,40 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
-	pending_permission, pending_permission_tool, pending_permission_args,
-	pending_permission_danger, pending_permission_rationale, auto_approve_safe, last_evidence,
+	pending_permission, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id`
+
+// pendingPermissionRow is pending_permission's jsonb shape in the
+// missions table: bundles the five columns the API's flat
+// PendingPermission/PendingPermissionTool/... fields used to be, so
+// the wire shape stays unchanged while the DB representation is one
+// column instead of five.
+type pendingPermissionRow struct {
+	ID        string `json:"id"`
+	Tool      string `json:"tool"`
+	Args      string `json:"args"`
+	Danger    string `json:"danger"`
+	Rationale string `json:"rationale"`
+}
+
+// scanPendingPermission unmarshals the pending_permission jsonb column
+// (nil when there's no pending request) into Mission's flat fields.
+func scanPendingPermission(m *Mission, raw []byte) {
+	if raw == nil {
+		return
+	}
+	var p pendingPermissionRow
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return
+	}
+	m.PendingPermission = p.ID
+	m.PendingPermissionTool = p.Tool
+	m.PendingPermissionArgs = p.Args
+	m.PendingPermissionDanger = p.Danger
+	m.PendingPermissionRationale = p.Rationale
+}
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
 // column: the mission's latest mission.failed event's payload.reason
@@ -64,7 +93,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		m                                                             Mission
 		agentID, scheduleID, sessionID, parentMission                 *string
 		phase, status                                                 string
-		pendingPermission                                             *string
+		pendingPermissionRaw                                          []byte
 		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
 		failureReason                                                 *string
 		workflowRunID                                                 *string
@@ -74,8 +103,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
-		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
-		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
+		&pendingPermissionRaw, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
@@ -86,6 +114,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
+	scanPendingPermission(&m, pendingPermissionRaw)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -97,9 +126,6 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	}
 	if parentMission != nil {
 		m.ParentMissionID = *parentMission
-	}
-	if pendingPermission != nil {
-		m.PendingPermission = *pendingPermission
 	}
 	if workflowRunID != nil {
 		m.WorkflowRunID = *workflowRunID
@@ -151,7 +177,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		m                                                             Mission
 		agentID, scheduleID, sessionID, parentMission                 *string
 		phase, status                                                 string
-		pendingPermission                                             *string
+		pendingPermissionRaw                                          []byte
 		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
 		workflowRunID                                                 *string
 		promoteKBCollectionID                                         *string
@@ -160,8 +186,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
-		&pendingPermission, &m.PendingPermissionTool, &m.PendingPermissionArgs,
-		&m.PendingPermissionDanger, &m.PendingPermissionRationale, &m.AutoApproveSafe, &m.LastEvidence,
+		&pendingPermissionRaw, &m.AutoApproveSafe, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
@@ -171,6 +196,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
+	scanPendingPermission(&m, pendingPermissionRaw)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -182,9 +208,6 @@ func scanMission(row pgx.Row) (Mission, error) {
 	}
 	if parentMission != nil {
 		m.ParentMissionID = *parentMission
-	}
-	if pendingPermission != nil {
-		m.PendingPermission = *pendingPermission
 	}
 	if workflowRunID != nil {
 		m.WorkflowRunID = *workflowRunID
@@ -498,7 +521,7 @@ func (s *Store) Progress(ctx context.Context, id string) ([]ProgressNote, error)
 // mission.permission_requested event in the same transaction — without
 // this, the Timeline shows nothing while a mission is parked, and the
 // tool/command detail is lost once ClearPendingPermission runs (the
-// pending_permission_* columns are live-only state, not history). Args
+// pending_permission column is live-only state, not history). Args
 // are truncated the same way progress notes are — a shell command can
 // be arbitrarily large, and the log only needs enough to identify what
 // was approved, not a byte-for-byte replay.
@@ -512,10 +535,13 @@ func (s *Store) SetPendingPermission(ctx context.Context, id, permissionID, tool
 		return fmt.Errorf("missions set pending permission begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	data, err := json.Marshal(pendingPermissionRow{ID: permissionID, Tool: tool, Args: args, Danger: danger, Rationale: rationale})
+	if err != nil {
+		return fmt.Errorf("missions set pending permission: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
-			pending_permission = $2, pending_permission_tool = $3, pending_permission_args = $4,
-			pending_permission_danger = $5, pending_permission_rationale = $6, updated_at = now()
-		WHERE id = $1`, id, permissionID, tool, args, danger, rationale); err != nil {
+			pending_permission = $2, updated_at = now()
+		WHERE id = $1`, id, data); err != nil {
 		return fmt.Errorf("missions set pending permission: %w", err)
 	}
 	payload := map[string]any{"tool": tool, "args": truncate(args, 2000), "danger": danger, "rationale": rationale}
@@ -534,8 +560,7 @@ func (s *Store) ClearPendingPermission(ctx context.Context, id string) error {
 		return fmt.Errorf("missions clear pending permission: %w", err)
 	}
 	if _, err := db.Exec(ctx, `UPDATE missions SET
-			pending_permission = '', pending_permission_tool = '', pending_permission_args = '',
-			pending_permission_danger = '', pending_permission_rationale = '', updated_at = now()
+			pending_permission = NULL, updated_at = now()
 		WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("missions clear pending permission: %w", err)
 	}
@@ -776,20 +801,16 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	// mission has moved on.
 	//
 	// A transition landing on a terminal phase (cancel, or the state
-	// machine's own done/failed) also clears any pending_permission*
+	// machine's own done/failed) also clears any pending_permission
 	// detail — a dead mission can never resolve a park (the API's
 	// answer-permission handler checks phase first and would already
-	// reject it), so leaving the columns populated only stales the
+	// reject it), so leaving the column populated only stales the
 	// Timeline's "Allow" banner for a mission that's no longer running.
 	clearPending := t.Next.Phase.Terminal()
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
 			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, replan_used = $11, updated_at = now(),
-			pending_permission = CASE WHEN $10 THEN '' ELSE pending_permission END,
-			pending_permission_tool = CASE WHEN $10 THEN '' ELSE pending_permission_tool END,
-			pending_permission_args = CASE WHEN $10 THEN '' ELSE pending_permission_args END,
-			pending_permission_danger = CASE WHEN $10 THEN '' ELSE pending_permission_danger END,
-			pending_permission_rationale = CASE WHEN $10 THEN '' ELSE pending_permission_rationale END
+			pending_permission = CASE WHEN $10 THEN NULL ELSE pending_permission END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,

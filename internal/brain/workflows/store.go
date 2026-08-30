@@ -42,9 +42,9 @@ type Run struct {
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
-// RunEvent is one row from workflow_run_events.
+// RunEvent is one row from workflow_run_events. PRIMARY KEY is
+// (run_id, seq), no surrogate id column.
 type RunEvent struct {
-	ID        int64           `json:"id"`
 	RunID     string          `json:"run_id"`
 	Seq       int64           `json:"seq"`
 	Kind      string          `json:"kind"`
@@ -348,7 +348,7 @@ func (s *Store) RunEvents(ctx context.Context, runID string) ([]RunEvent, error)
 	if err != nil {
 		return nil, fmt.Errorf("workflows run events: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT id, run_id, seq, kind, payload, created_at
+	rows, err := db.Query(ctx, `SELECT run_id, seq, kind, payload, created_at
 		FROM workflow_run_events WHERE run_id = $1 ORDER BY seq`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("workflows run events: %w", err)
@@ -357,7 +357,7 @@ func (s *Store) RunEvents(ctx context.Context, runID string) ([]RunEvent, error)
 	out := []RunEvent{}
 	for rows.Next() {
 		var e RunEvent
-		if err := rows.Scan(&e.ID, &e.RunID, &e.Seq, &e.Kind, &e.Payload, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.RunID, &e.Seq, &e.Kind, &e.Payload, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("workflows run events: %w", err)
 		}
 		out = append(out, e)

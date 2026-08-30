@@ -330,15 +330,17 @@ func (s *Store) SetTitleIfEmpty(ctx context.Context, id, title string) error {
 	return err
 }
 
-// SetLastRoute remembers the session's most recent route and agent so
-// the UI composer can restore it.
+// SetLastRoute remembers the session's most recent route so the UI
+// composer can restore it. agent is unused (per-turn agent attribution
+// lives in message events, not on the session row) but stays in the
+// signature to match the Directory interface chat.go calls through.
 func (s *Store) SetLastRoute(ctx context.Context, id, route, agent string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("session: set route: %w", err)
 	}
 	_, err = db.Exec(ctx,
-		"UPDATE sessions SET last_route = $2, agent = $3 WHERE id = $1", id, route, agent)
+		"UPDATE sessions SET last_route = $2 WHERE id = $1", id, route)
 	return err
 }
 

@@ -41,8 +41,8 @@ func (o *Outputs) Put(ctx context.Context, sessionID, tool, content string) (str
 	}
 	var id string
 	if err := db.QueryRow(ctx,
-		"INSERT INTO tool_outputs (session_id, tool, content, bytes) VALUES ($1, $2, $3, $4) RETURNING id",
-		sessionID, tool, content, len(content),
+		"INSERT INTO tool_outputs (session_id, tool, content) VALUES ($1, $2, $3) RETURNING id",
+		sessionID, tool, content,
 	).Scan(&id); err != nil {
 		return "", fmt.Errorf("tools: outputs put: %w", err)
 	}
