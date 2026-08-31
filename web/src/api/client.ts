@@ -1286,7 +1286,7 @@ export interface CreateMissionInput {
   destination_ids?: string[]
   // promote_kb_collection_id names a kb collection to promote this
   // mission's markdown artifacts into in the result phase's step
-  // (D-081, issue #370; D-082); omit (or "") promotes nothing automatically.
+  // (D-081, issue #370; D-086); omit (or "") promotes nothing automatically.
   promote_kb_collection_id?: string
   // light requests a mission that skips discover/plan/prove (D-069):
   // single worker turn, final message delivered as the result. Only

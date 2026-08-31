@@ -365,7 +365,7 @@ func TestBackfillMissionNameFillsEmptyName(t *testing.T) {
 }
 
 // TestRunResultSkipsNamingWhenAlreadyNamed covers the already-named
-// guard in runResult (D-082): naming moved there from the old
+// guard in runResult (D-086): naming moved there from the old
 // terminal-transition hook, so an already-named mission must still
 // never re-fire the generator.
 func TestRunResultSkipsNamingWhenAlreadyNamed(t *testing.T) {

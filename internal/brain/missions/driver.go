@@ -603,7 +603,7 @@ func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) error
 }
 
 // resultStepOrder documents runResult's fixed sequence (slice 1 of the
-// phase redesign, D-082): every piece the old terminal-done transition
+// phase redesign, D-086): every piece the old terminal-done transition
 // used to fire, now run as the result phase's own deterministic step,
 // zero LLM turns.
 //
@@ -673,7 +673,7 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 
 // D-073: runTerminalHooks is the single place Advance and Signal fire
 // every terminal-transition hook, replacing what used to be a verbatim
-// block duplicated in both. Since D-082 (the result phase), this only
+// block duplicated in both. Since D-086 (the result phase), this only
 // covers the hooks that fire on EVERY terminal transition (done or
 // failed): delivery/copy/promote/on_complete moved into runResult,
 // which the driver runs as an ordinary phase step before the mission

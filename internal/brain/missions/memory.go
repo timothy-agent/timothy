@@ -93,7 +93,7 @@ func (d *Driver) extractMissionMemory(ctx context.Context, m Mission, terminal P
 }
 
 // backfillMissionName regenerates a missing display name when a
-// mission reaches the result phase (D-082): the create-time naming
+// mission reaches the result phase (D-086): the create-time naming
 // call is best-effort and a failure there would otherwise be
 // permanent. Best-effort itself: never fails the step (any error is
 // logged and swallowed). Runs synchronously: runResult reloads the

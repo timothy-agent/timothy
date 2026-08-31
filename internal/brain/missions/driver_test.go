@@ -428,7 +428,7 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 
 // TestDriverOnCompleteFailureParksInResultAndNotifies proves a failed
 // auto-fire (push rejected) never un-dones the mission: it parks the
-// mission IN result (D-082, an operator's on_complete choice failing
+// mission IN result (D-086, an operator's on_complete choice failing
 // is an explicit park, not a silently-lost notification), and fires
 // the wired push-failed notifier exactly once.
 func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {

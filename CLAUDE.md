@@ -93,7 +93,7 @@ First run: `cp deploy/env.example deploy/.env` and set
   `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema:
   `migrations/0001_init.sql` (edited in place pre-release, never new
   ALTER migrations).
-- Mission phases (D-082, issue #455): discover -> plan -> generate ->
+- Mission phases (D-086, issue #455): discover -> plan -> generate ->
   prove -> result -> done|failed. `parsePhase` (statemachine.go) still
   accepts the pre-rename names (explore/execute/review) at read time,
   mapping them to discover/generate/prove, so a new binary reads old

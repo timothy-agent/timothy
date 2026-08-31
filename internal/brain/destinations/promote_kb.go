@@ -77,7 +77,7 @@ func PromoteMission(ctx context.Context, opener artifactOpener, store kbDocStore
 }
 
 // PromoteKB adapts PromoteMission to missions.PromoteKB, the driver's
-// result-phase step signature (D-082): every per-artifact error is
+// result-phase step signature (D-086): every per-artifact error is
 // logged, and the first one is also returned so the result step can
 // fold it into its overall outcome and park the mission on failure.
 func PromoteKB(opener artifactOpener, store kbDocStore, ingest kbIngester, log *slog.Logger) missions.PromoteKB {

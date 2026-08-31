@@ -209,7 +209,7 @@ func TestDeliverOncePerMissionGuard(t *testing.T) {
 	}
 }
 
-// TestDeliverRedriveRetriesOnlyFailedDestination covers D-082's
+// TestDeliverRedriveRetriesOnlyFailedDestination covers D-086's
 // result-phase retry contract: a destination that recorded
 // mission.delivery_failed (not mission.delivered) is retried on a
 // re-drive, unlike TestDeliverOncePerMissionGuard's already-delivered

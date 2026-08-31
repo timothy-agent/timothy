@@ -9,7 +9,7 @@ import (
 
 // recordingDeliver is a DestinationDeliver fake that records every call
 // it receives: called SYNCHRONOUSLY from the result phase's step
-// (D-082), so no dispatch-goroutine wait is needed. err, when set, is
+// (D-086), so no dispatch-goroutine wait is needed. err, when set, is
 // returned on every call (scripts a delivery failure without a real
 // Deliverer).
 type recordingDeliver struct {
@@ -110,7 +110,7 @@ func TestDriverSkipsDeliveryWhenNoDestinations(t *testing.T) {
 	}
 }
 
-// TestDriverBackfillsNameBeforeDestinationDelivery covers D-082's
+// TestDriverBackfillsNameBeforeDestinationDelivery covers D-086's
 // ordering guarantee: runResult backfills a missing name and reloads
 // the mission BEFORE handing it to the destinations hook, so a
 // mission that reaches result with no name still delivers with the
@@ -158,7 +158,7 @@ func TestDriverSkipsDeliveryWhenNilHook(t *testing.T) {
 	}
 }
 
-// TestDriverParksInResultOnDeliveryFailure covers D-082's core
+// TestDriverParksInResultOnDeliveryFailure covers D-086's core
 // guarantee: a delivery failure at result parks the mission IN result
 // (not failed) with a visible pause reason, instead of the old
 // behavior of logging the failure and losing it on the terminal

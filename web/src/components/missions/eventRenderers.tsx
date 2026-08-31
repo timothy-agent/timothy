@@ -158,7 +158,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     )
   },
   // mission.discover_complete is the discover phase's event kind since
-  // the D-082 rename (issue #455); mission.explore_complete is the
+  // the D-086 rename (issue #455); mission.explore_complete is the
   // pre-rename name a historical mission's events may still carry
   // forever. Both render identically.
   'mission.discover_complete': (p) => {
@@ -170,7 +170,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return `Discover complete (${String(chars ?? '?')} chars)`
   },
   // mission.result_complete is the result phase's own step outcome
-  // (D-082): a summary of what delivery/copy/promote/on_complete did.
+  // (D-086): a summary of what delivery/copy/promote/on_complete did.
   'mission.result_complete': (p) => {
     const {
       delivered,

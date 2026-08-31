@@ -695,7 +695,7 @@ export interface Mission {
   name?: string
   kind: 'coding' | 'general'
   agent_id?: string
-  // Mission phase pipeline (D-082, issue #455): discover -> plan ->
+  // Mission phase pipeline (D-086, issue #455): discover -> plan ->
   // generate -> prove -> result -> done|failed. explore/execute/review
   // are the pre-rename names, still possible on a mission whose row
   // predates the data migration in scripts/pending-alters.md.
@@ -797,12 +797,12 @@ export interface Mission {
   attachments?: { id: string; mime: string; name?: string }[]
   // destination_ids names operator-created destinations (email,
   // webhook) this mission delivers its outcome digest to in the result
-  // phase's step (D-082). Validated against the destinations table
+  // phase's step (D-086). Validated against the destinations table
   // at create time: never model-decided.
   destination_ids?: string[]
   // promote_kb_collection_id names a kb collection this mission's
   // markdown artifacts promote into in the result phase's step
-  // (D-081, issue #370; D-082). Absent/'' promotes nothing automatically;
+  // (D-081, issue #370; D-086). Absent/'' promotes nothing automatically;
   // the operator can still promote manually via POST .../promote-kb.
   promote_kb_collection_id?: string
   // light marks a mission that skips discover/plan/prove (D-069):
@@ -816,7 +816,7 @@ export interface Mission {
   final_output?: string
   // artifact_refs are this mission's declared artifact files, best-
   // effort copied into the attachment store in the result phase's step
-  // (D-082): survive workspace deletion, unlike the live-workspace
+  // (D-086): survive workspace deletion, unlike the live-workspace
   // files ArtifactsSection browses. Absent/empty until that copy runs.
   artifact_refs?: MediaRef[]
   created_at: string

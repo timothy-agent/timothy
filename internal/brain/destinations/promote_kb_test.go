@@ -199,7 +199,7 @@ func TestPromoteMissionCollectsIngestErrors(t *testing.T) {
 	}
 }
 
-// TestPromoteKBLogsAndReturnsError confirms PromoteKB (D-082) logs a
+// TestPromoteKBLogsAndReturnsError confirms PromoteKB (D-086) logs a
 // per-artifact failure and returns the first one, so the driver's
 // result phase can fold it into its overall outcome and park the
 // mission instead of silently losing it.

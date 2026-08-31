@@ -436,7 +436,7 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 // TestStepLightApproveGoesResult confirms a light mission (born in
 // PhaseGenerate, empty spec so LastUnit is always true) advances to
 // the result phase on review_approve exactly like a coding/general
-// mission's last unit: not straight to done, since D-082's result
+// mission's last unit: not straight to done, since D-086's result
 // phase now sits between the last unit's approval and done.
 func TestStepLightApproveGoesResult(t *testing.T) {
 	got := Step(

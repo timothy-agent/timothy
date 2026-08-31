@@ -738,13 +738,13 @@ CREATE TABLE IF NOT EXISTS missions (
     commit_style          text NOT NULL DEFAULT '',
     -- Destination ids to deliver this mission's outcome digest to in
     -- the result phase's step (destinations.go's Deliverer,
-    -- driver.go's runResult, D-082). Never model-decided: api/missions.go's
+    -- driver.go's runResult, D-086). Never model-decided: api/missions.go's
     -- create validates every id against the operator-owned destinations
     -- table before it lands here.
     destination_ids       uuid[] NOT NULL DEFAULT '{}',
     -- D-081 (issue #370): kb collection to promote this mission's
     -- markdown artifacts into in the result phase's step
-    -- (kb.go's promoteToKB, driver.go's runResult, D-082). ''
+    -- (kb.go's promoteToKB, driver.go's runResult, D-086). ''
     -- (default) does nothing. Explicit id, never a default "Missions"
     -- collection auto-create, same as destination_ids above; the
     -- operator can also promote manually via POST .../promote-kb after
@@ -758,7 +758,7 @@ CREATE TABLE IF NOT EXISTS missions (
     workflow_step          text NOT NULL DEFAULT '',
     -- ArtifactRefs: this mission's declared artifact files, best-effort
     -- copied into the attachment store in the result phase's step
-    -- (driver.go's copyArtifacts, D-082): a jsonb array of {id, mime, name},
+    -- (driver.go's copyArtifacts, D-086): a jsonb array of {id, mime, name},
     -- mirroring attachments' own shape. Never bytes (D-045). Lets a
     -- mission's result artifacts survive workspace deletion, unlike the
     -- live-workspace files ArtifactsSection browses.

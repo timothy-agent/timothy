@@ -9,7 +9,7 @@ import (
 
 // recordingPromoteKB is a PromoteKB fake that records every call it
 // receives: called SYNCHRONOUSLY from the result phase's step
-// (D-082), no dispatch-goroutine wait needed. err, when set, is
+// (D-086), no dispatch-goroutine wait needed. err, when set, is
 // returned on every call.
 type recordingPromoteKB struct {
 	mu    sync.Mutex
@@ -122,7 +122,7 @@ func TestDriverSkipsPromoteKBWhenNilHook(t *testing.T) {
 	}
 }
 
-// TestDriverParksInResultOnPromoteKBFailure covers D-082's core
+// TestDriverParksInResultOnPromoteKBFailure covers D-086's core
 // guarantee for kb promotion, mirroring
 // TestDriverParksInResultOnDeliveryFailure: a promotion failure parks
 // the mission IN result rather than being logged and lost.

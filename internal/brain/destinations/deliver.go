@@ -32,7 +32,7 @@ type eventRecorder interface {
 
 // Deliverer resolves a mission's destination_ids, renders the digest,
 // and calls each destination's adapter: run SYNCHRONOUSLY from the
-// driver's result phase step (D-082, see missions/driver.go). Every
+// driver's result phase step (D-086, see missions/driver.go). Every
 // failure is logged and recorded as a mission_events row; Deliver also
 // returns a non-nil error naming the failed destinations so the result
 // step can park the mission and retry only those on the next round.
@@ -246,7 +246,7 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 
 // alreadyDelivered scans a mission's events for prior mission.delivered
 // rows, keyed by destination_id: a destination already delivered is
-// never re-sent on a result-phase retry (D-082), but one that only
+// never re-sent on a result-phase retry (D-086), but one that only
 // recorded mission.delivery_failed (or was never attempted) IS
 // retried, so a park in result actually makes progress instead of
 // replaying the same permanent failure forever.
