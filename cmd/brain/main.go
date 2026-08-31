@@ -294,7 +294,7 @@ func main() {
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier,
-			flags.PermissionTimeoutSeconds, broker.Resolve, app.Log)
+			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker.Resolve, app.Log)
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
@@ -1045,6 +1045,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	}
 	nativeRunner.SetProgressReader(store)
 	nativeRunner.SetLocation(flags.Location)
+	nativeRunner.SetAskParker(store)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch: resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,

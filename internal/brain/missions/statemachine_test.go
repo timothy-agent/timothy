@@ -745,3 +745,36 @@ func TestStepPlanRediscoverEmitsEvent(t *testing.T) {
 		t.Fatalf("Events = %+v, want exactly one mission.rediscover_requested event", got.Events)
 	}
 }
+
+// TestStepAskUserParksWithoutEvent confirms InputAskUser moves Status
+// to waiting_for_input and leaves Phase untouched (D-088, issue #457):
+// no event here since Store.SetPendingInput already appended
+// mission.input_requested before this input reaches Step, same
+// division of labor as pending_permission's own park.
+func TestStepAskUserParksWithoutEvent(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking},
+		StepInput{Input: InputAskUser},
+		DefaultConfig,
+	)
+	if got.Next.Status != StatusWaitingForInput {
+		t.Fatalf("Status = %s, want waiting_for_input", got.Next.Status)
+	}
+	if got.Next.Phase != PhaseGenerate {
+		t.Fatalf("Phase = %s, want generate (unchanged)", got.Next.Phase)
+	}
+	if len(got.Events) != 0 {
+		t.Fatalf("Events = %+v, want none: the store already recorded mission.input_requested", got.Events)
+	}
+}
+
+// TestStepAskUserParksInEveryLLMPhase confirms the park applies
+// uniformly regardless of which of the four LLM phases asked.
+func TestStepAskUserParksInEveryLLMPhase(t *testing.T) {
+	for _, phase := range []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve} {
+		got := Step(StepState{Phase: phase, Status: StatusWorking}, StepInput{Input: InputAskUser}, DefaultConfig)
+		if got.Next.Status != StatusWaitingForInput || got.Next.Phase != phase {
+			t.Fatalf("phase %s: Next = %+v, want same phase with status waiting_for_input", phase, got.Next)
+		}
+	}
+}

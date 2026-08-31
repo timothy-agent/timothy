@@ -153,6 +153,13 @@ const (
 	InputPlanApprove    Input = "plan_approve"
 	InputPlanReplan     Input = "plan_replan"
 	InputPlanRediscover Input = "plan_rediscover"
+	// InputAskUser fires when a phase turn's ask_user tool call parks the
+	// mission (D-088, issue #457): the store has already recorded
+	// pending_input and incremented asks_used by the time this input
+	// reaches Step (mirrors InputWorkerBlocked's shape, both just move
+	// Status to waiting_for_input); the difference is ask_user's answer
+	// resolves through Store.AnswerPendingInput, not a plain resume.
+	InputAskUser Input = "ask_user"
 )
 
 // StepState is the state-machine-relevant slice of a Mission — Step
@@ -299,6 +306,12 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 			Next:   withStatus(s, StatusWaitingForInput),
 			Events: []EventDraft{{Kind: "mission.blocked", Payload: map[string]any{"question": in.Message}}},
 		}
+	case InputAskUser:
+		// The store already appended mission.input_requested (SetPendingInput)
+		// before this input reaches Step: no separate event here, same as
+		// pending_permission's own park (Store writes it, Step only moves
+		// Status).
+		return Transition{Next: withStatus(s, StatusWaitingForInput)}
 	case InputWorkerFailed:
 		return stepWorkerFailed(s, in, cfg)
 	case InputReviewApprove:

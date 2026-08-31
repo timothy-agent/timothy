@@ -162,6 +162,15 @@ type Mission struct {
 	// stored value <= 0 the same as "disabled," matching the global
 	// setting's own 0-means-off convention.
 	PermissionTimeoutSeconds *int `json:"permission_timeout_seconds,omitempty"`
+	// PendingInput is ask_user's park (D-088, issue #457): non-nil while
+	// a phase turn is waiting on the operator's answer, cleared once
+	// answered or timed out. A second park kind alongside
+	// PendingPermission, the two never overlap since a turn only ever
+	// parks on one or the other at a time.
+	PendingInput *PendingInput `json:"pending_input,omitempty"`
+	// AsksUsed counts ask_user calls this mission has spent (D-088);
+	// enforced against askBudget in asktool.go.
+	AsksUsed int `json:"asks_used"`
 	// AutoApproveSafe, when true (the default for new missions), grants
 	// the hidden session standing approval for any shell call the
 	// danger classifier rates safe — a mission runs for hours
@@ -302,6 +311,20 @@ type PlanUnit struct {
 	// longer fake completion when the declared artifact is missing.
 	Artifacts []string `json:"artifacts,omitempty"`
 	Passes    bool     `json:"passes"`
+}
+
+// PendingInput is ask_user's park detail (D-088, issue #457): the
+// structured question a phase turn is waiting on the operator to
+// answer. Kind is "mcq", "yes_no", or "open"; Options is populated
+// only for "mcq". ProposedDefault is required on every ask: the
+// timeout sweep applies it verbatim if nobody answers in time.
+type PendingInput struct {
+	Question        string    `json:"question"`
+	Kind            string    `json:"kind"`
+	Options         []string  `json:"options,omitempty"`
+	ProposedDefault string    `json:"proposed_default"`
+	AskedAt         time.Time `json:"asked_at"`
+	Phase           Phase     `json:"phase"`
 }
 
 // ProgressNote is one append-only entry in the mission's progress log

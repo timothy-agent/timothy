@@ -161,9 +161,11 @@ func TestRunWorkerSentinelPresent(t *testing.T) {
 	}
 	// D-075: the worker turn must tell loop.Agent its sentinel ends the
 	// turn, so a clean mission_status call never triggers a pointless
-	// continuation call.
-	if len(agent.requests) != 1 || len(agent.requests[0].EndTurnTools) != 1 || agent.requests[0].EndTurnTools[0] != missionStatusToolName {
-		t.Fatalf("EndTurnTools = %+v, want [%q]", agent.requests[0].EndTurnTools, missionStatusToolName)
+	// continuation call. ask_user (D-088) always rides along in
+	// EndTurnTools too, whether or not the turn actually offers it.
+	wantEndTurnTools := []string{missionStatusToolName, askUserToolName}
+	if len(agent.requests) != 1 || !slices.Equal(agent.requests[0].EndTurnTools, wantEndTurnTools) {
+		t.Fatalf("EndTurnTools = %+v, want %+v", agent.requests[0].EndTurnTools, wantEndTurnTools)
 	}
 }
 

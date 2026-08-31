@@ -51,7 +51,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
-	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds`
+	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds, pending_input, asks_used`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -86,6 +86,19 @@ func scanPendingPermission(m *Mission, raw []byte) {
 	m.PendingPermissionParkedAt = p.ParkedAt
 }
 
+// scanPendingInput unmarshals the pending_input jsonb column (nil when
+// there's no pending question) into Mission.PendingInput.
+func scanPendingInput(m *Mission, raw []byte) {
+	if raw == nil {
+		return
+	}
+	var p PendingInput
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return
+	}
+	m.PendingInput = &p
+}
+
 // scanMissionWithFailureReason is scanMission plus one extra trailing
 // column: the mission's latest mission.failed event's payload.reason
 // (via a lateral join, added by the caller's query), empty for a
@@ -102,6 +115,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		workflowRunID                                                 *string
 		promoteKBCollectionID                                         *string
 		permissionTimeoutSeconds                                      *int
+		pendingInputRaw                                               []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -113,12 +127,14 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
+		&pendingInputRaw, &m.AsksUsed,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	scanPendingPermission(&m, pendingPermissionRaw)
+	scanPendingInput(&m, pendingInputRaw)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -187,6 +203,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		workflowRunID                                                 *string
 		promoteKBCollectionID                                         *string
 		permissionTimeoutSeconds                                      *int
+		pendingInputRaw                                               []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -197,12 +214,14 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds); err != nil {
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
+		&pendingInputRaw, &m.AsksUsed); err != nil {
 		return Mission{}, err
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	scanPendingPermission(&m, pendingPermissionRaw)
+	scanPendingInput(&m, pendingInputRaw)
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
@@ -650,6 +669,141 @@ func (s *Store) ResolvePendingPermissionTimeout(ctx context.Context, id, tool st
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("missions resolve pending permission timeout commit: %w", err)
+	}
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
+	}
+	return nil
+}
+
+// SetPendingInput records ask_user's park (D-088): a second park kind
+// alongside pending_permission, mirroring SetPendingPermission's shape
+// and reasoning exactly: bypasses ApplyTransition since parking
+// happens mid-turn, appends mission.input_requested in the same
+// transaction so the Timeline shows the question immediately. AskedAt
+// is stamped here, server-side, same as SetPendingPermission's ParkedAt.
+func (s *Store) SetPendingInput(ctx context.Context, id string, input PendingInput) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set pending input: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("missions set pending input begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	input.AskedAt = time.Now().UTC()
+	data, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("missions set pending input: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE missions SET
+			pending_input = $2, asks_used = asks_used + 1, updated_at = now()
+		WHERE id = $1`, id, data); err != nil {
+		return fmt.Errorf("missions set pending input: %w", err)
+	}
+	payload := map[string]any{
+		"question": input.Question, "kind": input.Kind, "options": input.Options,
+		"proposed_default": input.ProposedDefault, "phase": string(input.Phase),
+	}
+	if err := appendEventTx(ctx, tx, id, "mission.input_requested", payload, "live"); err != nil {
+		return fmt.Errorf("missions set pending input: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("missions set pending input commit: %w", err)
+	}
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
+	}
+	return nil
+}
+
+// ParkAskUser satisfies askUserParker (asktool.go): the tool's own
+// Execute callback into the store, kept as a thin alias so the
+// runner-facing interface name documents ask_user's specific purpose
+// rather than exposing SetPendingInput's more general store-level name.
+func (s *Store) ParkAskUser(ctx context.Context, missionID string, input PendingInput) error {
+	return s.SetPendingInput(ctx, missionID, input)
+}
+
+// ClearPendingInput drops a mission's parked question once it's
+// answered or timed out.
+func (s *Store) ClearPendingInput(ctx context.Context, id string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions clear pending input: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET
+			pending_input = NULL, updated_at = now()
+		WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("missions clear pending input: %w", err)
+	}
+	return nil
+}
+
+// ParkedInput is one PendingInputs row: just enough for the timeout
+// sweep's elapsed-time decision, mirroring ParkedPermission.
+type ParkedInput struct {
+	MissionID string
+	Input     PendingInput
+}
+
+// PendingInputs returns every mission currently parked on pending_input,
+// the ask-timeout sweep's input.
+func (s *Store) PendingInputs(ctx context.Context) ([]ParkedInput, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("missions pending inputs: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT id, pending_input FROM missions WHERE pending_input IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("missions pending inputs: %w", err)
+	}
+	defer rows.Close()
+	out := []ParkedInput{}
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, fmt.Errorf("missions pending inputs: %w", err)
+		}
+		var p PendingInput
+		if err := json.Unmarshal(raw, &p); err != nil {
+			continue // corrupt row: skip rather than fail the whole sweep
+		}
+		out = append(out, ParkedInput{MissionID: id, Input: p})
+	}
+	return out, rows.Err()
+}
+
+// AnswerPendingInput resolves a mission's parked question with answer
+// (an operator's own text, or the proposed_default on timeout): clears
+// pending_input, appends the given event kind (mission.input_answered
+// or mission.input_timed_out) and payload, and resumes the mission from
+// waiting_for_input back to idle so the next Drive re-enters the same
+// phase the question was asked in: the answer rides into that turn's
+// prompt via the progress log (recordProgress), not through this
+// method, which only owns the park/resume transition.
+func (s *Store) AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions answer pending input: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("missions answer pending input begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `UPDATE missions SET
+			pending_input = NULL, status = 'idle', updated_at = now()
+		WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("missions answer pending input: %w", err)
+	}
+	if err := appendEventTx(ctx, tx, id, eventKind, payload, "live"); err != nil {
+		return fmt.Errorf("missions answer pending input: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("missions answer pending input commit: %w", err)
 	}
 	if s.hub != nil {
 		s.hub.Publish(Signal{Kind: "mission", ID: id})

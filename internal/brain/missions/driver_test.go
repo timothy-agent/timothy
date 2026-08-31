@@ -207,6 +207,20 @@ func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	return nil
 }
 
+// AnswerPendingInput mirrors the real Store.AnswerPendingInput: clears
+// PendingInput, resumes to idle, and appends eventKind.
+func (f *fakeStore) AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.PendingInput = nil
+	m.Status = StatusIdle
+	f.missions[id] = m
+	f.seq[id]++
+	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: eventKind})
+	return nil
+}
+
 // scriptedRunner replays fixed responses for RunWorker/RunReview/
 // PlanSession, one entry consumed per call — lets a test script an
 // exact sequence of outcomes across several Advance calls. workerErr,

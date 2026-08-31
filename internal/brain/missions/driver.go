@@ -78,6 +78,7 @@ type driverStore interface {
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	AppendProgress(ctx context.Context, id, note string) error
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
+	AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error
 }
 
 // fxRateSource is the narrow slice of *fxrates.Store Driver needs for
@@ -825,6 +826,14 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	turnStart := time.Now()
 	in, err := d.runPhase(ctx, m)
 	turnMs := time.Since(turnStart).Milliseconds()
+	if err != nil && errors.Is(err, ErrAskedUser) {
+		// The turn already parked (nativeRunner.askUserTool's Execute
+		// recorded pending_input and incremented asks_used before ending
+		// the turn): this is not a failure, just the phase's own runner
+		// method reporting "no verdict, ask_user handled it instead."
+		in = StepInput{Input: InputAskUser}
+		err = nil
+	}
 	if err != nil {
 		d.log.Error("driver: phase run failed", "mission_id", id, "phase", m.Phase, "error", err)
 		switch {
@@ -1044,6 +1053,40 @@ func (d *Driver) DecidePlan(ctx context.Context, id string, input Input, feedbac
 	return nil
 }
 
+// AnswerAskUser resolves a mission's parked ask_user question (D-088):
+// the API layer's answer endpoint calls this, never the model.
+// Records the Q+A as a progress note (the same durable channel a
+// worker/review/plan turn already reads back: WorkPacket.Progress,
+// ReviewPacket.Progress, replanNotes' recentProgressNotes), so the
+// NEXT turn of the SAME phase (Store.AnswerPendingInput resumes to
+// idle without touching Phase) carries the question and answer
+// verbatim. Returns ErrNotAwaitingApproval if the mission isn't
+// currently parked on a question, reused rather than a new sentinel
+// since both mean the same thing to a caller: "there's nothing here to
+// answer."
+func (d *Driver) AnswerAskUser(ctx context.Context, id, answer string) error {
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("driver: answer ask user: %w", err)
+	}
+	if m.PendingInput == nil {
+		return ErrNotAwaitingApproval
+	}
+	note := fmt.Sprintf("Operator answered your question %q: %s", m.PendingInput.Question, NeutralizeSlot(answer))
+	if err := d.store.AppendProgress(ctx, id, note); err != nil {
+		d.log.Warn("driver: record ask_user answer progress failed", "mission_id", id, "error", err)
+	}
+	if err := d.store.AnswerPendingInput(ctx, id, "mission.input_answered", map[string]any{"answer": answer}); err != nil {
+		return fmt.Errorf("driver: answer ask user: %w", err)
+	}
+	go func() { //nolint:gosec // G118: deliberate, the mission must outlive the HTTP request that answered it, driveTimeBound is Drive's own cap
+		if err := d.Drive(context.Background(), id); err != nil {
+			d.log.Error("driver: post-answer drive failed", "mission_id", id, "error", err)
+		}
+	}()
+	return nil
+}
+
 // toStepState projects a Mission onto the state machine's input shape,
 // pulling actual ledger spend for the budget brake via budgetProjector
 // (budget.go, D-074).
@@ -1174,7 +1217,16 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 // "a plan already exists" check instead.
 func replanNotes(m Mission) string {
 	if len(m.Spec.Units) == 0 {
-		return m.ExploreNotes
+		notes := m.ExploreNotes
+		// D-088: an ask_user answer during a first-time plan turn (no
+		// plan landed yet, so the "being replanned" branch below never
+		// runs) still needs to reach the very next plan turn's prompt,
+		// same recentProgressNotes channel, just not gated on a plan
+		// existing yet.
+		if progress := recentProgressNotes(m.Progress, 3); progress != "" {
+			notes += "\n\nRecent progress (includes any operator answers to prior questions):\n" + progress
+		}
+		return notes
 	}
 	var b strings.Builder
 	b.WriteString(m.ExploreNotes)

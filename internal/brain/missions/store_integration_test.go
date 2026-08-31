@@ -1533,6 +1533,105 @@ func TestPendingPermissionsAndResolveTimeout(t *testing.T) {
 	}
 }
 
+// TestAskUserParkAnswerRoundTripCarriesQAIntoNextTurn covers D-088's
+// full path against a real store: ask_user's park (SetPendingInput),
+// the operator's answer (AnswerAskUser via AppendProgress +
+// AnswerPendingInput), and the durable channel that carries the Q+A
+// into the NEXT turn of the same phase: WorkPacket.Render reads
+// m.Progress verbatim, so no separate wiring is needed once the answer
+// lands as a progress note.
+func TestAskUserParkAnswerRoundTripCarriesQAIntoNextTurn(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "ask-user-round-trip", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
+		t.Fatalf("ApplyTransition working: %v", err)
+	}
+
+	input := PendingInput{
+		Question: "which runtime should this target?", Kind: "mcq",
+		Options: []string{"node", "python"}, ProposedDefault: "node", Phase: PhaseGenerate,
+	}
+	if err := s.SetPendingInput(ctx, id, input); err != nil {
+		t.Fatalf("SetPendingInput: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWaitingForInput}}); err != nil {
+		t.Fatalf("ApplyTransition waiting_for_input: %v", err)
+	}
+
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after park: %v", err)
+	}
+	if m.PendingInput == nil || m.PendingInput.Question != input.Question {
+		t.Fatalf("PendingInput after park = %+v, want %+v", m.PendingInput, input)
+	}
+	if m.AsksUsed != 1 {
+		t.Fatalf("AsksUsed after park = %d, want 1", m.AsksUsed)
+	}
+
+	// The API's answer handler validates the mcq option, appends the Q+A
+	// progress note, then calls Store.AnswerPendingInput: mirrored here
+	// directly against the store (Driver.AnswerAskUser wraps the same two
+	// calls).
+	if err := s.AppendProgress(ctx, id, `Operator answered your question "which runtime should this target?": python`); err != nil {
+		t.Fatalf("AppendProgress: %v", err)
+	}
+	if err := s.AnswerPendingInput(ctx, id, "mission.input_answered", map[string]any{"answer": "python"}); err != nil {
+		t.Fatalf("AnswerPendingInput: %v", err)
+	}
+
+	m, err = s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after answer: %v", err)
+	}
+	if m.PendingInput != nil {
+		t.Fatalf("PendingInput after answer = %+v, want nil", m.PendingInput)
+	}
+	if m.Status != StatusIdle {
+		t.Fatalf("Status after answer = %s, want idle", m.Status)
+	}
+
+	// The next worker turn's packet renders m.Progress verbatim
+	// (WorkPacket.Render, packet.go): this is the "next-turn-prompt
+	// carries Q+A round trip" the design promises, without any packet
+	// changes: the Q+A rides the same durable channel a steering note
+	// already uses.
+	packet := WorkPacket{Progress: m.Progress}
+	_, user := packet.Render()
+	if !strings.Contains(user, input.Question) || !strings.Contains(user, "python") {
+		t.Fatalf("next worker packet does not carry the Q+A verbatim: %s", user)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var sawRequested, sawAnswered bool
+	for _, e := range events {
+		switch e.Kind {
+		case "mission.input_requested":
+			sawRequested = true
+		case "mission.input_answered":
+			sawAnswered = true
+			var payload struct{ Answer string }
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal input_answered payload: %v", err)
+			}
+			if payload.Answer != "python" {
+				t.Fatalf("input_answered payload = %+v, want answer=python", payload)
+			}
+		}
+	}
+	if !sawRequested || !sawAnswered {
+		t.Fatalf("events = %+v, want both mission.input_requested and mission.input_answered", events)
+	}
+}
+
 // fakePermissionTimeoutDriverIT captures Drive calls from
 // sweepPermissionTimeouts against a real store, synchronized so the
 // test can wait for the sweep's background goroutine before asserting.
