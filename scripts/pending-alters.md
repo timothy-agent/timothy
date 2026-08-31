@@ -10,7 +10,7 @@ Required on live DBs before/with the next deploy. Additive, safe to
 run before deploy.
 
 ```sql
-ALTER TABLE kb_collections ADD COLUMN IF NOT EXISTS retrieval_weight real NOT NULL DEFAULT 1.0;
+ALTER TABLE kb_collections ADD COLUMN IF NOT EXISTS retrieval_weight double precision NOT NULL DEFAULT 1.0;
 
 DO $$
 BEGIN
