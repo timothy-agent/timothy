@@ -1620,12 +1620,33 @@ func (a *Admin) audit(ctx context.Context, action, entity, entityID string, befo
 		a.log.Warn("admin audit skipped", "action", action, "entity", entity, "error", err)
 		return
 	}
-	b, _ := json.Marshal(before)
-	aft, _ := json.Marshal(after)
+	b, _ := json.Marshal(redactAuditValue(before))
+	aft, _ := json.Marshal(redactAuditValue(after))
 	if _, err := db.Exec(ctx, `INSERT INTO admin_audit (action, entity, entity_id, before, after)
 		VALUES ($1, $2, $3, $4, $5)`, action, entity, entityID, b, aft); err != nil {
 		a.log.Warn("admin audit failed", "action", action, "entity", entity, "error", err)
 	}
+}
+
+// redactAuditValue blanks Provider.Headers values before a payload is
+// written to admin_audit: header-authenticated providers put
+// Authorization/x-api-key values there, and admin_audit is a plain
+// table with no dedicated secret handling. Copies the map so the live
+// struct (and whatever the caller does with it afterward) is untouched.
+func redactAuditValue(v any) any {
+	p, ok := v.(Provider)
+	if !ok {
+		return v
+	}
+	if len(p.Headers) == 0 {
+		return p
+	}
+	redacted := make(map[string]string, len(p.Headers))
+	for k := range p.Headers {
+		redacted[k] = "[redacted]"
+	}
+	p.Headers = redacted
+	return p
 }
 
 // reload swaps the serving snapshot; a failure keeps the last good one

@@ -283,10 +283,61 @@ func (s *Store) audit(ctx context.Context, action, entityID string, before, afte
 		s.log.Warn("connector audit skipped", "action", action, "error", err)
 		return
 	}
-	b, _ := json.Marshal(before)
-	aft, _ := json.Marshal(after)
+	b, _ := json.Marshal(redactAuditValue(before))
+	aft, _ := json.Marshal(redactAuditValue(after))
 	if _, err := db.Exec(ctx, `INSERT INTO admin_audit (action, entity, entity_id, before, after)
 		VALUES ($1, 'connector', $2, $3, $4)`, action, entityID, b, aft); err != nil {
 		s.log.Warn("connector audit failed", "action", action, "error", err)
+	}
+}
+
+// redactAuditValue blanks Connector.Config's string values before a
+// payload is written to admin_audit: imap/caldav configs carry
+// host/username/password-shaped fields, and admin_audit is a plain
+// table with no dedicated secret handling. Keys and non-string
+// structure (numbers, bools, nesting) survive so the audit still shows
+// what changed shape-wise; only string leaves are redacted, since a
+// key-based allowlist would miss whatever field name the next
+// connector kind picks. Never mutates the stored connector's Config.
+func redactAuditValue(v any) any {
+	c, ok := v.(Connector)
+	if !ok {
+		return v
+	}
+	if len(c.Config) == 0 {
+		return c
+	}
+	var parsed any
+	if err := json.Unmarshal(c.Config, &parsed); err != nil {
+		return c
+	}
+	redacted, err := json.Marshal(redactStrings(parsed))
+	if err != nil {
+		return c
+	}
+	c.Config = redacted
+	return c
+}
+
+// redactStrings walks a decoded JSON value, replacing every string leaf
+// with "[redacted]" and recursing into objects/arrays unchanged.
+func redactStrings(v any) any {
+	switch val := v.(type) {
+	case string:
+		return "[redacted]"
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, vv := range val {
+			out[k] = redactStrings(vv)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, vv := range val {
+			out[i] = redactStrings(vv)
+		}
+		return out
+	default:
+		return val
 	}
 }
