@@ -147,7 +147,7 @@ func (h *kbAPI) resolveCollection(ctx context.Context, title, markdownText strin
 	if name == "" {
 		name = "Unsorted"
 	}
-	id, err := h.store.CreateCollection(ctx, name, choice.NewDesc)
+	id, err := h.store.CreateCollection(ctx, name, choice.NewDesc, 0)
 	if err != nil {
 		return "", fmt.Errorf("create collection %q: %w", name, err)
 	}
@@ -183,10 +183,19 @@ func (h *kbAPI) listCollections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"collections": rows})
 }
 
+// validKBRetrievalWeight is the valid range for a collection's
+// retrieval_weight (D-085, issue #443), matching the DB CHECK
+// constraint: > 0 keeps a collection always retrievable when it's the
+// only relevant content, <= 2 bounds how far it can dominate.
+func validKBRetrievalWeight(w float64) bool {
+	return w > 0 && w <= 2
+}
+
 func (h *kbAPI) createCollection(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name            string   `json:"name"`
+		Description     string   `json:"description"`
+		RetrievalWeight *float64 `json:"retrieval_weight"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -196,7 +205,15 @@ func (h *kbAPI) createCollection(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "name is required")
 		return
 	}
-	id, err := h.store.CreateCollection(r.Context(), req.Name, req.Description)
+	var retrievalWeight float64
+	if req.RetrievalWeight != nil {
+		if !validKBRetrievalWeight(*req.RetrievalWeight) {
+			jsonError(w, http.StatusBadRequest, "bad_request", "retrieval_weight must be > 0 and <= 2")
+			return
+		}
+		retrievalWeight = *req.RetrievalWeight
+	}
+	id, err := h.store.CreateCollection(r.Context(), req.Name, req.Description, retrievalWeight)
 	if err != nil {
 		failKB(w, err)
 		return
@@ -218,14 +235,15 @@ func (h *kbAPI) getCollection(w http.ResponseWriter, r *http.Request) {
 // same shape the settings handlers use).
 func (h *kbAPI) updateCollection(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
+		Name            *string  `json:"name"`
+		Description     *string  `json:"description"`
+		RetrievalWeight *float64 `json:"retrieval_weight"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.Name == nil && req.Description == nil {
+	if req.Name == nil && req.Description == nil && req.RetrievalWeight == nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", "nothing to update")
 		return
 	}
@@ -233,7 +251,11 @@ func (h *kbAPI) updateCollection(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "name must not be empty")
 		return
 	}
-	if err := h.store.UpdateCollection(r.Context(), r.PathValue("id"), req.Name, req.Description); err != nil {
+	if req.RetrievalWeight != nil && !validKBRetrievalWeight(*req.RetrievalWeight) {
+		jsonError(w, http.StatusBadRequest, "bad_request", "retrieval_weight must be > 0 and <= 2")
+		return
+	}
+	if err := h.store.UpdateCollection(r.Context(), r.PathValue("id"), req.Name, req.Description, req.RetrievalWeight); err != nil {
 		failKB(w, err)
 		return
 	}

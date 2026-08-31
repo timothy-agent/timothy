@@ -146,6 +146,24 @@ func TestKBCollectionsCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Default retrieval_weight (D-085, issue #443) is neutral (1.0).
+	def, err := store.GetCollection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCollection after create: %v", err)
+	}
+	if def.RetrievalWeight != 1.0 {
+		t.Fatalf("default RetrievalWeight = %v, want 1.0", def.RetrievalWeight)
+	}
+
+	// An out-of-bounds retrieval_weight is rejected at create time too.
+	badCreate := httptest.NewRequest("POST", "/v1/admin/kb/collections", strings.NewReader(`{"name":"itest-badweight","retrieval_weight":0}`))
+	badCreate.Header.Set("Authorization", "Bearer tok")
+	w = httptest.NewRecorder()
+	m.ServeHTTP(w, badCreate)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create with bad weight status = %d, want 400", w.Code)
+	}
+
 	list := httptest.NewRequest("GET", "/v1/admin/kb/collections", nil)
 	list.Header.Set("Authorization", "Bearer tok")
 	w = httptest.NewRecorder()
@@ -170,7 +188,7 @@ func TestKBCollectionsCRUD(t *testing.T) {
 	if renamed.Name != "itest-docs-renamed" || renamed.Description != "test collection" {
 		t.Fatalf("after rename: name=%q description=%q", renamed.Name, renamed.Description)
 	}
-	for _, body := range []string{`{}`, `{"name":"  "}`} {
+	for _, body := range []string{`{}`, `{"name":"  "}`, `{"retrieval_weight":0}`, `{"retrieval_weight":2.5}`} {
 		bad := httptest.NewRequest("PATCH", "/v1/admin/kb/collections/"+created.ID, strings.NewReader(body))
 		bad.Header.Set("Authorization", "Bearer tok")
 		w = httptest.NewRecorder()
@@ -178,6 +196,22 @@ func TestKBCollectionsCRUD(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("patch %s status = %d, want 400", body, w.Code)
 		}
+	}
+
+	// A valid retrieval_weight (D-085, issue #443) persists.
+	weightPatch := httptest.NewRequest("PATCH", "/v1/admin/kb/collections/"+created.ID, strings.NewReader(`{"retrieval_weight":0.3}`))
+	weightPatch.Header.Set("Authorization", "Bearer tok")
+	w = httptest.NewRecorder()
+	m.ServeHTTP(w, weightPatch)
+	if w.Code != http.StatusOK {
+		t.Fatalf("weight patch status = %d body %s", w.Code, w.Body)
+	}
+	weighted, err := store.GetCollection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCollection after weight patch: %v", err)
+	}
+	if weighted.RetrievalWeight != 0.3 {
+		t.Fatalf("RetrievalWeight = %v, want 0.3", weighted.RetrievalWeight)
 	}
 
 	// A failed document counts toward failed_count but not the base
@@ -217,7 +251,7 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-upload", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-upload", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -288,11 +322,11 @@ func TestKBSearchDocumentsCrossCollectionTitleMatch(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
-	collA, err := store.CreateCollection(context.Background(), "itest-search-a", "")
+	collA, err := store.CreateCollection(context.Background(), "itest-search-a", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	collB, err := store.CreateCollection(context.Background(), "itest-search-b", "")
+	collB, err := store.CreateCollection(context.Background(), "itest-search-b", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -344,7 +378,7 @@ func TestKBDocumentUploadStripsNULAndInvalidUTF8(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-nul", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-nul", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -382,7 +416,7 @@ func TestKBDocumentUploadRejectsUnsupportedType(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-upload-bad", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-upload-bad", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -418,7 +452,7 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-url", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-url", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -494,7 +528,7 @@ func TestKBDocumentFromURLScopedReAddRefreshesInPlace(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-url-readd", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-url-readd", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -655,7 +689,7 @@ func TestKBDocumentFromURLDifferentURLStillCreates(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-url-distinct", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-url-distinct", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -753,7 +787,7 @@ func TestKBDocumentFromURLAutoUsesExistingCollection(t *testing.T) {
 	kbFetchTransport = http.DefaultTransport
 	defer func() { kbFetchTransport = saved }()
 
-	existingID, err := store.CreateCollection(context.Background(), "itest-existing", "")
+	existingID, err := store.CreateCollection(context.Background(), "itest-existing", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -789,7 +823,7 @@ func TestKBSweepStaleFailsStuckDocuments(t *testing.T) {
 	store := testKBStore(t)
 	ctx := context.Background()
 
-	collID, err := store.CreateCollection(ctx, "itest-sweep", "")
+	collID, err := store.CreateCollection(ctx, "itest-sweep", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -979,7 +1013,7 @@ func TestKBClipNewDocumentWithCollectionSkipsClassifier(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-clip-target", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-clip-target", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1097,11 +1131,11 @@ func TestKBClipReClipMovesCollection(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
-	origID, err := store.CreateCollection(context.Background(), "itest-clip-orig", "")
+	origID, err := store.CreateCollection(context.Background(), "itest-clip-orig", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	newID, err := store.CreateCollection(context.Background(), "itest-clip-new", "")
+	newID, err := store.CreateCollection(context.Background(), "itest-clip-new", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1227,7 +1261,7 @@ func TestKBDocumentFromURLRejectsBadURL(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-url-bad", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-url-bad", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1256,7 +1290,7 @@ func TestKBDocumentFromURLBlocksLocalAddresses(t *testing.T) {
 	}))
 	defer page.Close()
 
-	collID, err := store.CreateCollection(context.Background(), "itest-url-ssrf", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-url-ssrf", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1278,7 +1312,7 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-reingest", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-reingest", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1347,7 +1381,7 @@ func TestKBDocumentReingestRetryableErrorSchedulesRetry(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-retry-schedule", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-retry-schedule", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1390,7 +1424,7 @@ func TestKBDocumentReingestPermanentErrorNeverSchedulesRetry(t *testing.T) {
 	m := mux(a)
 	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
 
-	collID, err := store.CreateCollection(context.Background(), "itest-retry-permanent", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-retry-permanent", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -1426,7 +1460,7 @@ func TestRunKBRetrySweepRetriesUntilBudgetExhausted(t *testing.T) {
 	store := testKBStore(t)
 	ingester := &fakeIngester{err: errors.New("gwclient: gateway http 503: service unavailable")}
 
-	collID, err := store.CreateCollection(context.Background(), "itest-retry-sweep", "")
+	collID, err := store.CreateCollection(context.Background(), "itest-retry-sweep", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}

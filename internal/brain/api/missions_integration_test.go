@@ -1530,7 +1530,7 @@ func TestMissionsPromoteKB(t *testing.T) {
 	kbStore := testKBStore(t)
 	ctx := context.Background()
 
-	collectionID, err := kbStore.CreateCollection(ctx, "itest-promote-kb", "")
+	collectionID, err := kbStore.CreateCollection(ctx, "itest-promote-kb", "", 0)
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}

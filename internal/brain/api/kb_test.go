@@ -27,3 +27,25 @@ func TestKBRetryDelay(t *testing.T) {
 		}
 	}
 }
+
+// TestValidKBRetrievalWeight pins the bounds (D-085, issue #443):
+// > 0 and <= 2, matching the kb_collections CHECK constraint.
+func TestValidKBRetrievalWeight(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		weight float64
+		want   bool
+	}{
+		{0, false},
+		{-0.1, false},
+		{0.1, true},
+		{1.0, true},
+		{2.0, true},
+		{2.1, false},
+	}
+	for _, tc := range cases {
+		if got := validKBRetrievalWeight(tc.weight); got != tc.want {
+			t.Fatalf("validKBRetrievalWeight(%v) = %v, want %v", tc.weight, got, tc.want)
+		}
+	}
+}

@@ -31,8 +31,11 @@ type Collection struct {
 	DocCount    int       `json:"doc_count"`
 	ChunkCount  int       `json:"chunk_count"`
 	FailedCount int       `json:"failed_count"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// RetrievalWeight scales this collection's score at retrieval time
+	// (D-085, issue #443): 1.0 is neutral, bounded to (0, 2].
+	RetrievalWeight float64   `json:"retrieval_weight"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Document is one ingested file within a collection. Markdown is
@@ -76,14 +79,14 @@ func New(db *pgpool.Pool) *Store {
 	return &Store{db: db}
 }
 
-const collectionColumns = `c.id, c.name, c.description, c.created_at, c.updated_at,
+const collectionColumns = `c.id, c.name, c.description, c.retrieval_weight, c.created_at, c.updated_at,
 	(SELECT count(*) FROM kb_documents d WHERE d.collection_id = c.id),
 	(SELECT coalesce(sum(d.chunk_count), 0) FROM kb_documents d WHERE d.collection_id = c.id),
 	(SELECT count(*) FROM kb_documents d WHERE d.collection_id = c.id AND d.status = 'failed')`
 
 func scanCollection(row pgx.Row) (Collection, error) {
 	var c Collection
-	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.CreatedAt, &c.UpdatedAt, &c.DocCount, &c.ChunkCount, &c.FailedCount)
+	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.RetrievalWeight, &c.CreatedAt, &c.UpdatedAt, &c.DocCount, &c.ChunkCount, &c.FailedCount)
 	return c, err
 }
 
@@ -125,15 +128,22 @@ func (s *Store) GetCollection(ctx context.Context, id string) (Collection, error
 	return c, nil
 }
 
-// CreateCollection inserts a new collection.
-func (s *Store) CreateCollection(ctx context.Context, name, description string) (string, error) {
+// CreateCollection inserts a new collection. retrievalWeight of 0 uses
+// the column default (1.0, neutral); callers validate bounds before
+// calling (D-085, issue #443).
+func (s *Store) CreateCollection(ctx context.Context, name, description string, retrievalWeight float64) (string, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("kb collections create: %w", err)
 	}
 	var id string
-	err = db.QueryRow(ctx, `INSERT INTO kb_collections (name, description) VALUES ($1, $2) RETURNING id`,
-		name, description).Scan(&id)
+	if retrievalWeight == 0 {
+		err = db.QueryRow(ctx, `INSERT INTO kb_collections (name, description) VALUES ($1, $2) RETURNING id`,
+			name, description).Scan(&id)
+	} else {
+		err = db.QueryRow(ctx, `INSERT INTO kb_collections (name, description, retrieval_weight) VALUES ($1, $2, $3) RETURNING id`,
+			name, description, retrievalWeight).Scan(&id)
+	}
 	if err != nil {
 		return "", fmt.Errorf("kb collections create: %w", err)
 	}
@@ -141,16 +151,18 @@ func (s *Store) CreateCollection(ctx context.Context, name, description string) 
 }
 
 // UpdateCollection renames a collection and/or replaces its
-// description. nil leaves a field unchanged, so a bare rename never
-// clobbers the description the classifier matches against.
-func (s *Store) UpdateCollection(ctx context.Context, id string, name, description *string) error {
+// description and/or retrieval weight. nil leaves a field unchanged,
+// so a bare rename never clobbers the description the classifier
+// matches against, or the retrieval weight (D-085, issue #443).
+func (s *Store) UpdateCollection(ctx context.Context, id string, name, description *string, retrievalWeight *float64) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("kb collections update: %w", err)
 	}
 	tag, err := db.Exec(ctx, `UPDATE kb_collections
-		SET name = COALESCE($2, name), description = COALESCE($3, description), updated_at = now()
-		WHERE id = $1`, id, name, description)
+		SET name = COALESCE($2, name), description = COALESCE($3, description),
+			retrieval_weight = COALESCE($4, retrieval_weight), updated_at = now()
+		WHERE id = $1`, id, name, description, retrievalWeight)
 	if err != nil {
 		return fmt.Errorf("kb collections update: %w", err)
 	}
