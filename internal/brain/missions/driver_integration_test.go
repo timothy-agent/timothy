@@ -28,7 +28,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	workspace := NewWorkspace(wsRoot, nil, log)
 
-	id, err := store.Create(ctx, Mission{Goal: marker + "e2e coding", Kind: "coding", Route: "default", ReviewRoute: "default"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "e2e coding", Kind: "coding", Route: "default", ReviewRoute: "default", AutoApprovePlan: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
