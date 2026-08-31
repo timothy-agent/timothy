@@ -189,17 +189,17 @@ function defaultHarnessLabel(defaultHarnessName: string): string {
 // string before the plan has loaded.
 function defaultPlanRouteLabel(plan: ExecutionPlanPhase[] | null): string {
   const phase = plan?.find((p) => p.phase === 'plan')
-  if (!phase?.route) return 'Same as execute route'
-  return `Same as execute route (${phase.route})`
+  if (!phase?.route) return 'Same as generate route'
+  return `Same as generate route (${phase.route})`
 }
 
 // defaultReviewRouteLabel names what leaving Review route on
-// "Default" resolves to: either the plan or the execute route,
-// whichever the review phase actually inherited from.
+// "Default" resolves to: either the plan or the generate route,
+// whichever the prove phase actually inherited from.
 function defaultReviewRouteLabel(plan: ExecutionPlanPhase[] | null): string {
-  const phase = plan?.find((p) => p.phase === 'review')
-  if (!phase?.route) return 'Default (same as plan/execute route)'
-  const from = phase.route_source === 'inherited-from-execute' ? 'execute' : 'plan'
+  const phase = plan?.find((p) => p.phase === 'prove')
+  if (!phase?.route) return 'Default (same as plan/generate route)'
+  const from = phase.route_source === 'inherited-from-generate' ? 'generate' : 'plan'
   return `Same as ${from} route (${phase.route})`
 }
 
@@ -906,7 +906,7 @@ export function MissionForm({
             <span>
               Light mission
               <span className="block text-xs text-muted-foreground">
-                Skips explore/plan/review for a single-pass task — the worker's final message
+                Skips discover/plan/prove for a single-pass task; the worker's final message
                 is delivered as the result.
               </span>
             </span>
@@ -1486,7 +1486,7 @@ export function MissionForm({
                     id="mission-plan-route"
                     value={planRoute}
                     onChange={(e) => setPlanRoute(e.target.value)}
-                    placeholder="Same as execute route"
+                    placeholder="Same as generate route"
                   />
                 ) : (
                   <Select
@@ -1507,8 +1507,8 @@ export function MissionForm({
                   </Select>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Explore, plan, and review run on this route instead of the execute route above —
-                  e.g. a strong model plans while a cheap/local route executes.
+                  Discover, plan, and prove run on this route instead of the generate route above,
+                  e.g. a strong model plans while a cheap/local route generates.
                 </p>
               </div>
               {mode === 'create' && !repeat && (

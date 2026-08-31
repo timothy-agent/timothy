@@ -1339,7 +1339,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
 })
 
 describe('MissionForm: plan route', () => {
-  it('renders the Plan route select in Advanced, defaulted to "Same as execute route"', async () => {
+  it('renders the Plan route select in Advanced, defaulted to "Same as generate route"', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
@@ -1347,7 +1347,7 @@ describe('MissionForm: plan route', () => {
     await screen.findByLabelText('Review route')
 
     expect(screen.getByLabelText('Plan route')).toBeInTheDocument()
-    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as execute route')
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as generate route')
   })
 
   it('submits plan_route when a route other than the default is picked', async () => {
@@ -1497,7 +1497,7 @@ describe('MissionForm: edit mode', () => {
 
 function makePhase(overrides: Partial<ExecutionPlanPhase> = {}): ExecutionPlanPhase {
   return {
-    phase: 'explore',
+    phase: 'discover',
     route: 'coding',
     route_source: 'agent',
     axis: 'native',
@@ -1512,7 +1512,7 @@ function makePhase(overrides: Partial<ExecutionPlanPhase> = {}): ExecutionPlanPh
 
 const fivePhases: ExecutionPlanPhase[] = [
   makePhase({
-    phase: 'explore',
+    phase: 'discover',
     entries: [
       {
         provider_name: 'GLM (Z.ai)',
@@ -1529,7 +1529,7 @@ const fivePhases: ExecutionPlanPhase[] = [
   }),
   makePhase({ phase: 'plan' }),
   makePhase({
-    phase: 'execute',
+    phase: 'generate',
     axis: 'harness',
     harness: 'claude-cli',
     harness_source: 'settings',
@@ -1546,7 +1546,7 @@ const fivePhases: ExecutionPlanPhase[] = [
       },
     ],
   }),
-  makePhase({ phase: 'review' }),
+  makePhase({ phase: 'prove' }),
   makePhase({ phase: 'escalate', route: '', route_source: 'off', skipped: true, skip_reason: '' }),
 ]
 
@@ -1561,12 +1561,12 @@ describe('MissionForm: execution plan', () => {
     expect(screen.getByText('Claude Code')).toBeInTheDocument()
     // No pin set on either phase: the select shows "Auto" naming the
     // entry the server marked selected.
-    expect(screen.getByLabelText('Explore model')).toHaveTextContent('Autoglm-5.3')
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Autosonnet-5')
-    fireEvent.click(screen.getByLabelText('Explore model'))
+    expect(screen.getByLabelText('Discover model')).toHaveTextContent('Autoglm-5.3')
+    expect(screen.getByLabelText('Generate model')).toHaveTextContent('Autosonnet-5')
+    fireEvent.click(screen.getByLabelText('Discover model'))
     expect(await screen.findByRole('option', { name: 'glm-5.3' })).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Explore model'))
-    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(screen.getByLabelText('Discover model'))
+    fireEvent.click(screen.getByLabelText('Generate model'))
     expect(await screen.findByRole('option', { name: 'sonnet-5' })).toBeInTheDocument()
     expect(screen.getByText('$0.60/$2.20 per Mtok')).toBeInTheDocument()
     expect(screen.getByText('Naming and memory extraction use the summarize route.')).toBeInTheDocument()
@@ -1586,7 +1586,7 @@ describe('MissionForm: execution plan', () => {
 
   it('shows Auto with the unusable entry disabled when nothing is selected', async () => {
     const plan = fivePhases.map((p) =>
-      p.phase === 'explore'
+      p.phase === 'discover'
         ? {
             ...p,
             entries: [
@@ -1609,15 +1609,15 @@ describe('MissionForm: execution plan', () => {
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
 
-    expect(await screen.findByLabelText('Explore model')).toHaveTextContent('Auto (first usable)')
-    fireEvent.click(screen.getByLabelText('Explore model'))
+    expect(await screen.findByLabelText('Discover model')).toHaveTextContent('Auto (first usable)')
+    fireEvent.click(screen.getByLabelText('Discover model'))
     const option = await screen.findByRole('option', { name: /gpt-5-mini - cooling down/ })
     expect(option).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('renders no price text when the selected entry has no prices', async () => {
     const plan = fivePhases.map((p) =>
-      p.phase === 'explore'
+      p.phase === 'discover'
         ? { ...p, entries: [{ ...p.entries[0], prices: undefined }] }
         : p,
     )
@@ -1630,17 +1630,17 @@ describe('MissionForm: execution plan', () => {
     expect(screen.queryByText(/per Mtok/)).not.toBeInTheDocument()
   })
 
-  it('picking an entry in the execute model select submits route_model, and Auto omits it', async () => {
+  it('picking an entry in the generate model select submits route_model, and Auto omits it', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
     vi.mocked(createMission).mockResolvedValue({ id: 'm-pin' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    await screen.findByLabelText('Execute model')
+    await screen.findByLabelText('Generate model')
 
-    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(screen.getByLabelText('Generate model'))
     fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('sonnet-5')
+    expect(screen.getByLabelText('Generate model')).toHaveTextContent('sonnet-5')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
@@ -1656,7 +1656,7 @@ describe('MissionForm: execution plan', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    await screen.findByLabelText('Execute model')
+    await screen.findByLabelText('Generate model')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
@@ -1669,21 +1669,21 @@ describe('MissionForm: execution plan', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    await screen.findByLabelText('Execute model')
+    await screen.findByLabelText('Generate model')
 
-    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(screen.getByLabelText('Generate model'))
     fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('sonnet-5')
+    expect(screen.getByLabelText('Generate model')).toHaveTextContent('sonnet-5')
 
-    fireEvent.click(screen.getByLabelText('Execute model'))
+    fireEvent.click(screen.getByLabelText('Generate model'))
     fireEvent.click(await screen.findByRole('option', { name: 'Autosonnet-5' }))
-    expect(screen.getByLabelText('Execute model')).toHaveTextContent('Autosonnet-5')
+    expect(screen.getByLabelText('Generate model')).toHaveTextContent('Autosonnet-5')
   })
 
-  it('shows live default labels for plan, review, and escalation route selects', async () => {
+  it('shows live default labels for plan, prove, and escalation route selects', async () => {
     const plan = fivePhases.map((p) => {
-      if (p.phase === 'plan') return { ...p, route: 'coding', route_source: 'inherited-from-execute' }
-      if (p.phase === 'review') return { ...p, route: 'coding', route_source: 'inherited-from-plan' }
+      if (p.phase === 'plan') return { ...p, route: 'coding', route_source: 'inherited-from-generate' }
+      if (p.phase === 'prove') return { ...p, route: 'coding', route_source: 'inherited-from-plan' }
       return p
     })
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
@@ -1694,7 +1694,7 @@ describe('MissionForm: execution plan', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
     await screen.findByLabelText('Review route')
 
-    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as execute route (coding)')
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as generate route (coding)')
     expect(screen.getByLabelText('Review route')).toHaveTextContent('Same as plan route (coding)')
     expect(screen.getByLabelText('Escalation route')).toHaveTextContent(
       'Off (no escalation on failure)',

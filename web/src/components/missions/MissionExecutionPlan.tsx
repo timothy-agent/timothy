@@ -16,14 +16,14 @@ function pinValue(entry: ExecutionPlanEntry): string {
 // phaseLabels maps the API's phase key to its display name, in the
 // fixed order the response always carries them.
 const phaseLabels: Record<string, string> = {
-  explore: 'Explore',
+  discover: 'Discover',
   plan: 'Plan',
-  execute: 'Execute',
-  review: 'Review',
+  generate: 'Generate',
+  prove: 'Prove',
   escalate: 'Escalate',
 }
 
-const phaseOrder = ['explore', 'plan', 'execute', 'review', 'escalate']
+const phaseOrder = ['discover', 'plan', 'generate', 'prove', 'escalate']
 
 // routeSourceLabels renders each provenance value human-readable, in
 // parentheses next to the route name. 'off'/'none' render nothing —
@@ -34,7 +34,7 @@ const routeSourceLabels: Record<string, string> = {
   'named-coding': 'coding route',
   'default-role': 'default route',
   'inherited-from-plan': 'same as plan route',
-  'inherited-from-execute': 'same as execute route',
+  'inherited-from-generate': 'same as generate route',
 }
 
 function routeLabel(phase: ExecutionPlanPhase): string | null {
@@ -63,18 +63,18 @@ function priceLabel(phase: ExecutionPlanPhase): string | null {
 }
 
 // modelPinFor/onModelPinChangeFor map a phase key to the pin state that
-// backs it: execute uses route_model, explore/plan use plan_route_model
-// (they share oversightRoute), review uses review_route_model. Escalate
+// backs it: generate uses route_model, discover/plan use plan_route_model
+// (they share oversightRoute), prove uses review_route_model. Escalate
 // is never pinned — it's a failure-path fallback (runner.go's
 // workerModel clears route_model once escalated), so it gets no select.
 function modelPinFor(phaseKey: string, props: MissionExecutionPlanProps): string {
   switch (phaseKey) {
-    case 'explore':
+    case 'discover':
     case 'plan':
       return props.planRouteModel
-    case 'execute':
+    case 'generate':
       return props.routeModel
-    case 'review':
+    case 'prove':
       return props.reviewRouteModel
     default:
       return ''
@@ -86,12 +86,12 @@ function onModelPinChangeFor(
   props: MissionExecutionPlanProps,
 ): ((v: string) => void) | null {
   switch (phaseKey) {
-    case 'explore':
+    case 'discover':
     case 'plan':
       return props.onPlanRouteModelChange
-    case 'execute':
+    case 'generate':
       return props.onRouteModelChange
-    case 'review':
+    case 'prove':
       return props.onReviewRouteModelChange
     default:
       return null

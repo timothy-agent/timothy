@@ -157,6 +157,45 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
       </span>
     )
   },
+  // mission.discover_complete is the discover phase's event kind since
+  // the D-082 rename (issue #455); mission.explore_complete is the
+  // pre-rename name a historical mission's events may still carry
+  // forever. Both render identically.
+  'mission.discover_complete': (p) => {
+    const { chars } = asRecord(p)
+    return `Discover complete (${String(chars ?? '?')} chars)`
+  },
+  'mission.explore_complete': (p) => {
+    const { chars } = asRecord(p)
+    return `Discover complete (${String(chars ?? '?')} chars)`
+  },
+  // mission.result_complete is the result phase's own step outcome
+  // (D-082): a summary of what delivery/copy/promote/on_complete did.
+  'mission.result_complete': (p) => {
+    const {
+      delivered,
+      artifacts_copied,
+      promoted_kb_collection_id,
+      on_complete,
+      delivery_error,
+      promote_kb_error,
+      on_complete_error,
+    } = asRecord(p)
+    const parts: string[] = []
+    if (delivered) parts.push(`delivered to ${String(delivered)}`)
+    if (artifacts_copied) parts.push(`${String(artifacts_copied)} artifact(s) copied`)
+    if (promoted_kb_collection_id) parts.push('promoted to kb')
+    if (on_complete) parts.push(String(on_complete))
+    const errors = [delivery_error, promote_kb_error, on_complete_error].filter(Boolean)
+    if (errors.length === 0) {
+      return <span className="text-green-400">Result complete{parts.length > 0 ? `: ${parts.join(', ')}` : ''}</span>
+    }
+    return (
+      <span className="text-red-400" title={errors.map(String).join('; ')}>
+        Result step failed{parts.length > 0 ? ` (${parts.join(', ')} succeeded)` : ''}
+      </span>
+    )
+  },
   'executor.spawned': (p) => {
     const { harness, provider, model, auth_mode } = p as ExecutorSpawnedPayload
     return (

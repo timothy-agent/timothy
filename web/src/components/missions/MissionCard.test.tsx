@@ -10,7 +10,7 @@ const baseMission: Mission = {
   id: 'm1',
   goal: 'Fix the login bug on the staging server before Friday',
   kind: 'general',
-  phase: 'execute',
+  phase: 'generate',
   status: 'working',
   spec: { units: [] },
   progress: [],
@@ -54,7 +54,7 @@ describe('MissionCard name fallback', () => {
 
 describe('MissionCard status pill', () => {
   it('shows the raw status for a non-terminal mission', () => {
-    renderCard({ ...baseMission, status: 'working', phase: 'execute' })
+    renderCard({ ...baseMission, status: 'working', phase: 'generate' })
     expect(screen.getByText('working')).toBeInTheDocument()
   })
 
@@ -120,12 +120,12 @@ describe('MissionCard removed fields', () => {
   it('never renders retries, unit progress, or the raw phase text', () => {
     renderCard({
       ...baseMission,
-      phase: 'execute',
+      phase: 'generate',
       iteration: 3,
       spec: { units: [{ title: 'a', verify_cmd: '', passes: true }, { title: 'b', verify_cmd: '', passes: false }] },
     })
     expect(screen.queryByText(/Retries/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+\/\d+ units/)).not.toBeInTheDocument()
-    expect(screen.queryByText('execute')).not.toBeInTheDocument()
+    expect(screen.queryByText('generate')).not.toBeInTheDocument()
   })
 })

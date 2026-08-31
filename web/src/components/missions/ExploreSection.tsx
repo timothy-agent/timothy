@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 // ExploreSection renders a mission's explore_notes (set once, at the
-// end of the explore phase — see driver.go's runExplore) as
+// end of the discover phase, see driver.go's runExplore) as
 // collapsed-by-default markdown, the same rendering ResultSection uses
 // for last_evidence. The page only mounts this when notes is non-empty.
 // Uses CodeBlock (not the plain MarkdownPre) so fenced code gets the

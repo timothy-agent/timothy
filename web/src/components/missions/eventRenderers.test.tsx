@@ -267,9 +267,9 @@ describe('executor lifecycle event rendering', () => {
 describe('mission.turn rendering', () => {
   it('renders phase, ok, and duration for a successful turn', () => {
     render(
-      <div>{renderEvent(event({ phase: 'execute', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+      <div>{renderEvent(event({ phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
     )
-    expect(screen.getByText('Turn (execute): ok · 1.5s')).toBeInTheDocument()
+    expect(screen.getByText('Turn (generate): ok · 1.5s')).toBeInTheDocument()
   })
 
   it('renders a failed turn in red with the reason', () => {
@@ -283,6 +283,45 @@ describe('mission.turn rendering', () => {
     const row = screen.getByText(/Turn \(plan\): failed · 500ms/)
     expect(row).toHaveClass('text-red-400')
     expect(row).toHaveTextContent('model returned empty')
+  })
+
+  it('renders a legacy pre-rename phase name unchanged (historical events keep old names forever)', () => {
+    render(
+      <div>{renderEvent(event({ phase: 'execute', duration_ms: 800, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+    )
+    expect(screen.getByText('Turn (execute): ok · 800ms')).toBeInTheDocument()
+  })
+})
+
+describe('mission.discover_complete / mission.explore_complete rendering', () => {
+  it('renders the new discover_complete kind', () => {
+    expect(renderEvent(event({ chars: 120 }, 'mission.discover_complete'))).toBe('Discover complete (120 chars)')
+  })
+
+  it('renders the legacy explore_complete kind identically (historical tolerance)', () => {
+    expect(renderEvent(event({ chars: 120 }, 'mission.explore_complete'))).toBe('Discover complete (120 chars)')
+  })
+})
+
+describe('mission.result_complete rendering', () => {
+  it('renders a successful result step summary', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ delivered: 2, artifacts_copied: 1, on_complete: 'push' }, 'mission.result_complete'),
+        )}
+      </div>,
+    )
+    const row = screen.getByText(/Result complete/)
+    expect(row).toHaveClass('text-green-400')
+    expect(row).toHaveTextContent('delivered to 2')
+    expect(row).toHaveTextContent('1 artifact(s) copied')
+    expect(row).toHaveTextContent('push')
+  })
+
+  it('renders a failed result step in red', () => {
+    render(<div>{renderEvent(event({ delivery_error: 'destination unreachable' }, 'mission.result_complete'))}</div>)
+    expect(screen.getByText(/Result step failed/)).toHaveClass('text-red-400')
   })
 })
 

@@ -1228,7 +1228,7 @@ export interface CreateMissionInput {
   agent_id?: string
   route?: string
   review_route?: string
-  // plan_route, when set, is the route explore/plan/replan/review run
+  // plan_route, when set, is the route discover/plan/replan/prove run
   // on instead of route: omit (or "") to use route for everything.
   plan_route?: string
   escalation_route?: string
@@ -1285,10 +1285,10 @@ export interface CreateMissionInput {
   // (or empty) delivers nowhere.
   destination_ids?: string[]
   // promote_kb_collection_id names a kb collection to promote this
-  // mission's markdown artifacts into on the terminal done transition
-  // (D-081, issue #370); omit (or "") promotes nothing automatically.
+  // mission's markdown artifacts into in the result phase's step
+  // (D-081, issue #370; D-082); omit (or "") promotes nothing automatically.
   promote_kb_collection_id?: string
-  // light requests a mission that skips explore/plan/review (D-069):
+  // light requests a mission that skips discover/plan/prove (D-069):
   // single worker turn, final message delivered as the result. Only
   // valid when kind === 'general'.
   light?: boolean
@@ -1316,8 +1316,8 @@ export async function getMissionExecutorOptions(route?: string): Promise<Executo
   return options ?? []
 }
 
-// getMissionExecutionPlan resolves all five mission phases (explore,
-// plan, execute, review, escalate) server-side for the given create
+// getMissionExecutionPlan resolves all five mission phases (discover,
+// plan, generate, prove, escalate) server-side for the given create
 // inputs, so the frontend never mirrors route/harness precedence
 // itself. Params match the create form's own fields; all optional.
 export async function getMissionExecutionPlan(params: {

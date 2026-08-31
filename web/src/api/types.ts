@@ -376,7 +376,7 @@ export interface MissionUsage {
   // billed_brain_by_currency/billed_harness_by_currency split billed
   // spend by who incurred it: the delegated CLI executor's own rows
   // (harness, D-051) vs everything else the missions engine billed
-  // directly (brain: explore/plan/worker/review).
+  // directly (brain: discover/plan/worker/prove).
   billed_brain_by_currency?: Record<string, number>
   billed_harness_by_currency?: Record<string, number>
   // unbilled_cost_by_currency is the API-equivalent price of rows
@@ -683,8 +683,8 @@ export interface ProgressNote {
 }
 
 // Mission is one long-running, agent-driven unit of work
-// (internal/brain/missions): explore -> plan -> execute -> review
-// under a state machine.
+// (internal/brain/missions): discover -> plan -> generate -> prove ->
+// result under a state machine.
 export interface Mission {
   id: string
   goal: string
@@ -695,7 +695,11 @@ export interface Mission {
   name?: string
   kind: 'coding' | 'general'
   agent_id?: string
-  phase: 'explore' | 'plan' | 'execute' | 'review' | 'done' | 'failed'
+  // Mission phase pipeline (D-082, issue #455): discover -> plan ->
+  // generate -> prove -> result -> done|failed. explore/execute/review
+  // are the pre-rename names, still possible on a mission whose row
+  // predates the data migration in scripts/pending-alters.md.
+  phase: 'discover' | 'plan' | 'generate' | 'prove' | 'result' | 'done' | 'failed' | 'explore' | 'execute' | 'review'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
   // failure_reason is derived server-side (Store.List/Get) from this
   // mission's latest mission.failed event's payload.reason:
@@ -718,9 +722,9 @@ export interface Mission {
   // nothing, 'push' pushes the branch, 'push_pr' pushes then opens a
   // pull request. Only ever set at create time, never by the model.
   on_complete?: '' | 'push' | 'push_pr'
-  // explore_notes is set once, at the end of the explore phase
+  // explore_notes is set once, at the end of the discover phase
   // (driver.go's runExplore): absent/empty for a mission created
-  // before the explore phase existed, or one that hasn't reached it
+  // before the discover phase existed, or one that hasn't reached it
   // yet.
   explore_notes?: string
   spec: { units: PlanUnit[]; assumptions?: PlanAssumption[] }
@@ -734,15 +738,15 @@ export interface Mission {
   budget_currency?: string
   route: string
   review_route: string
-  // plan_route, when set, is the route explore/plan/replan/review run
+  // plan_route, when set, is the route discover/plan/replan/prove run
   // on instead of route: "" means route covers everything.
   plan_route?: string
   escalation_route?: string
   // route_model/plan_route_model/review_route_model pin one phase axis
   // to one exact chain entry ("provider name/model") in the route it
   // would otherwise resolve: "" or absent keeps the first-usable walk.
-  // Precedence mirrors the route fields: route_model backs execute,
-  // plan_route_model backs explore/plan, review_route_model falls back
+  // Precedence mirrors the route fields: route_model backs generate,
+  // plan_route_model backs discover/plan, review_route_model falls back
   // review_route_model > plan_route_model > route_model.
   route_model?: string
   plan_route_model?: string
@@ -792,17 +796,17 @@ export interface Mission {
   // never sent over the wire (see api/missions.go's sanitizeMission).
   attachments?: { id: string; mime: string; name?: string }[]
   // destination_ids names operator-created destinations (email,
-  // webhook) this mission delivers its outcome digest to on the
-  // terminal done transition. Validated against the destinations table
+  // webhook) this mission delivers its outcome digest to in the result
+  // phase's step (D-082). Validated against the destinations table
   // at create time: never model-decided.
   destination_ids?: string[]
   // promote_kb_collection_id names a kb collection this mission's
-  // markdown artifacts promote into on the terminal done transition
-  // (D-081, issue #370). Absent/'' promotes nothing automatically; the
-  // operator can still promote manually via POST .../promote-kb.
+  // markdown artifacts promote into in the result phase's step
+  // (D-081, issue #370; D-082). Absent/'' promotes nothing automatically;
+  // the operator can still promote manually via POST .../promote-kb.
   promote_kb_collection_id?: string
-  // light marks a mission that skips explore/plan/review (D-069):
-  // kind=general only, born in phase=execute, one bare worker turn.
+  // light marks a mission that skips discover/plan/prove (D-069):
+  // kind=general only, born in phase=generate, one bare worker turn.
   // final_output is that worker's verbatim final message: the
   // deliverable itself, absent/empty until the mission reaches done.
   // Invariant: final_output is only ever populated when light is true;
@@ -811,8 +815,8 @@ export interface Mission {
   light?: boolean
   final_output?: string
   // artifact_refs are this mission's declared artifact files, best-
-  // effort copied into the attachment store on the terminal done
-  // transition: survive workspace deletion, unlike the live-workspace
+  // effort copied into the attachment store in the result phase's step
+  // (D-082): survive workspace deletion, unlike the live-workspace
   // files ArtifactsSection browses. Absent/empty until that copy runs.
   artifact_refs?: MediaRef[]
   created_at: string
@@ -942,8 +946,8 @@ export interface MissionRetryPayload {
 
 // MissionToolCallPayload is mission.tool_call's payload (runner.go's
 // runTurn, issue #369): one event per tool call finished during a
-// worker/explore/plan/review turn, in call order. phase matches the
-// mission.turn event for the same turn (explore/plan/execute/review),
+// worker/discover/plan/prove turn, in call order. phase matches the
+// mission.turn event for the same turn (discover/plan/generate/prove),
 // so the detail page can group a turn's trace. args_digest is capped
 // server-side, never a full args blob. kb_hits is set only for a
 // search_kb call (issue #413): an empty array means the search ran and
@@ -1050,7 +1054,7 @@ export interface MissionTemplate {
   agent_id?: string
   route?: string
   review_route?: string
-  // plan_route, when set, is the route explore/plan/replan/review run
+  // plan_route, when set, is the route discover/plan/replan/prove run
   // on instead of route: "" means route covers everything.
   plan_route?: string
   max_iterations?: number
@@ -1066,7 +1070,7 @@ export interface MissionTemplate {
   // fire time: a destination deleted or disabled since the schedule
   // was created is dropped silently rather than failing the fire.
   destination_ids?: string[]
-  // light marks a mission that skips explore/plan/review (D-069);
+  // light marks a mission that skips discover/plan/prove (D-069);
   // only valid for kind=general, rejected for kind=coding at schedule
   // create/update.
   light?: boolean
@@ -1118,9 +1122,9 @@ export interface ExecutionPlanEntry {
   prices?: ExecutionPlanPrices
 }
 
-// ExecutionPlanPhase is one of the five fixed mission phases (explore,
-// plan, execute, review, escalate) resolved server-side. axis is
-// 'native' or 'harness' - only execute is ever 'harness'.
+// ExecutionPlanPhase is one of the five fixed mission phases (discover,
+// plan, generate, prove, escalate) resolved server-side. axis is
+// 'native' or 'harness' - only generate is ever 'harness'.
 // route_source/harness_source name provenance for the phase table's
 // "(from agent)" style annotations.
 export interface ExecutionPlanPhase {

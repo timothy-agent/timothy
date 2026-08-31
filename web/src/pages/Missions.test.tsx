@@ -33,7 +33,7 @@ const mission: Mission = {
   id: 'm1',
   goal: 'Fix the login bug',
   kind: 'general',
-  phase: 'execute',
+  phase: 'generate',
   status: 'working',
   spec: { units: [] },
   progress: [],
