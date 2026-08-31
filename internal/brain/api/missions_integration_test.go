@@ -289,6 +289,56 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 	}
 }
 
+// TestMissionsNoteAcceptedOnEveryNonTerminalPhase confirms the note
+// endpoint (D-089, issue #458) is not generate-only: discover, plan,
+// prove, and generate all accept a note, and the mission.steered event
+// records which phase it landed in.
+func TestMissionsNoteAcceptedOnEveryNonTerminalPhase(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	for _, phase := range []missions.Phase{missions.PhaseDiscover, missions.PhasePlan, missions.PhaseGenerate, missions.PhaseProve} {
+		phase := phase
+		t.Run(string(phase), func(t *testing.T) {
+			id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission note phase test", Kind: "general"})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if err := store.ApplyTransition(ctx, id, missions.Transition{
+				Next: missions.StepState{Phase: phase, Status: missions.StatusIdle},
+			}); err != nil {
+				t.Fatalf("ApplyTransition: %v", err)
+			}
+
+			req := httptest.NewRequest("POST", "/v1/missions/"+id+"/note", strings.NewReader(`{"text":"steering note"}`))
+			req.Header.Set("Authorization", "Bearer tok")
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("note during %s = %d, want 200: %s", phase, w.Code, w.Body.String())
+			}
+
+			events, err := store.Events(ctx, id)
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			var sawPhase bool
+			for _, e := range events {
+				if e.Kind == "mission.steered" && strings.Contains(string(e.Payload), `"phase":"`+string(phase)+`"`) {
+					sawPhase = true
+				}
+			}
+			if !sawPhase {
+				t.Fatalf("mission.steered events = %+v, want one carrying phase=%s", events, phase)
+			}
+		})
+	}
+}
+
 // TestMissionsNoteUnknownMission confirms an unknown mission id 404s
 // before any store write is attempted.
 func TestMissionsNoteUnknownMission(t *testing.T) {

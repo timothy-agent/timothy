@@ -1364,9 +1364,11 @@ func (h *missionAPI) cancel(w http.ResponseWriter, r *http.Request) {
 
 // note handles POST /v1/missions/{id}/note: operator guidance injected
 // into a running mission via the existing progress-note pipeline — no
-// state transition, no driver signal. The next worker turn's packet
-// renders it like any other progress note (Render, packet.go), so
-// steering takes effect on its own without waking the mission early.
+// state transition, no driver signal. Accepted on any non-terminal
+// phase (D-089, issue #458): the mission.steered event carries the
+// phase it landed in, and every phase's packet renders the note like
+// any other progress note (Render, packet.go), so steering takes
+// effect on its own without waking the mission early.
 func (h *missionAPI) note(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Text string `json:"text"`
@@ -1386,7 +1388,7 @@ func (h *missionAPI) note(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	note := missions.NeutralizeSlot(truncateAnswer(body.Text, resumeAnswerCap))
-	if err := h.store.AppendEvent(r.Context(), id, "mission.steered", map[string]any{"note": note}); err != nil {
+	if err := h.store.AppendEvent(r.Context(), id, "mission.steered", map[string]any{"note": note, "phase": string(m.Phase)}); err != nil {
 		h.log.Warn("mission: record mission.steered event failed", "mission_id", id, "error", err)
 	}
 	if err := h.store.AppendProgress(r.Context(), id, "Operator note: "+note); err != nil {
