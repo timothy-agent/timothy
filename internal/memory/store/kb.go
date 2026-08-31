@@ -344,7 +344,13 @@ const (
 		WHEN 'web' THEN ` + provenanceWeightWebLit + `
 		ELSE ` + provenanceWeightCuratedLit + ` END)`
 
-	semanticSQL = kbProjection + `, (1 - (c.embedding <=> $1::vector)) * ` + boostMultiplierQ4 + ` * ` + provenanceMultiplier + ` AS score
+	// retrievalWeightMultiplier (D-085, issue #443) scales a chunk's
+	// score by its collection's kb_collections.retrieval_weight, joining
+	// the same post-fusion multiplication chain as boostMultiplier and
+	// provenanceMultiplier: a per-collection ranking dial, not a filter.
+	retrievalWeightMultiplier = `col.retrieval_weight`
+
+	semanticSQL = kbProjection + `, (1 - (c.embedding <=> $1::vector)) * ` + boostMultiplierQ4 + ` * ` + provenanceMultiplier + ` * ` + retrievalWeightMultiplier + ` AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id
@@ -354,7 +360,7 @@ const (
 		LIMIT $3`
 
 	keywordSQL = `WITH q AS (` + kbQueryCTEq1 + `)
-		` + kbProjection + `, ts_rank(c.tsv, q.query) * ` + boostMultiplierQ4 + ` * ` + provenanceMultiplier + ` AS score
+		` + kbProjection + `, ts_rank(c.tsv, q.query) * ` + boostMultiplierQ4 + ` * ` + provenanceMultiplier + ` * ` + retrievalWeightMultiplier + ` AS score
 		FROM kb_chunks c
 		JOIN kb_documents d ON d.id = c.document_id
 		JOIN kb_collections col ON col.id = d.collection_id, q
@@ -399,7 +405,7 @@ const (
 			) legs
 			GROUP BY id
 		)
-		` + kbProjection + `, fused.score * ` + boostMultiplierQ5 + ` * ` + provenanceMultiplier + ` AS score
+		` + kbProjection + `, fused.score * ` + boostMultiplierQ5 + ` * ` + provenanceMultiplier + ` * ` + retrievalWeightMultiplier + ` AS score
 		FROM fused
 		JOIN kb_chunks c ON c.id = fused.id
 		JOIN kb_documents d ON d.id = c.document_id

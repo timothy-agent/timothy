@@ -782,6 +782,139 @@ func TestKBGoldenKeywordGateAllowsTwoLexemeOverlap(t *testing.T) {
 	}
 }
 
+// D-085 (issue #443): per-collection retrieval weight.
+const (
+	kbRetrievalWeightBystanderCollection = "itest-kbretrieval-bystander"
+	kbRetrievalWeightOnTopicCollection   = "itest-kbretrieval-ontopic"
+)
+
+// seedKBRetrievalWeight builds a bystander document in a low-weight
+// (0.3) collection that wins raw vector similarity outright (on-axis
+// embedding, exact query text), and an on-topic document in a
+// normal-weight collection that shares the query's topic vocabulary
+// but sits off the query's exact axis, so it only wins on the fused
+// (leg-weighted) ranking once the collection weight is applied. This
+// mirrors D-083's bystander pattern but at the collection level: leg
+// weights alone can't fix this case because the bystander wins the raw
+// vector leg outright (kb.go's D-083 comment).
+func seedKBRetrievalWeight(t *testing.T) *KBStore {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := pgpool.New(t.Context(), dsn, log)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, _ = db.Exec(ctx, "DELETE FROM kb_collections WHERE name LIKE 'itest-kbretrieval-%'")
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		conn, err := pgx.Connect(cctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, "DELETE FROM kb_collections WHERE name LIKE 'itest-kbretrieval-%'")
+	})
+
+	st := NewKBStore(pool)
+
+	var bystanderCollID string
+	if err := db.QueryRow(ctx,
+		"INSERT INTO kb_collections (name, retrieval_weight) VALUES ($1, 0.3) RETURNING id",
+		kbRetrievalWeightBystanderCollection).Scan(&bystanderCollID); err != nil {
+		t.Fatalf("insert bystander collection: %v", err)
+	}
+	var onTopicCollID string
+	if err := db.QueryRow(ctx,
+		"INSERT INTO kb_collections (name) VALUES ($1) RETURNING id",
+		kbRetrievalWeightOnTopicCollection).Scan(&onTopicCollID); err != nil {
+		t.Fatalf("insert on-topic collection: %v", err)
+	}
+
+	insert := func(collID, title, content string, emb Vector) {
+		var docID string
+		if err := db.QueryRow(ctx, `INSERT INTO kb_documents (collection_id, title, status)
+			VALUES ($1, $2, 'ready') RETURNING id`, collID, title).Scan(&docID); err != nil {
+			t.Fatalf("insert document %s: %v", title, err)
+		}
+		if err := st.ReplaceChunks(ctx, docID, []KBChunk{
+			{Seq: 0, Content: content, Embedding: emb, EmbeddingModel: "itest"},
+		}); err != nil {
+			t.Fatalf("ReplaceChunks %s: %v", title, err)
+		}
+	}
+
+	// Bystander: on the query's exact axis, wins raw vector similarity
+	// outright, and shares every query lexeme for a high keyword rank too.
+	insert(bystanderCollID, "bystander", "kubernetes cluster migration notes for the operator's own background",
+		kbBasis(950))
+	// On-topic: shares the topic vocabulary but sits off-axis (lower
+	// cosine similarity), so it only outranks the bystander once the
+	// bystander's collection weight discounts its otherwise-winning score.
+	onTopicVec := make(Vector, 1024)
+	onTopicVec[950] = 0.9
+	onTopicVec[951] = 0.44
+	insert(onTopicCollID, "on-topic", "kubernetes cluster migration runbook for production workloads",
+		onTopicVec)
+
+	return st
+}
+
+// TestKBGoldenRetrievalWeightDownranksBystander pins D-085's main
+// contract: a bystander that wins raw retrieval on both legs (D-083's
+// stated limit) still loses the fused ranking once its collection's
+// low retrieval_weight is applied.
+func TestKBGoldenRetrievalWeightDownranksBystander(t *testing.T) {
+	st := seedKBRetrievalWeight(t)
+	hits, err := st.KBSearch(t.Context(), "kubernetes cluster migration", kbBasis(950),
+		[]string{kbRetrievalWeightBystanderCollection, kbRetrievalWeightOnTopicCollection}, nil, KBSearchHybrid, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	if len(hits) < 2 {
+		t.Fatalf("got %d hits, want at least 2: %+v", len(hits), hits)
+	}
+	if hits[0].DocumentTitle != "on-topic" {
+		t.Fatalf("top hit = %q, want the on-topic document ranked first ahead of the low-weight bystander: %+v",
+			hits[0].DocumentTitle, hits)
+	}
+}
+
+// TestKBGoldenRetrievalWeightStillReachableAlone pins D-085's other
+// half: a low collection weight must never hide a document that is the
+// only relevant content for a query (the "must NOT hard-hide" AC).
+func TestKBGoldenRetrievalWeightStillReachableAlone(t *testing.T) {
+	st := seedKBRetrievalWeight(t)
+	hits, err := st.KBSearch(t.Context(), "kubernetes cluster migration", kbBasis(950),
+		[]string{kbRetrievalWeightBystanderCollection}, nil, KBSearchHybrid, 5)
+	if err != nil {
+		t.Fatalf("KBSearch: %v", err)
+	}
+	found := false
+	for _, h := range hits {
+		if h.DocumentTitle == "bystander" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("low-weight collection's only relevant document was not retrieved when it's the only candidate: %+v", hits)
+	}
+}
+
 func TestKBGoldenSemanticFloor(t *testing.T) {
 	st := seedKBGolden(t)
 	// On-axis query hits; orthogonal query (similarity 0) must not.

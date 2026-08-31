@@ -833,6 +833,11 @@ CREATE TABLE IF NOT EXISTS kb_collections (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text UNIQUE NOT NULL,
     description text NOT NULL DEFAULT '',
+    -- retrieval_weight (D-085, issue #443) down-weights or up-weights a
+    -- whole collection at retrieval time: a low weight keeps
+    -- identity/profile collections out of general topical contests
+    -- while still retrievable when they are the only relevant content.
+    retrieval_weight real NOT NULL DEFAULT 1.0 CHECK (retrieval_weight > 0 AND retrieval_weight <= 2),
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
