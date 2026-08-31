@@ -80,6 +80,13 @@ const (
 	// "Europe/Amsterdam"), used to render delivery timestamps
 	// (destinations/render.go); "" defers to time.UTC.
 	ValueTimezone = "timezone"
+	// ValuePermissionTimeoutSeconds bounds how long a mission may sit
+	// parked on pending_permission before the periodic sweep
+	// (missions/sweep.go) auto-denies it (issue #445); "" or "0" (the
+	// default) disables the sweep entirely, preserving park-forever
+	// behavior. A mission's own permission_timeout_seconds column
+	// overrides this per mission.
+	ValuePermissionTimeoutSeconds = "permission_timeout_seconds"
 )
 
 var knownValueKeys = map[string]bool{
@@ -89,6 +96,7 @@ var knownValueKeys = map[string]bool{
 	ValueCodingExecutor:   true,
 	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
 	ValueWebBaseURL: true, ValueTimezone: true,
+	ValuePermissionTimeoutSeconds: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -166,6 +174,19 @@ func (s *Store) TokenBudget(ctx context.Context, def int) int {
 		}
 	}
 	return def
+}
+
+// PermissionTimeoutSeconds parses the global parked-permission timeout,
+// falling back to 0 (disabled) when unset or unparsable. 0 means the
+// sweep never auto-denies, preserving the original park-forever
+// behavior.
+func (s *Store) PermissionTimeoutSeconds(ctx context.Context) int {
+	if v := s.Value(ctx, ValuePermissionTimeoutSeconds); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // DefaultCurrency returns the configured default currency, falling
@@ -312,6 +333,11 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 	if key == ValueTokenBudget && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n <= 0 {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
+		}
+	}
+	if key == ValuePermissionTimeoutSeconds && value != "" {
+		if n, err := strconv.Atoi(value); err != nil || n < 0 {
+			return fmt.Errorf("%s must be a non-negative integer or empty", key)
 		}
 	}
 	if key == ValueDefaultCurrency && value != "" {

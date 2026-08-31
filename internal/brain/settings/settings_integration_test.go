@@ -300,3 +300,44 @@ func TestTimezoneSetting(t *testing.T) {
 		t.Fatalf("Location after clear = %v, want time.UTC", got)
 	}
 }
+
+// TestPermissionTimeoutSecondsSetting covers issue #445's global setting:
+// absent/unset (or explicitly 0) means disabled, matching the original
+// park-forever behavior of a deployment that never opts in; a positive
+// value round-trips, and a negative or non-numeric value is rejected.
+func TestPermissionTimeoutSecondsSetting(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if got := s.PermissionTimeoutSeconds(ctx); got != 0 {
+		t.Fatalf("PermissionTimeoutSeconds default = %d, want 0 (disabled)", got)
+	}
+
+	if err := s.SetValue(ctx, ValuePermissionTimeoutSeconds, "-5"); err == nil {
+		t.Fatal("negative timeout accepted")
+	}
+	if err := s.SetValue(ctx, ValuePermissionTimeoutSeconds, "not-a-number"); err == nil {
+		t.Fatal("non-numeric timeout accepted")
+	}
+
+	if err := s.SetValue(ctx, ValuePermissionTimeoutSeconds, "600"); err != nil {
+		t.Fatalf("SetValue 600: %v", err)
+	}
+	if got := s.PermissionTimeoutSeconds(ctx); got != 600 {
+		t.Fatalf("PermissionTimeoutSeconds after set = %d, want 600 (cache must invalidate on write)", got)
+	}
+
+	if err := s.SetValue(ctx, ValuePermissionTimeoutSeconds, "0"); err != nil {
+		t.Fatalf("SetValue 0: %v", err)
+	}
+	if got := s.PermissionTimeoutSeconds(ctx); got != 0 {
+		t.Fatalf("PermissionTimeoutSeconds after explicit 0 = %d, want 0 (disabled)", got)
+	}
+
+	if err := s.SetValue(ctx, ValuePermissionTimeoutSeconds, ""); err != nil {
+		t.Fatalf("SetValue clear: %v", err)
+	}
+	if got := s.PermissionTimeoutSeconds(ctx); got != 0 {
+		t.Fatalf("PermissionTimeoutSeconds after clear = %d, want 0", got)
+	}
+}

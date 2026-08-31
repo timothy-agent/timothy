@@ -22,3 +22,12 @@ BEGIN
     END IF;
 END $$;
 ```
+
+## Parked permission timeout (issue #445)
+
+Required on live DBs before/with the next deploy. Additive, safe to
+run before deploy.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS permission_timeout_seconds integer;
+```

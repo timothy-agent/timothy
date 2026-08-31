@@ -761,7 +761,14 @@ CREATE TABLE IF NOT EXISTS missions (
     -- mirroring attachments' own shape. Never bytes (D-045). Lets a
     -- mission's result artifacts survive workspace deletion, unlike the
     -- live-workspace files ArtifactsSection browses.
-    artifact_refs          jsonb NOT NULL DEFAULT '[]'
+    artifact_refs          jsonb NOT NULL DEFAULT '[]',
+    -- Per-mission override for how long an unanswered pending_permission
+    -- may stay parked before the periodic sweep (missions/sweep.go)
+    -- auto-denies it (issue #445). NULL inherits the global
+    -- permission_timeout_seconds setting; the setting itself defaults to
+    -- 0 (disabled, park forever) so this is opt-in and changes nothing
+    -- for an existing deployment that never sets it.
+    permission_timeout_seconds integer
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);
