@@ -68,13 +68,13 @@ func missionPolicyFor(m Mission) missionPolicy {
 }
 
 // initialPhase is the phase a newly created mission row starts in:
-// PhaseExecute for a light mission (D-069, skips explore/plan),
-// PhaseExplore otherwise. Shared by store.go's Create and
+// PhaseGenerate for a light mission (D-069, skips discover/plan),
+// PhaseDiscover otherwise. Shared by store.go's Create and
 // scheduler.go's createFromTemplate, which both used to duplicate
 // this check inline.
 func initialPhase(kind string, light bool) Phase {
 	if policyFor(kind, light).skipsPlanning {
-		return PhaseExecute
+		return PhaseGenerate
 	}
-	return PhaseExplore
+	return PhaseDiscover
 }

@@ -65,7 +65,7 @@ type MissionTemplate struct {
 	AgentID     string `json:"agent_id"`
 	Route       string `json:"route"`
 	ReviewRoute string `json:"review_route"`
-	// PlanRoute, when set, is the route explore/plan/replan/review run
+	// PlanRoute, when set, is the route discover/plan/replan/prove run
 	// on instead of Route (see missions.Mission.PlanRoute). "" means
 	// Route covers everything.
 	PlanRoute      string   `json:"plan_route,omitempty"`
@@ -77,7 +77,7 @@ type MissionTemplate struct {
 	// time via resolveTemplateDefaults, same precedence as create()'s
 	// own handling of an omitted request field.
 	Harness string `json:"harness,omitempty"`
-	// Light missions (D-069) skip explore/plan/review; only meaningful
+	// Light missions (D-069) skip discover/plan/prove; only meaningful
 	// on a kind=general template (rejected at schedule create/update for
 	// kind=coding, api/schedules.go).
 	Light bool `json:"light,omitempty"`

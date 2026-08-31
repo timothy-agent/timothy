@@ -60,7 +60,7 @@ type WorkPacket struct {
 	// resolver is unwired. Native workers only: a delegated CLI has no
 	// load_skill tool, so RenderForDelegated never includes it.
 	SkillsIndex string
-	// Light marks a mission that skips explore/plan/review (D-069) —
+	// Light marks a mission that skips discover/plan/prove (D-069):
 	// Render uses lightSystemPreamble instead of nativeSystemPreamble,
 	// and Spec is always empty so the Plan block never renders.
 	Light bool
@@ -70,7 +70,7 @@ type WorkPacket struct {
 }
 
 // toolDisciplineNote is the tool-loop stop-rule contract shared by the
-// explore prompt (runner.go) and both worker preambles: without it,
+// discover prompt (runner.go) and both worker preambles: without it,
 // models repeat failed tool calls verbatim and burn iterations
 // (observed on glm-5.3 and the nova family), and fill gaps with
 // plausible guesses instead of naming what's missing.
@@ -192,7 +192,7 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 // renderAttachments formats each attachment with markdown into a
 // "Attached document <name>:" section, neutralized like every other
 // model-reachable field — shared by WorkPacket.Render and the
-// explore/plan runner sessions (runner.go) so the three near-identical
+// discover/plan runner sessions (runner.go) so the three near-identical
 // loops stay in sync. An attachment with no markdown (a conversion
 // that somehow never ran) renders nothing.
 func renderAttachments(atts []MissionAttachment) string {

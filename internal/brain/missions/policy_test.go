@@ -66,10 +66,10 @@ func TestInitialPhase(t *testing.T) {
 		light bool
 		want  Phase
 	}{
-		{name: "coding starts at explore", kind: KindCoding, want: PhaseExplore},
-		{name: "general starts at explore", kind: KindGeneral, want: PhaseExplore},
-		{name: "light general starts at execute", kind: KindGeneral, light: true, want: PhaseExecute},
-		{name: "unknown kind starts at explore even if light requested", kind: "bogus", light: true, want: PhaseExplore},
+		{name: "coding starts at discover", kind: KindCoding, want: PhaseDiscover},
+		{name: "general starts at discover", kind: KindGeneral, want: PhaseDiscover},
+		{name: "light general starts at generate", kind: KindGeneral, light: true, want: PhaseGenerate},
+		{name: "unknown kind starts at discover even if light requested", kind: "bogus", light: true, want: PhaseDiscover},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

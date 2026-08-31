@@ -112,7 +112,7 @@ func TestMissionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.Phase != PhaseExplore || m.Status != StatusIdle || m.MaxIterations != 3 {
+	if m.Phase != PhaseDiscover || m.Status != StatusIdle || m.MaxIterations != 3 {
 		t.Fatalf("Get = %+v, want default explore/idle/3", m)
 	}
 
@@ -515,7 +515,7 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 	if !m.Light {
 		t.Fatal("Light = false, want true")
 	}
-	if m.Phase != PhaseExecute {
+	if m.Phase != PhaseGenerate {
 		t.Fatalf("Phase = %q, want execute for a light mission at create", m.Phase)
 	}
 	if m.FinalOutput != "" {
@@ -544,7 +544,7 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 	if m2.Light {
 		t.Fatal("Light = true, want false when not set")
 	}
-	if m2.Phase != PhaseExplore {
+	if m2.Phase != PhaseDiscover {
 		t.Fatalf("Phase = %q, want explore for a non-light mission at create", m2.Phase)
 	}
 }
@@ -830,7 +830,7 @@ func TestApplyTransitionClearsPendingPermissionOnTerminal(t *testing.T) {
 	}
 
 	// Non-terminal transition must NOT clear it: only a terminal one.
-	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8}}); err != nil {
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8}}); err != nil {
 		t.Fatalf("ApplyTransition (non-terminal): %v", err)
 	}
 	m, err := s.Get(ctx, id)
@@ -880,8 +880,8 @@ func TestApplyTransitionRejectsWriteOnTerminalMission(t *testing.T) {
 	// A stale in-flight turn's transition arrives after cancel already
 	// landed: must be rejected, not written over the terminal row.
 	err = s.ApplyTransition(ctx, id, Transition{
-		Next:   StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8},
-		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "execute"}}},
+		Next:   StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "generate"}}},
 	})
 	if !errors.Is(err, ErrTerminal) {
 		t.Fatalf("ApplyTransition (stale turn) err = %v, want ErrTerminal", err)
@@ -928,8 +928,8 @@ func TestApplyTransitionRejectsWriteOnUnrecognizedPhase(t *testing.T) {
 	}
 
 	err = s.ApplyTransition(ctx, id, Transition{
-		Next:   StepState{Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8},
-		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "execute"}}},
+		Next:   StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.turn", Payload: map[string]any{"phase": "generate"}}},
 	})
 	if !errors.Is(err, ErrTerminal) {
 		t.Fatalf("ApplyTransition (unrecognized phase) err = %v, want ErrTerminal", err)
@@ -1221,7 +1221,7 @@ func TestRecoverWorking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create working: %v", err)
 	}
-	if err := s.ApplyTransition(ctx, workingID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+	if err := s.ApplyTransition(ctx, workingID, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
 		t.Fatalf("ApplyTransition working: %v", err)
 	}
 
@@ -1249,7 +1249,7 @@ func TestRecoverStaleWorking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create fresh: %v", err)
 	}
-	if err := s.ApplyTransition(ctx, freshID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+	if err := s.ApplyTransition(ctx, freshID, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
 		t.Fatalf("ApplyTransition fresh: %v", err)
 	}
 
@@ -1257,7 +1257,7 @@ func TestRecoverStaleWorking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create stale: %v", err)
 	}
-	if err := s.ApplyTransition(ctx, staleID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+	if err := s.ApplyTransition(ctx, staleID, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
 		t.Fatalf("ApplyTransition stale: %v", err)
 	}
 	db, err := s.db.Get()
@@ -1294,7 +1294,7 @@ func TestBackoffPausedAndCountBackoffPauses(t *testing.T) {
 	}
 	pauseBackoff := func() {
 		if err := s.ApplyTransition(ctx, backoffID, Transition{
-			Next:   StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseBackoff},
+			Next:   StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseBackoff},
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff)}}},
 		}); err != nil {
 			t.Fatalf("ApplyTransition pause backoff: %v", err)
@@ -1307,7 +1307,7 @@ func TestBackoffPausedAndCountBackoffPauses(t *testing.T) {
 		t.Fatalf("Create infra: %v", err)
 	}
 	if err := s.ApplyTransition(ctx, infraID, Transition{
-		Next:   StepState{Phase: PhaseExecute, Status: StatusPaused, PauseReason: PauseInfra},
+		Next:   StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseInfra},
 		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra)}}},
 	}); err != nil {
 		t.Fatalf("ApplyTransition pause infra: %v", err)
@@ -1337,7 +1337,7 @@ func TestBackoffPausedAndCountBackoffPauses(t *testing.T) {
 	}
 
 	// Resume, then pause for backoff again: count must accumulate.
-	if err := s.ApplyTransition(ctx, backoffID, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusIdle}}); err != nil {
+	if err := s.ApplyTransition(ctx, backoffID, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusIdle}}); err != nil {
 		t.Fatalf("ApplyTransition resume: %v", err)
 	}
 	pauseBackoff()
@@ -1409,7 +1409,7 @@ func TestPendingPermissionsAndResolveTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
 		t.Fatalf("ApplyTransition working: %v", err)
 	}
 	if err := s.SetPendingPermission(ctx, id, "perm-timeout-1", "shell", `{"command":"rm -rf x"}`, "destructive", "deletes files"); err != nil {
@@ -1511,7 +1511,7 @@ func TestSweepPermissionTimeoutsAutoDeniesAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
 		t.Fatalf("ApplyTransition working: %v", err)
 	}
 	if err := s.SetPendingPermission(ctx, id, "perm-sweep-1", "shell", `{"command":"rm -rf x"}`, "destructive", "deletes files"); err != nil {

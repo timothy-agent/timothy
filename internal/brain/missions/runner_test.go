@@ -1584,9 +1584,9 @@ func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
 		t.Fatalf("RunWorker: %v", err)
 	}
 	want := []toolCallRecord{
-		{"m1", "execute", "search_kb", `{"query":"first"}`, "ok", 12, nil},
-		{"m1", "execute", "shell", `{"command":"rm -rf /"}`, "denied", 3, nil},
-		{"m1", "execute", "write_file", `{"path":"x"}`, "error", 40, nil},
+		{"m1", "generate", "search_kb", `{"query":"first"}`, "ok", 12, nil},
+		{"m1", "generate", "shell", `{"command":"rm -rf /"}`, "denied", 3, nil},
+		{"m1", "generate", "write_file", `{"path":"x"}`, "error", 40, nil},
 	}
 	if len(parker.toolCalls) != len(want) {
 		t.Fatalf("toolCalls = %+v, want %d entries", parker.toolCalls, len(want))
@@ -1917,7 +1917,7 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 		textEvent("partial work"),
 	}}}
 	r := newTestRunner(agent)
-	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
 	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
 		t.Fatalf("err = %v, want no-terminal error", err)
 	}
@@ -1935,7 +1935,7 @@ func TestRunTurnIncompleteIsError(t *testing.T) {
 		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
 		t.Fatalf("err = %v, want incomplete-stream error", err)
 	}
 }
@@ -1948,7 +1948,7 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		{Type: stream.EventError},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate); err == nil || !strings.Contains(err.Error(), "provider stream error") {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
@@ -1983,7 +1983,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 	done := make(chan struct{})
 	var err error
 	go func() {
-		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseExecute)
+		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
 		close(done)
 	}()
 	select {

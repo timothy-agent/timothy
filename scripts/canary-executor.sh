@@ -6,7 +6,7 @@
 # own contract — executor.spawned/executor.result events actually fire,
 # the CLI subprocess produced real usage, and the mission still went
 # through LLM review and harness verification like any other coding
-# mission. A native-served execute phase cannot quietly pass: the
+# mission. A native-served generate phase cannot quietly pass: the
 # assertions demand executor.spawned and exactly one executor.result,
 # so this canary fails loudly the moment the executor path itself breaks.
 set -euo pipefail
@@ -80,7 +80,7 @@ if [[ -z "${provider_id}" ]]; then
   echo "canary-executor: FAIL — no enabled provider with driver=anthropic or options.anthropic_base_url set; configure one in Settings first" >&2
   exit 2
 fi
-# The chain entry also serves explore/plan/review natively, so the
+# The chain entry also serves discover/plan/prove natively, so the
 # model must be one the provider actually hosts — its own default,
 # unless the operator overrides.
 MODEL="${CANARY_EXECUTOR_MODEL:-${provider_default_model:-${EXECUTOR_MODEL_FALLBACK}}}"
@@ -104,11 +104,11 @@ else
 fi
 
 # A single native chain entry (D-051 rework: harness is no longer a
-# chain field). explore/plan/review always stream natively over this
-# same route; execute alone dispatches to the harness named on the
-# mission itself. Silent fail-over to native during execute cannot mask
+# chain field). discover/plan/prove always stream natively over this
+# same route; generate alone dispatches to the harness named on the
+# mission itself. Silent fail-over to native during generate cannot mask
 # an executor break — the assertions below demand executor.spawned and
-# exactly one executor.result, so a native-served execute phase still
+# exactly one executor.result, so a native-served generate phase still
 # fails the canary loudly.
 chain_json="$(PROVIDER_ID="${provider_id}" MODEL="${MODEL}" python3 <<'PY'
 import json, os

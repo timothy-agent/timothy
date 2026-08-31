@@ -124,7 +124,7 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 	// transition leaves behind, so Signal(InputResume) has something
 	// legal to resume from.
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseExecute, Status: missions.StatusWaitingForInput},
+		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusWaitingForInput},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseExecute, Status: missions.StatusPaused, PauseReason: missions.PauseInfra},
+		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusPaused, PauseReason: missions.PauseInfra},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseExecute, Status: missions.StatusIdle},
+		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusIdle},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Phase != missions.PhaseExecute || got.Status != missions.StatusIdle {
+	if got.Phase != missions.PhaseGenerate || got.Status != missions.StatusIdle {
 		t.Fatalf("phase/status after note = %s/%s, want unchanged execute/idle", got.Phase, got.Status)
 	}
 	if len(got.Progress) != 1 || !strings.Contains(got.Progress[0].Note, "Operator note: focus on the staging config next") {

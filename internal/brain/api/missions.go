@@ -35,7 +35,7 @@ import (
 
 // maxMissionAttachments caps how many PDFs a single mission create
 // request may attach — bounds worst-case prompt size across every
-// explore/plan/work turn (each attachment's markdown is rendered every
+// discover/plan/work turn (each attachment's markdown is rendered every
 // turn, unlike chat where it's per-message).
 const maxMissionAttachments = 8
 
@@ -363,7 +363,7 @@ type createMissionRequest struct {
 	AgentID     string `json:"agent_id"`
 	Route       string `json:"route"`
 	ReviewRoute string `json:"review_route"`
-	// PlanRoute, when set, is the route explore/plan/replan/review run
+	// PlanRoute, when set, is the route discover/plan/replan/prove run
 	// on instead of Route (see missions.Mission.PlanRoute for full
 	// precedence). "" is the default: Route covers everything, exact
 	// prior behavior. Not defaulted from an agent's route/review_route —
@@ -460,7 +460,7 @@ type createMissionRequest struct {
 	// model never supplies or addresses it, same invariant as
 	// DestinationIDs.
 	PromoteKBCollectionID string `json:"promote_kb_collection_id"`
-	// Light requests a mission that skips explore/plan/review (D-069):
+	// Light requests a mission that skips discover/plan/prove (D-069):
 	// kind=general only, rejected outright on kind=coding (explicit or
 	// classified). Always the operator's explicit choice — the classify
 	// preview only suggests a value, never sets it.
@@ -1033,7 +1033,7 @@ func (h *missionAPI) baseRoute(ctx context.Context, kind, explicitRoute, agentID
 	return "", "none"
 }
 
-// resolveHarness resolves the execute phase's harness via
+// resolveHarness resolves the generate phase's harness via
 // missions.ResolveHarness, the same precedence chain create() and the
 // scheduler's fire path use: explicit -> agent -> settings -> native.
 // Only kind=coding can ever delegate (mirrors policy.go's
@@ -1104,12 +1104,12 @@ func (h *missionAPI) resolveEntries(ctx context.Context, route, harness, modelPi
 }
 
 const (
-	lightSkipReason   = "light missions run execute only"
-	escalateOffReason = "no escalation route set; failures retry on the execute route"
+	lightSkipReason   = "light missions run generate only"
+	escalateOffReason = "no escalation route set; failures retry on the generate route"
 )
 
 // executionPlan serves GET /v1/missions/execution-plan, resolving
-// every phase (explore, plan, execute, review, escalate) server-side
+// every phase (discover, plan, generate, prove, escalate) server-side
 // so the web UI never recomputes route/harness precedence itself
 // (docs/2026-08-26-mission-execution-plan.md, slice 1). Query params
 // mirror createMissionRequest's own route fields; all are optional.
@@ -1131,8 +1131,8 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 	escalationRoute := q.Get("escalation_route")
 	light := q.Get("light") == "true"
 	// Model pins (D-078) mirror runner.go's own precedence: routeModel
-	// backs execute, planRouteModel backs explore/plan, reviewModel
-	// falls back reviewRouteModel > planRouteModel > routeModel — see
+	// backs generate, planRouteModel backs discover/plan, reviewModel
+	// falls back reviewRouteModel > planRouteModel > routeModel, see
 	// oversightModel/reviewModel.
 	routeModel := q.Get("route_model")
 	planRouteModel := q.Get("plan_route_model")
@@ -1164,12 +1164,12 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 
 	// reviewRoute mirrors runner.go's own helper: review_route, else
 	// plan_route (as "inherited-from-plan"), else the base route (as
-	// "inherited-from-execute"). oversight already equals planRoute
-	// when planRoute is set (see above), so that's the discriminator —
+	// "inherited-from-generate"). oversight already equals planRoute
+	// when planRoute is set (see above), so that's the discriminator,
 	// oversightSource itself may also read "explicit" when it fell
 	// through to an explicit base route, which must not be confused
 	// with plan_route actually being set.
-	review, reviewSource := oversight, "inherited-from-execute"
+	review, reviewSource := oversight, "inherited-from-generate"
 	if planRoute != "" {
 		reviewSource = "inherited-from-plan"
 	}
@@ -1179,11 +1179,11 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 
 	phases := make([]executionPlanPhase, 0, 5)
 
-	exploreEntries, exploreErr := h.resolveEntries(ctx, oversight, "", oversightModel)
+	discoverEntries, discoverErr := h.resolveEntries(ctx, oversight, "", oversightModel)
 	phases = append(phases, executionPlanPhase{
-		Phase: "explore", Route: oversight, RouteSource: oversightSource, Axis: "native",
-		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, exploreErr),
-		Entries: emptyEntries(exploreEntries),
+		Phase: "discover", Route: oversight, RouteSource: oversightSource, Axis: "native",
+		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, discoverErr),
+		Entries: emptyEntries(discoverEntries),
 	})
 
 	planEntries, planErr := h.resolveEntries(ctx, oversight, "", oversightModel)
@@ -1193,19 +1193,19 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 		Entries: emptyEntries(planEntries),
 	})
 
-	executeEntries, executeErr := h.resolveEntries(ctx, base, harness, routeModel)
+	generateEntries, generateErr := h.resolveEntries(ctx, base, harness, routeModel)
 	phases = append(phases, executionPlanPhase{
-		Phase: "execute", Route: base, RouteSource: baseSource, Axis: executeAxis,
+		Phase: "generate", Route: base, RouteSource: baseSource, Axis: executeAxis,
 		Harness: harness, HarnessSource: harnessSource,
-		SkipReason: executeErr,
-		Entries:    emptyEntries(executeEntries),
+		SkipReason: generateErr,
+		Entries:    emptyEntries(generateEntries),
 	})
 
-	reviewEntries, reviewErr := h.resolveEntries(ctx, review, "", reviewModel)
+	proveEntries, proveErr := h.resolveEntries(ctx, review, "", reviewModel)
 	phases = append(phases, executionPlanPhase{
-		Phase: "review", Route: review, RouteSource: reviewSource, Axis: "native",
-		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, reviewErr),
-		Entries: emptyEntries(reviewEntries),
+		Phase: "prove", Route: review, RouteSource: reviewSource, Axis: "native",
+		Skipped: light, SkipReason: skipReasonIf(light, lightSkipReason, proveErr),
+		Entries: emptyEntries(proveEntries),
 	})
 
 	if escalationRoute != "" {

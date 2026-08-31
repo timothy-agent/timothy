@@ -573,7 +573,7 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 // runner must pause the mission as infra on the FIRST turn.
 func TestDriverErrExecutorAuthPausesImmediately(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: stderr said please run /login", ErrExecutorAuth)}
 	d := testDriver(store, runner)
 

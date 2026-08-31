@@ -960,7 +960,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		Steering: r.steeringFor(m.ID, packet.Progress),
 	}
 
-	res, err := r.runTurn(ctx, req, missionStatusToolName, PhaseExecute)
+	res, err := r.runTurn(ctx, req, missionStatusToolName, PhaseGenerate)
 	text, seenURLs := res.text, res.seenURLs
 	if err != nil {
 		return WorkerVerdict{}, text, err
@@ -977,7 +977,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one mission_status tool call: done, retry, or blocked."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName, PhaseExecute)
+	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName, PhaseGenerate)
 	recoverText := recoverRes.text
 	seenURLs = append(seenURLs, recoverRes.seenURLs...)
 	if err != nil {
@@ -1091,7 +1091,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		Unattended:   m.ScheduleID != "",
 	}
 
-	res, err := r.runTurn(ctx, req, exploreNotesToolName, PhaseExplore)
+	res, err := r.runTurn(ctx, req, exploreNotesToolName, PhaseDiscover)
 	text := res.text
 	if err != nil {
 		return "", err
@@ -1106,7 +1106,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one explore_notes tool call containing your findings."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, exploreNotesToolName, PhaseExplore)
+	recoverRes, err := r.runTurn(ctx, recoverReq, exploreNotesToolName, PhaseDiscover)
 	recoverText := recoverRes.text
 	if err != nil {
 		return "", err
@@ -1172,7 +1172,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
 	}
-	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseReview)
+	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseProve)
 	text, args := res.text, res.sentinelArgs
 	if err != nil {
 		return ReviewVerdict{}, nil, err
@@ -1187,7 +1187,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 			provider.Message{Role: "assistant", Content: text},
 			provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one review_verdict tool call: approve or rework."},
 		)
-		recoverRes, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName, PhaseReview)
+		recoverRes, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName, PhaseProve)
 		recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 		if err != nil {
 			return ReviewVerdict{}, nil, err

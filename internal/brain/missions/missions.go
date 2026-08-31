@@ -1,9 +1,10 @@
 // Package missions implements Phase 1 of the mission engine: an
 // agent-driven, long-running unit of work that walks a fixed phase
-// pipeline (explore -> plan -> execute -> review -> done|failed)
-// under a pure state machine, executed by native (in-process) model
-// turns via loop.Agent. Delegated CLI executors (claude/codex
-// subprocess shelling) are explicitly out of scope for this phase.
+// pipeline (discover -> plan -> generate -> prove -> result ->
+// done|failed) under a pure state machine, executed by native
+// (in-process) model turns via loop.Agent. Delegated CLI executors
+// (claude/codex subprocess shelling) are explicitly out of scope for
+// this phase.
 package missions
 
 import (
@@ -124,9 +125,9 @@ type Mission struct {
 	// (internal/brain/missions/executor). Coding-only; a general mission
 	// always runs native.
 	Harness string `json:"harness,omitempty"`
-	// Light missions (D-069, general kind only) skip explore/plan/
-	// review entirely: born in phase=execute, one bare worker turn, the
-	// final worker message is the deliverable.
+	// Light missions (D-069, general kind only) skip discover/plan/
+	// prove entirely: born in phase=generate, one bare worker turn, the
+	// final worker message is the deliverable, then result/done.
 	Light bool `json:"light"`
 	// FinalOutput is a light mission's verbatim final worker message,
 	// set on the done transition (driver.go's runExecute) — the

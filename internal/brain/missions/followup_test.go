@@ -19,7 +19,7 @@ func followUpBlockedRunner() *scriptedRunner {
 // mid-flight is refused before any child mission is created.
 func TestCreateFollowUpRejectsNonTerminalParent(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Goal: "do the thing", Kind: "general", Phase: PhaseExecute, Status: StatusWorking})
+	store.put("parent", Mission{ID: "parent", Goal: "do the thing", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking})
 	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", "do more")

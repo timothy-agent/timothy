@@ -249,7 +249,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	return m, nil
 }
 
-// Create inserts a mission row in phase=explore, status=idle.
+// Create inserts a mission row in phase=discover, status=idle.
 func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	db, err := s.db.Get()
 	if err != nil {

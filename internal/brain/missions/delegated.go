@@ -115,7 +115,7 @@ type cooldownKey struct {
 	harness    string
 }
 
-// delegatedRunner wraps nativeRunner: explore/plan/review pass through
+// delegatedRunner wraps nativeRunner: discover/plan/prove pass through
 // untouched (delegated CLI executors only ever serve worker turns).
 // RunWorker dispatches on the mission's own Harness column (D-051
 // rework — no longer a per-chain-entry field): m.Harness == "" defers
