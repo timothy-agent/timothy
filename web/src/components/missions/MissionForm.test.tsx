@@ -563,6 +563,91 @@ describe('MissionForm: follow-up', () => {
   })
 })
 
+describe('MissionForm: kind and light pre-fill (#447)', () => {
+  it('pre-selects coding when a repo/connector is seeded and kind is untouched', async () => {
+    vi.mocked(listConnectorRepos).mockResolvedValue([])
+    renderForm(
+      <MissionForm
+        mode="create"
+        initial={{
+          repo_url: 'https://github.com/octocat/hello-world.git',
+          connector_id: 'c1',
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Continue the work' } })
+    expect(await screen.findByText('Coding · branches from repo')).toBeInTheDocument()
+  })
+
+  it('a manual general choice is never overridden by the repo signal', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm-manual' } as Mission)
+    vi.mocked(listConnectorRepos).mockResolvedValue([])
+    renderForm(
+      <MissionForm
+        mode="create"
+        initial={{
+          kind: 'coding',
+          repo_url: 'https://github.com/octocat/hello-world.git',
+          connector_id: 'c1',
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Continue the work' } })
+    expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+
+    // Operator explicitly picks general despite the repo signal.
+    fireEvent.click(screen.getByText('Coding · branches from repo'))
+    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ kind: 'general' })),
+    )
+  })
+
+  it('pre-fills light on for a summarize-shaped goal on a general mission', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'summarize my inbox from this week' },
+    })
+
+    expect(await screen.findByLabelText(/Light mission/)).toBeChecked()
+  })
+
+  it('a manually toggled-off light stays off after the goal changes again', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'summarize my inbox from this week' },
+    })
+    const toggle = await screen.findByLabelText(/Light mission/)
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle) // operator turns it off
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'summarize my inbox from this week, and also the calendar' },
+    })
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('leaves kind and light at their current defaults when no signal is present', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Look into something' } })
+    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Light mission/)).not.toBeChecked()
+  })
+})
+
 describe('MissionForm: kind chip', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -755,10 +840,10 @@ describe('MissionForm: light mission toggle', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
-    // Explicitly check it, then immediately uncheck it: the operator's
-    // deliberate final choice is false, which must survive the classify
-    // preview resolving to light: true.
-    fireEvent.click(screen.getByLabelText(/Light mission/))
+    // The goal's own summarize-shaped text pre-fills the toggle on
+    // (issue #447) before the classify debounce even fires; the
+    // operator then explicitly unchecks it, and that deliberate final
+    // choice must survive the classify preview resolving to light: true.
     fireEvent.click(screen.getByLabelText(/Light mission/))
     expect(screen.getByLabelText(/Light mission/)).not.toBeChecked()
 

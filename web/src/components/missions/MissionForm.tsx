@@ -238,6 +238,20 @@ const commitStyleChoices: { value: string; label: string }[] = [
   { value: 'plain', label: 'Plain' },
 ]
 
+// lightSignalPattern matches goal text shaped like a lightweight
+// digest/summary ask (issue #447): conservative on purpose, since a
+// false positive wrongly forces light on while a false negative just
+// leaves the manual toggle to the operator.
+const lightSignalPattern = /\b(summarize|summary|digest|brief overview)\b/i
+
+// looksLikeLightGoal flags a short goal that reads like a summary/
+// digest ask, the pre-fill signal for the light-mission toggle.
+function looksLikeLightGoal(goal: string): boolean {
+  const trimmed = goal.trim()
+  if (trimmed === '' || trimmed.split(/\s+/).length > 20) return false
+  return lightSignalPattern.test(trimmed)
+}
+
 // expiresAt is stored as the wire-compatible 'YYYY-MM-DDTHH:mm' string the
 // API already expects; these split it into a Date (for the calendar) and a
 // 'HH:mm' string (for the time input) and back.
@@ -396,6 +410,23 @@ export function MissionForm({
   const [newRepo, setNewRepo] = useState(false)
   const [newRepoName, setNewRepoName] = useState('')
   const [newRepoPrivate, setNewRepoPrivate] = useState(true)
+
+  // A repo/connector is considered "attached" once it resolves to a
+  // clone URL: mirrors githubSourceReady's own readiness check below.
+  const repoAttached =
+    repoSource === 'github' && !!connectorID && (newRepo ? newRepoName.trim() !== '' : !!selectedRepo)
+
+  // Kind pre-fill signal 1 (issue #447): a repo/connector attached
+  // implies a coding mission. Purely client-side, re-evaluated whenever
+  // the repo attachment changes, and never fires once the operator has
+  // made an explicit kind choice (kindLocked). Also locks kind so the
+  // goal-classify debounce below can't clobber this signal afterward.
+  useEffect(() => {
+    if (repoAttached && !kindLocked) {
+      setKind('coding')
+      setKindLocked(true)
+    }
+  }, [repoAttached, kindLocked])
 
   // Consent-at-create for the mission's auto-completion action:
   // resets whenever the GitHub source is unpicked, since on_complete is
@@ -608,6 +639,15 @@ export function MissionForm({
       setClassifying(false)
     }
   }, [goal, kindLocked, lightTouched])
+
+  // Light pre-fill signal 2 (issue #447): a short goal shaped like a
+  // summary/digest ask, on a general mission, pre-toggles light on.
+  // Re-evaluated on every goal edit but never fires once the operator
+  // has touched the toggle directly (lightTouched).
+  useEffect(() => {
+    if (kind !== 'general' || lightTouched) return
+    if (looksLikeLightGoal(goal)) setLight(true)
+  }, [goal, kind, lightTouched])
 
   const onGoalChange = (v: string) => {
     setGoal(v)
