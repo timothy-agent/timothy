@@ -937,9 +937,12 @@ export interface ExecutorSkippedPayload {
 }
 
 // MissionSteeredPayload is mission.steered's payload: operator
-// guidance injected into a running mission via POST .../note.
+// guidance injected into a running mission via POST .../note. phase is
+// the mission's phase when the note landed (issue #458); absent on
+// events recorded before that field existed.
 export interface MissionSteeredPayload {
   note: string
+  phase?: string
 }
 
 // MissionTurnPayload is mission.turn's payload: one event per phase

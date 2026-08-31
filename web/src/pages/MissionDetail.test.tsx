@@ -769,21 +769,31 @@ describe('MissionDetail', () => {
     await waitFor(() => expect(resumeMission).toHaveBeenCalledWith('m1'))
   })
 
-  it('sends a note for a working mission and clears the input on success', async () => {
+  it('sends a note for a working mission via the Intervene modal and closes on success', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    const input = screen.getByPlaceholderText('Send a note to steer this mission…')
+    fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
+    const input = screen.getByPlaceholderText('Steer this mission (markdown supported)…')
     fireEvent.change(input, { target: { value: 'focus on staging next' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(sendMissionNote).toHaveBeenCalledWith('m1', 'focus on staging next'))
-    await waitFor(() => expect(input).toHaveValue(''))
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText('Steer this mission (markdown supported)…')).toBeNull(),
+    )
   })
 
-  it('hides the note affordance once the mission is terminal', async () => {
+  it('shows the mission phase and status in the Intervene modal', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
+    await screen.findByText((_, el) => el?.textContent === 'Currently in generate · working')
+  })
+
+  it('disables the Intervene button once the mission is terminal', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'idle' })
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.queryByPlaceholderText('Send a note to steer this mission…')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Intervene' })).toBeDisabled()
   })
 
   it('surfaces the most recent mission.paused event detail while paused', async () => {

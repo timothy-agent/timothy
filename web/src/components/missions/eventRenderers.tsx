@@ -147,8 +147,12 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
   'mission.resumed': () => 'Resumed',
   'mission.steered': (p) => {
-    const { note } = p as MissionSteeredPayload
-    return <span className="text-amber-400">Operator note: {note}</span>
+    const { note, phase } = p as MissionSteeredPayload
+    return (
+      <span className="text-amber-400">
+        Operator note{phase ? ` (${phase})` : ''}: {note}
+      </span>
+    )
   },
   'mission.recovery': () => 'Recovered after a restart',
   'mission.violation': () => <span className="text-red-400">Policy violation detected</span>,

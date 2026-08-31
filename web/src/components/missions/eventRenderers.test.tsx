@@ -181,6 +181,13 @@ describe('mission.steered rendering', () => {
     expect(row).toBeInTheDocument()
     expect(row).toHaveClass('text-amber-400')
   })
+
+  it('includes the phase when the payload carries one', () => {
+    render(
+      <div>{renderEvent(event({ note: 'hurry up', phase: 'discover' }, 'mission.steered'))}</div>,
+    )
+    expect(screen.getByText(/Operator note \(discover\): hurry up/)).toBeInTheDocument()
+  })
 })
 
 describe('executor lifecycle event rendering', () => {

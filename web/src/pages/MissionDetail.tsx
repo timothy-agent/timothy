@@ -4,6 +4,7 @@ import {
   Delete02Icon,
   GitBranchIcon,
   GitPullRequestCreateIcon,
+  Message01Icon,
   Pdf02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -38,7 +39,6 @@ import { GoalSection } from '../components/missions/GoalSection'
 import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Button } from '../components/ui/button'
-import { Input } from '../components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -46,6 +46,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
+import { Textarea } from '../components/ui/textarea'
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
 import { CursorIcon } from '../components/icons/CursorIcon'
@@ -227,6 +228,7 @@ export function MissionDetail() {
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [intervening, setIntervening] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [sendingNote, setSendingNote] = useState(false)
   const [pushing, setPushing] = useState(false)
@@ -415,6 +417,7 @@ export function MissionDetail() {
     try {
       await sendMissionNote(id, text)
       setNoteText('')
+      setIntervening(false)
       toast.success('Note sent')
     } catch (err) {
       toast.error('Could not send note', { description: errText(err) })
@@ -701,24 +704,6 @@ export function MissionDetail() {
             {pauseDetail && (
               <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>
             )}
-            {!terminalPhases.has(mission.phase) && (
-              <div className="mt-3 flex max-w-md gap-2">
-                <Input
-                  placeholder="Send a note to steer this mission…"
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && void sendNote()}
-                  disabled={sendingNote}
-                />
-                <Button
-                  variant="outline"
-                  disabled={sendingNote || !noteText.trim()}
-                  onClick={() => void sendNote()}
-                >
-                  Send note
-                </Button>
-              </div>
-            )}
           </div>
           <TooltipProvider>
             <div className="flex shrink-0 gap-2">
@@ -756,6 +741,25 @@ export function MissionDetail() {
                   )}
                 </>
               )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      variant="outline"
+                      disabled={terminalPhases.has(mission.phase)}
+                      onClick={() => setIntervening(true)}
+                    >
+                      <HugeiconsIcon icon={Message01Icon} />
+                      Intervene
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {terminalPhases.has(mission.phase)
+                    ? 'This mission has finished; there is nothing left to steer'
+                    : 'Send a note to steer this mission, whatever phase it is in'}
+                </TooltipContent>
+              </Tooltip>
               {canResume && (
                 <Button variant="outline" disabled={busy} onClick={() => void resume()}>
                   Resume
@@ -925,6 +929,33 @@ export function MissionDetail() {
             </Button>
             <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={intervening} onOpenChange={setIntervening}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Intervene</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Currently in <span className="font-medium text-foreground">{mission.phase}</span> ·{' '}
+            {mission.status.replace(/_/g, ' ')}
+          </p>
+          <Textarea
+            placeholder="Steer this mission (markdown supported)…"
+            value={noteText}
+            onChange={(e) => setNoteText(e.target.value)}
+            disabled={sendingNote}
+            rows={5}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIntervening(false)}>
+              Cancel
+            </Button>
+            <Button disabled={sendingNote || !noteText.trim()} onClick={() => void sendNote()}>
+              Send
             </Button>
           </DialogFooter>
         </DialogContent>
