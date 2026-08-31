@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
@@ -49,7 +50,7 @@ func (f *fakeKBStore) FindDocumentBySource(_ context.Context, sourceType, source
 
 func (f *fakeKBStore) CreateDocument(_ context.Context, collectionID, title, sourceType, sourceRef, provenance, markdown string, bytes int64) (string, error) {
 	f.nextID++
-	id := "doc" + string(rune('0'+f.nextID))
+	id := "doc" + strconv.Itoa(f.nextID)
 	f.docs[id] = kb.Document{ID: id, CollectionID: collectionID, Title: title, SourceType: sourceType, SourceRef: sourceRef, Provenance: provenance, Markdown: markdown, Bytes: bytes, Status: "pending"}
 	return id, nil
 }
