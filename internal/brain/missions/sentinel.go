@@ -107,6 +107,18 @@ func PlanTool() *tools.Tool {
 				"reason": {
 					"type": "string",
 					"description": "Required when infeasible is true: why the goal is infeasible."
+				},
+				"assumptions": {
+					"type": "array",
+					"description": "Ambiguities in the goal you resolved silently, and the default you chose for each. Omit or leave empty when the goal was unambiguous. Example: {\"assumption\": \"no language version was specified\", \"default\": \"Python 3.12\"}.",
+					"items": {
+						"type": "object",
+						"properties": {
+							"assumption": {"type": "string", "description": "What was ambiguous."},
+							"default": {"type": "string", "description": "The default you chose."}
+						},
+						"required": ["assumption", "default"]
+					}
 				}
 			},
 			"required": []

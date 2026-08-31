@@ -266,6 +266,18 @@ type Spec struct {
 	// match the submit_plan tool schema's property name).
 	Infeasible       bool   `json:"infeasible,omitempty"`
 	InfeasibleReason string `json:"reason,omitempty"`
+	// Assumptions lists ambiguities the planner resolved silently and
+	// the default it chose for each (issue #446): informational only,
+	// never a gate — the operator catches a wrong guess via a steering
+	// note, not a pause.
+	Assumptions []PlanAssumption `json:"assumptions,omitempty"`
+}
+
+// PlanAssumption is one ambiguity the planner resolved on its own,
+// paired with the default it picked.
+type PlanAssumption struct {
+	Assumption string `json:"assumption"`
+	Default    string `json:"default"`
 }
 
 // PlanUnit is one item of the plan. Passes is flipped only by the

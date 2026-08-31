@@ -584,6 +584,79 @@ func TestDriverPlanReceivesStoredExploreNotes(t *testing.T) {
 	}
 }
 
+// TestDriverPlanCreatedEventCarriesAssumptions confirms issue #446:
+// the mission.plan_created event payload includes the plan's
+// assumptions when the planner declared any, and omits the key
+// entirely when it did not (no empty "assumptions" key noise).
+func TestDriverPlanCreatedEventCarriesAssumptions(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		plans: []Spec{{
+			Units:       []PlanUnit{{Title: "only unit"}},
+			Assumptions: []PlanAssumption{{Assumption: "no language version was specified", Default: "Python 3.12"}},
+		}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	events, err := store.Events(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var payload map[string]any
+	for _, e := range events {
+		if e.Kind == "mission.plan_created" {
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal plan_created payload: %v", err)
+			}
+		}
+	}
+	if payload == nil {
+		t.Fatal("no mission.plan_created event recorded")
+	}
+	assumptions, ok := payload["assumptions"].([]any)
+	if !ok || len(assumptions) != 1 {
+		t.Fatalf("plan_created payload assumptions = %+v, want one entry", payload["assumptions"])
+	}
+}
+
+// TestDriverPlanCreatedEventOmitsEmptyAssumptions confirms an
+// unambiguous plan's event payload carries no "assumptions" key at
+// all, not an empty array.
+func TestDriverPlanCreatedEventOmitsEmptyAssumptions(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		plans: []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	events, err := store.Events(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var payload map[string]any
+	for _, e := range events {
+		if e.Kind == "mission.plan_created" {
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal plan_created payload: %v", err)
+			}
+		}
+	}
+	if payload == nil {
+		t.Fatal("no mission.plan_created event recorded")
+	}
+	if _, ok := payload["assumptions"]; ok {
+		t.Fatalf("plan_created payload = %+v, want no assumptions key for an unambiguous plan", payload)
+	}
+}
+
 // TestDriverPlanInfeasibleFailsMission confirms D-077: when the
 // planner reports the goal cannot be achieved as stated, the driver
 // feeds InputPlanInfeasible through the normal transition path and the

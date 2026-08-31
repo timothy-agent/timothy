@@ -492,6 +492,49 @@ func TestPlanSessionParsesSpec(t *testing.T) {
 	}
 }
 
+// TestPlanSessionParsesAssumptions covers issue #446: assumptions is
+// optional, so a plan omitting it, sending an empty array, or sending
+// populated entries must all parse cleanly with the expected result.
+func TestPlanSessionParsesAssumptions(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want []PlanAssumption
+	}{
+		{
+			name: "omitted",
+			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./..."}]}`,
+			want: nil,
+		},
+		{
+			name: "empty",
+			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./..."}],"assumptions":[]}`,
+			want: nil,
+		},
+		{
+			name: "populated",
+			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./..."}],"assumptions":[{"assumption":"no language version was specified","default":"Python 3.12"}]}`,
+			want: []PlanAssumption{{Assumption: "no language version was specified", Default: "Python 3.12"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, err := parseSpec(tt.json)
+			if err != nil {
+				t.Fatalf("parseSpec: %v", err)
+			}
+			if len(spec.Assumptions) != len(tt.want) {
+				t.Fatalf("Assumptions = %+v, want %+v", spec.Assumptions, tt.want)
+			}
+			for i := range tt.want {
+				if spec.Assumptions[i] != tt.want[i] {
+					t.Fatalf("Assumptions[%d] = %+v, want %+v", i, spec.Assumptions[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestPlanSessionPromptsLengthAwareSplitting pins that the planner is
 // told to split a unit whose own deliverable demands a long
 // continuous generation (many chapters/sections/files) along its

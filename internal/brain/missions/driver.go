@@ -1060,7 +1060,11 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 		}
 		return StepInput{Input: InputPlanInfeasible, Reason: spec.InfeasibleReason}, nil
 	}
-	if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_created", map[string]any{"units": len(spec.Units)}); err != nil {
+	planCreatedPayload := map[string]any{"units": len(spec.Units)}
+	if len(spec.Assumptions) > 0 {
+		planCreatedPayload["assumptions"] = spec.Assumptions
+	}
+	if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_created", planCreatedPayload); err != nil {
 		return StepInput{}, fmt.Errorf("driver: record plan: %w", err)
 	}
 	if m.ReplanUsed {
