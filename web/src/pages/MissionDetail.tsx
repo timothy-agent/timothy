@@ -849,11 +849,6 @@ export function MissionDetail() {
                 </Badge>
               )
             })()}
-          {mission.flow && mission.flow !== 'full' && (
-            <Badge variant="secondary" title="Phase set this mission runs, chosen at create time">
-              flow · {mission.flow.replace(/_/g, ' ')}
-            </Badge>
-          )}
           {mission.on_complete === 'push' && (
             <Badge variant="secondary" title="This mission pushes its branch automatically when it finishes">
               auto-push

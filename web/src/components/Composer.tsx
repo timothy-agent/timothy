@@ -583,7 +583,7 @@ export function Composer({
       className="relative rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40"
     >
       {popupOpen && (
-        <div className="absolute bottom-full left-2 z-10 mb-1 max-h-72 w-64 overflow-y-auto rounded-lg border border-zinc-950/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-zinc-800">
+        <div className="absolute bottom-full left-2 z-50 mb-1 max-h-72 w-64 overflow-y-auto rounded-lg border border-zinc-950/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-zinc-800">
           {combinedOptions.map((opt, i) => (
             <div key={i}>
               {opt.header && (

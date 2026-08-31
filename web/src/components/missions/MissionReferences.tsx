@@ -107,7 +107,7 @@ export function GoalTextarea({
     <div className="space-y-2">
       <div className="relative">
         {open && (
-          <div className="absolute bottom-full left-0 z-10 mb-1 max-h-72 w-72 overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-lg">
+          <div className="absolute bottom-full left-0 z-50 mb-1 max-h-72 w-72 overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-lg">
             {groups.map((group) => (
               <div key={group.kind}>
                 <div className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
