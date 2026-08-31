@@ -86,6 +86,11 @@ export function MissionCard({ mission }: { mission: Mission }) {
             needs approval
           </span>
         )}
+        {mission.pending_input && (
+          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            needs answer
+          </span>
+        )}
         <span className="inline-flex items-center gap-1">
           <HarnessIcon harness={mission.harness} />
           {harnessLabel(mission.harness)}

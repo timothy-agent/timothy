@@ -762,6 +762,19 @@ export interface Mission {
   // know an unanswered request auto-denies after a timeout.
   pending_permission_parked_at?: string
   permission_timeout_seconds?: number
+  // pending_input is ask_user's park (D-088, issue #457): a second park
+  // kind alongside pending_permission, present only while a phase turn
+  // is waiting on the operator's answer (status: "waiting_for_input").
+  pending_input?: {
+    question: string
+    kind: 'mcq' | 'yes_no' | 'open'
+    options?: string[]
+    proposed_default: string
+    asked_at: string
+    phase: string
+  }
+  // asks_used counts ask_user calls this mission has spent so far.
+  asks_used: number
   last_evidence?: string
   auto_approve_safe: boolean
   // auto_approve_plan: true (default) advances straight from plan to

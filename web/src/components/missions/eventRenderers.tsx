@@ -108,6 +108,29 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const { tool, decision } = asRecord(p)
     return `Permission ${String(decision ?? '?')}: ${String(tool ?? 'a tool call')}`
   },
+  'mission.input_requested': (p) => {
+    const { question, kind, proposed_default } = asRecord(p)
+    return (
+      <span>
+        Question asked ({String(kind ?? '?')}): {String(question ?? '?')}
+        {proposed_default ? (
+          <span className="text-zinc-500"> (proposed: {String(proposed_default)})</span>
+        ) : null}
+      </span>
+    )
+  },
+  'mission.input_answered': (p) => {
+    const { answer } = asRecord(p)
+    return `Answered: ${String(answer ?? '?')}`
+  },
+  'mission.input_timed_out': (p) => {
+    const { applied_default } = asRecord(p)
+    return (
+      <span className="text-amber-400">
+        Question timed out, applied default: {String(applied_default ?? '?')}
+      </span>
+    )
+  },
   'mission.permission_denied': (p) => {
     const { tool, detail } = p as MissionPermissionDeniedPayload
     return (

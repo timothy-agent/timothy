@@ -1466,6 +1466,17 @@ export async function rediscoverMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/rediscover`, { method: 'POST' })
 }
 
+// answerMissionQuestion answers a mission parked on ask_user
+// (pending_input): mcq/yes_no answers must match the question's own
+// options, open accepts any non-empty text, the server validates
+// again either way.
+export async function answerMissionQuestion(id: string, answer: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/answer`, {
+    method: 'POST',
+    body: JSON.stringify({ answer }),
+  })
+}
+
 // pushMission pushes the mission's branch to its worktree's origin
 // remote. credentialRef is optional: omitted (undefined) resolves a
 // github-connection mission's connector PAT server-side; passing one

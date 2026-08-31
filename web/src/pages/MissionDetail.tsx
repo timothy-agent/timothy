@@ -12,6 +12,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   answerMissionPermission,
+  answerMissionQuestion,
   approveMissionPlan,
   cancelMission,
   deleteMission,
@@ -28,6 +29,7 @@ import {
 } from '../api/client'
 import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
+import { InputRequestBanner } from '../components/missions/InputRequestBanner'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanApprovalBanner } from '../components/missions/PlanApprovalBanner'
 import { PlanSection } from '../components/missions/PlanSection'
@@ -258,6 +260,14 @@ export function MissionDetail() {
   const [answeredPlanDecision, setAnsweredPlanDecision] = useState<'approve' | 'replan' | 'rediscover' | null>(
     null,
   )
+  // answeredQuestion mirrors answeredPermission's own pattern: the
+  // answer POST resolves right away, but pending_input only clears once
+  // the harness resumes the mission and the next fetch catches up.
+  // Keyed by the question text (not a bare boolean) so a NEW question
+  // arriving later renders as a fresh actionable card.
+  const [answeredQuestion, setAnsweredQuestion] = useState<{ question: string; answer: string } | null>(
+    null,
+  )
 
   const refreshSeq = useRef(0)
 
@@ -279,6 +289,8 @@ export function MissionDetail() {
   const wasPendingRef = useRef(false)
   const pendingPlanApproval = mission?.phase === 'plan' && mission?.pause_reason === 'approval'
   const wasPlanParkedRef = useRef(false)
+  const pendingInput = mission?.pending_input
+  const wasQuestionPendingRef = useRef(false)
 
   useEffect(() => {
     refresh()
@@ -324,6 +336,13 @@ export function MissionDetail() {
     wasPlanParkedRef.current = pendingPlanApproval
     if (!pendingPlanApproval) setAnsweredPlanDecision(null)
   }, [pendingPlanApproval])
+
+  // Same chime-once-on-transition treatment for a new ask_user question
+  // arriving, tracked with its own ref.
+  useEffect(() => {
+    if (pendingInput && !wasQuestionPendingRef.current) playAlertSound()
+    wasQuestionPendingRef.current = !!pendingInput
+  }, [pendingInput])
 
   if (!id) return null
   if (!mission) {
@@ -501,6 +520,18 @@ export function MissionDetail() {
     }
   }
 
+  const answerQuestion = async (answer: string) => {
+    const question = pendingInput?.question
+    try {
+      await answerMissionQuestion(id, answer)
+      if (question) setAnsweredQuestion({ question, answer })
+    } catch (err) {
+      toast.error('Could not send answer', { description: errText(err) })
+    } finally {
+      refresh()
+    }
+  }
+
   // Cross-tab/refresh fallback: this tab may not have the optimistic
   // answeredPermission state (a fresh load, or the decision happened
   // in another tab) but the events list already fetched can still show
@@ -555,6 +586,22 @@ export function MissionDetail() {
           onApprove={() => void approvePlan()}
           onReplan={(feedback) => void requestReplan(feedback)}
           onRediscover={() => void rediscover()}
+        />
+      )}
+
+      {pendingInput && (
+        <InputRequestBanner
+          question={pendingInput.question}
+          kind={pendingInput.kind}
+          options={pendingInput.options}
+          proposedDefault={pendingInput.proposed_default}
+          answered={
+            answeredQuestion && answeredQuestion.question === pendingInput.question
+              ? answeredQuestion.answer
+              : undefined
+          }
+          onAnswer={(answer) => void answerQuestion(answer)}
+          askedAt={pendingInput.asked_at}
         />
       )}
 

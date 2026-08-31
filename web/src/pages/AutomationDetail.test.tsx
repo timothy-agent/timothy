@@ -54,6 +54,7 @@ const firedMission: Mission = {
   review_route: 'default',
   auto_approve_safe: true,
   auto_approve_plan: true,
+  asks_used: 0,
   schedule_id: 's1',
   created_at: '2026-07-27T08:00:00Z',
   updated_at: '2026-07-27T08:01:00Z',
