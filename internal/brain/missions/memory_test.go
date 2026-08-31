@@ -27,7 +27,7 @@ func TestOutcomeDigest(t *testing.T) {
 				Spec:         Spec{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
 			},
 			events: []Event{
-				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"execute","duration_ms":500}`)},
+				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"generate","duration_ms":500}`)},
 				{Kind: "mission.review_verdict", Payload: json.RawMessage(`{"decision":"approved","findings":"looks good"}`)},
 			},
 			terminal: PhaseDone,
@@ -38,7 +38,7 @@ func TestOutcomeDigest(t *testing.T) {
 				"review verdict: approved", "review findings: looks good",
 				"terminal state: done",
 			},
-			wantExcludes: []string{"duration_ms", "\"phase\":\"execute\""},
+			wantExcludes: []string{"duration_ms", "\"phase\":\"generate\""},
 		},
 		{
 			name: "review skipped",
@@ -167,7 +167,7 @@ func waitForCalls(t *testing.T, r *recordingExtract, want int) {
 
 func TestDriverExtractsMemoryOnDone(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -177,7 +177,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	driveN(t, d, "m1", 4) // explore -> plan -> execute -> review -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
 
 	waitForCalls(t, rec, 1)
 
@@ -189,7 +189,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 
 func TestDriverExtractsMemoryOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 1, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}
@@ -210,7 +210,7 @@ func TestDriverExtractsMemoryOnFailed(t *testing.T) {
 
 func TestDriverDoesNotExtractOnNonTerminalTransitions(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -220,7 +220,7 @@ func TestDriverDoesNotExtractOnNonTerminalTransitions(t *testing.T) {
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	// explore -> plan -> execute: 2 non-terminal Advance calls.
+	// discover -> plan: 2 non-terminal Advance calls.
 	driveN(t, d, "m1", 2)
 
 	// Give any (wrongly) dispatched goroutine a chance to run before
@@ -261,7 +261,7 @@ func TestDriverExtractsMemoryOnceOnRedrive(t *testing.T) {
 // committed before extraction was even dispatched.
 func TestDriverMemoryExtractionErrorDoesNotBlockTransition(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -275,7 +275,7 @@ func TestDriverMemoryExtractionErrorDoesNotBlockTransition(t *testing.T) {
 		rec.fn()(ctx, sessionID, seq, text, route)
 	})
 
-	driveN(t, d, "m1", 4)
+	driveN(t, d, "m1", 5)
 	m, err := store.Get(context.Background(), "m1")
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestDriverMemoryExtractionErrorDoesNotBlockTransition(t *testing.T) {
 
 func TestDriverSkipsExtractionWhenNilClient(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -296,7 +296,7 @@ func TestDriverSkipsExtractionWhenNilClient(t *testing.T) {
 	}
 	d := testDriver(store, runner) // no SetMemoryExtract call: d.memory stays nil
 
-	driveN(t, d, "m1", 4)
+	driveN(t, d, "m1", 5)
 
 	events, _ := store.Events(context.Background(), "m1")
 	if alreadyExtracted(events) {
@@ -364,17 +364,21 @@ func TestBackfillMissionNameFillsEmptyName(t *testing.T) {
 	}
 }
 
-// TestRunTerminalHooksSkipsNamingWhenAlreadyNamed covers the
-// already-named guard, which now lives in runTerminalHooks rather than
-// backfillMissionName itself.
-func TestRunTerminalHooksSkipsNamingWhenAlreadyNamed(t *testing.T) {
+// TestRunResultSkipsNamingWhenAlreadyNamed covers the already-named
+// guard in runResult (D-082): naming moved there from the old
+// terminal-transition hook, so an already-named mission must still
+// never re-fire the generator.
+func TestRunResultSkipsNamingWhenAlreadyNamed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Name: "Already Named", Phase: PhaseDone, Status: StatusDone})
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Name: "Already Named", Phase: PhaseResult, Status: StatusWorking})
 	d := testDriver(store, &scriptedRunner{})
 	rec := &recordingNameMission{name: "Nice Name"}
 	d.SetNameMission(rec.fn())
 
-	d.runTerminalHooks(context.Background(), "m1", PhaseDone, nil)
+	m, _ := store.Get(context.Background(), "m1")
+	if _, err := d.runResult(context.Background(), m); err != nil {
+		t.Fatalf("runResult: %v", err)
+	}
 	if got := rec.count(); got != 0 {
 		t.Fatalf("nameMission calls for an already-named mission = %d, want 0", got)
 	}

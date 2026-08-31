@@ -540,7 +540,8 @@ CREATE TABLE IF NOT EXISTS workflow_run_events (
 -- Missions are long-running, agent-driven units of work distinct from
 -- chat sessions: a mission survives across many model turns, tracks a
 -- plan and progress log, and drives itself through a fixed phase
--- pipeline under a state machine (internal/brain/missions).
+-- pipeline (discover -> plan -> generate -> prove -> result ->
+-- done|failed) under a state machine (internal/brain/missions).
 --
 -- phase and status are deliberately NOT CHECK-constrained. A future
 -- code rollback that doesn't recognize a newer phase/status value must
@@ -552,7 +553,7 @@ CREATE TABLE IF NOT EXISTS missions (
     goal                  text NOT NULL,
     kind                  text NOT NULL CHECK (kind IN ('coding', 'general')),
     agent_id              uuid REFERENCES agents(id),
-    phase                 text NOT NULL DEFAULT 'explore',
+    phase                 text NOT NULL DEFAULT 'discover',
     status                text NOT NULL DEFAULT 'idle',
     pause_reason          text NOT NULL DEFAULT '',
     pause_message         text NOT NULL DEFAULT '',
@@ -571,11 +572,11 @@ CREATE TABLE IF NOT EXISTS missions (
     budget_currency       char(3) NOT NULL DEFAULT 'USD',
     route                 text NOT NULL DEFAULT '',
     review_route          text NOT NULL DEFAULT '',
-    -- PlanRoute, when set, is the route oversight phases (explore, plan,
-    -- replan) run on instead of route -- "GLM plans, local executes":
-    -- worker/execute turns keep running on route while oversight runs on
+    -- PlanRoute, when set, is the route oversight phases (discover, plan,
+    -- replan) run on instead of route -- "GLM plans, local generates":
+    -- worker/generate turns keep running on route while oversight runs on
     -- a stronger model. '' (the default) means route covers everything,
-    -- exact prior behavior. review_route still overrides for review
+    -- exact prior behavior. review_route still overrides for prove
     -- specifically: precedence there is review_route > plan_route >
     -- route (internal/brain/missions/runner.go's reviewRoute).
     plan_route            text NOT NULL DEFAULT '',
@@ -584,7 +585,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- otherwise resolve, as "provider name/model" (router.go's
     -- splitProviderModelHint) -- '' means today's first-usable walk.
     -- Precedence mirrors the route helpers exactly: route_model backs
-    -- execute (workerRoute), plan_route_model backs explore/plan
+    -- generate (workerRoute), plan_route_model backs discover/plan
     -- (oversightRoute), review_route_model falls back review_route_model
     -- > plan_route_model > route_model (runner.go's reviewRouteModel).
     -- Escalation is never pinned: it is a failure-path fallback and a
@@ -611,12 +612,12 @@ CREATE TABLE IF NOT EXISTS missions (
     parent_mission_id     uuid REFERENCES missions(id) ON DELETE SET NULL,
     -- ParentContext is an immutable outcome-digest snapshot of the
     -- parent mission taken at follow-up create time (missions.OutcomeDigest),
-    -- rendered into the follow-up's explore/plan/work prompts.
+    -- rendered into the follow-up's discover/plan/work prompts.
     parent_context        text NOT NULL DEFAULT '',
     -- ReferencedContext is an immutable digest of the composer #-mention
     -- references (missions/sessions/kb docs) picked at create time,
     -- resolved via chat.Service's reference resolver -- rendered into
-    -- explore/plan/work prompts additive to parent_context, not a
+    -- discover/plan/work prompts additive to parent_context, not a
     -- replacement for it (a mission can be both a follow-up AND carry
     -- its own picked references).
     referenced_context    text NOT NULL DEFAULT '',
@@ -651,9 +652,9 @@ CREATE TABLE IF NOT EXISTS missions (
     -- settings at dispatch. "" is native; "claude-cli" (etc) names a
     -- registered delegated executor (internal/brain/missions/executor).
     harness               text NOT NULL DEFAULT '',
-    -- Light missions (D-069, general kind only) skip explore/plan/
-    -- review: born in phase=execute, one bare worker turn, the final
-    -- worker message is the deliverable.
+    -- Light missions (D-069, general kind only) skip discover/plan/
+    -- prove: born in phase=generate, one bare worker turn, the final
+    -- worker message is the deliverable, then result/done.
     light                 boolean NOT NULL DEFAULT false,
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
@@ -675,10 +676,10 @@ CREATE TABLE IF NOT EXISTS missions (
     -- mission never touches tracked files -- its diff is
     -- always empty, so the reviewer previously had zero evidence to
     -- judge and rejected every round. This carries the worker's own
-    -- mission_status evidence text forward from execute to review,
+    -- mission_status evidence text forward from generate to prove,
     -- alongside (not instead of) the diff for coding missions.
     last_evidence         text NOT NULL DEFAULT '',
-    -- The explore phase's findings, carried into the plan phase's
+    -- The discover phase's findings, carried into the plan phase's
     -- prompt (internal/brain/missions/driver.go's runPlan) so the
     -- planner sees what exploration turned up, not just the bare goal.
     explore_notes         text NOT NULL DEFAULT '',
@@ -718,7 +719,7 @@ CREATE TABLE IF NOT EXISTS missions (
     repo_url              text NOT NULL DEFAULT '',
     connector_id          text NOT NULL DEFAULT '',
     -- Consent-at-create for the mission's auto-completion action: ''
-    -- (default) does nothing when the mission reaches done; 'push'
+    -- (default) does nothing in the result phase's step; 'push'
     -- pushes the branch; 'push_pr' pushes then opens a pull request.
     -- Chosen by the operator at create time (api/missions.go), never
     -- decided by the model -- keeps the pushes-stay-human invariant:
@@ -735,15 +736,15 @@ CREATE TABLE IF NOT EXISTS missions (
     -- branchtemplate.go); commit_style is 'conventional' or 'plain'.
     branch_pattern        text NOT NULL DEFAULT '',
     commit_style          text NOT NULL DEFAULT '',
-    -- Destination ids to deliver this mission's outcome digest to on
-    -- the terminal done transition (destinations.go's Deliverer,
-    -- driver.go's terminal-transition hook). Never model-decided:
-    -- api/missions.go's create validates every id against the
-    -- operator-owned destinations table before it lands here.
+    -- Destination ids to deliver this mission's outcome digest to in
+    -- the result phase's step (destinations.go's Deliverer,
+    -- driver.go's runResult, D-082). Never model-decided: api/missions.go's
+    -- create validates every id against the operator-owned destinations
+    -- table before it lands here.
     destination_ids       uuid[] NOT NULL DEFAULT '{}',
     -- D-081 (issue #370): kb collection to promote this mission's
-    -- markdown artifacts into on the terminal done transition
-    -- (kb.go's promoteToKB, driver.go's fireOnComplete-style hook). ''
+    -- markdown artifacts into in the result phase's step
+    -- (kb.go's promoteToKB, driver.go's runResult, D-082). ''
     -- (default) does nothing. Explicit id, never a default "Missions"
     -- collection auto-create, same as destination_ids above; the
     -- operator can also promote manually via POST .../promote-kb after
@@ -756,8 +757,8 @@ CREATE TABLE IF NOT EXISTS missions (
     workflow_run_id        uuid REFERENCES workflow_runs(id),
     workflow_step          text NOT NULL DEFAULT '',
     -- ArtifactRefs: this mission's declared artifact files, best-effort
-    -- copied into the attachment store on the terminal done transition
-    -- (driver.go's copyArtifacts): a jsonb array of {id, mime, name},
+    -- copied into the attachment store in the result phase's step
+    -- (driver.go's copyArtifacts, D-082): a jsonb array of {id, mime, name},
     -- mirroring attachments' own shape. Never bytes (D-045). Lets a
     -- mission's result artifacts survive workspace deletion, unlike the
     -- live-workspace files ArtifactsSection browses.

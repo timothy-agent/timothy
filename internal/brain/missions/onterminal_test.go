@@ -44,7 +44,7 @@ func waitForOnTerminalCalls(t *testing.T, r *recordingOnTerminal, want int) {
 
 func TestDriverFiresOnTerminalForWorkflowMission(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, WorkflowRunID: "run-1", WorkflowStep: "step-a"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, WorkflowRunID: "run-1", WorkflowStep: "step-a"})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -54,7 +54,7 @@ func TestDriverFiresOnTerminalForWorkflowMission(t *testing.T) {
 	rec := &recordingOnTerminal{}
 	d.SetOnTerminal(rec.fn())
 
-	driveN(t, d, "m1", 4) // explore -> plan -> execute -> review -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
 
 	waitForOnTerminalCalls(t, rec, 1)
 	if rec.calls[0] != "m1" {
@@ -64,7 +64,7 @@ func TestDriverFiresOnTerminalForWorkflowMission(t *testing.T) {
 
 func TestDriverSkipsOnTerminalWithoutWorkflowRunID(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -74,7 +74,7 @@ func TestDriverSkipsOnTerminalWithoutWorkflowRunID(t *testing.T) {
 	rec := &recordingOnTerminal{}
 	d.SetOnTerminal(rec.fn())
 
-	driveN(t, d, "m1", 4)
+	driveN(t, d, "m1", 5)
 
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.count(); got != 0 {
@@ -84,7 +84,7 @@ func TestDriverSkipsOnTerminalWithoutWorkflowRunID(t *testing.T) {
 
 func TestDriverSkipsOnTerminalWhenNilHook(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, WorkflowRunID: "run-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, WorkflowRunID: "run-1"})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -93,7 +93,7 @@ func TestDriverSkipsOnTerminalWhenNilHook(t *testing.T) {
 	d := testDriver(store, runner) // no SetOnTerminal call: d.onTerminal stays nil
 
 	// This must not panic — the whole point of the nil-safe field.
-	driveN(t, d, "m1", 4)
+	driveN(t, d, "m1", 5)
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDone {

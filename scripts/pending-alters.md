@@ -31,3 +31,22 @@ run before deploy.
 ```sql
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS permission_timeout_seconds integer;
 ```
+
+## Mission phase rename (issue #455, slice 1 of the phase redesign)
+
+Not required before deploy: parsePhase (statemachine.go) tolerates
+both the old and new phase names, so a new binary reads old rows
+correctly with no downtime. Safe to run any time AFTER the new binary
+is live, on every instance. Historical mission_events payloads keep
+their old phase names forever; the web timeline renderer already
+tolerates both.
+
+```sql
+UPDATE missions SET phase = CASE phase
+    WHEN 'explore' THEN 'discover'
+    WHEN 'execute' THEN 'generate'
+    WHEN 'review' THEN 'prove'
+    ELSE phase
+END
+WHERE phase IN ('explore', 'execute', 'review');
+```

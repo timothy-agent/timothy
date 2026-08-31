@@ -9,10 +9,10 @@ import (
 // ordering guarantee: the artifact-copy hook runs and its refs are
 // persisted BEFORE destinations delivery sees the mission, so a
 // webhook payload built from the same reloaded Mission can include
-// them.
+// them. Both now run synchronously within the result phase's step.
 func TestDriverCopiesArtifactsBeforeDestinationDelivery(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8, DestinationIDs: []string{"d1"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, DestinationIDs: []string{"d1"}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -26,9 +26,11 @@ func TestDriverCopiesArtifactsBeforeDestinationDelivery(t *testing.T) {
 	deliverRec := &recordingDeliver{}
 	d.SetDestinationDeliver(deliverRec.fn())
 
-	driveN(t, d, "m1", 4) // explore -> plan -> execute -> review -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
 
-	waitForDeliverCalls(t, deliverRec, 1)
+	if got := deliverRec.count(); got != 1 {
+		t.Fatalf("deliver calls = %d, want 1", got)
+	}
 	got := deliverRec.calls[0].mission.ArtifactRefs
 	if len(got) != 1 || got[0] != wantRefs[0] {
 		t.Fatalf("destination delivery saw ArtifactRefs = %+v, want %+v", got, wantRefs)
@@ -40,12 +42,13 @@ func TestDriverCopiesArtifactsBeforeDestinationDelivery(t *testing.T) {
 	}
 }
 
-// TestDriverSkipsArtifactCopyOnFailed covers the same done-only gate
-// deliverToDestinations already has: a mission that fails must not run
-// the artifact-copy hook.
+// TestDriverSkipsArtifactCopyOnFailed covers the same never-reaches-
+// result guarantee: a mission that fails before its last unit is
+// verified never enters the result phase, so the artifact-copy hook
+// never runs.
 func TestDriverSkipsArtifactCopyOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExecute, Status: StatusWorking, MaxIterations: 1})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}
@@ -63,7 +66,7 @@ func TestDriverSkipsArtifactCopyOnFailed(t *testing.T) {
 		t.Fatalf("mission phase = %s, want failed", m.Phase)
 	}
 	if called {
-		t.Fatal("artifact copy hook must not run on a failed transition")
+		t.Fatal("artifact copy hook must not run when the mission never reaches result")
 	}
 }
 
@@ -71,7 +74,7 @@ func TestDriverSkipsArtifactCopyOnFailed(t *testing.T) {
 // never panics and leaves ArtifactRefs empty.
 func TestDriverSkipsArtifactCopyWhenNilHook(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseExplore, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -79,7 +82,7 @@ func TestDriverSkipsArtifactCopyWhenNilHook(t *testing.T) {
 	}
 	d := testDriver(store, runner) // no SetArtifactCopy call: d.artifactCopy stays nil
 
-	driveN(t, d, "m1", 4)
+	driveN(t, d, "m1", 5)
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDone {

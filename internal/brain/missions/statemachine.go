@@ -4,16 +4,24 @@ package missions
 type Phase string
 
 const (
-	PhaseExplore Phase = "explore"
-	PhasePlan    Phase = "plan"
-	PhaseExecute Phase = "execute"
-	PhaseReview  Phase = "review"
-	PhaseDone    Phase = "done"
-	PhaseFailed  Phase = "failed"
+	PhaseDiscover Phase = "discover"
+	PhasePlan     Phase = "plan"
+	PhaseGenerate Phase = "generate"
+	PhaseProve    Phase = "prove"
+	// PhaseResult runs deterministic delivery/copy/promote/on_complete
+	// work with zero LLM turns (slice 1 of the phase redesign): the last
+	// stop before done, so a delivery failure parks the mission
+	// observably instead of being lost on the old terminal transition.
+	PhaseResult Phase = "result"
+	PhaseDone   Phase = "done"
+	PhaseFailed Phase = "failed"
 )
 
-// phaseOrder is the fixed pipeline a mission advances through.
-var phaseOrder = []Phase{PhaseExplore, PhasePlan, PhaseExecute, PhaseReview}
+// phaseOrder is the fixed pipeline stepPhaseComplete walks: prove is
+// its last entry since a mission never reaches result via
+// InputPhaseComplete, only via stepReviewApprove/trySkipReview once
+// the plan's last unit is verified (reviewSkippedOrProvePassTransition).
+var phaseOrder = []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve}
 
 // Terminal reports whether phase ends the mission.
 func (p Phase) Terminal() bool {
@@ -21,7 +29,7 @@ func (p Phase) Terminal() bool {
 }
 
 // nextPhase returns what phase follows p in the fixed pipeline, and
-// whether p has a successor (PhaseReview's success case is handled by
+// whether p has a successor (PhaseProve's success case is handled by
 // the caller, since it depends on whether the reviewed unit was last).
 func nextPhase(p Phase) (Phase, bool) {
 	for i, cur := range phaseOrder {
@@ -38,10 +46,23 @@ func nextPhase(p Phase) (Phase, bool) {
 // terminal re-check treats it as terminal) — corruption-safety over
 // strictness, each call site choosing the safe fallback for its own
 // context.
+//
+// Legacy mapping (slice 1 of the phase redesign): explore/execute/
+// review are the pre-rename phase names, still readable from rows a
+// data migration hasn't touched yet or from historical mission_events
+// payloads after a rollback. Drop this branch once the migration in
+// scripts/pending-alters.md has run everywhere and the first stable
+// release ships.
 func parsePhase(raw string) (Phase, bool) {
 	switch Phase(raw) {
-	case PhaseExplore, PhasePlan, PhaseExecute, PhaseReview, PhaseDone, PhaseFailed:
+	case PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve, PhaseResult, PhaseDone, PhaseFailed:
 		return Phase(raw), true
+	case "explore":
+		return PhaseDiscover, true
+	case "execute":
+		return PhaseGenerate, true
+	case "review":
+		return PhaseProve, true
 	default:
 		return "", false
 	}
@@ -102,8 +123,15 @@ const (
 	InputCancel             Input = "cancel"
 	// InputPlanInfeasible fires when the planner reports the goal cannot
 	// be achieved as stated (D-077); valid only in PhasePlan, fails the
-	// mission instead of letting a rewritten goal reach execute.
+	// mission instead of letting a rewritten goal reach generate.
 	InputPlanInfeasible Input = "plan_infeasible"
+	// InputResultComplete/InputResultFailed report the result phase's
+	// own deterministic step outcome (driver-run, zero LLM turns): valid
+	// only in PhaseResult. Complete advances to done; Failed parks the
+	// mission IN result with PauseInfra so it stays resumable and the
+	// work product isn't lost.
+	InputResultComplete Input = "result_complete"
+	InputResultFailed   Input = "result_failed"
 )
 
 // StepState is the state-machine-relevant slice of a Mission — Step
@@ -135,16 +163,16 @@ type StepState struct {
 	MixedCurrencySpend bool
 	RateAsOf           string
 	// LastUnit reports whether the unit under review is the plan's
-	// last unit — PhaseReview's approve transition needs this to
-	// decide between advancing to execute (more units left) or done.
+	// last unit: PhaseProve's approve transition needs this to decide
+	// between advancing to generate (more units left) or result.
 	LastUnit bool
 	// ReplanUsed reports whether this mission already spent its one
 	// automatic replan-on-stall attempt (stepWorkerRetry/
-	// stepReviewRework) — a second stall pauses for a human same as
+	// stepReviewRework), a second stall pauses for a human same as
 	// before this feature existed.
 	ReplanUsed bool
-	// Light marks a mission that skips explore/plan/review (D-069) —
-	// a stall can never replan into PhasePlan for one, since it never
+	// Light marks a mission that skips discover/plan/prove (D-069), a
+	// stall can never replan into PhasePlan for one, since it never
 	// visits that phase.
 	Light bool
 }
@@ -254,6 +282,10 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 			Next:   withPause(s, PauseInfra),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
 		}
+	case InputResultComplete:
+		return stepResultComplete(s)
+	case InputResultFailed:
+		return stepResultFailed(s, in)
 	case InputPlanInfeasible:
 		// Valid only in PhasePlan (D-077): a mission that reaches plan and
 		// gets told the goal itself cannot be done fails outright rather
@@ -303,9 +335,9 @@ func stepResume(s StepState) Transition {
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.resumed"}}}
 }
 
-// stepPhaseComplete advances explore/plan to the next fixed phase.
-// execute's completion goes through review (a worker verdict of DONE
-// requests review, it doesn't itself complete the phase — the driver
+// stepPhaseComplete advances discover/plan to the next fixed phase.
+// generate's completion goes through prove (a worker verdict of DONE
+// requests review, it doesn't itself complete the phase: the driver
 // routes DONE into a review round, whose outcome arrives as
 // InputReviewApprove/InputReviewRework, not InputPhaseComplete).
 func stepPhaseComplete(s StepState) Transition {
@@ -400,7 +432,7 @@ func replanTransition(s StepState, in StepInput) Transition {
 	s.LastGapFingerprint = ""
 	s.Iteration = 0
 	// A replan is a fresh start, same as any other stepPhaseComplete
-	// transition into a new phase — leaving ConsecutiveFailures set would
+	// transition into a new phase: leaving ConsecutiveFailures set would
 	// arrive at planning already one failure from a backoff pause despite
 	// having made no failed attempt yet in the new phase.
 	s.ConsecutiveFailures = 0
@@ -408,30 +440,37 @@ func replanTransition(s StepState, in StepInput) Transition {
 }
 
 // stepReviewApprove clears the stall counter (progress was made) and
-// either moves to the next unit (more execute work) or completes the
-// mission, depending on whether the reviewed unit was the plan's last.
+// either moves to the next unit (more generate work) or advances to
+// the result phase, depending on whether the reviewed unit was the
+// plan's last.
 func stepReviewApprove(s StepState) Transition {
 	s.StallCount = 0
 	s.LastGapFingerprint = ""
 	if s.LastUnit {
-		s.Phase = PhaseDone
-		s.Status = StatusDone
-		// verified: false for light missions, which reach done with zero
-		// harness verification (no spec units, no CheckArtifacts/RunVerify) —
-		// distinguishes that in the event log from a harness-verified done.
-		return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": !s.Light}}}}
+		return reviewSkippedOrProvePassTransition(s)
 	}
-	s.Phase = PhaseExecute
+	s.Phase = PhaseGenerate
 	s.Status = StatusIdle
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.unit_verified", Payload: map[string]any{"passed": true, "check": "review"}}}}
 }
 
-// stepReviewRework sends the mission back to execute for another
+// reviewSkippedOrProvePassTransition advances a mission whose last
+// unit is verified (either the review-skip fast path or an approved
+// prove round) into the result phase, replacing the old direct
+// transition to done: result now runs the delivery/copy/promote work
+// that used to fire on the terminal done transition itself.
+func reviewSkippedOrProvePassTransition(s StepState) Transition {
+	s.Phase = PhaseResult
+	s.Status = StatusIdle
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.phase_started", Payload: map[string]any{"phase": string(PhaseResult)}}}}
+}
+
+// stepReviewRework sends the mission back to generate for another
 // attempt, tracking the stall brake: two consecutive rounds with an
 // IDENTICAL gap fingerprint mean the reviewer keeps rejecting for the
-// same reason — no real progress is happening.
+// same reason, no real progress is happening.
 func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 	if in.GapFingerprint != "" && in.GapFingerprint == s.LastGapFingerprint {
 		s.StallCount++
@@ -448,7 +487,7 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},
 		}
 	}
-	s.Phase = PhaseExecute
+	s.Phase = PhaseGenerate
 	s.Status = StatusIdle
 	s.Iteration++
 	if s.Iteration >= s.MaxIterations {
@@ -458,4 +497,29 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 		}
 	}
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.review_verdict", Payload: map[string]any{"decision": "rework", "reason": in.Reason}}}}
+}
+
+// stepResultComplete is the result phase's own success transition,
+// fired by the driver after every delivery/copy/promote/on_complete
+// step succeeds (or has nothing to do). Zero LLM turns: this is pure
+// bookkeeping, done stays the terminal state it always was.
+func stepResultComplete(s StepState) Transition {
+	s.Phase = PhaseDone
+	s.Status = StatusDone
+	// verified: false for light missions, which reach done with zero
+	// harness verification (no spec units, no CheckArtifacts/RunVerify),
+	// distinguishes that in the event log from a harness-verified done.
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": !s.Light}}}}
+}
+
+// stepResultFailed parks a mission whose result step hit a delivery,
+// artifact-copy, kb-promotion, or on_complete failure: PauseInfra
+// keeps it resumable in PhaseResult (not failed) so the retry only
+// re-runs the failed pieces, and the work product (branch, artifacts)
+// is never lost.
+func stepResultFailed(s StepState, in StepInput) Transition {
+	return Transition{
+		Next:   withPause(s, PauseInfra),
+		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+	}
 }

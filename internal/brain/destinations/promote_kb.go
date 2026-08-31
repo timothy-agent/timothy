@@ -77,15 +77,19 @@ func PromoteMission(ctx context.Context, opener artifactOpener, store kbDocStore
 }
 
 // PromoteKB adapts PromoteMission to missions.PromoteKB, the driver's
-// fire-and-forget terminal hook signature: failures are logged, never
-// returned, matching CopyArtifacts' own contract.
+// result-phase step signature (D-082): every per-artifact error is
+// logged, and the first one is also returned so the result step can
+// fold it into its overall outcome and park the mission on failure.
 func PromoteKB(opener artifactOpener, store kbDocStore, ingest kbIngester, log *slog.Logger) missions.PromoteKB {
-	return func(ctx context.Context, m missions.Mission, collectionID string) {
-		if _, errs := PromoteMission(ctx, opener, store, ingest, m, collectionID); len(errs) > 0 {
-			for _, err := range errs {
-				log.Warn("mission kb promotion skipped", "mission_id", m.ID, "error", err)
-			}
+	return func(ctx context.Context, m missions.Mission, collectionID string) error {
+		_, errs := PromoteMission(ctx, opener, store, ingest, m, collectionID)
+		for _, err := range errs {
+			log.Warn("mission kb promotion skipped", "mission_id", m.ID, "error", err)
 		}
+		if len(errs) > 0 {
+			return errs[0]
+		}
+		return nil
 	}
 }
 

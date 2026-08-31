@@ -442,64 +442,60 @@ func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
 	d.nameMission = fn
 }
 
-// DestinationDeliver delivers a terminal mission's generated output to
-// its attached destination_ids — destinations.Deliverer.Deliver
-// satisfies this signature. Fire-and-forget by contract, same as
-// MemoryExtract: it must never return an error, block, or affect
-// mission state.
-type DestinationDeliver func(ctx context.Context, m Mission, destinationIDs []string)
+// DestinationDeliver delivers a mission's generated output to its
+// attached destination_ids, returning an error naming any destination
+// that failed: destinations.Deliverer.Deliver satisfies this
+// signature. Called SYNCHRONOUSLY from the result phase's step
+// (runResult, slice 1 of the phase redesign): a returned error parks
+// the mission in result rather than being logged and lost. Idempotent
+// per destination: a destination already recorded delivered is
+// skipped on retry, only a destination recorded delivery_failed (or
+// never attempted) is retried.
+type DestinationDeliver func(ctx context.Context, m Mission, destinationIDs []string) error
 
-// SetDestinationDeliver wires the destinations delivery hook fired on
-// a mission's terminal done transition (see deliverToDestinations) — a
-// setter for the same reason SetMemoryExtract is. Optional — nil skips
-// delivery entirely, same as a mission with no destination_ids.
+// SetDestinationDeliver wires the destinations delivery hook run by
+// the result phase's step (see deliverToDestinations): a setter for
+// the same reason SetMemoryExtract is. Optional, nil skips delivery
+// entirely, same as a mission with no destination_ids.
 func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 	d.deliverDestinations = fn
 }
 
-// deliverToDestinations fires the destinations delivery hook exactly
-// on a transition into phase=done (never phase=failed — v1 doesn't
-// deliver on failure, the notifier already covers failure alerts) and
-// only when the mission actually has destination_ids attached. m is
-// the terminal-transition's own reload (onTerminal's single Get,
-// after backfillMissionName) — this no longer reloads itself, so
-// delivery always sees the backfilled name. Detached from ctx like
-// fireOnComplete: the mission is already terminal, so delivery must
-// outlive a request that may be winding down.
-func (d *Driver) deliverToDestinations(m Mission, terminal Phase) {
-	if d.deliverDestinations == nil || terminal != PhaseDone || len(m.DestinationIDs) == 0 {
-		return
+// deliverToDestinations runs the destinations delivery hook when the
+// mission actually has destination_ids attached, returning its error
+// (if any) for the result step to fold into its overall outcome.
+func (d *Driver) deliverToDestinations(ctx context.Context, m Mission) error {
+	if d.deliverDestinations == nil || len(m.DestinationIDs) == 0 {
+		return nil
 	}
-	rctx := context.Background()
-	go d.deliverDestinations(rctx, m, m.DestinationIDs) //nolint:gosec // G118: deliberate — the mission is already terminal, delivery must outlive whatever request/ctx observed that transition
+	return d.deliverDestinations(ctx, m, m.DestinationIDs)
 }
 
-// PromoteKB promotes a terminal mission's markdown artifacts into a kb
-// collection with provenance='mission': kb.PromoteMission (D-081,
-// issue #370) satisfies this signature. Fire-and-forget by contract,
-// same as DestinationDeliver: it must never return an error, block, or
-// affect mission state; failures are its own concern to log.
-type PromoteKB func(ctx context.Context, m Mission, collectionID string)
+// PromoteKB promotes a mission's markdown artifacts into a kb
+// collection with provenance='mission', returning any promotion
+// error: kb.PromoteMission (D-081, issue #370) satisfies this
+// signature. Called SYNCHRONOUSLY from the result phase's step, same
+// reasoning as DestinationDeliver. Idempotent: promoteOne dedups by
+// source_ref, replacing an existing document rather than duplicating
+// it on retry.
+type PromoteKB func(ctx context.Context, m Mission, collectionID string) error
 
-// SetPromoteKB wires the kb-promotion hook fired on a mission's
-// terminal done transition (see promoteToKB): a setter for the same
-// reason SetDestinationDeliver is. Optional: nil skips promotion
-// entirely, same as a mission with no promote_kb_collection_id.
+// SetPromoteKB wires the kb-promotion hook run by the result phase's
+// step (see promoteToKB): a setter for the same reason
+// SetDestinationDeliver is. Optional: nil skips promotion entirely,
+// same as a mission with no promote_kb_collection_id.
 func (d *Driver) SetPromoteKB(fn PromoteKB) {
 	d.promoteKB = fn
 }
 
-// promoteToKB fires the kb-promotion hook exactly on a transition into
-// phase=done (mirrors deliverToDestinations) and only when the mission
-// has promote_kb_collection_id set. Detached from ctx like
-// deliverToDestinations: the mission is already terminal, so promotion
-// must outlive a request that may be winding down.
-func (d *Driver) promoteToKB(m Mission, terminal Phase) {
-	if d.promoteKB == nil || terminal != PhaseDone || m.PromoteKBCollectionID == "" {
-		return
+// promoteToKB runs the kb-promotion hook when the mission has
+// promote_kb_collection_id set, returning its error (if any) for the
+// result step to fold into its overall outcome.
+func (d *Driver) promoteToKB(ctx context.Context, m Mission) error {
+	if d.promoteKB == nil || m.PromoteKBCollectionID == "" {
+		return nil
 	}
-	rctx := context.Background()
-	go d.promoteKB(rctx, m, m.PromoteKBCollectionID) //nolint:gosec // G118: deliberate: the mission is already terminal, promotion must outlive whatever request/ctx observed that transition
+	return d.promoteKB(ctx, m, m.PromoteKBCollectionID)
 }
 
 // ArtifactCopy best-effort copies a terminal mission's declared
@@ -509,23 +505,23 @@ func (d *Driver) promoteToKB(m Mission, terminal Phase) {
 // mime file is simply skipped, never fails the transition.
 type ArtifactCopy func(ctx context.Context, m Mission) []ArtifactRef
 
-// SetArtifactCopy wires the artifact-copy hook fired on a mission's
-// terminal done transition (see copyArtifacts) — a setter for the same
-// reason SetDestinationDeliver is. Optional — nil leaves ArtifactRefs
-// empty, same as a mission with no declared artifacts.
+// SetArtifactCopy wires the artifact-copy hook run by the result
+// phase's step (see copyArtifacts): a setter for the same reason
+// SetDestinationDeliver is. Optional, nil leaves ArtifactRefs empty,
+// same as a mission with no declared artifacts.
 func (d *Driver) SetArtifactCopy(fn ArtifactCopy) {
 	d.artifactCopy = fn
 }
 
-// copyArtifacts runs the artifact-copy hook exactly on a transition
-// into phase=done (mirrors deliverToDestinations) and persists the
-// resulting refs onto the mission row — SYNCHRONOUS, unlike delivery/
-// memory extraction below, so deliverToDestinations' webhook payload
-// (built from the same reloaded Mission) can include them. Bounded so
-// a slow attachment store never stalls the terminal-transition path
-// indefinitely.
-func (d *Driver) copyArtifacts(ctx context.Context, id string, m Mission, terminal Phase) Mission {
-	if d.artifactCopy == nil || terminal != PhaseDone {
+// copyArtifacts runs the artifact-copy hook and persists the
+// resulting refs onto the mission row, so deliverToDestinations'
+// webhook payload (built from the same reloaded Mission) can include
+// them. Bounded so a slow attachment store never stalls the result
+// step indefinitely. Content-addressed on the attachment store side,
+// so re-running on a result retry is naturally idempotent: no error
+// return, matching ArtifactCopy's own never-fails contract.
+func (d *Driver) copyArtifacts(ctx context.Context, id string, m Mission) Mission {
+	if d.artifactCopy == nil {
 		return m
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -582,91 +578,128 @@ func (d *Driver) fireOnTerminal(m Mission) {
 }
 
 // fireOnComplete runs a mission's recorded on_complete choice
-// (push/push_pr) exactly once, right after its own ApplyTransition into
-// phase=done succeeds — the SAME Completer code the manual push/pr API
-// endpoints use, so an auto-fired push/PR can never diverge from what a
-// human clicking the button gets. Failure never un-dones the mission:
-// Completer.RunOnComplete already appended mission.push_failed (via
-// PushBranch/OpenPR's own error path); this only additionally fires a
-// best-effort notification so the operator hears about it, mirroring
-// notify.go's own best-effort webhook fan-out. No retry — one attempt,
-// the manual push/pr endpoints remain available.
-func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) {
+// (push/push_pr), the SAME Completer code the manual push/pr API
+// endpoints use, so an auto-fired push/PR can never diverge from what
+// a human clicking the button gets. Completer.RunOnComplete already
+// appends mission.push_failed itself (via PushBranch/OpenPR's own
+// error path) on failure; this additionally fires a best-effort
+// notification so the operator hears about it, mirroring notify.go's
+// own best-effort webhook fan-out. The error return is the result
+// step's own signal to park (an explicit operator choice, made at
+// create time, so a failure here must be visible and retryable, not
+// silently swallowed).
+func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) error {
 	if d.completer == nil || m.OnComplete == "" {
-		return
+		return nil
 	}
-	// Detached from ctx: the mission is already terminal, so this must
-	// not be cancelled by a request winding down (same reasoning as
-	// removeSandbox).
-	rctx := context.Background()
-	if err := d.completer.RunOnComplete(rctx, m); err != nil {
+	if err := d.completer.RunOnComplete(ctx, m); err != nil {
 		d.log.Error("driver: on_complete auto-fire failed", "mission_id", id, "on_complete", m.OnComplete, "error", err)
 		if d.notifyPushFailed != nil {
-			d.notifyPushFailed(rctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, m.OnComplete, err.Error()))
+			d.notifyPushFailed(ctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, m.OnComplete, err.Error()))
+		}
+		return err
+	}
+	return nil
+}
+
+// resultStepOrder documents runResult's fixed sequence (slice 1 of the
+// phase redesign, D-082): every piece the old terminal-done transition
+// used to fire, now run as the result phase's own deterministic step,
+// zero LLM turns.
+//
+//  1. name backfill (see backfillMissionName), then one mission
+//     reload so every piece past this point sees the backfilled name.
+//  2. artifact copy (see copyArtifacts): runs before destinations
+//     delivery below so its webhook payload can include the refs.
+//  3. destinations delivery, kb promotion, on_complete: each a
+//     required piece now (unlike before this phase existed); any
+//     failure among them means runResult reports failure and the
+//     driver parks the mission in result instead of losing it.
+//
+// A failure in one piece does not stop the others from running this
+// same round: every piece gets a chance, and every failure is folded
+// into one summary event, so a retry only needs to re-run what
+// actually failed (each piece is independently idempotent, see their
+// own doc comments).
+func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
+	if d.nameMission != nil {
+		if m.Name == "" {
+			nctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			d.backfillMissionName(nctx, m.ID, m.Goal)
+			cancel()
+			if reloaded, err := d.store.Get(ctx, m.ID); err == nil {
+				m = reloaded
+			}
 		}
 	}
+	m = d.copyArtifacts(ctx, m.ID, m)
+
+	summary := map[string]any{}
+	var failures []string
+
+	if err := d.deliverToDestinations(ctx, m); err != nil {
+		failures = append(failures, "delivery: "+err.Error())
+		summary["delivery_error"] = err.Error()
+	} else if len(m.DestinationIDs) > 0 {
+		summary["delivered"] = len(m.DestinationIDs)
+	}
+
+	if err := d.promoteToKB(ctx, m); err != nil {
+		failures = append(failures, "kb promotion: "+err.Error())
+		summary["promote_kb_error"] = err.Error()
+	} else if m.PromoteKBCollectionID != "" {
+		summary["promoted_kb_collection_id"] = m.PromoteKBCollectionID
+	}
+
+	if err := d.fireOnComplete(ctx, m.ID, m); err != nil {
+		failures = append(failures, "on_complete: "+err.Error())
+		summary["on_complete_error"] = err.Error()
+	} else if m.OnComplete != "" {
+		summary["on_complete"] = m.OnComplete
+	}
+
+	if len(m.ArtifactRefs) > 0 {
+		summary["artifacts_copied"] = len(m.ArtifactRefs)
+	}
+	if err := d.store.AppendEvent(ctx, m.ID, "mission.result_complete", summary); err != nil {
+		d.log.Warn("driver: record result complete failed", "mission_id", m.ID, "error", err)
+	}
+
+	if len(failures) > 0 {
+		return StepInput{Input: InputResultFailed, Reason: strings.Join(failures, "; ")}, nil
+	}
+	return StepInput{Input: InputResultComplete}, nil
 }
 
 // D-073: runTerminalHooks is the single place Advance and Signal fire
-// every terminal-transition hook, replacing what used to be a verbatim block
-// duplicated in both (and had already drifted: Signal's copy omitted
-// fireOnComplete, benign only because Signal never produces a done
-// transition today — cancel always fails a mission, never completes
-// it).
+// every terminal-transition hook, replacing what used to be a verbatim
+// block duplicated in both. Since D-082 (the result phase), this only
+// covers the hooks that fire on EVERY terminal transition (done or
+// failed): delivery/copy/promote/on_complete moved into runResult,
+// which the driver runs as an ordinary phase step before the mission
+// ever reaches this function.
 //
 // Fixed order:
 //  1. gatekeeper state drop (in-process only, no I/O)
 //  2. sandbox container removal (async, best-effort)
-//  3. name backfill (SYNCHRONOUS — see backfillMissionName)
-//  4. one mission reload, AFTER the backfill above, so every hook past
-//     this point sees a stable, already-backfilled name
-//  5. artifact copy (SYNCHRONOUS, done transitions only — see
-//     copyArtifacts) — runs BEFORE the hooks below so destinations
-//     delivery's webhook payload can include the resulting refs
-//  6. memory extraction, destinations delivery, kb promotion, workflow
-//     onTerminal: each handed the SAME reloaded (and
-//     artifact-copy-updated) Mission, no hook reloads on its own
-//  7. fireOnComplete, done transitions only
+//  3. one mission reload
+//  4. memory extraction, workflow onTerminal: each handed the SAME
+//     reloaded Mission, no hook reloads on its own
 //
-// Each hook may still dispatch its own goroutine (memory/destinations/
-// workflow all remain fire-and-forget past this function returning) —
-// the order guarantee above only covers the synchronous portion: it
-// guarantees WHAT each hook is handed, not when its own background work
-// finishes. notify.OnTransition is deliberately NOT one of these hooks:
-// it fires on every transition, not just terminal ones, so callers keep
-// invoking it separately.
-//
-// A hook failure is logged by the hook itself and never stops the rest
-// of the sequence — one hook's trouble (a dead memoryd, a bad
-// destination) must never suppress another's.
+// A hook failure is logged by the hook itself and never stops the
+// rest of the sequence.
 func (d *Driver) runTerminalHooks(ctx context.Context, id string, terminal Phase, events []EventDraft) {
 	delete(d.gatekeepers, id)
 	d.removeSandbox(id)
 
 	reason := failedReason(events)
-	if d.nameMission != nil {
-		if pre, err := d.store.Get(ctx, id); err == nil && pre.Name == "" {
-			// Synchronous but bounded: the backfill is an LLM call, and
-			// a wedged provider must not stall the drive loop past this.
-			nctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			d.backfillMissionName(nctx, id, pre.Goal)
-			cancel()
-		}
-	}
-
 	m, err := d.store.Get(ctx, id)
 	if err != nil {
 		d.log.Warn("driver: terminal hooks: reload mission failed", "mission_id", id, "error", err)
 		return
 	}
-	m = d.copyArtifacts(ctx, id, m, terminal)
 	d.extractMissionMemory(ctx, m, terminal, reason)
-	d.deliverToDestinations(m, terminal)
-	d.promoteToKB(m, terminal)
 	d.fireOnTerminal(m)
-	if terminal == PhaseDone {
-		d.fireOnComplete(ctx, id, m)
-	}
 }
 
 // removeSandbox best-effort tears down a mission's sandbox container in
@@ -736,11 +769,11 @@ func (d *Driver) grantSessionDefaults(ctx context.Context, m Mission) {
 	d.provision.grantSessionDefaults(ctx, m)
 }
 
-// Advance performs exactly one worker turn, review round, or planning
-// turn for mission id — whatever its current phase calls for — then
-// persists the resulting transition and returns whether the mission
-// can be Advanced again immediately (false on terminal, paused,
-// waiting_for_input, or idle).
+// Advance performs exactly one worker turn, review round, planning
+// turn, or result step for mission id, whatever its current phase
+// calls for, then persists the resulting transition and returns
+// whether the mission can be Advanced again immediately (false on
+// terminal, paused, waiting_for_input, or idle).
 func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err error) {
 	m, err := d.store.Get(ctx, id)
 	if err != nil {
@@ -805,10 +838,16 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// same entry is futile, so pause immediately as infra instead
 			// of burning iterations (same reasoning as ErrModelFloor above).
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
-		case m.Phase == PhaseReview:
+		case m.Phase == PhaseProve:
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case m.Phase == PhaseResult:
+			// runResult itself never returns an error (each hook's own
+			// failure is folded into the result, see runResult); this
+			// case only guards against a future bug in runResult's own
+			// wiring, same fail-safe reasoning as the other cases here.
+			in = StepInput{Input: InputResultFailed, Reason: err.Error()}
 		default:
-			// review_infra_failure is review's error input; other phases
+			// review_infra_failure is prove's error input; other phases
 			// report the equivalent-shaped worker_failed so the same
 			// backoff/pause machinery applies uniformly regardless of
 			// which phase actually failed.
@@ -822,7 +861,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		"phase": string(m.Phase), "duration_ms": turnMs,
 		"ok": err == nil, "input": string(in.Input), "reason": in.Reason,
 	}
-	if m.Phase == PhaseExecute && workerRoute(m) != m.Route {
+	if m.Phase == PhaseGenerate && workerRoute(m) != m.Route {
 		payload["escalated_route"] = workerRoute(m)
 	}
 	if evErr := d.store.AppendEvent(ctx, id, "mission.turn", payload); evErr != nil {
@@ -1002,19 +1041,21 @@ func isLastUnit(spec Spec) bool {
 // its outcome maps to. It does not itself decide pass/fail semantics
 // beyond what each phase's contract already defines (worker sentinel,
 // review verdict, planner output). Light missions (D-069) are born in
-// PhaseExecute and short-circuit out of runExecute's done branch
-// straight to InputReviewApprove, so they never reach the explore/plan/
-// review cases below by construction.
+// PhaseGenerate and short-circuit out of runExecute's done branch
+// straight to InputReviewApprove, so they never reach the discover/plan/
+// prove cases below by construction.
 func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	switch m.Phase {
-	case PhaseExplore:
+	case PhaseDiscover:
 		return d.runExplore(ctx, m)
 	case PhasePlan:
 		return d.runPlan(ctx, m)
-	case PhaseExecute:
+	case PhaseGenerate:
 		return d.runExecute(ctx, m)
-	case PhaseReview:
+	case PhaseProve:
 		return d.runReview(ctx, m)
+	case PhaseResult:
+		return d.runResult(ctx, m)
 	default:
 		return StepInput{}, fmt.Errorf("driver: mission %s in unhandled phase %q", m.ID, m.Phase)
 	}
@@ -1039,7 +1080,7 @@ func (d *Driver) runExplore(ctx context.Context, m Mission) (StepInput, error) {
 	if err := d.store.SetExploreNotes(ctx, m.ID, notes); err != nil {
 		return StepInput{}, fmt.Errorf("driver: store explore notes: %w", err)
 	}
-	if err := d.store.AppendEvent(ctx, m.ID, "mission.explore_complete", map[string]any{"chars": len(notes)}); err != nil {
+	if err := d.store.AppendEvent(ctx, m.ID, "mission.discover_complete", map[string]any{"chars": len(notes)}); err != nil {
 		d.log.Warn("driver: record explore complete failed", "mission_id", m.ID, "error", err)
 	}
 	return StepInput{Input: InputPhaseComplete}, nil

@@ -93,8 +93,19 @@ First run: `cp deploy/env.example deploy/.env` and set
   `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema:
   `migrations/0001_init.sql` (edited in place pre-release, never new
   ALTER migrations).
-- Light missions (D-069, kind=general only): born in phase=execute,
-  skip explore/plan/review; the deliverable travels in mission_status's
+- Mission phases (D-082, issue #455): discover -> plan -> generate ->
+  prove -> result -> done|failed. `parsePhase` (statemachine.go) still
+  accepts the pre-rename names (explore/execute/review) at read time,
+  mapping them to discover/generate/prove, so a new binary reads old
+  rows safely before the data migration in `scripts/pending-alters.md`
+  runs; historical `mission_events` payloads keep their old phase
+  names forever, tolerated by the web timeline renderer. Result is
+  deterministic harness code (zero LLM turns): destinations delivery,
+  artifact copy, KB promotion, and `on_complete` push/PR all run there
+  now, not on the old done transition; a failure parks the mission IN
+  result with a visible pause reason instead of being lost.
+- Light missions (D-069, kind=general only): born in phase=generate,
+  skip discover/plan/prove; the deliverable travels in mission_status's
   `final_output` argument (reasoning models emit tool calls with no
   plain text). Digest schedules run light.
 - Worker turns END on successful sentinel execution
@@ -109,7 +120,7 @@ First run: `cp deploy/env.example deploy/.env` and set
 - Follow-up missions: a terminal mission spawns a new one via
   `parent_mission_id`; the parent's outcome digest (`OutcomeDigest`,
   shared with memory extraction) is snapshotted into `parent_context`
-  at create and rendered into explore/plan/work prompts. Worktree bases
+  at create and rendered into discover/plan/work prompts. Worktree bases
   on the parent branch when reachable, else the repo default. Never
   reopen a terminal mission.
 - PDF attachments: converted via markitdown ONCE at create (prompt-
@@ -123,7 +134,7 @@ First run: `cp deploy/env.example deploy/.env` and set
   only when PDFGEN_URL is set (derived read-only setting
   `pdf_export_enabled`).
 - Mission display names: generated fire-and-forget at create
-  (`chat.TitleOverGateway`), backfilled once at terminal transition
+  (`chat.TitleOverGateway`), backfilled once in the result phase's step
   (`Driver.SetNameMission`) if still empty.
 - Harness-owned verification: `CheckArtifacts` (declared artifact paths
   must exist, non-empty, inside the workspace) runs BEFORE any

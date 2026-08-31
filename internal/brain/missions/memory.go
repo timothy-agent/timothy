@@ -56,10 +56,10 @@ func alreadyExtracted(events []Event) bool {
 }
 
 // extractMissionMemory runs the mission's one terminal extraction pass:
-// called by onTerminal for every transition whose Next.Phase is
-// terminal (done or failed). m is onTerminal's single reload — this no
-// longer reloads itself. Nil memory client, or a mission with no
-// hidden session, skips silently — matching the nil-gated dependency
+// called by runTerminalHooks for every transition whose Next.Phase is
+// terminal (done or failed). m is runTerminalHooks' single reload,
+// this no longer reloads itself. Nil memory client, or a mission with
+// no hidden session, skips silently, matching the nil-gated dependency
 // pattern the rest of the driver's optional hooks use (fireOnComplete,
 // notify). Extraction failures can never fail or block the mission
 // transition: MemoryExtract's own contract (see its doc comment) is
@@ -92,15 +92,15 @@ func (d *Driver) extractMissionMemory(ctx context.Context, m Mission, terminal P
 	go d.memory(context.Background(), m.SessionID, 0, digest, "") //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
 }
 
-// backfillMissionName regenerates a missing display name when a mission
-// reaches a terminal phase — the create-time naming call is best-effort
-// and a failure there would otherwise be permanent. Best-effort itself:
-// never fails the transition (any error is logged and swallowed). Runs
-// synchronously (D-073), unlike the rest of the terminal hooks: onTerminal
-// reloads the mission right after this returns, and that reload is what
-// destinations/workflow hooks see, so the name must already be persisted
-// by the time this call returns. SetNameIfEmpty's guard makes a late
-// create-time call racing this one harmless.
+// backfillMissionName regenerates a missing display name when a
+// mission reaches the result phase (D-082): the create-time naming
+// call is best-effort and a failure there would otherwise be
+// permanent. Best-effort itself: never fails the step (any error is
+// logged and swallowed). Runs synchronously: runResult reloads the
+// mission right after this returns, and that reload is what
+// destinations/kb promotion see, so the name must already be
+// persisted by the time this call returns. SetNameIfEmpty's guard
+// makes a late create-time call racing this one harmless.
 func (d *Driver) backfillMissionName(ctx context.Context, id, goal string) {
 	if d.nameMission == nil {
 		return

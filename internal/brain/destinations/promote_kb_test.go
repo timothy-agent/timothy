@@ -199,14 +199,19 @@ func TestPromoteMissionCollectsIngestErrors(t *testing.T) {
 	}
 }
 
-func TestPromoteKBLogsAndNeverReturnsError(t *testing.T) {
+// TestPromoteKBLogsAndReturnsError confirms PromoteKB (D-082) logs a
+// per-artifact failure and returns the first one, so the driver's
+// result phase can fold it into its overall outcome and park the
+// mission instead of silently losing it.
+func TestPromoteKBLogsAndReturnsError(t *testing.T) {
 	opener := &fakeOpener{data: map[string][]byte{}} // a1 vanished
 	store := newFakeKBStore()
 	m := missions.Mission{ID: "m1", ArtifactRefs: []missions.ArtifactRef{{ID: "a1", Mime: "text/plain", Name: "report.md"}}}
 
-	// Must not panic: PromoteKB's contract is fire-and-forget, same as
-	// CopyArtifacts.
-	PromoteKB(opener, store, &fakeIngest{}, slog.Default())(t.Context(), m, "col1")
+	err := PromoteKB(opener, store, &fakeIngest{}, slog.Default())(t.Context(), m, "col1")
+	if err == nil {
+		t.Fatal("PromoteKB with a vanished artifact: want an error, got nil")
+	}
 	if len(store.docs) != 0 {
 		t.Fatalf("documents = %d, want 0 (vanished artifact skipped)", len(store.docs))
 	}

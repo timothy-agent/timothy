@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -30,11 +31,11 @@ type eventRecorder interface {
 }
 
 // Deliverer resolves a mission's destination_ids, renders the digest,
-// and calls each destination's adapter — fire-and-forget from the
-// driver's terminal-transition hook (see missions/driver.go). Never
-// returns an error: every failure is logged and recorded as a
-// mission_events row, exactly matching notify.go's own best-effort
-// contract.
+// and calls each destination's adapter: run SYNCHRONOUSLY from the
+// driver's result phase step (D-082, see missions/driver.go). Every
+// failure is logged and recorded as a mission_events row; Deliver also
+// returns a non-nil error naming the failed destinations so the result
+// step can park the mission and retry only those on the next round.
 type Deliverer struct {
 	store    destinationStore
 	events   eventRecorder
@@ -79,22 +80,24 @@ const (
 	eventDeliveryFailed = "mission.delivery_failed"
 )
 
-// Deliver runs delivery for every id in destinationIDs, best-effort.
-// Recipients get the mission's generated output (Render's Files, from
-// the mission's declared plan-unit artifacts) plus a short completion
-// line — never the goal/plan/review process digest. Guards against a
-// mission that already recorded an outcome event for a given
-// destination (idempotent under a re-drive), and no-ops immediately for
-// an empty destinationIDs — zero adapter/store calls for a mission with
-// no destinations.
-func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destinationIDs []string) {
+// Deliver runs delivery for every id in destinationIDs, best-effort
+// per destination. Recipients get the mission's generated output
+// (Render's Files, from the mission's declared plan-unit artifacts)
+// plus a short completion line, never the goal/plan/review process
+// digest. Idempotent under a re-drive: a destination that already
+// recorded mission.delivered is skipped, one that recorded
+// mission.delivery_failed (or was never attempted) is retried. No-ops
+// immediately for an empty destinationIDs. Returns an error naming
+// every destination that failed this round, or nil if all succeeded
+// (or there was nothing to deliver).
+func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destinationIDs []string) error {
 	if len(destinationIDs) == 0 {
-		return
+		return nil
 	}
-	already, err := d.alreadyDelivered(ctx, m.ID)
+	delivered, err := d.alreadyDelivered(ctx, m.ID)
 	if err != nil {
 		d.log.Warn("destinations: load prior delivery events failed", "mission_id", m.ID, "error", err)
-		return
+		return err
 	}
 	events, err := d.events.Events(ctx, m.ID)
 	if err != nil {
@@ -113,28 +116,38 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destination
 	}
 	payload := Render(m, webBaseURL, events, loc)
 
+	var failed []string
 	for _, id := range destinationIDs {
-		if already[id] {
+		if delivered[id] {
 			continue
 		}
-		d.deliverOne(ctx, m.ID, id, payload)
+		if err := d.deliverOne(ctx, m.ID, id, payload); err != nil {
+			failed = append(failed, id)
+		}
 	}
+	if len(failed) > 0 {
+		return fmt.Errorf("delivery failed for destination(s): %s", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
-func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID string, payload Payload) {
+func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID string, payload Payload) error {
 	dest, err := d.store.Get(ctx, destinationID)
 	if err != nil {
-		d.recordOutcome(ctx, missionID, destinationID, "", false, "destination not found: "+err.Error())
-		return
+		reason := "destination not found: " + err.Error()
+		d.recordOutcome(ctx, missionID, destinationID, "", false, reason)
+		return errors.New(reason)
 	}
 	if !dest.Enabled {
-		d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, "destination is disabled")
-		return
+		reason := "destination is disabled"
+		d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, reason)
+		return errors.New(reason)
 	}
 	adapter := d.adapters[dest.Kind]
 	if adapter == nil {
-		d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, "no adapter for kind "+dest.Kind)
-		return
+		reason := "no adapter for kind " + dest.Kind
+		d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, reason)
+		return errors.New(reason)
 	}
 
 	var lastErr error
@@ -146,14 +159,14 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID str
 			case <-ctx.Done():
 				timer.Stop()
 				d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, ctx.Err().Error())
-				return
+				return ctx.Err()
 			case <-timer.C:
 			}
 		}
 		lastErr = adapter.Deliver(ctx, dest.Config, dest.CredentialRef, payload)
 		if lastErr == nil {
 			d.recordOutcome(ctx, missionID, destinationID, dest.Name, true, "")
-			return
+			return nil
 		}
 		d.log.Warn("destinations: delivery attempt failed", "mission_id", missionID, "destination_id", destinationID, "attempt", i+1, "error", lastErr)
 		if errors.Is(lastErr, errMaybeDelivered) {
@@ -164,6 +177,7 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID str
 		}
 	}
 	d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, lastErr.Error())
+	return lastErr
 }
 
 func (d *Deliverer) recordOutcome(ctx context.Context, missionID, destinationID, name string, ok bool, reason string) {
@@ -230,12 +244,12 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 	return dest.Name, dest.Kind, nil
 }
 
-// alreadyDelivered scans a mission's events for prior
-// mission.delivered/mission.delivery_failed rows, keyed by
-// destination_id — the one-per-destination-per-mission idempotency
-// guard, mirroring notify.go's sendOncePerMission reasoning but via
-// AppendEvent + a prior-existence check (mission_events is append-only
-// so there is no upsert form here).
+// alreadyDelivered scans a mission's events for prior mission.delivered
+// rows, keyed by destination_id: a destination already delivered is
+// never re-sent on a result-phase retry (D-082), but one that only
+// recorded mission.delivery_failed (or was never attempted) IS
+// retried, so a park in result actually makes progress instead of
+// replaying the same permanent failure forever.
 func (d *Deliverer) alreadyDelivered(ctx context.Context, missionID string) (map[string]bool, error) {
 	events, err := d.events.Events(ctx, missionID)
 	if err != nil {
@@ -243,7 +257,7 @@ func (d *Deliverer) alreadyDelivered(ctx context.Context, missionID string) (map
 	}
 	out := map[string]bool{}
 	for _, ev := range events {
-		if ev.Kind != eventDelivered && ev.Kind != eventDeliveryFailed {
+		if ev.Kind != eventDelivered {
 			continue
 		}
 		var payload struct {
