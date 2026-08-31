@@ -49,10 +49,10 @@ describe('PlanApprovalBanner', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Request replan' }))
     const textarea = screen.getByPlaceholderText(/Optional feedback/)
-    fireEvent.change(textarea, { target: { value: 'try a different approach' } })
+    fireEvent.change(textarea, { target: { value: 'try a different **approach**' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    expect(onReplan).toHaveBeenCalledWith('try a different approach')
+    expect(onReplan).toHaveBeenCalledWith('try a different **approach**')
   })
 
   it('submits empty feedback when Send is clicked with no text typed', () => {

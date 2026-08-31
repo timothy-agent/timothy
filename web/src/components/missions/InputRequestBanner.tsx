@@ -1,6 +1,9 @@
 import { useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import { CodeBlock } from '../CodeBlock'
+import { rehypePlugins, remarkPlugins } from '../../lib/markdown'
 import { Button } from '../ui/button'
-import { Textarea } from '../ui/textarea'
+import { MarkdownField } from './MarkdownField'
 
 // InputRequestBanner renders only when a mission has a live
 // pending_input (ask_user's park, D-088). Same architecture as
@@ -41,10 +44,17 @@ export function InputRequestBanner({
   return (
     <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950">
       <div className="space-y-1">
-        <p className="text-sm font-medium text-amber-900 dark:text-amber-200">{question}</p>
-        {typeof timeoutSeconds === 'number' && timeoutSeconds > 0 && askedAt && (
+        <div className="prose prose-sm max-w-none text-amber-900 dark:prose-invert dark:text-amber-200">
+          <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={{ pre: CodeBlock }}>
+            {question}
+          </ReactMarkdown>
+        </div>
+        {answered === undefined && (
           <p className="text-xs text-amber-700 dark:text-amber-400">
-            Auto-answers with the proposed default if unanswered for {timeoutSeconds}s
+            Auto-answers with the proposed default
+            {typeof timeoutSeconds === 'number' && timeoutSeconds > 0 && askedAt
+              ? ` (${kind === 'yes_no' ? (proposedDefault === 'yes' ? 'Yes' : 'No') : proposedDefault}) if unanswered for ${timeoutSeconds}s`
+              : ` (${kind === 'yes_no' ? (proposedDefault === 'yes' ? 'Yes' : 'No') : proposedDefault}) if unanswered`}
           </p>
         )}
       </div>
@@ -61,7 +71,11 @@ export function InputRequestBanner({
               onClick={() => onAnswer(opt)}
             >
               {opt}
-              {opt === proposedDefault && ' (proposed)'}
+              {opt === proposedDefault && (
+                <span className="ml-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide dark:bg-white/15">
+                  default
+                </span>
+              )}
             </Button>
           ))}
         </div>
@@ -72,22 +86,32 @@ export function InputRequestBanner({
             size="sm"
             onClick={() => onAnswer('yes')}
           >
-            Yes{proposedDefault === 'yes' && ' (proposed)'}
+            Yes
+            {proposedDefault === 'yes' && (
+              <span className="ml-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide dark:bg-white/15">
+                default
+              </span>
+            )}
           </Button>
           <Button
             variant={proposedDefault === 'no' ? 'default' : 'outline'}
             size="sm"
             onClick={() => onAnswer('no')}
           >
-            No{proposedDefault === 'no' && ' (proposed)'}
+            No
+            {proposedDefault === 'no' && (
+              <span className="ml-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide dark:bg-white/15">
+                default
+              </span>
+            )}
           </Button>
         </div>
       ) : (
         <div className="space-y-2">
-          <Textarea
-            placeholder={proposedDefault || 'Your answer…'}
+          <MarkdownField
             value={openAnswer}
-            onChange={(e) => setOpenAnswer(e.target.value)}
+            onChange={setOpenAnswer}
+            placeholder={proposedDefault || 'Your answer, markdown supported…'}
           />
           <Button size="sm" onClick={() => onAnswer(openAnswer.trim() || proposedDefault)}>
             Send

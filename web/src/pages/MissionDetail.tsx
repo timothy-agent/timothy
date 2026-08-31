@@ -31,6 +31,7 @@ import {
 import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { InputRequestBanner } from '../components/missions/InputRequestBanner'
+import { MarkdownField } from '../components/missions/MarkdownField'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanApprovalBanner } from '../components/missions/PlanApprovalBanner'
 import { PlanSection } from '../components/missions/PlanSection'
@@ -46,7 +47,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
-import { Textarea } from '../components/ui/textarea'
 import { ModelBadge } from '../components/ModelBadge'
 import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
 import { CursorIcon } from '../components/icons/CursorIcon'
@@ -956,10 +956,10 @@ export function MissionDetail() {
             Currently in <span className="font-medium text-foreground">{mission.phase}</span> ·{' '}
             {mission.status.replace(/_/g, ' ')}
           </p>
-          <Textarea
+          <MarkdownField
             placeholder="Steer this mission (markdown supported)…"
             value={noteText}
-            onChange={(e) => setNoteText(e.target.value)}
+            onChange={setNoteText}
             disabled={sendingNote}
             rows={5}
           />

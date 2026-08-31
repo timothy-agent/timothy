@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { PlanAssumption, PlanUnit } from '../../api/types'
 import { Button } from '../ui/button'
-import { Textarea } from '../ui/textarea'
+import { MarkdownField } from './MarkdownField'
 import { PlanSection } from './PlanSection'
 
 // answeredCopy mirrors PermissionBanner's own status-line pattern: the
@@ -73,10 +73,10 @@ export function PlanApprovalBanner({
       <PlanSection units={units} assumptions={assumptions} />
       {answeredDecision === undefined && showFeedback && (
         <div className="space-y-2">
-          <Textarea
-            placeholder="Optional feedback for the replan…"
+          <MarkdownField
             value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
+            onChange={setFeedback}
+            placeholder="Optional feedback for the replan, markdown supported…"
           />
           <Button size="sm" onClick={submitReplan}>
             Send

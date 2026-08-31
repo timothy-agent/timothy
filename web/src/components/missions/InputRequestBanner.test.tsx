@@ -5,6 +5,19 @@ import { InputRequestBanner } from './InputRequestBanner'
 afterEach(cleanup)
 
 describe('InputRequestBanner', () => {
+  it('renders the question as markdown', () => {
+    render(
+      <InputRequestBanner
+        question="which **runtime** should this target?"
+        kind="mcq"
+        options={['node', 'python']}
+        proposedDefault="node"
+        onAnswer={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('runtime').tagName).toBe('STRONG')
+  })
+
   it('renders mcq options with the proposed default marked, and answers on click', () => {
     const onAnswer = vi.fn()
     render(
@@ -17,7 +30,7 @@ describe('InputRequestBanner', () => {
       />,
     )
     expect(screen.getByText(/which runtime should this target/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /node.*proposed/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /node.*default/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^python$/ }))
     expect(onAnswer).toHaveBeenCalledWith('python')
   })
@@ -32,12 +45,12 @@ describe('InputRequestBanner', () => {
         onAnswer={onAnswer}
       />,
     )
-    expect(screen.getByRole('button', { name: /Yes.*proposed/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Yes.*default/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^No$/ }))
     expect(onAnswer).toHaveBeenCalledWith('no')
   })
 
-  it('renders an open textarea and submits typed text', () => {
+  it('renders an open MarkdownField and submits the drafted text unchanged', () => {
     const onAnswer = vi.fn()
     render(
       <InputRequestBanner
@@ -47,10 +60,10 @@ describe('InputRequestBanner', () => {
         onAnswer={onAnswer}
       />,
     )
-    const textarea = screen.getByPlaceholderText('Untitled')
-    fireEvent.change(textarea, { target: { value: 'My Report' } })
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'My **Report**' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(onAnswer).toHaveBeenCalledWith('My Report')
+    expect(onAnswer).toHaveBeenCalledWith('My **Report**')
   })
 
   it('falls back to the proposed default when open text is left empty', () => {
@@ -81,7 +94,7 @@ describe('InputRequestBanner', () => {
     expect(screen.queryByRole('button', { name: /^Yes/ })).not.toBeInTheDocument()
   })
 
-  it('renders a timeout line only when both timeoutSeconds and askedAt are given', () => {
+  it('always names the proposed default, adding the timeout only when both are given', () => {
     const { rerender } = render(
       <InputRequestBanner
         question="continue?"
@@ -90,7 +103,8 @@ describe('InputRequestBanner', () => {
         onAnswer={vi.fn()}
       />,
     )
-    expect(screen.queryByText(/Auto-answers/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Auto-answers with the proposed default \(Yes\)/)).toBeInTheDocument()
+    expect(screen.queryByText(/if unanswered for/)).not.toBeInTheDocument()
 
     rerender(
       <InputRequestBanner
@@ -102,6 +116,6 @@ describe('InputRequestBanner', () => {
         askedAt="2026-08-30T00:00:00Z"
       />,
     )
-    expect(screen.getByText(/Auto-answers/)).toBeInTheDocument()
+    expect(screen.getByText(/if unanswered for 300s/)).toBeInTheDocument()
   })
 })
