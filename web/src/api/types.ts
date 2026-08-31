@@ -745,6 +745,12 @@ export interface Mission {
   pending_permission_args?: string
   pending_permission_danger?: string
   pending_permission_rationale?: string
+  // pending_permission_parked_at is when the current park started; used
+  // with permission_timeout_seconds (this mission's own override, if
+  // set, otherwise the operator-configured global setting applies) to
+  // know an unanswered request auto-denies after a timeout.
+  pending_permission_parked_at?: string
+  permission_timeout_seconds?: number
   last_evidence?: string
   auto_approve_safe: boolean
   // environment is the sandbox image key (D-05x) this coding mission's

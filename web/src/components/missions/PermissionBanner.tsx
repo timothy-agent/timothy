@@ -35,6 +35,7 @@ export function PermissionBanner({
   rationale,
   answeredDecision,
   onDecide,
+  timeoutSeconds,
 }: {
   tool?: string
   args?: string
@@ -42,6 +43,12 @@ export function PermissionBanner({
   rationale?: string
   answeredDecision?: 'once' | 'session' | 'deny' | 'unknown'
   onDecide: (decision: 'once' | 'session' | 'deny') => void
+  // timeoutSeconds is this mission's own permission_timeout_seconds
+  // override, when set: an unattended mission auto-denies an
+  // unanswered request after this many seconds. undefined means no
+  // per-mission override (the global setting may still apply; that
+  // value isn't exposed to the UI).
+  timeoutSeconds?: number
 }) {
   return (
     <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950">
@@ -52,6 +59,11 @@ export function PermissionBanner({
             {danger === 'destructive' && <Badge variant="destructive">destructive</Badge>}
           </p>
           {rationale && <p className="text-sm text-amber-800 dark:text-amber-300">{rationale}</p>}
+          {typeof timeoutSeconds === 'number' && timeoutSeconds > 0 && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              Auto-denies if unanswered for {timeoutSeconds}s
+            </p>
+          )}
         </div>
         {answeredDecision !== undefined ? (
           <p className="shrink-0 text-sm text-amber-800 dark:text-amber-300">

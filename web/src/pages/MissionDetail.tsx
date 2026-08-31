@@ -486,6 +486,7 @@ export function MissionDetail() {
           rationale={mission.pending_permission_rationale}
           answeredDecision={answeredDecision}
           onDecide={(d) => void decidePermission(d)}
+          timeoutSeconds={mission.permission_timeout_seconds}
         />
       )}
 
