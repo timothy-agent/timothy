@@ -672,6 +672,14 @@ CREATE TABLE IF NOT EXISTS missions (
     -- classified commands still always ask, unaffected by this column
     -- or any grant.
     auto_approve_safe     boolean NOT NULL DEFAULT true,
+    -- D-087 (issue #456): true (default) advances plan -> generate the
+    -- moment a plan lands, byte-identical to every mission before this
+    -- column existed. false parks the mission on pause_reason='approval'
+    -- instead, waiting for an operator approve/replan/rediscover verb --
+    -- never auto-resumed by any sweep, an approval decision has no safe
+    -- default. Forced true at creation for scheduler-fired and
+    -- workflow-spawned missions regardless of template/step input.
+    auto_approve_plan     boolean NOT NULL DEFAULT true,
     -- The reviewer judges the baseline git diff, but a general
     -- mission never touches tracked files -- its diff is
     -- always empty, so the reviewer previously had zero evidence to

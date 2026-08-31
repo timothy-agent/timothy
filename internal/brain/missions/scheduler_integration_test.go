@@ -102,6 +102,36 @@ func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 	}
 }
 
+// TestSchedulerFireForcesAutoApprovePlanTrue confirms D-087 (issue
+// #456): a scheduler-fired mission always gets auto_approve_plan=true.
+// MissionTemplate has no field for it at all, so this is really
+// confirming createFromTemplate's own INSERT hardcodes true rather
+// than silently leaving the column at its Go zero-value false.
+func TestSchedulerFireForcesAutoApprovePlanTrue(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	id := createTestSchedule(t, store, marker+"force-approve-plan", "* * * * *")
+	db, _ := store.db.Get()
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var autoApprovePlan bool
+	if err := db.QueryRow(ctx, `SELECT auto_approve_plan FROM missions WHERE schedule_id = $1`, id).Scan(&autoApprovePlan); err != nil {
+		t.Fatalf("query fired mission's auto_approve_plan: %v", err)
+	}
+	if !autoApprovePlan {
+		t.Fatal("fired mission auto_approve_plan = false, want true (unattended missions have nobody to approve a plan)")
+	}
+}
+
 // TestSchedulerFireUsesTemplateNameOverSlug guards the fix for a real
 // UI gap: schedule names are strict lowercase slugs (shared validation
 // with connectors/destinations/agents), so a scheduled mission's

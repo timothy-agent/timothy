@@ -1008,6 +1008,42 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	return nil
 }
 
+// DecidePlan applies one of the three plan-approval verbs (D-087,
+// issue #456) to a mission parked on PauseApproval: the API layer's
+// approve/replan/rediscover endpoints call this, never the model.
+// feedback is only meaningful on InputPlanReplan (folded into the next
+// planning prompt by runPlan via replanNotes); ignored otherwise.
+// Returns ErrNotAwaitingApproval for any other state, mapped to 409 by
+// the API layer.
+func (d *Driver) DecidePlan(ctx context.Context, id string, input Input, feedback string) error {
+	if input != InputPlanApprove && input != InputPlanReplan && input != InputPlanRediscover {
+		return fmt.Errorf("driver: decide plan: %q is not a plan-approval input", input)
+	}
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("driver: decide plan: %w", err)
+	}
+	if m.Phase != PhasePlan || m.PauseReason != PauseApproval {
+		return ErrNotAwaitingApproval
+	}
+	before := m.Status
+	t := Step(d.toStepState(ctx, m), StepInput{Input: input, Reason: feedback}, d.cfg)
+	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
+		return fmt.Errorf("driver: decide plan: apply transition: %w", err)
+	}
+	if d.notify != nil {
+		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
+			d.log.Warn("driver: notify failed", "mission_id", id, "error", err)
+		}
+	}
+	go func() { //nolint:gosec // G118: deliberate, the mission must outlive the HTTP request that decided it, driveTimeBound is Drive's own cap
+		if err := d.Drive(context.Background(), id); err != nil {
+			d.log.Error("driver: post-plan-decision drive failed", "mission_id", id, "error", err)
+		}
+	}()
+	return nil
+}
+
 // toStepState projects a Mission onto the state machine's input shape,
 // pulling actual ledger spend for the budget brake via budgetProjector
 // (budget.go, D-074).
@@ -1020,6 +1056,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
 		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed, Light: m.Light,
+		AutoApprovePlan: m.AutoApprovePlan,
 	}
 }
 
@@ -1126,13 +1163,22 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 // through unchanged. Folded into the existing exploreNotes string
 // argument (rather than a new Runner parameter) so PlanSession's
 // interface never has to change for this feature.
+//
+// Gated on len(m.Spec.Units) > 0 rather than m.ReplanUsed alone: an
+// operator-requested replan (D-087, issue #456) re-enters PhasePlan
+// without setting ReplanUsed (that flag is reserved for the automatic
+// stall-replan budget, never spent by a free operator iteration (see
+// stepPlanReplan), so the prior plan and any operator feedback
+// (appended as a progress note by the API's replan handler, same
+// channel as a steering note) must reach the prompt through this same
+// "a plan already exists" check instead.
 func replanNotes(m Mission) string {
-	if !m.ReplanUsed || len(m.Spec.Units) == 0 {
+	if len(m.Spec.Units) == 0 {
 		return m.ExploreNotes
 	}
 	var b strings.Builder
 	b.WriteString(m.ExploreNotes)
-	b.WriteString("\n\nThe previous plan stalled and is being replanned. Current plan:\n")
+	b.WriteString("\n\nThe previous plan is being replanned. Current plan:\n")
 	for _, u := range m.Spec.Units {
 		status := "pending"
 		if u.Passes {

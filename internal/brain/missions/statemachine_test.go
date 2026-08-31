@@ -93,11 +93,18 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle},
 		},
 		{
-			name:  "phase_complete advances plan to generate",
+			name:  "phase_complete advances plan to generate when auto_approve_plan is true",
+			state: StepState{Phase: PhasePlan, Status: StatusWorking, AutoApprovePlan: true},
+			input: StepInput{Input: InputPhaseComplete},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, AutoApprovePlan: true},
+		},
+		{
+			name:  "phase_complete parks on approval when auto_approve_plan is false",
 			state: StepState{Phase: PhasePlan, Status: StatusWorking},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle},
+			want:  StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
 		},
 		{
 			name:  "phase_complete advances generate to prove",
@@ -327,6 +334,50 @@ func TestStep(t *testing.T) {
 			name:  "result_failed parks the mission in result with an infra pause",
 			state: StepState{Phase: PhaseResult, Status: StatusWorking},
 			input: StepInput{Input: InputResultFailed, Reason: "delivery: destination unreachable"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseResult, Status: StatusPaused, PauseReason: PauseInfra},
+		},
+		{
+			name:  "plan_approve from an approval park advances to generate",
+			state: StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+			input: StepInput{Input: InputPlanApprove},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle},
+		},
+		{
+			// Operator iterations are free: replan must NOT set ReplanUsed
+			// (that budget is reserved for the automatic stall-replan path).
+			name:  "plan_replan from an approval park re-enters plan without spending ReplanUsed",
+			state: StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+			input: StepInput{Input: InputPlanReplan, Reason: "use Go 1.23 not 1.21"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle},
+		},
+		{
+			name:  "plan_rediscover from an approval park re-enters discover",
+			state: StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+			input: StepInput{Input: InputPlanRediscover},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseDiscover, Status: StatusIdle},
+		},
+		{
+			name:  "plan_approve outside an approval park is a no-op",
+			state: StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			input: StepInput{Input: InputPlanApprove},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking},
+		},
+		{
+			name:  "plan_replan outside an approval park is a no-op",
+			state: StepState{Phase: PhasePlan, Status: StatusWorking},
+			input: StepInput{Input: InputPlanReplan, Reason: "feedback"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusWorking},
+		},
+		{
+			name:  "plan_rediscover outside an approval park is a no-op",
+			state: StepState{Phase: PhaseResult, Status: StatusPaused, PauseReason: PauseInfra},
+			input: StepInput{Input: InputPlanRediscover},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseResult, Status: StatusPaused, PauseReason: PauseInfra},
 		},
@@ -620,5 +671,77 @@ func TestPhaseTerminal(t *testing.T) {
 		if p.Terminal() {
 			t.Fatalf("%q.Terminal() = true, want false", p)
 		}
+	}
+}
+
+// TestStepPlanAwaitingApprovalEmitsEvent confirms the park itself
+// (D-087, issue #456) fires mission.plan_awaiting_approval. The
+// notification inbox entry (Notifier.OnTransition) rides the generic
+// idle/working -> paused transition this produces, no separate wiring
+// needed.
+func TestStepPlanAwaitingApprovalEmitsEvent(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhasePlan, Status: StatusWorking},
+		StepInput{Input: InputPhaseComplete},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.plan_awaiting_approval" {
+		t.Fatalf("Events = %+v, want exactly one mission.plan_awaiting_approval event", got.Events)
+	}
+}
+
+// TestStepPlanApproveEmitsEvent confirms the approve verb's event.
+func TestStepPlanApproveEmitsEvent(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+		StepInput{Input: InputPlanApprove},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.plan_approved" {
+		t.Fatalf("Events = %+v, want exactly one mission.plan_approved event", got.Events)
+	}
+}
+
+// TestStepPlanReplanEventCarriesFeedbackPresence confirms the replan
+// verb's event payload records only WHETHER feedback text was given
+// (matching mission.blocked/mission.answered's own precedent for
+// operator-authored text: full text does get stored, but the event's
+// own "feedback" key is a presence bool the API layer decides, this
+// tests both the with- and without-feedback shapes).
+func TestStepPlanReplanEventCarriesFeedbackPresence(t *testing.T) {
+	withFeedback := Step(
+		StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+		StepInput{Input: InputPlanReplan, Reason: "use Go 1.23"},
+		DefaultConfig,
+	)
+	if len(withFeedback.Events) != 1 || withFeedback.Events[0].Kind != "mission.plan_replan_requested" {
+		t.Fatalf("Events = %+v, want exactly one mission.plan_replan_requested event", withFeedback.Events)
+	}
+	if got, _ := withFeedback.Events[0].Payload["feedback"].(bool); !got {
+		t.Fatalf("payload[feedback] = %v, want true when Reason is set", withFeedback.Events[0].Payload)
+	}
+	if withFeedback.Next.ReplanUsed {
+		t.Fatal("operator replan must not set ReplanUsed, that budget is only spent by an automatic stall replan")
+	}
+
+	noFeedback := Step(
+		StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+		StepInput{Input: InputPlanReplan},
+		DefaultConfig,
+	)
+	if got, _ := noFeedback.Events[0].Payload["feedback"].(bool); got {
+		t.Fatalf("payload[feedback] = %v, want false when Reason is empty", noFeedback.Events[0].Payload)
+	}
+}
+
+// TestStepPlanRediscoverEmitsEvent confirms the rediscover verb's event.
+func TestStepPlanRediscoverEmitsEvent(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
+		StepInput{Input: InputPlanRediscover},
+		DefaultConfig,
+	)
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.rediscover_requested" {
+		t.Fatalf("Events = %+v, want exactly one mission.rediscover_requested event", got.Events)
 	}
 }

@@ -50,3 +50,12 @@ UPDATE missions SET phase = CASE phase
 END
 WHERE phase IN ('explore', 'execute', 'review');
 ```
+
+## Plan approval gate (issue #456, slice 2 of the phase redesign)
+
+Required on live DBs before/with the next deploy. Additive, safe to
+run before deploy.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS auto_approve_plan boolean NOT NULL DEFAULT true;
+```

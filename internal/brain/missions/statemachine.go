@@ -106,6 +106,16 @@ const (
 	// for spend, not just price). A convertible other-currency amount
 	// is folded into Spent instead and never reaches this pause.
 	PauseMixedCurrency PauseReason = "mixed_currency"
+	// PauseApproval parks a mission whose plan just landed with
+	// auto_approve_plan=false (D-087, issue #456), waiting on one of
+	// the three operator verbs (approve/replan/rediscover). Distinct
+	// from PauseInfra/PauseBackoff/PauseNoProgress/PauseBudget: those
+	// all describe something going wrong that a sweep may self-heal or
+	// escalate; this describes an operator decision point with no safe
+	// default, so no sweep (autoResumeInfra, sweepPermissionTimeouts,
+	// or any future one) ever inspects this reason. It waits forever
+	// until a human acts.
+	PauseApproval PauseReason = "approval"
 )
 
 // Input is one event the driver feeds into Step.
@@ -132,6 +142,17 @@ const (
 	// work product isn't lost.
 	InputResultComplete Input = "result_complete"
 	InputResultFailed   Input = "result_failed"
+	// InputPlanApprove/InputPlanReplan/InputPlanRediscover are the three
+	// operator verbs that resolve a PauseApproval park (D-087): approve
+	// advances straight to generate on the plan as landed; replan
+	// re-enters PhasePlan with optional feedback folded into the next
+	// planning prompt; rediscover re-enters PhaseDiscover. Valid only
+	// when the mission is paused for PauseApproval; a no-op transition
+	// otherwise, same "unrecognized/out-of-state input" convention as
+	// InputPlanInfeasible's own phase check.
+	InputPlanApprove    Input = "plan_approve"
+	InputPlanReplan     Input = "plan_replan"
+	InputPlanRediscover Input = "plan_rediscover"
 )
 
 // StepState is the state-machine-relevant slice of a Mission — Step
@@ -175,6 +196,13 @@ type StepState struct {
 	// stall can never replan into PhasePlan for one, since it never
 	// visits that phase.
 	Light bool
+	// AutoApprovePlan gates the plan phase's success transition
+	// (D-087, issue #456): true (the default) advances straight to
+	// generate, byte-identical to pre-#456 behavior. false parks the
+	// mission on PauseApproval instead, waiting for one of the three
+	// operator verbs. Light missions never visit PhasePlan, so this
+	// flag has no effect on them regardless of its value.
+	AutoApprovePlan bool
 }
 
 // StepInput bundles the triggering Input with whatever data it
@@ -297,6 +325,12 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 			Next:   withPhaseFailed(s),
 			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "goal_infeasible", "detail": in.Reason}}},
 		}
+	case InputPlanApprove:
+		return stepPlanApprove(s)
+	case InputPlanReplan:
+		return stepPlanReplan(s, in)
+	case InputPlanRediscover:
+		return stepPlanRediscover(s)
 	default:
 		// Unrecognized input: no-op rather than a panic or a silent
 		// wrong transition — the driver logs this as a bug elsewhere.
@@ -340,7 +374,19 @@ func stepResume(s StepState) Transition {
 // requests review, it doesn't itself complete the phase: the driver
 // routes DONE into a review round, whose outcome arrives as
 // InputReviewApprove/InputReviewRework, not InputPhaseComplete).
+//
+// The plan phase's own completion forks on AutoApprovePlan (D-087,
+// issue #456): true is the byte-identical default, straight through to
+// nextPhase like every other phase. false parks the mission instead:
+// the plan already landed (runPlan's own SetSpec ran before this
+// input arrives), so the park shows the real plan, not a stale one.
 func stepPhaseComplete(s StepState) Transition {
+	if s.Phase == PhasePlan && !s.AutoApprovePlan {
+		return Transition{
+			Next:   withPause(s, PauseApproval),
+			Events: []EventDraft{{Kind: "mission.plan_awaiting_approval", Payload: map[string]any{}}},
+		}
+	}
 	next, ok := nextPhase(s.Phase)
 	if !ok {
 		return Transition{Next: s}
@@ -350,6 +396,58 @@ func stepPhaseComplete(s StepState) Transition {
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.phase_started", Payload: map[string]any{"phase": string(next)}}}}
+}
+
+// stepPlanApprove is the approve verb (D-087): valid only while parked
+// on PauseApproval, advances straight to generate on the plan as it
+// landed: the same nextPhase(PhasePlan) step stepPhaseComplete would
+// have taken had AutoApprovePlan been true. Any other state is a no-op
+// (the API layer rejects the request with 409 before Step ever sees
+// it; this is the state machine's own belt).
+func stepPlanApprove(s StepState) Transition {
+	if s.Phase != PhasePlan || s.PauseReason != PauseApproval {
+		return Transition{Next: s}
+	}
+	s.Status = StatusIdle
+	s.PauseReason = ""
+	s.Phase = PhaseGenerate
+	s.Iteration = 0
+	s.ConsecutiveFailures = 0
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.plan_approved", Payload: map[string]any{}}}}
+}
+
+// stepPlanReplan is the replan verb (D-087): re-enters PhasePlan for
+// another planning turn with the operator's feedback (in.Reason)
+// folded into the next prompt by the driver (mirrors replanNotes'
+// existing stall-replan folding). Deliberately does NOT set
+// ReplanUsed: only an AUTOMATIC stall replan spends that budget
+// (stepWorkerRetry/stepReviewRework); an operator-requested replan is
+// a free, unlimited iteration, per #456's "unlimited iterations" scope.
+func stepPlanReplan(s StepState, in StepInput) Transition {
+	if s.Phase != PhasePlan || s.PauseReason != PauseApproval {
+		return Transition{Next: s}
+	}
+	s.Status = StatusIdle
+	s.PauseReason = ""
+	s.Iteration = 0
+	s.ConsecutiveFailures = 0
+	payload := map[string]any{"feedback": in.Reason != ""}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.plan_replan_requested", Payload: payload}}}
+}
+
+// stepPlanRediscover is the rediscover verb (D-087): back to
+// PhaseDiscover for a fresh exploration pass, same free-iteration
+// reasoning as stepPlanReplan (no ReplanUsed, no iteration spend).
+func stepPlanRediscover(s StepState) Transition {
+	if s.Phase != PhasePlan || s.PauseReason != PauseApproval {
+		return Transition{Next: s}
+	}
+	s.Status = StatusIdle
+	s.PauseReason = ""
+	s.Phase = PhaseDiscover
+	s.Iteration = 0
+	s.ConsecutiveFailures = 0
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.rediscover_requested", Payload: map[string]any{}}}}
 }
 
 // stepWorkerFailed counts consecutive failures toward the backoff

@@ -212,6 +212,9 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 		OnComplete: step.OnComplete, DestinationIDs: step.DestinationIDs,
 		ParentMissionID: parentMissionID, ParentContext: outcome,
 		WorkflowRunID: runID, WorkflowStep: stepName,
+		// Forced true (D-087, issue #456): a workflow-spawned mission
+		// runs unattended, so nobody is watching to approve its plan.
+		AutoApprovePlan: true,
 	})
 }
 

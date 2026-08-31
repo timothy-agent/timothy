@@ -812,6 +812,59 @@ func TestApplyTransitionAndEvents(t *testing.T) {
 	}
 }
 
+// TestPlanApprovalParkRoundTrip confirms D-087 (issue #456) is real DB
+// state, not in-memory only: a mission created with auto_approve_plan
+// false, parked on PauseApproval via ApplyTransition, survives a fresh
+// Get exactly as parked (same as a process restart would see), then
+// the approve verb's own transition unparks it to generate.
+func TestPlanApprovalParkRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "plan approval park", Kind: "general", AutoApprovePlan: false})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	created, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after create: %v", err)
+	}
+	if created.AutoApprovePlan {
+		t.Fatal("AutoApprovePlan = true after create, want false (explicit request honored)")
+	}
+
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next:   StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.plan_awaiting_approval", Payload: map[string]any{}}},
+	}); err != nil {
+		t.Fatalf("ApplyTransition (park): %v", err)
+	}
+
+	// A fresh Get is exactly what a restarted process sees: the park
+	// is real DB state, not driver-in-memory.
+	parked, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after park: %v", err)
+	}
+	if parked.Phase != PhasePlan || parked.Status != StatusPaused || parked.PauseReason != PauseApproval {
+		t.Fatalf("mission after park = %s/%s/%s, want plan/paused/approval", parked.Phase, parked.Status, parked.PauseReason)
+	}
+
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next:   StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.plan_approved", Payload: map[string]any{}}},
+	}); err != nil {
+		t.Fatalf("ApplyTransition (approve): %v", err)
+	}
+	approved, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after approve: %v", err)
+	}
+	if approved.Phase != PhaseGenerate || approved.Status != StatusIdle || approved.PauseReason != "" {
+		t.Fatalf("mission after approve = %s/%s/%s, want generate/idle/<none>", approved.Phase, approved.Status, approved.PauseReason)
+	}
+}
+
 // TestApplyTransitionClearsPendingPermissionOnTerminal reproduces a
 // real bug: cancelling (or otherwise terminating) a mission parked on
 // a permission left the pending_permission_* columns populated:

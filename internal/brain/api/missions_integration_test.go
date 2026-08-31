@@ -361,6 +361,148 @@ func TestMissionsNoteTerminalMissionRejected(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateDefaultsAutoApprovePlanTrue confirms an omitted
+// auto_approve_plan defaults true (D-087, issue #456), the same
+// "pointer field, omitted vs explicit false" shape as auto_approve_safe.
+func TestMissionsCreateDefaultsAutoApprovePlanTrue(t *testing.T) {
+	store := testMissionStore(t)
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	body := `{"goal":"itest-api-mission default auto_approve_plan","kind":"general"}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var created missions.Mission
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if !created.AutoApprovePlan {
+		t.Fatal("create response AutoApprovePlan = false, want true by default")
+	}
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.AutoApprovePlan {
+		t.Fatal("stored AutoApprovePlan = false, want true by default")
+	}
+}
+
+// TestMissionsCreateHonorsExplicitAutoApprovePlanFalse confirms an
+// explicit false request field is honored (not silently overridden by
+// the true default).
+func TestMissionsCreateHonorsExplicitAutoApprovePlanFalse(t *testing.T) {
+	store := testMissionStore(t)
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	body := `{"goal":"itest-api-mission explicit auto_approve_plan false","kind":"general","auto_approve_plan":false}`
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	got, err := store.Get(context.Background(), gjsonID(t, w.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.AutoApprovePlan {
+		t.Fatal("stored AutoApprovePlan = true, want false when the request explicitly set it")
+	}
+}
+
+// gjsonID decodes just the id field of a create response, avoiding a
+// second full missions.Mission decode in tests that only need it.
+func gjsonID(t *testing.T, body []byte) string {
+	t.Helper()
+	var v struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decode id: %v", err)
+	}
+	return v.ID
+}
+
+// TestMissionsApprovePlanRejectedWhenNotParked confirms 409 for all
+// three plan-approval verbs when the mission isn't currently parked on
+// PauseApproval: here, a fresh mission still in phase=discover.
+func TestMissionsApprovePlanRejectedWhenNotParked(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission approve-plan not parked", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	for _, verb := range []string{"approve-plan", "replan", "rediscover"} {
+		req := httptest.NewRequest("POST", "/v1/missions/"+id+"/"+verb, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("%s on a non-parked mission = %d, want 409: %s", verb, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestMissionsApprovePlanAdvancesToGenerate confirms the full round
+// trip: a mission parked on PauseApproval, approve-plan advances it to
+// generate.
+func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{
+		Goal: "itest-api-mission approve-plan happy path", Kind: "general",
+		Spec: missions.Spec{Units: []missions.PlanUnit{{Title: "only unit"}}},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.ApplyTransition(ctx, id, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhasePlan, Status: missions.StatusPaused, PauseReason: missions.PauseApproval},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/approve-plan", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("approve-plan = %d, want 204: %s", w.Code, w.Body.String())
+	}
+
+	got, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Phase != missions.PhaseGenerate || got.Status != missions.StatusIdle && got.Status != missions.StatusWorking {
+		t.Fatalf("mission after approve-plan = %s/%s, want generate/idle-or-working (Drive may have already claimed it)", got.Phase, got.Status)
+	}
+}
+
 // TestMissionsCreateResponseCarriesDetectedEnvironment confirms the
 // POST /v1/missions response reflects the row create() actually
 // persisted — the create() handler resolves an omitted coding

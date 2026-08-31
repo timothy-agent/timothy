@@ -193,6 +193,25 @@ func TestStartRunSpawnsEntryStep(t *testing.T) {
 	}
 }
 
+// TestStartRunForcesAutoApprovePlanTrue confirms D-087 (issue #456): a
+// workflow-spawned mission always gets AutoApprovePlan=true. Step has
+// no field for it at all, so this really confirms spawnStep's own
+// missions.Mission{} literal sets it explicitly rather than leaving it
+// at the Go zero-value false.
+func TestStartRunForcesAutoApprovePlanTrue(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	if _, err := e.StartRun(context.Background(), "wf1", map[string]string{"K": "v"}); err != nil {
+		t.Fatalf("StartRun() = %v", err)
+	}
+	if m := spawner.last(); !m.AutoApprovePlan {
+		t.Fatalf("spawned mission AutoApprovePlan = false, want true (unattended missions have nobody to approve a plan)")
+	}
+}
+
 func TestStartRunRefusesDisabledWorkflow(t *testing.T) {
 	store := newFakeEngineStore()
 	store.putWorkflow("wf1", coderQADefinition(), false)

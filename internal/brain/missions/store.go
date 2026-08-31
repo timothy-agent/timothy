@@ -48,7 +48,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
-	pending_permission, auto_approve_safe, last_evidence,
+	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds`
@@ -107,7 +107,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
-		&pendingPermissionRaw, &m.AutoApproveSafe, &m.LastEvidence,
+		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
@@ -192,7 +192,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
-		&pendingPermissionRaw, &m.AutoApproveSafe, &m.LastEvidence,
+		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
@@ -293,9 +293,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, m.Light)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30, $31, $32, $33, NULLIF($34, '')::uuid, $35, NULLIF($36, '')::uuid, $37) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, NULLIF($28, '')::uuid, $29, $30, $31, $32, $33, $34, NULLIF($35, '')::uuid, $36, NULLIF($37, '')::uuid, $38) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

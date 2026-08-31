@@ -170,7 +170,16 @@ type Mission struct {
 	// (but harmless) shell invocation. Destructive-classified commands
 	// still always ask: tools.Permissions.Resolve forces that
 	// regardless of any grant, so this cannot weaken that guarantee.
-	AutoApproveSafe bool   `json:"auto_approve_safe"`
+	AutoApproveSafe bool `json:"auto_approve_safe"`
+	// AutoApprovePlan, when true (the default), advances straight from
+	// plan to generate the moment a plan lands, exactly as every
+	// mission has always worked. false parks the mission on
+	// PauseApproval instead (D-087, issue #456), waiting for an
+	// operator to approve/replan/rediscover. Snapshotted at create
+	// time, same as AutoApproveSafe; scheduler.go and the workflow
+	// engine both force this true regardless of template/step input:
+	// an unattended mission has nobody to approve its plan.
+	AutoApprovePlan bool   `json:"auto_approve_plan"`
 	ScheduleID      string `json:"schedule_id,omitempty"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
@@ -336,4 +345,8 @@ var (
 	// deleted, so a live mission's row/events/workspace can never vanish
 	// out from under a running Driver.Advance.
 	ErrNotTerminal = errors.New("mission is not terminal")
+	// ErrNotAwaitingApproval guards the three plan-approval verbs
+	// (D-087, issue #456): approve/replan/rediscover are only valid
+	// while the mission is parked on PauseApproval.
+	ErrNotAwaitingApproval = errors.New("mission is not awaiting plan approval")
 )

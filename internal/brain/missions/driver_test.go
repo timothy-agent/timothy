@@ -337,7 +337,7 @@ func driveN(t *testing.T, d *Driver, id string, n int) {
 
 func TestDriverHappyPathToDone(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -382,7 +382,7 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	store := newFakeStore()
 	dir, base := codingWorktree(t)
 	store.put("m1", Mission{
-		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
 		Worktree: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
 		OnComplete: "push_pr",
 	})
@@ -435,7 +435,7 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	store := newFakeStore()
 	dir, base := codingWorktree(t)
 	store.put("m1", Mission{
-		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
 		Worktree: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
 		OnComplete: "push",
 	})
@@ -480,7 +480,7 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 // mission.discover_complete, and advances to plan.
 func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
 		exploreNotes: []string{"no prior implementation exists; goal is self-contained"},
 		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
@@ -514,7 +514,7 @@ func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
 // prompt, so unbounded notes would blow out that turn's context.
 func TestDriverExploreTruncatesLongNotes(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	long := strings.Repeat("x", exploreNotesCap+500)
 	runner := &scriptedRunner{
 		exploreNotes: []string{long},
@@ -538,7 +538,7 @@ func TestDriverExploreTruncatesLongNotes(t *testing.T) {
 // explore has no phase-specific error input of its own.
 func TestDriverExploreErrorRoutesToWorkerFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{exploreErr: fmt.Errorf("gateway unreachable")}
 	d := testDriver(store, runner)
 
@@ -560,7 +560,7 @@ func TestDriverExploreErrorRoutesToWorkerFailed(t *testing.T) {
 // stale in-memory value from the explore turn.
 func TestDriverPlanReceivesStoredExploreNotes(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
 		exploreNotes: []string{"found a reusable config loader in internal/platform/config"},
 		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
@@ -653,6 +653,129 @@ func TestDriverPlanCreatedEventOmitsEmptyAssumptions(t *testing.T) {
 	}
 	if _, ok := payload["assumptions"]; ok {
 		t.Fatalf("plan_created payload = %+v, want no assumptions key for an unambiguous plan", payload)
+	}
+}
+
+// TestDriverPlanApprovalGateParks confirms D-087 (issue #456): a plan
+// phase turn on a mission with AutoApprovePlan=false parks on
+// PauseApproval with the plan already stored, instead of advancing to
+// generate; no worker turn runs (scriptedRunner has no workerVerdicts
+// scripted, so a stray runExecute call would fail the test via an
+// unscripted-call panic/error).
+func TestDriverPlanApprovalGateParks(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: false})
+	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "only unit"}}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	got := store.missions["m1"]
+	if got.Phase != PhasePlan || got.Status != StatusPaused || got.PauseReason != PauseApproval {
+		t.Fatalf("mission after plan with auto_approve_plan=false = %s/%s/%s, want plan/paused/approval", got.Phase, got.Status, got.PauseReason)
+	}
+	if len(got.Spec.Units) != 1 {
+		t.Fatalf("Spec.Units = %+v, want the plan stored even though the mission parked", got.Spec.Units)
+	}
+}
+
+// TestDriverDecidePlanApprove confirms DecidePlan's approve verb
+// unparks a PauseApproval mission straight to generate. Scripts a
+// workerVerdicts entry (blocked) so the background Drive goroutine
+// DecidePlan kicks off, which continues into the now-unparked
+// generate phase, settles cleanly instead of panicking on an
+// unscripted RunWorker call once it runs past this assertion.
+func TestDriverDecidePlanApprove(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval,
+		MaxIterations: 8, Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := testDriver(store, runner)
+
+	if err := d.DecidePlan(context.Background(), "m1", InputPlanApprove, ""); err != nil {
+		t.Fatalf("DecidePlan: %v", err)
+	}
+	// DecidePlan's own ApplyTransition write happens synchronously before
+	// it spawns the post-decision Drive goroutine, but reading it back
+	// via Get (mutex-guarded) rather than a raw map index avoids racing
+	// that goroutine's own concurrent Get/writes.
+	got, err := store.Get(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Phase != PhaseGenerate || got.Status != StatusIdle || got.PauseReason != "" {
+		t.Fatalf("mission after approve = %s/%s/%s, want generate/idle/<none>", got.Phase, got.Status, got.PauseReason)
+	}
+}
+
+// TestDriverDecidePlanReplanRejectedWhenNotParked confirms the driver's
+// own belt-and-suspenders guard: DecidePlan returns
+// ErrNotAwaitingApproval for a mission not currently parked on
+// PauseApproval, regardless of phase.
+func TestDriverDecidePlanReplanRejectedWhenNotParked(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	d := testDriver(store, &scriptedRunner{})
+
+	err := d.DecidePlan(context.Background(), "m1", InputPlanReplan, "feedback")
+	if !errors.Is(err, ErrNotAwaitingApproval) {
+		t.Fatalf("DecidePlan error = %v, want ErrNotAwaitingApproval", err)
+	}
+	got := store.missions["m1"]
+	if got.Phase != PhaseGenerate || got.Status != StatusWorking {
+		t.Fatalf("mission after rejected decide = %s/%s, want untouched generate/working", got.Phase, got.Status)
+	}
+}
+
+// TestDriverReplanFeedsFollowingPlanTurn confirms the operator's
+// replan feedback (recorded as a progress note by the API layer, same
+// channel as h.note's steering notes) reaches the NEXT plan turn's
+// prompt via replanNotes, without spending ReplanUsed. Drives the
+// unpark step directly via Step+ApplyTransition (the API/DecidePlan's
+// own transition), then a synchronous Advance for the plan turn itself.
+// This avoids DecidePlan's background Drive re-kick racing this test's
+// own reads of the unsynchronized scriptedRunner test double.
+func TestDriverReplanFeedsFollowingPlanTurn(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval,
+		MaxIterations: 8, ExploreNotes: "original findings",
+		Spec: Spec{Units: []PlanUnit{{Title: "unit0"}}},
+	})
+	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0 revised"}}}}}
+	d := testDriver(store, runner)
+
+	// AppendProgress mirrors what the API's replan handler does before
+	// the state transition, same channel as h.note's steering notes.
+	if err := store.AppendProgress(context.Background(), "m1", "Operator replan feedback: use Go 1.23"); err != nil {
+		t.Fatalf("AppendProgress: %v", err)
+	}
+	t1 := Step(StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval, MaxIterations: 8},
+		StepInput{Input: InputPlanReplan, Reason: "use Go 1.23"}, DefaultConfig)
+	if err := store.ApplyTransition(context.Background(), "m1", t1); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	if t1.Next.ReplanUsed {
+		t.Fatal("replan transition set ReplanUsed, operator iterations must stay free")
+	}
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(runner.planExploreNotes) != 1 {
+		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planExploreNotes))
+	}
+	if got := runner.planExploreNotes[0]; !strings.Contains(got, "use Go 1.23") {
+		t.Fatalf("replan prompt = %q, want it to contain the operator feedback", got)
+	}
+	// The replanned plan (AutoApprovePlan still false on this fixture)
+	// parks on approval again once runPlan completes.
+	got := store.missions["m1"]
+	if got.Phase != PhasePlan || got.Status != StatusPaused || got.PauseReason != PauseApproval || got.ReplanUsed {
+		t.Fatalf("mission after replanned plan lands = %s/%s/%s/ReplanUsed=%v, want plan/paused/approval/false", got.Phase, got.Status, got.PauseReason, got.ReplanUsed)
 	}
 }
 
@@ -2034,7 +2157,7 @@ func TestDriverReplanPromptCarriesStallContext(t *testing.T) {
 		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planExploreNotes))
 	}
 	got := runner.planExploreNotes[0]
-	for _, want := range []string{"original findings", "previous plan stalled", "tried approach A, failed", "unit0"} {
+	for _, want := range []string{"original findings", "previous plan is being replanned", "tried approach A, failed", "unit0"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("replan prompt = %q, want it to contain %q", got, want)
 		}
@@ -2281,7 +2404,7 @@ func TestDriverAdvanceNilCapacityGateRunsTurn(t *testing.T) {
 // must keep advancing even when the gate denies.
 func TestDriverAdvanceCapacityGateIgnoredWhenAlreadyWorking(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
 	d := testDriver(store, runner)
 	d.SetCapacityGate(fakeCapacityChecker{admit: false, reason: "denied"})

@@ -34,7 +34,7 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID, goal string) (str
 		RouteModel: parent.RouteModel, PlanRouteModel: parent.PlanRouteModel,
 		ReviewRouteModel: parent.ReviewRouteModel,
 		BudgetAmount:     parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
-		AutoApproveSafe: parent.AutoApproveSafe, PromptOverlay: parent.PromptOverlay,
+		AutoApproveSafe: parent.AutoApproveSafe, AutoApprovePlan: parent.AutoApprovePlan, PromptOverlay: parent.PromptOverlay,
 		Knowledge: parent.Knowledge, Harness: parent.Harness, Environment: parent.Environment,
 		RepoURL: parent.RepoURL, ConnectorID: parent.ConnectorID,
 		BranchPattern: parent.BranchPattern, CommitStyle: parent.CommitStyle,

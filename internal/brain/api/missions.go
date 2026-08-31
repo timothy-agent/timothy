@@ -116,6 +116,9 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("POST /v1/missions/{id}/note", a.auth(http.HandlerFunc(h.note)))
 	handle("POST /v1/missions/{id}/cancel", a.auth(http.HandlerFunc(h.cancel)))
 	handle("POST /v1/missions/{id}/permission", a.auth(http.HandlerFunc(h.permission)))
+	handle("POST /v1/missions/{id}/approve-plan", a.auth(http.HandlerFunc(h.approvePlan)))
+	handle("POST /v1/missions/{id}/replan", a.auth(http.HandlerFunc(h.replan)))
+	handle("POST /v1/missions/{id}/rediscover", a.auth(http.HandlerFunc(h.rediscover)))
 	handle("GET /v1/missions/{id}/files", a.auth(http.HandlerFunc(h.files)))
 	handle("GET /v1/missions/{id}/files/{path...}", a.auth(http.HandlerFunc(h.download)))
 	handle("GET /v1/missions/{id}/archive", a.auth(http.HandlerFunc(h.archive)))
@@ -253,6 +256,8 @@ func failMission(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "already_finished", err.Error())
 	case errors.Is(err, missions.ErrNotTerminal):
 		jsonError(w, http.StatusConflict, "not_terminal", err.Error())
+	case errors.Is(err, missions.ErrNotAwaitingApproval):
+		jsonError(w, http.StatusConflict, "not_awaiting_approval", err.Error())
 	case errors.Is(err, missions.ErrInvalidMission):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
@@ -410,6 +415,12 @@ type createMissionRequest struct {
 	// unattended, so auto-approving DangerSafe shell calls is the
 	// sensible default; destructive commands always ask regardless.
 	AutoApproveSafe *bool `json:"auto_approve_safe"`
+	// AutoApprovePlan defaults true (pointer, same "omitted vs explicit
+	// false" reasoning as AutoApproveSafe above): false parks the
+	// mission for operator approve/replan/rediscover once the plan
+	// phase lands (D-087, issue #456). Ignored (forced true) for
+	// scheduler-fired and workflow-spawned missions.
+	AutoApprovePlan *bool `json:"auto_approve_plan"`
 	// RepoURL is a GitHub repo's https clone URL: when set, the mission
 	// clones it instead of self-initializing an empty repo. Mutually
 	// exclusive with a future repo_path option and coding-only, same as
@@ -626,6 +637,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	if req.AutoApproveSafe != nil {
 		autoApproveSafe = *req.AutoApproveSafe
 	}
+	autoApprovePlan := true
+	if req.AutoApprovePlan != nil {
+		autoApprovePlan = *req.AutoApprovePlan
+	}
 	if req.PermissionTimeoutSeconds != nil && *req.PermissionTimeoutSeconds < 0 {
 		jsonError(w, http.StatusBadRequest, "bad_request", "permission_timeout_seconds must not be negative")
 		return
@@ -639,7 +654,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
-		AutoApproveSafe: autoApproveSafe, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
+		AutoApproveSafe: autoApproveSafe, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
@@ -1422,6 +1437,60 @@ func (h *missionAPI) permission(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.AppendEvent(r.Context(), m.ID, "mission.permission_answered",
 		map[string]any{"tool": m.PendingPermissionTool, "decision": body.Decision}); err != nil {
 		h.log.Warn("mission: record permission_answered event failed", "mission_id", m.ID, "error", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// approvePlan handles POST /v1/missions/{id}/approve-plan: the operator
+// accepts the plan as landed, advancing straight to generate (D-087,
+// issue #456). Plain HTTP handler only, never a tool: the model
+// cannot call this.
+func (h *missionAPI) approvePlan(w http.ResponseWriter, r *http.Request) {
+	if err := h.driver.DecidePlan(r.Context(), r.PathValue("id"), missions.InputPlanApprove, ""); err != nil {
+		failMission(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// replan handles POST /v1/missions/{id}/replan: re-runs the plan phase
+// with optional operator feedback folded into the next planning
+// prompt. Feedback is recorded as a progress note (same channel the
+// note endpoint's steering notes use, and the same precedent for
+// storing the operator's own text verbatim in an event payload) BEFORE
+// DecidePlan runs, so runPlan's replanNotes picks it up on the very
+// next planning turn. Does not consume the mission's automatic
+// stall-replan budget (ReplanUsed): an operator-requested replan is a
+// free, unlimited iteration.
+func (h *missionAPI) replan(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Feedback string `json:"feedback"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with an optional feedback field")
+		return
+	}
+	id := r.PathValue("id")
+	feedback := missions.NeutralizeSlot(truncateAnswer(body.Feedback, resumeAnswerCap))
+	if feedback != "" {
+		if err := h.store.AppendProgress(r.Context(), id, "Operator replan feedback: "+feedback); err != nil {
+			h.log.Warn("mission: record replan feedback progress note failed", "mission_id", id, "error", err)
+		}
+	}
+	if err := h.driver.DecidePlan(r.Context(), id, missions.InputPlanReplan, feedback); err != nil {
+		failMission(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// rediscover handles POST /v1/missions/{id}/rediscover: sends the
+// mission back to the discover phase for a fresh exploration pass, no
+// feedback text taken (unlike replan).
+func (h *missionAPI) rediscover(w http.ResponseWriter, r *http.Request) {
+	if err := h.driver.DecidePlan(r.Context(), r.PathValue("id"), missions.InputPlanRediscover, ""); err != nil {
+		failMission(w, err)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
