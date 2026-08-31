@@ -275,8 +275,9 @@ func (r *nativeRunner) SetLocation(loc func(ctx context.Context) *time.Location)
 // steeringFor only ever redelivers notes carrying it.
 const operatorNotePrefix = "Operator note: "
 
-// D-076: steeringFor builds a worker turn's loop.Request.Steering
-// closure: the watermark starts at the count of operator notes already
+// D-076/D-089: steeringFor builds a phase turn's loop.Request.Steering
+// closure (worker, discover, plan, and prove turns): the watermark
+// starts at the count of operator notes already
 // present in the packet the worker was seeded with, so those never
 // redeliver; each poll re-reads the mission's live progress log, takes
 // operator notes past the watermark, and advances it by however many it
@@ -1014,8 +1015,8 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		// with feedback instead of parking (D-039). UI-created missions
 		// (ScheduleID empty) keep the park-and-answer flow.
 		Unattended: m.ScheduleID != "",
-		// Only the worker turn gets mid-run steering (D-076): explore/
-		// plan/review turns are unaffected.
+		// D-076/D-089: worker turns get mid-run steering, same mechanism
+		// now shared by discover/plan/prove turns (issue #458).
 		Steering: r.steeringFor(m.ID, packet.Progress),
 	}
 
@@ -1157,6 +1158,10 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
+		// D-089: discover turns get the same mid-turn steering as worker
+		// turns (issue #458): a note posted while explore is in flight
+		// reaches this turn instead of only the next phase's prompt.
+		Steering: r.steeringFor(m.ID, m.Progress),
 	}
 
 	res, err := r.runTurn(ctx, req, exploreNotesToolName, PhaseDiscover)
@@ -1245,6 +1250,8 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
+		// D-089: same mid-turn steering as discover/plan/worker (issue #458).
+		Steering: r.steeringFor(m.ID, m.Progress),
 	}
 	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseProve)
 	text, args := res.text, res.sentinelArgs
@@ -1407,6 +1414,8 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes 
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
+		// D-089: same mid-turn steering as discover/worker (issue #458).
+		Steering: r.steeringFor(m.ID, m.Progress),
 	}
 	// Force submit_plan only when it is the turn's sole tool (D-063):
 	// a KB-attached mission also offers search_kb/read_kb here, and a

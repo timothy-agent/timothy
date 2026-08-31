@@ -2610,3 +2610,100 @@ func TestRunWorkerWiresSteeringFromProgressReader(t *testing.T) {
 		}
 	})
 }
+
+// TestExploreSessionWiresSteeringFromProgressReader mirrors
+// TestRunWorkerWiresSteeringFromProgressReader for the discover phase
+// (D-089, issue #458): a ProgressReader must produce a non-nil Steering
+// func on the explore turn's loop.Request, same seam RunWorker uses.
+func TestExploreSessionWiresSteeringFromProgressReader(t *testing.T) {
+	batch := [][]stream.StreamEvent{
+		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+	}
+
+	t.Run("wired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: batch}
+		r := newTestRunner(agent)
+		r.SetProgressReader(&fakeProgressReader{})
+		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("ExploreSession: %v", err)
+		}
+		if agent.requests[0].Steering == nil {
+			t.Fatal("Steering not wired on the explore request despite a ProgressReader")
+		}
+	})
+
+	t.Run("unwired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: batch}
+		r := newTestRunner(agent)
+		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("ExploreSession: %v", err)
+		}
+		if agent.requests[0].Steering != nil {
+			t.Fatal("Steering wired despite no ProgressReader")
+		}
+	})
+}
+
+// TestPlanSessionWiresSteeringFromProgressReader mirrors
+// TestRunWorkerWiresSteeringFromProgressReader for the plan phase
+// (D-089, issue #458).
+func TestPlanSessionWiresSteeringFromProgressReader(t *testing.T) {
+	batch := [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+	}
+
+	t.Run("wired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: batch}
+		r := newTestRunner(agent)
+		r.SetProgressReader(&fakeProgressReader{})
+		if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
+			t.Fatalf("PlanSession: %v", err)
+		}
+		if agent.requests[0].Steering == nil {
+			t.Fatal("Steering not wired on the plan request despite a ProgressReader")
+		}
+	})
+
+	t.Run("unwired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: batch}
+		r := newTestRunner(agent)
+		if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
+			t.Fatalf("PlanSession: %v", err)
+		}
+		if agent.requests[0].Steering != nil {
+			t.Fatal("Steering wired despite no ProgressReader")
+		}
+	})
+}
+
+// TestRunReviewWiresSteeringFromProgressReader mirrors
+// TestRunWorkerWiresSteeringFromProgressReader for the prove phase
+// (D-089, issue #458).
+func TestRunReviewWiresSteeringFromProgressReader(t *testing.T) {
+	batch := [][]stream.StreamEvent{
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+	}
+
+	t.Run("wired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: batch}
+		r := newTestRunner(agent)
+		r.SetProgressReader(&fakeProgressReader{})
+		if _, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}, nil); err != nil {
+			t.Fatalf("RunReview: %v", err)
+		}
+		if agent.requests[0].Steering == nil {
+			t.Fatal("Steering not wired on the review request despite a ProgressReader")
+		}
+	})
+
+	t.Run("unwired", func(t *testing.T) {
+		agent := &scriptedAgent{batches: batch}
+		r := newTestRunner(agent)
+		if _, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}, nil); err != nil {
+			t.Fatalf("RunReview: %v", err)
+		}
+		if agent.requests[0].Steering != nil {
+			t.Fatal("Steering wired despite no ProgressReader")
+		}
+	})
+}
