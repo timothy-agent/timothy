@@ -548,8 +548,9 @@ func sweepAskTimeouts(ctx context.Context, d askTimeoutDriver, store askTimeoutS
 			continue
 		}
 		if notify != nil {
-			if err := notify.NotifyMessage(ctx, p.MissionID, "ask_timed_out",
-				"a pending question timed out and the proposed default was applied automatically"); err != nil {
+			title := PRTitle(Mission{Name: p.Name, Goal: p.Goal})
+			message := fmt.Sprintf("Mission - %s: pending question timed out; applied the proposed default (%s).", title, p.Input.ProposedDefault)
+			if err := notify.NotifyMessage(ctx, p.MissionID, "ask_timed_out", message); err != nil {
 				log.Warn("ask timeout sweep: notify failed", "mission_id", p.MissionID, "error", err)
 			}
 		}

@@ -31,6 +31,8 @@ function harnessLabel(harness?: string): string {
 // kind) falls back to the existing amber styling.
 const notificationSeverityClasses: Record<string, string> = {
   done: 'border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200',
+  ask_timed_out:
+    'border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200',
   error:
     'border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200',
   paused:
@@ -41,6 +43,8 @@ const notificationSeverityClasses: Record<string, string> = {
 
 const notificationDismissClasses: Record<string, string> = {
   done: 'text-green-700 hover:text-green-900 dark:text-green-400 dark:hover:text-green-200',
+  ask_timed_out:
+    'text-green-700 hover:text-green-900 dark:text-green-400 dark:hover:text-green-200',
   error: 'text-red-700 hover:text-red-900 dark:text-red-400 dark:hover:text-red-200',
   paused: 'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200',
   waiting_for_input:

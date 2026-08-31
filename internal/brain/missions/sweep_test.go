@@ -93,13 +93,16 @@ func (f *fakeSignaler) Signal(ctx context.Context, id string, input Input) error
 }
 
 // fakeMessageNotifier captures NotifyMessage calls for
-// autoResumeBackoff tests.
+// autoResumeBackoff tests. messages mirrors notified 1:1, added for
+// tests that need to assert on the notification text itself.
 type fakeMessageNotifier struct {
 	notified []string
+	messages []string
 }
 
 func (f *fakeMessageNotifier) NotifyMessage(ctx context.Context, missionID, kind, message string) error {
 	f.notified = append(f.notified, missionID)
+	f.messages = append(f.messages, message)
 	return nil
 }
 
@@ -498,8 +501,8 @@ func TestSweepAskTimeoutsAppliesDefaultAndDrives(t *testing.T) {
 	now := time.Now()
 	store := &fakeAskTimeoutStore{
 		pending: []ParkedInput{
-			{MissionID: "timed-out", Input: PendingInput{ProposedDefault: "yes", AskedAt: now.Add(-10 * time.Minute)}},
-			{MissionID: "still-waiting", Input: PendingInput{ProposedDefault: "no", AskedAt: now.Add(-1 * time.Second)}},
+			{MissionID: "timed-out", Name: "Fix login bug", Input: PendingInput{ProposedDefault: "yes", AskedAt: now.Add(-10 * time.Minute)}},
+			{MissionID: "still-waiting", Name: "Other mission", Input: PendingInput{ProposedDefault: "no", AskedAt: now.Add(-1 * time.Second)}},
 		},
 	}
 	driver := &fakeAskTimeoutDriver{}
@@ -514,6 +517,10 @@ func TestSweepAskTimeoutsAppliesDefaultAndDrives(t *testing.T) {
 	}
 	if len(notifier.notified) != 1 || notifier.notified[0] != "timed-out" {
 		t.Fatalf("notified = %v, want exactly [timed-out]", notifier.notified)
+	}
+	wantMessage := "Mission - Fix login bug: pending question timed out; applied the proposed default (yes)."
+	if len(notifier.messages) != 1 || notifier.messages[0] != wantMessage {
+		t.Fatalf("messages = %v, want exactly [%q]", notifier.messages, wantMessage)
 	}
 	if len(driver.drove) != 1 || driver.drove[0] != "timed-out" {
 		t.Fatalf("drove = %v, want exactly [timed-out]", driver.drove)

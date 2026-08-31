@@ -753,9 +753,13 @@ func (s *Store) ClearPendingInput(ctx context.Context, id string) error {
 }
 
 // ParkedInput is one PendingInputs row: just enough for the timeout
-// sweep's elapsed-time decision, mirroring ParkedPermission.
+// sweep's elapsed-time decision, mirroring ParkedPermission. Name and
+// Goal let the sweep's notification name the mission (PRTitle takes a
+// Mission, so both are carried rather than a pre-computed title).
 type ParkedInput struct {
 	MissionID string
+	Name      string
+	Goal      string
 	Input     PendingInput
 }
 
@@ -766,23 +770,23 @@ func (s *Store) PendingInputs(ctx context.Context) ([]ParkedInput, error) {
 	if err != nil {
 		return nil, fmt.Errorf("missions pending inputs: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT id, pending_input FROM missions WHERE pending_input IS NOT NULL`)
+	rows, err := db.Query(ctx, `SELECT id, name, goal, pending_input FROM missions WHERE pending_input IS NOT NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("missions pending inputs: %w", err)
 	}
 	defer rows.Close()
 	out := []ParkedInput{}
 	for rows.Next() {
-		var id string
+		var id, name, goal string
 		var raw []byte
-		if err := rows.Scan(&id, &raw); err != nil {
+		if err := rows.Scan(&id, &name, &goal, &raw); err != nil {
 			return nil, fmt.Errorf("missions pending inputs: %w", err)
 		}
 		var p PendingInput
 		if err := json.Unmarshal(raw, &p); err != nil {
 			continue // corrupt row: skip rather than fail the whole sweep
 		}
-		out = append(out, ParkedInput{MissionID: id, Input: p})
+		out = append(out, ParkedInput{MissionID: id, Name: name, Goal: goal, Input: p})
 	}
 	return out, rows.Err()
 }

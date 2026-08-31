@@ -620,9 +620,6 @@ export function MissionDetail() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">{missionDisplayName(mission)}</h1>
-            <div className="mt-1.5">
-              <GoalSection goal={mission.goal} />
-            </div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span className="capitalize">{mission.kind}</span>
               <span>{mission.phase}</span>
@@ -811,6 +808,9 @@ export function MissionDetail() {
               )}
             </div>
           </TooltipProvider>
+        </div>
+        <div className="mt-2">
+          <GoalSection goal={mission.goal} />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {usage &&
