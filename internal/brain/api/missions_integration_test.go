@@ -328,7 +328,16 @@ func TestMissionsNoteAcceptedOnEveryNonTerminalPhase(t *testing.T) {
 			}
 			var sawPhase bool
 			for _, e := range events {
-				if e.Kind == "mission.steered" && strings.Contains(string(e.Payload), `"phase":"`+string(phase)+`"`) {
+				if e.Kind != "mission.steered" {
+					continue
+				}
+				var payload struct {
+					Phase string `json:"phase"`
+				}
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					t.Fatalf("unmarshal mission.steered payload %s: %v", e.Payload, err)
+				}
+				if payload.Phase == string(phase) {
 					sawPhase = true
 				}
 			}
