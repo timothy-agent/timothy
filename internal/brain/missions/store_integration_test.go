@@ -423,7 +423,7 @@ func TestMissionKnowledgeRoundTrips(t *testing.T) {
 
 // TestMissionHarnessRoundTrips covers D-051: harness is a first-class
 // column snapshotted at create time, same shape as PromptOverlay above
-//: "" (native) is the default when a mission omits it.
+// : "" (native) is the default when a mission omits it.
 func TestMissionHarnessRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -1391,5 +1391,171 @@ func TestSpendExcludesUnbilledRows(t *testing.T) {
 	}
 	if got := spend.ByCurrency["USD"]; got != 0.05 {
 		t.Fatalf("Spend USD = %v, want 0.05 (unbilled row must be excluded from the brake)", got)
+	}
+}
+
+// TestPendingPermissionsAndResolveTimeout covers issue #445's store
+// layer: PendingPermissions lists a mission's parked request with its
+// parked_at and per-mission override intact, and
+// ResolvePendingPermissionTimeout clears the park and appends the SAME
+// mission.permission_answered event kind an operator's manual deny
+// produces, with reason=timed_out distinguishing the two.
+func TestPendingPermissionsAndResolveTimeout(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	timeout := 30
+	id, err := s.Create(ctx, Mission{Goal: marker + "permission-timeout-store", Kind: "general", Route: "default", PermissionTimeoutSeconds: &timeout})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+		t.Fatalf("ApplyTransition working: %v", err)
+	}
+	if err := s.SetPendingPermission(ctx, id, "perm-timeout-1", "shell", `{"command":"rm -rf x"}`, "destructive", "deletes files"); err != nil {
+		t.Fatalf("SetPendingPermission: %v", err)
+	}
+
+	pending, err := s.PendingPermissions(ctx)
+	if err != nil {
+		t.Fatalf("PendingPermissions: %v", err)
+	}
+	var found *ParkedPermission
+	for i := range pending {
+		if pending[i].MissionID == id {
+			found = &pending[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("PendingPermissions did not return the parked mission")
+	}
+	if found.PermissionID != "perm-timeout-1" || found.Tool != "shell" {
+		t.Fatalf("ParkedPermission = %+v, want id/tool from SetPendingPermission", found)
+	}
+	if found.TimeoutOverride == nil || *found.TimeoutOverride != timeout {
+		t.Fatalf("TimeoutOverride = %v, want %d", found.TimeoutOverride, timeout)
+	}
+	if found.ParkedAt.IsZero() {
+		t.Fatal("ParkedAt was not recorded")
+	}
+
+	if err := s.ResolvePendingPermissionTimeout(ctx, id, "shell"); err != nil {
+		t.Fatalf("ResolvePendingPermissionTimeout: %v", err)
+	}
+
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PendingPermission != "" {
+		t.Fatalf("Get after timeout resolve = %+v, want pending_permission cleared", m)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	last := events[len(events)-1]
+	if last.Kind != "mission.permission_answered" {
+		t.Fatalf("last event kind = %q, want mission.permission_answered", last.Kind)
+	}
+	var payload struct {
+		Tool, Decision, Reason string
+	}
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal event payload: %v", err)
+	}
+	if payload.Decision != "deny" || payload.Reason != "timed_out" {
+		t.Fatalf("event payload = %+v, want decision=deny reason=timed_out", payload)
+	}
+
+	pending, err = s.PendingPermissions(ctx)
+	if err != nil {
+		t.Fatalf("PendingPermissions after resolve: %v", err)
+	}
+	for _, p := range pending {
+		if p.MissionID == id {
+			t.Fatal("resolved mission still reported as pending")
+		}
+	}
+}
+
+// fakePermissionTimeoutDriverIT captures Drive calls from
+// sweepPermissionTimeouts against a real store, synchronized so the
+// test can wait for the sweep's background goroutine before asserting.
+type fakePermissionTimeoutDriverIT struct {
+	wg    sync.WaitGroup
+	mu    sync.Mutex
+	drove []string
+}
+
+func (f *fakePermissionTimeoutDriverIT) Drive(ctx context.Context, id string) error {
+	defer f.wg.Done()
+	f.mu.Lock()
+	f.drove = append(f.drove, id)
+	f.mu.Unlock()
+	return nil
+}
+
+// TestSweepPermissionTimeoutsAutoDeniesAndResumes is the end-to-end
+// path for issue #445 against a real store: a mission parked on
+// permission with a very short (1s) effective timeout gets auto-denied
+// once the sweep runs past that interval, the mission_event carries
+// reason=timed_out, and the mission is handed back to Drive to resume.
+func TestSweepPermissionTimeoutsAutoDeniesAndResumes(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	timeout := 1
+	id, err := s.Create(ctx, Mission{Goal: marker + "permission-timeout-sweep", Kind: "general", Route: "default", PermissionTimeoutSeconds: &timeout})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseExecute, Status: StatusWorking}}); err != nil {
+		t.Fatalf("ApplyTransition working: %v", err)
+	}
+	if err := s.SetPendingPermission(ctx, id, "perm-sweep-1", "shell", `{"command":"rm -rf x"}`, "destructive", "deletes files"); err != nil {
+		t.Fatalf("SetPendingPermission: %v", err)
+	}
+
+	time.Sleep(1200 * time.Millisecond) // past the 1s effective timeout
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	driver := &fakePermissionTimeoutDriverIT{}
+	driver.wg.Add(1)
+	sweepPermissionTimeouts(ctx, driver, s, func(context.Context) int { return 0 }, nil, nil, log)
+	driver.wg.Wait()
+
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.PendingPermission != "" {
+		t.Fatalf("Get after sweep = %+v, want pending_permission auto-denied", m)
+	}
+
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	last := events[len(events)-1]
+	if last.Kind != "mission.permission_answered" {
+		t.Fatalf("last event kind = %q, want mission.permission_answered", last.Kind)
+	}
+	var payload struct {
+		Decision, Reason string
+	}
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal event payload: %v", err)
+	}
+	if payload.Decision != "deny" || payload.Reason != "timed_out" {
+		t.Fatalf("event payload = %+v, want decision=deny reason=timed_out", payload)
+	}
+
+	driver.mu.Lock()
+	drove := driver.drove
+	driver.mu.Unlock()
+	if len(drove) != 1 || drove[0] != id {
+		t.Fatalf("Drive calls = %v, want exactly [%s] (mission resumed)", drove, id)
 	}
 }

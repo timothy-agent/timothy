@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/loop"
 )
 
 // workSlotSweepInterval is how often the idle-over-cap sweep retries
@@ -32,6 +34,15 @@ const (
 	recoverWorkingRetries    = 5
 	recoverWorkingRetryDelay = 2 * time.Second
 )
+
+// permissionTimeoutStore is the narrow slice of *Store the parked-
+// permission timeout sweep needs, an interface for the same reason
+// backoffStore/pausedByReasonStore are: unit-testable against a faked
+// store.
+type permissionTimeoutStore interface {
+	PendingPermissions(ctx context.Context) ([]ParkedPermission, error)
+	ResolvePendingPermissionTimeout(ctx context.Context, id, tool string) error
+}
 
 // sandboxSweeper is the narrow slice of the sandbox backend the
 // periodic orphan pass needs — kept as an interface (not an import of
@@ -138,13 +149,18 @@ func admitWork(ctx context.Context, gate capacityChecker, log *slog.Logger) (adm
 
 // RecoverAndSweep runs the boot-time recovery pass once (re-Drives any
 // mission left status='working' from a prior process's crash), then
-// runs the periodic work-slot sweep until ctx is done — which now also
-// sweeps orphaned sandbox containers on the same tick (see
-// runWorkSlotSweep). This is the one entry point cmd/brain/main.go
-// needs — it owns the Driver, which carries its own Store reference.
-func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, log *slog.Logger) {
+// runs the periodic work-slot sweep until ctx is done, which now also
+// sweeps orphaned sandbox containers and timed-out parked permissions on
+// the same tick (see runWorkSlotSweep). This is the one entry point
+// cmd/brain/main.go needs: it owns the Driver, which carries its own
+// Store reference. globalPermissionTimeout reads the current
+// settings.ValuePermissionTimeoutSeconds value (issue #445); resolveBroker
+// is the live in-memory PermBroker's Resolve, best-effort. nil is valid
+// (a still-running turn just times out on its own permissionTimeout
+// instead of waking early).
+func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
 	recoverWorking(ctx, d, store, log)
-	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, log)
+	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, resolveBroker, log)
 }
 
 // sweepOrphanSandboxes runs on every runWorkSlotSweep tick (previously
@@ -210,11 +226,12 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 
 // runWorkSlotSweep retries missions parked idle over the work-slot cap
 // every workSlotSweepInterval via ClaimWorkSlot, kicking off a Drive
-// for whichever gets claimed, sweeps orphaned sandbox containers, and
-// re-Drives any 'working' mission stale past staleWorkingAfter — all on
-// the same tick. Runs until ctx is done — this call blocks, so
+// for whichever gets claimed, sweeps orphaned sandbox containers,
+// re-Drives any 'working' mission stale past staleWorkingAfter, and
+// auto-denies any pending_permission parked past its effective timeout,
+// all on the same tick. Runs until ctx is done; this call blocks, so
 // RecoverAndSweep's caller runs it in its own goroutine.
-func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, log *slog.Logger) {
+func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
 	ticker := time.NewTicker(workSlotSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -226,6 +243,7 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 			reDriveStaleWorking(ctx, d, store, log)
 			autoResumeBackoff(ctx, d, store, notify, log)
 			autoResumeInfra(ctx, d, store, notify, log)
+			sweepPermissionTimeouts(ctx, d, store, globalPermissionTimeout, resolveBroker, notify, log)
 			// D-056: skip the claim entirely this tick if the host can't
 			// afford another working mission — the mission stays idle,
 			// and this same sweep retries it in workSlotSweepInterval; that
@@ -377,5 +395,92 @@ func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore,
 		if err := d.Signal(ctx, m.ID, InputResume); err != nil {
 			log.Error("auto-resume infra sweep: signal failed", "mission_id", m.ID, "error", err)
 		}
+	}
+}
+
+// shouldTimeoutPermission is the pure elapsed-time decision the
+// permission-timeout sweep applies to one parked mission (issue #445):
+// missionOverride, when non-nil, takes precedence over globalSeconds
+// (per-mission opt-out/opt-in); either one <= 0 means "disabled" for
+// that mission, matching the settings default of 0 == park forever.
+// Never returns true for anything but "deny is due"; there is no
+// "approve" outcome this function can produce.
+func shouldTimeoutPermission(now, parkedAt time.Time, missionOverride *int, globalSeconds int) bool {
+	timeout := globalSeconds
+	if missionOverride != nil {
+		timeout = *missionOverride
+	}
+	if timeout <= 0 {
+		return false
+	}
+	return now.Sub(parkedAt) >= time.Duration(timeout)*time.Second
+}
+
+// permissionTimeoutDriver is the narrow slice of *Driver
+// sweepPermissionTimeouts needs to rescue a mission whose worker
+// goroutine died while parked: Drive, not Signal, since pending_permission
+// never advances Status (it stays 'working' the whole time a mission is
+// parked, same as any other mid-turn state), so forcing a resume
+// transition here would race a genuinely still-running turn's own
+// eventual ApplyTransition. Drive is always safe to call again:
+// Driver.claimDriving makes a second concurrent call for the same id a
+// no-op, exactly the guarantee reDriveStaleWorking already relies on.
+type permissionTimeoutDriver interface {
+	Drive(ctx context.Context, id string) error
+}
+
+// sweepPermissionTimeouts auto-denies any mission whose pending_permission
+// has sat unanswered past its effective timeout (issue #445): a
+// deployment that never sets settings.ValuePermissionTimeoutSeconds (or
+// sets it to 0) sees this do nothing, preserving the original park-
+// forever behavior exactly. Resolution goes through
+// Store.ResolvePendingPermissionTimeout, the same store-level deny the
+// API's operator-deny handler ends in, so a restarted process (whose
+// in-memory PermBroker lost every pending id) still gets a durable
+// answer. resolveBroker is a best-effort nudge to also wake a STILL-LIVE
+// worker turn blocked in loop.Agent's askUser immediately rather than
+// waiting out its own longer in-process permissionTimeout; a false/nil
+// result just means the turn was already gone (crash, restart) or
+// already resolved. Either way, Drive picks the mission back up: if a
+// live turn is still running it's claimDriving's own no-op, otherwise
+// this is exactly recoverWorking/reDriveStaleWorking's own rescue path
+// for a 'working' mission whose Drive loop stopped advancing.
+func sweepPermissionTimeouts(ctx context.Context, d permissionTimeoutDriver, store permissionTimeoutStore, globalPermissionTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, notify messageNotifier, log *slog.Logger) {
+	if globalPermissionTimeout == nil {
+		return
+	}
+	pending, err := store.PendingPermissions(ctx)
+	if err != nil {
+		log.Error("permission timeout sweep: list failed", "error", err)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+	globalSeconds := globalPermissionTimeout(ctx)
+	now := time.Now().UTC()
+	for _, p := range pending {
+		if !shouldTimeoutPermission(now, p.ParkedAt, p.TimeoutOverride, globalSeconds) {
+			continue
+		}
+		log.Warn("permission timeout sweep: auto-denying a parked permission request", "mission_id", p.MissionID, "tool", p.Tool)
+		if err := store.ResolvePendingPermissionTimeout(ctx, p.MissionID, p.Tool); err != nil {
+			log.Error("permission timeout sweep: resolve failed", "mission_id", p.MissionID, "error", err)
+			continue
+		}
+		if resolveBroker != nil {
+			resolveBroker(p.PermissionID, loop.DecideDeny) // best-effort: wakes a still-live worker turn immediately
+		}
+		if notify != nil {
+			if err := notify.NotifyMessage(ctx, p.MissionID, "permission_timed_out",
+				"a pending permission request timed out and was denied automatically"); err != nil {
+				log.Warn("permission timeout sweep: notify failed", "mission_id", p.MissionID, "error", err)
+			}
+		}
+		go func(id string) {
+			if err := d.Drive(ctx, id); err != nil {
+				log.Error("permission timeout sweep: drive failed", "mission_id", id, "error", err)
+			}
+		}(p.MissionID)
 	}
 }

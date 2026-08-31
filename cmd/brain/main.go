@@ -293,7 +293,8 @@ func main() {
 	kbStore := kb.New(app.DB)
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
-		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, app.Log)
+		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier,
+			flags.PermissionTimeoutSeconds, broker.Resolve, app.Log)
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {

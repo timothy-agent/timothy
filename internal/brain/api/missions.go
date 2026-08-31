@@ -465,6 +465,12 @@ type createMissionRequest struct {
 	// classified). Always the operator's explicit choice — the classify
 	// preview only suggests a value, never sets it.
 	Light bool `json:"light"`
+	// PermissionTimeoutSeconds overrides the global
+	// settings.ValuePermissionTimeoutSeconds for this mission alone
+	// (issue #445): nil (omitted) inherits the global setting; 0 or a
+	// positive integer sets this mission's own park-forever/auto-deny
+	// bound. Never negative.
+	PermissionTimeoutSeconds *int `json:"permission_timeout_seconds"`
 }
 
 // missionAttachmentInput names one already-uploaded attachment to
@@ -620,6 +626,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	if req.AutoApproveSafe != nil {
 		autoApproveSafe = *req.AutoApproveSafe
 	}
+	if req.PermissionTimeoutSeconds != nil && *req.PermissionTimeoutSeconds < 0 {
+		jsonError(w, http.StatusBadRequest, "bad_request", "permission_timeout_seconds must not be negative")
+		return
+	}
 	budgetCurrency := req.BudgetCurrency
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
@@ -634,6 +644,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
 		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID, Light: req.Light,
+		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {

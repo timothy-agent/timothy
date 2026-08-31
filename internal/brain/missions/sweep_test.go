@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 )
@@ -256,5 +257,153 @@ func TestAutoResumeInfraNilNotifierSafe(t *testing.T) {
 	autoResumeInfra(context.Background(), signaler, store, nil, log)
 	if len(signaler.signaled) != 0 {
 		t.Fatal("exhausted mission must never be resumed")
+	}
+}
+
+// TestShouldTimeoutPermission covers issue #445's timeout-detection
+// decision: a mission override always wins over the global setting, and
+// <= 0 (either source) means disabled, the settings default that
+// preserves park-forever behavior for a deployment that never opts in.
+func TestShouldTimeoutPermission(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	intp := func(n int) *int { return &n }
+
+	cases := []struct {
+		name        string
+		parkedAgo   time.Duration
+		override    *int
+		global      int
+		wantTimeout bool
+	}{
+		{"global disabled (0), no override: never times out", 999 * time.Hour, nil, 0, false},
+		{"global set, just before due", 59 * time.Second, nil, 60, false},
+		{"global set, just after due", 61 * time.Second, nil, 60, true},
+		{"override disables even with global set", 999 * time.Hour, intp(0), 300, false},
+		{"override shorter than global, fires sooner", 31 * time.Second, intp(30), 300, true},
+		{"override longer than global, waits longer", 31 * time.Second, intp(300), 30, false},
+		{"negative override treated as disabled", 999 * time.Hour, intp(-1), 300, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := shouldTimeoutPermission(now, now.Add(-tc.parkedAgo), tc.override, tc.global)
+			if got != tc.wantTimeout {
+				t.Errorf("shouldTimeoutPermission() = %v, want %v", got, tc.wantTimeout)
+			}
+		})
+	}
+}
+
+// fakePermissionTimeoutStore scripts PendingPermissions/
+// ResolvePendingPermissionTimeout for sweepPermissionTimeouts tests
+// without a real Postgres pool.
+type fakePermissionTimeoutStore struct {
+	pending  []ParkedPermission
+	resolved []string
+}
+
+func (f *fakePermissionTimeoutStore) PendingPermissions(ctx context.Context) ([]ParkedPermission, error) {
+	return f.pending, nil
+}
+
+func (f *fakePermissionTimeoutStore) ResolvePendingPermissionTimeout(ctx context.Context, id, tool string) error {
+	f.resolved = append(f.resolved, id)
+	return nil
+}
+
+// fakePermissionTimeoutDriver captures Drive calls, safe for concurrent
+// use since sweepPermissionTimeouts fires Drive in a goroutine per
+// mission (mirroring reDriveStaleWorking's own fire-and-forget shape).
+type fakePermissionTimeoutDriver struct {
+	mu    sync.Mutex
+	wg    sync.WaitGroup
+	drove []string
+}
+
+func (f *fakePermissionTimeoutDriver) Drive(ctx context.Context, id string) error {
+	defer f.wg.Done()
+	f.mu.Lock()
+	f.drove = append(f.drove, id)
+	f.mu.Unlock()
+	return nil
+}
+
+// TestSweepPermissionTimeoutsDisabledByDefault confirms a global setting
+// of 0 (settings.Store.PermissionTimeoutSeconds' own default for an
+// absent/unset row) leaves every parked mission untouched, no matter how
+// long it has been parked: existing missions with pending_permission
+// stay parked forever, matching current behavior exactly.
+func TestSweepPermissionTimeoutsDisabledByDefault(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &fakePermissionTimeoutStore{
+		pending: []ParkedPermission{{MissionID: "m1", PermissionID: "p1", Tool: "shell", ParkedAt: time.Now().Add(-999 * time.Hour)}},
+	}
+	driver := &fakePermissionTimeoutDriver{}
+	notifier := &fakeMessageNotifier{}
+	sweepPermissionTimeouts(context.Background(), driver, store, func(context.Context) int { return 0 }, nil, notifier, log)
+
+	if len(store.resolved) != 0 {
+		t.Fatalf("resolved = %v, want none (sweep disabled)", store.resolved)
+	}
+	if len(notifier.notified) != 0 {
+		t.Fatalf("notified = %v, want none (sweep disabled)", notifier.notified)
+	}
+}
+
+// TestSweepPermissionTimeoutsResolvesAndDrives covers the enabled path:
+// a mission parked past the effective timeout is resolved (denied),
+// notified, and re-Driven; one still within its window is left alone.
+func TestSweepPermissionTimeoutsResolvesAndDrives(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	now := time.Now()
+	store := &fakePermissionTimeoutStore{
+		pending: []ParkedPermission{
+			{MissionID: "timed-out", PermissionID: "p1", Tool: "shell", ParkedAt: now.Add(-10 * time.Minute)},
+			{MissionID: "still-waiting", PermissionID: "p2", Tool: "shell", ParkedAt: now.Add(-1 * time.Second)},
+		},
+	}
+	driver := &fakePermissionTimeoutDriver{}
+	driver.wg.Add(1) // exactly one mission (timed-out) crosses the 60s global timeout
+	notifier := &fakeMessageNotifier{}
+	var resolvedBrokerIDs []string
+	resolveBroker := func(id, decision string) bool {
+		resolvedBrokerIDs = append(resolvedBrokerIDs, id+"|"+decision)
+		return true
+	}
+
+	sweepPermissionTimeouts(context.Background(), driver, store, func(context.Context) int { return 60 }, resolveBroker, notifier, log)
+	driver.wg.Wait()
+
+	if len(store.resolved) != 1 || store.resolved[0] != "timed-out" {
+		t.Fatalf("resolved = %v, want exactly [timed-out]", store.resolved)
+	}
+	if len(notifier.notified) != 1 || notifier.notified[0] != "timed-out" {
+		t.Fatalf("notified = %v, want exactly [timed-out]", notifier.notified)
+	}
+	if len(driver.drove) != 1 || driver.drove[0] != "timed-out" {
+		t.Fatalf("drove = %v, want exactly [timed-out]", driver.drove)
+	}
+	if len(resolvedBrokerIDs) != 1 || resolvedBrokerIDs[0] != "p1|deny" {
+		t.Fatalf("resolveBroker calls = %v, want exactly [p1|deny]", resolvedBrokerIDs)
+	}
+}
+
+// TestSweepPermissionTimeoutsNilResolveBrokerSafe confirms a nil
+// resolveBroker (a still-live worker turn just times out on its own
+// in-process permissionTimeout instead) never panics.
+func TestSweepPermissionTimeoutsNilResolveBrokerSafe(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &fakePermissionTimeoutStore{
+		pending: []ParkedPermission{{MissionID: "m1", PermissionID: "p1", Tool: "shell", ParkedAt: time.Now().Add(-999 * time.Hour)}},
+	}
+	driver := &fakePermissionTimeoutDriver{}
+	driver.wg.Add(1)
+	sweepPermissionTimeouts(context.Background(), driver, store, func(context.Context) int { return 60 }, nil, nil, log)
+	driver.wg.Wait()
+
+	if len(store.resolved) != 1 {
+		t.Fatalf("resolved = %v, want exactly one", store.resolved)
 	}
 }

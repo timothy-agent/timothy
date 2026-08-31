@@ -151,6 +151,16 @@ type Mission struct {
 	PendingPermissionArgs      string `json:"pending_permission_args,omitempty"`
 	PendingPermissionDanger    string `json:"pending_permission_danger,omitempty"`
 	PendingPermissionRationale string `json:"pending_permission_rationale,omitempty"`
+	// PendingPermissionParkedAt is when this park started (issue #445),
+	// the periodic timeout sweep's elapsed-time input, also exposed so
+	// the UI can show how long a request has been waiting.
+	PendingPermissionParkedAt time.Time `json:"pending_permission_parked_at,omitempty"`
+	// PermissionTimeoutSeconds overrides the global
+	// settings.ValuePermissionTimeoutSeconds for this mission alone; nil
+	// inherits the global setting. Never negative: the sweep treats a
+	// stored value <= 0 the same as "disabled," matching the global
+	// setting's own 0-means-off convention.
+	PermissionTimeoutSeconds *int `json:"permission_timeout_seconds,omitempty"`
 	// AutoApproveSafe, when true (the default for new missions), grants
 	// the hidden session standing approval for any shell call the
 	// danger classifier rates safe — a mission runs for hours

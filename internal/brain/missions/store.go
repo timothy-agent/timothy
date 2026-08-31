@@ -51,19 +51,21 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, auto_approve_safe, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
-	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id`
+	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
 // PendingPermission/PendingPermissionTool/... fields used to be, so
 // the wire shape stays unchanged while the DB representation is one
-// column instead of five.
+// column instead of five. ParkedAt (issue #445) is when the park
+// started, the timeout sweep's elapsed-time input.
 type pendingPermissionRow struct {
-	ID        string `json:"id"`
-	Tool      string `json:"tool"`
-	Args      string `json:"args"`
-	Danger    string `json:"danger"`
-	Rationale string `json:"rationale"`
+	ID        string    `json:"id"`
+	Tool      string    `json:"tool"`
+	Args      string    `json:"args"`
+	Danger    string    `json:"danger"`
+	Rationale string    `json:"rationale"`
+	ParkedAt  time.Time `json:"parked_at"`
 }
 
 // scanPendingPermission unmarshals the pending_permission jsonb column
@@ -81,6 +83,7 @@ func scanPendingPermission(m *Mission, raw []byte) {
 	m.PendingPermissionArgs = p.Args
 	m.PendingPermissionDanger = p.Danger
 	m.PendingPermissionRationale = p.Rationale
+	m.PendingPermissionParkedAt = p.ParkedAt
 }
 
 // scanMissionWithFailureReason is scanMission plus one extra trailing
@@ -98,6 +101,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		failureReason                                                 *string
 		workflowRunID                                                 *string
 		promoteKBCollectionID                                         *string
+		permissionTimeoutSeconds                                      *int
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -108,7 +112,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID,
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
@@ -130,6 +134,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	if workflowRunID != nil {
 		m.WorkflowRunID = *workflowRunID
 	}
+	m.PermissionTimeoutSeconds = permissionTimeoutSeconds
 	if promoteKBCollectionID != nil {
 		m.PromoteKBCollectionID = *promoteKBCollectionID
 	}
@@ -181,6 +186,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
 		workflowRunID                                                 *string
 		promoteKBCollectionID                                         *string
+		permissionTimeoutSeconds                                      *int
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -191,7 +197,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID); err != nil {
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds); err != nil {
 		return Mission{}, err
 	}
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
@@ -215,6 +221,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	if promoteKBCollectionID != nil {
 		m.PromoteKBCollectionID = *promoteKBCollectionID
 	}
+	m.PermissionTimeoutSeconds = permissionTimeoutSeconds
 	// Fail-safe degrade: an unrecognized phase/status (e.g. a future
 	// value an older binary doesn't know) loads as paused/infra rather
 	// than making the row unreadable.
@@ -286,9 +293,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, m.Light)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30, $31, $32, $33, NULLIF($34, '')::uuid, $35, NULLIF($36, '')::uuid) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30, $31, $32, $33, NULLIF($34, '')::uuid, $35, NULLIF($36, '')::uuid, $37) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -535,7 +542,7 @@ func (s *Store) SetPendingPermission(ctx context.Context, id, permissionID, tool
 		return fmt.Errorf("missions set pending permission begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	data, err := json.Marshal(pendingPermissionRow{ID: permissionID, Tool: tool, Args: args, Danger: danger, Rationale: rationale})
+	data, err := json.Marshal(pendingPermissionRow{ID: permissionID, Tool: tool, Args: args, Danger: danger, Rationale: rationale, ParkedAt: time.Now().UTC()})
 	if err != nil {
 		return fmt.Errorf("missions set pending permission: %w", err)
 	}
@@ -563,6 +570,89 @@ func (s *Store) ClearPendingPermission(ctx context.Context, id string) error {
 			pending_permission = NULL, updated_at = now()
 		WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("missions clear pending permission: %w", err)
+	}
+	return nil
+}
+
+// ParkedPermission is one PendingPermissions row: just enough for the
+// timeout sweep's elapsed-time decision, without the cost of a full
+// Mission scan.
+type ParkedPermission struct {
+	MissionID string
+	// PermissionID is the broker-issued id (pendingPermissionRow.ID),
+	// distinct from MissionID, needed to resolve a still-live worker
+	// turn's in-memory PermBroker wait (loop.PermBroker.Resolve takes
+	// this id, not the mission id).
+	PermissionID    string
+	Tool            string
+	ParkedAt        time.Time
+	TimeoutOverride *int // this mission's own permission_timeout_seconds, nil = inherit the global setting
+}
+
+// PendingPermissions returns every mission currently parked on
+// pending_permission, the timeout sweep's input.
+func (s *Store) PendingPermissions(ctx context.Context) ([]ParkedPermission, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("missions pending permissions: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT id, pending_permission, permission_timeout_seconds
+		FROM missions WHERE pending_permission IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("missions pending permissions: %w", err)
+	}
+	defer rows.Close()
+	out := []ParkedPermission{}
+	for rows.Next() {
+		var (
+			id      string
+			raw     []byte
+			timeout *int
+		)
+		if err := rows.Scan(&id, &raw, &timeout); err != nil {
+			return nil, fmt.Errorf("missions pending permissions: %w", err)
+		}
+		var p pendingPermissionRow
+		if err := json.Unmarshal(raw, &p); err != nil {
+			continue // corrupt row: skip rather than fail the whole sweep
+		}
+		out = append(out, ParkedPermission{MissionID: id, PermissionID: p.ID, Tool: p.Tool, ParkedAt: p.ParkedAt, TimeoutOverride: timeout})
+	}
+	return out, rows.Err()
+}
+
+// ResolvePendingPermissionTimeout auto-denies a mission's parked
+// permission request after it sat unanswered past the effective
+// timeout (issue #445): clears pending_permission and appends the SAME
+// mission.permission_answered event kind an operator's manual deny
+// produces, with reason=timed_out distinguishing it from a human
+// decision. Never approves: there is no other decision value this
+// method can write.
+func (s *Store) ResolvePendingPermissionTimeout(ctx context.Context, id, tool string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions resolve pending permission timeout: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("missions resolve pending permission timeout begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `UPDATE missions SET
+			pending_permission = NULL, updated_at = now()
+		WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("missions resolve pending permission timeout: %w", err)
+	}
+	if err := appendEventTx(ctx, tx, id, "mission.permission_answered", map[string]any{
+		"tool": tool, "decision": "deny", "reason": "timed_out",
+	}, "live"); err != nil {
+		return fmt.Errorf("missions resolve pending permission timeout: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("missions resolve pending permission timeout commit: %w", err)
+	}
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
 	}
 	return nil
 }
