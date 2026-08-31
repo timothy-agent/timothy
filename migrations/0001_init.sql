@@ -777,7 +777,17 @@ CREATE TABLE IF NOT EXISTS missions (
     -- permission_timeout_seconds setting; the setting itself defaults to
     -- 0 (disabled, park forever) so this is opt-in and changes nothing
     -- for an existing deployment that never sets it.
-    permission_timeout_seconds integer
+    permission_timeout_seconds integer,
+    -- PendingInput is ask_user's park (D-088, issue #457), a second park
+    -- kind alongside pending_permission: NULL means no pending question,
+    -- otherwise {question, kind, options, proposed_default, asked_at,
+    -- phase}. Mirrors pending_permission's shape/lifecycle exactly
+    -- (store.go's SetPendingInput/ClearPendingInput).
+    pending_input         jsonb,
+    -- AsksUsed counts ask_user calls this mission has spent, enforced
+    -- against askBudget (missions/asktool.go); a third call over
+    -- budget is a plain tool error back to the model, no park.
+    asks_used              integer NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

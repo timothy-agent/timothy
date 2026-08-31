@@ -59,3 +59,13 @@ run before deploy.
 ```sql
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS auto_approve_plan boolean NOT NULL DEFAULT true;
 ```
+
+## ask_user tool and waiting-input park (issue #457, slice 3 of the phase redesign)
+
+Required on live DBs before/with the next deploy. Additive, safe to
+run before deploy.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS pending_input jsonb;
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS asks_used integer NOT NULL DEFAULT 0;
+```
