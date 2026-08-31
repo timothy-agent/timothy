@@ -73,7 +73,7 @@ type driverStore interface {
 	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	SetFinalOutput(ctx context.Context, id, text string) error
-	SetExploreNotes(ctx context.Context, id, notes string) error
+	SetDiscoverNotes(ctx context.Context, id, notes string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	AppendProgress(ctx context.Context, id, note string) error
@@ -1130,7 +1130,7 @@ func isLastUnit(spec Spec) bool {
 func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	switch m.Phase {
 	case PhaseDiscover:
-		return d.runExplore(ctx, m)
+		return d.runDiscover(ctx, m)
 	case PhasePlan:
 		return d.runPlan(ctx, m)
 	case PhaseGenerate:
@@ -1144,28 +1144,28 @@ func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	}
 }
 
-// exploreNotesCap bounds how much of the explore turn's findings get
+// discoverNotesCap bounds how much of the discover turn's findings get
 // stored and fed into the plan phase's prompt — the findings feed
 // straight into the planner's prompt, and unbounded notes would blow
 // out that turn's context.
-const exploreNotesCap = 8000
+const discoverNotesCap = 8000
 
-// runExplore runs one explore turn: a tool-using session that
+// runDiscover runs one discover turn: a tool-using session that
 // explores the goal before planning (or, for flow=discover_generate,
 // D-090, the planless generate pass) commits to a shape. The findings
-// are stored on the mission (SetExploreNotes) so the next phase's own
+// are stored on the mission (SetDiscoverNotes) so the next phase's own
 // (separate) Advance call reads them back via a fresh Get.
-func (d *Driver) runExplore(ctx context.Context, m Mission) (StepInput, error) {
-	notes, err := d.runner.ExploreSession(ctx, m)
+func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) {
+	notes, err := d.runner.DiscoverSession(ctx, m)
 	if err != nil {
 		return StepInput{}, err
 	}
-	notes = truncate(notes, exploreNotesCap)
-	if err := d.store.SetExploreNotes(ctx, m.ID, notes); err != nil {
-		return StepInput{}, fmt.Errorf("driver: store explore notes: %w", err)
+	notes = truncate(notes, discoverNotesCap)
+	if err := d.store.SetDiscoverNotes(ctx, m.ID, notes); err != nil {
+		return StepInput{}, fmt.Errorf("driver: store discover notes: %w", err)
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.discover_complete", map[string]any{"chars": len(notes)}); err != nil {
-		d.log.Warn("driver: record explore complete failed", "mission_id", m.ID, "error", err)
+		d.log.Warn("driver: record discover complete failed", "mission_id", m.ID, "error", err)
 	}
 	return StepInput{Input: InputPhaseComplete}, nil
 }
@@ -1205,9 +1205,9 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	return StepInput{Input: InputPhaseComplete}, nil
 }
 
-// replanNotes extends the planner's exploreNotes input with what
-// stalled, on a replan only — first-time planning passes m.ExploreNotes
-// through unchanged. Folded into the existing exploreNotes string
+// replanNotes extends the planner's discoverNotes input with what
+// stalled, on a replan only, first-time planning passes m.DiscoverNotes
+// through unchanged. Folded into the existing discoverNotes string
 // argument (rather than a new Runner parameter) so PlanSession's
 // interface never has to change for this feature.
 //
@@ -1221,7 +1221,7 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 // "a plan already exists" check instead.
 func replanNotes(m Mission) string {
 	if len(m.Spec.Units) == 0 {
-		notes := m.ExploreNotes
+		notes := m.DiscoverNotes
 		// D-088: an ask_user answer during a first-time plan turn (no
 		// plan landed yet, so the "being replanned" branch below never
 		// runs) still needs to reach the very next plan turn's prompt,
@@ -1233,7 +1233,7 @@ func replanNotes(m Mission) string {
 		return notes
 	}
 	var b strings.Builder
-	b.WriteString(m.ExploreNotes)
+	b.WriteString(m.DiscoverNotes)
 	b.WriteString("\n\nThe previous plan is being replanned. Current plan:\n")
 	for _, u := range m.Spec.Units {
 		status := "pending"
@@ -1562,12 +1562,12 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext, ReferencedContext: m.ReferencedContext, Attachments: m.Attachments,
 		Light: m.RunsPlanless(), Location: loc,
 	}
-	// D-090: only flow=discover_generate ever has explore notes AND
+	// D-090: only flow=discover_generate ever has discover notes AND
 	// runs planless at the same time (Light is born in PhaseGenerate,
 	// never visits discover); gating on p.Light here is redundant but
-	// harmless, m.ExploreNotes is simply empty for every other case.
+	// harmless, m.DiscoverNotes is simply empty for every other case.
 	if p.Light {
-		p.ExploreNotes = m.ExploreNotes
+		p.DiscoverNotes = m.DiscoverNotes
 	}
 	if d.skillsIndex != nil && m.AgentID != "" {
 		p.SkillsIndex = d.skillsIndex(ctx, m.AgentID)

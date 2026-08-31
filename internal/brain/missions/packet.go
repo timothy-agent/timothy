@@ -66,14 +66,14 @@ type WorkPacket struct {
 	// nativeSystemPreamble, and Spec is always empty so the Plan block
 	// never renders.
 	Light bool
-	// ExploreNotes carries the discover phase's findings into a planless
+	// DiscoverNotes carries the discover phase's findings into a planless
 	// worker turn (D-090): only ever set for flow=discover_generate,
 	// which runs discover before its planless generate pass; a D-069
 	// light mission never visits discover, so this stays empty for it.
-	// Rendered the same "Exploration findings:" way PlanSession's own
+	// Rendered the same "Discovery findings:" way PlanSession's own
 	// prompt renders it (runner.go), kept cache-stable since notes are
 	// static once discover completes.
-	ExploreNotes string
+	DiscoverNotes string
 	// Location is the operator's configured timezone, used to render
 	// progress-note timestamps; nil renders in UTC.
 	Location *time.Location
@@ -138,9 +138,9 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	fmt.Fprintf(&b, "Goal: %s\n", NeutralizeSlot(p.Goal))
 	fmt.Fprintf(&b, "Iteration: %d\n\n", p.Iteration)
 
-	if p.ExploreNotes != "" {
-		b.WriteString("Exploration findings:\n")
-		b.WriteString(NeutralizeSlot(p.ExploreNotes))
+	if p.DiscoverNotes != "" {
+		b.WriteString("Discovery findings:\n")
+		b.WriteString(NeutralizeSlot(p.DiscoverNotes))
 		b.WriteString("\n\n")
 	}
 

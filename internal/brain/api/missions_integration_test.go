@@ -50,7 +50,7 @@ func (errRunner) PlanSession(context.Context, missions.Mission, string) (mission
 	return missions.Spec{}, errors.New("errRunner: not implemented")
 }
 
-func (errRunner) ExploreSession(context.Context, missions.Mission) (string, error) {
+func (errRunner) DiscoverSession(context.Context, missions.Mission) (string, error) {
 	return "", errors.New("errRunner: not implemented")
 }
 

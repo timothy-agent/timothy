@@ -187,7 +187,7 @@ func (a *Agent) toolset(builtinsOnly bool) (Executor, []provider.ToolDef) {
 }
 
 // SetBaseTools registers the compiled-in-builtins-only tool surface a
-// Request.BuiltinsOnly turn (mission-driven: explore/plan/worker/
+// Request.BuiltinsOnly turn (mission-driven: discover/plan/worker/
 // reviewer) resolves to, instead of the full shared registry
 // (connector tools + chat-only mission tools). Startup-time only —
 // unlike SwapTools' surface, this snapshot never changes at runtime.
@@ -281,7 +281,7 @@ type Request struct {
 	// builtins (calculator, shell, search_web, ...), excluding connector
 	// tools (e.g. a write-capable GitHub MCP token) and the chat-only
 	// mission tools (list_missions/get_mission/push_mission_branch). Set by
-	// every mission-driven request (explore/plan/worker/reviewer) — a
+	// every mission-driven request (discover/plan/worker/reviewer), a
 	// mission worker must never side-channel a connector write around
 	// the worktree/human-consented push pipeline, and push_mission_branch
 	// is nonsensical inside a mission turn. Deliberately independent of
@@ -289,7 +289,7 @@ type Request struct {
 	// stays an explicit, intentional choice at each call site rather
 	// than inferred.
 	// ExtraTools still layer on top as normal — missions.nativeRunner's
-	// worker/explore turns use exactly this to add back read-only
+	// worker/discover turns use exactly this to add back read-only
 	// connector tools (gmail/calendar reads) that scheduled general
 	// missions need, gated on the agent's Tools allowlist and never
 	// including MCP or write-capable tools (missions.ConnectorReadsResolver).
@@ -315,7 +315,7 @@ type Request struct {
 	// EndTurnTools names offered tools whose successful EXECUTION ends
 	// the turn immediately — no further model call to react to the
 	// result. Set by mission sentinel turns (mission_status/
-	// explore_notes/submit_plan/review_verdict), whose call already
+	// discover_notes/submit_plan/review_verdict), whose call already
 	// answers everything the turn needed; empty means today's behavior
 	// (always continue).
 	EndTurnTools []string
@@ -663,7 +663,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		}
 
 		// D-075: a sentinel call's successful execution already answers
-		// everything the turn needed (mission_status/explore_notes/
+		// everything the turn needed (mission_status/discover_notes/
 		// submit_plan/review_verdict) — sending its result back for
 		// another completion just burns a model call, and on reasoning
 		// models over openai-responses that pointless continuation

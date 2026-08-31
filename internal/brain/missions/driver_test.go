@@ -164,11 +164,11 @@ func (f *fakeStore) SetFinalOutput(ctx context.Context, id, text string) error {
 	return nil
 }
 
-func (f *fakeStore) SetExploreNotes(ctx context.Context, id, notes string) error {
+func (f *fakeStore) SetDiscoverNotes(ctx context.Context, id, notes string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.missions[id]
-	m.ExploreNotes = notes
+	m.DiscoverNotes = notes
 	f.missions[id] = m
 	return nil
 }
@@ -239,22 +239,22 @@ type scriptedRunner struct {
 	workerText string
 	// workerPackets records the WorkPacket RunWorker was called with,
 	// one entry per call: lets a test assert the generate phase's
-	// packet actually carried what the driver built (e.g. ExploreNotes
+	// packet actually carried what the driver built (e.g. DiscoverNotes
 	// for flow=discover_generate, D-090).
 	workerPackets  []WorkPacket
 	reviewVerdicts []ReviewVerdict
 	reviewIdx      int
 	plans          []Spec
 	planIdx        int
-	// planExploreNotes records the exploreNotes argument PlanSession
+	// planDiscoverNotes records the discoverNotes argument PlanSession
 	// was called with, one entry per call — lets a test assert the plan
-	// phase actually received what the explore phase stored.
-	planExploreNotes []string
-	// exploreNotes scripts ExploreSession's return, one entry consumed
+	// phase actually received what the discover phase stored.
+	planDiscoverNotes []string
+	// discoverNotes scripts DiscoverSession's return, one entry consumed
 	// per call (same one-behind-repeat pattern as plans/workerVerdicts).
-	exploreNotes []string
-	exploreIdx   int
-	exploreErr   error
+	discoverNotes []string
+	discoverIdx   int
+	discoverErr   error
 }
 
 func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
@@ -281,8 +281,8 @@ func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet Review
 	return v, &GatekeeperState{}, nil
 }
 
-func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
-	r.planExploreNotes = append(r.planExploreNotes, exploreNotes)
+func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
+	r.planDiscoverNotes = append(r.planDiscoverNotes, discoverNotes)
 	s := r.plans[r.planIdx]
 	if r.planIdx < len(r.plans)-1 {
 		r.planIdx++
@@ -290,16 +290,16 @@ func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, exploreNote
 	return s, nil
 }
 
-func (r *scriptedRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
-	if r.exploreErr != nil {
-		return "", r.exploreErr
+func (r *scriptedRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
+	if r.discoverErr != nil {
+		return "", r.discoverErr
 	}
-	if len(r.exploreNotes) == 0 {
+	if len(r.discoverNotes) == 0 {
 		return "", nil
 	}
-	notes := r.exploreNotes[r.exploreIdx]
-	if r.exploreIdx < len(r.exploreNotes)-1 {
-		r.exploreIdx++
+	notes := r.discoverNotes[r.discoverIdx]
+	if r.discoverIdx < len(r.discoverNotes)-1 {
+		r.discoverIdx++
 	}
 	return notes, nil
 }
@@ -495,14 +495,14 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	}
 }
 
-// TestDriverExploreStoresNotesAndAdvances confirms the discover phase
-// stores ExploreSession's findings on the mission, emits
+// TestDriverDiscoverStoresNotesAndAdvances confirms the discover phase
+// stores DiscoverSession's findings on the mission, emits
 // mission.discover_complete, and advances to plan.
-func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
+func TestDriverDiscoverStoresNotesAndAdvances(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
-		exploreNotes: []string{"no prior implementation exists; goal is self-contained"},
+		discoverNotes: []string{"no prior implementation exists; goal is self-contained"},
 		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
@@ -514,8 +514,8 @@ func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
 	if m.Phase != PhasePlan {
 		t.Fatalf("mission phase after discover = %q, want plan", m.Phase)
 	}
-	if m.ExploreNotes != "no prior implementation exists; goal is self-contained" {
-		t.Fatalf("mission.ExploreNotes = %q, want the discover findings persisted", m.ExploreNotes)
+	if m.DiscoverNotes != "no prior implementation exists; goal is self-contained" {
+		t.Fatalf("mission.DiscoverNotes = %q, want the discover findings persisted", m.DiscoverNotes)
 	}
 	events := store.events["m1"]
 	found := false
@@ -529,15 +529,15 @@ func TestDriverExploreStoresNotesAndAdvances(t *testing.T) {
 	}
 }
 
-// TestDriverExploreTruncatesLongNotes confirms exploreNotesCap bounds
+// TestDriverDiscoverTruncatesLongNotes confirms discoverNotesCap bounds
 // what gets stored — the findings feed straight into the plan phase's
 // prompt, so unbounded notes would blow out that turn's context.
-func TestDriverExploreTruncatesLongNotes(t *testing.T) {
+func TestDriverDiscoverTruncatesLongNotes(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
-	long := strings.Repeat("x", exploreNotesCap+500)
+	long := strings.Repeat("x", discoverNotesCap+500)
 	runner := &scriptedRunner{
-		exploreNotes: []string{long},
+		discoverNotes: []string{long},
 		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
@@ -546,20 +546,20 @@ func TestDriverExploreTruncatesLongNotes(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if len(m.ExploreNotes) > exploreNotesCap+len("…") {
-		t.Fatalf("mission.ExploreNotes length = %d, want capped near %d", len(m.ExploreNotes), exploreNotesCap)
+	if len(m.DiscoverNotes) > discoverNotesCap+len("…") {
+		t.Fatalf("mission.DiscoverNotes length = %d, want capped near %d", len(m.DiscoverNotes), discoverNotesCap)
 	}
 }
 
-// TestDriverExploreErrorRoutesToWorkerFailed confirms an ExploreSession
+// TestDriverDiscoverErrorRoutesToWorkerFailed confirms an DiscoverSession
 // error (infra/stream failure, not a missing-sentinel degrade — that
 // path never returns an error) maps to InputWorkerFailed, the same
 // backoff/pause machinery a worker/plan infra failure already takes —
-// explore has no phase-specific error input of its own.
-func TestDriverExploreErrorRoutesToWorkerFailed(t *testing.T) {
+// discover has no phase-specific error input of its own.
+func TestDriverDiscoverErrorRoutesToWorkerFailed(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
-	runner := &scriptedRunner{exploreErr: fmt.Errorf("gateway unreachable")}
+	runner := &scriptedRunner{discoverErr: fmt.Errorf("gateway unreachable")}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -567,39 +567,39 @@ func TestDriverExploreErrorRoutesToWorkerFailed(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDiscover {
-		t.Fatalf("mission phase after explore error = %q, want it to stay in explore (retry-eligible)", m.Phase)
+		t.Fatalf("mission phase after discover error = %q, want it to stay in discover (retry-eligible)", m.Phase)
 	}
 	if m.ConsecutiveFailures == 0 {
 		t.Fatalf("mission.ConsecutiveFailures = %d, want the failure counted", m.ConsecutiveFailures)
 	}
 }
 
-// TestDriverPlanReceivesStoredExploreNotes confirms runPlan reads
-// m.ExploreNotes from the FRESH Get at the top of the plan phase's own
-// Advance call (a separate call from the explore phase's), not some
-// stale in-memory value from the explore turn.
-func TestDriverPlanReceivesStoredExploreNotes(t *testing.T) {
+// TestDriverPlanReceivesStoredDiscoverNotes confirms runPlan reads
+// m.DiscoverNotes from the FRESH Get at the top of the plan phase's own
+// Advance call (a separate call from the discover phase's), not some
+// stale in-memory value from the discover turn.
+func TestDriverPlanReceivesStoredDiscoverNotes(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
-		exploreNotes: []string{"found a reusable config loader in internal/platform/config"},
+		discoverNotes: []string{"found a reusable config loader in internal/platform/config"},
 		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
-	// First Advance: explore phase.
+	// First Advance: discover phase.
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
-		t.Fatalf("Advance[explore]: %v", err)
+		t.Fatalf("Advance[discover]: %v", err)
 	}
 	// Second Advance: plan phase, a SEPARATE call with its own fresh Get.
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance[plan]: %v", err)
 	}
-	if len(runner.planExploreNotes) != 1 {
-		t.Fatalf("PlanSession call count = %d, want exactly one", len(runner.planExploreNotes))
+	if len(runner.planDiscoverNotes) != 1 {
+		t.Fatalf("PlanSession call count = %d, want exactly one", len(runner.planDiscoverNotes))
 	}
-	if runner.planExploreNotes[0] != "found a reusable config loader in internal/platform/config" {
-		t.Fatalf("PlanSession exploreNotes arg = %q, want the notes stored by the explore phase", runner.planExploreNotes[0])
+	if runner.planDiscoverNotes[0] != "found a reusable config loader in internal/platform/config" {
+		t.Fatalf("PlanSession discoverNotes arg = %q, want the notes stored by the discover phase", runner.planDiscoverNotes[0])
 	}
 }
 
@@ -762,7 +762,7 @@ func TestDriverReplanFeedsFollowingPlanTurn(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval,
-		MaxIterations: 8, ExploreNotes: "original findings",
+		MaxIterations: 8, DiscoverNotes: "original findings",
 		Spec: Spec{Units: []PlanUnit{{Title: "unit0"}}},
 	})
 	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0 revised"}}}}}
@@ -785,10 +785,10 @@ func TestDriverReplanFeedsFollowingPlanTurn(t *testing.T) {
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if len(runner.planExploreNotes) != 1 {
-		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planExploreNotes))
+	if len(runner.planDiscoverNotes) != 1 {
+		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planDiscoverNotes))
 	}
-	if got := runner.planExploreNotes[0]; !strings.Contains(got, "use Go 1.23") {
+	if got := runner.planDiscoverNotes[0]; !strings.Contains(got, "use Go 1.23") {
 		t.Fatalf("replan prompt = %q, want it to contain the operator feedback", got)
 	}
 	// The replanned plan (AutoApprovePlan still false on this fixture)
@@ -974,7 +974,7 @@ func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T)
 		ID: "m1", Kind: "general", Flow: FlowDiscoverGenerate, Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8,
 	})
 	runner := &scriptedRunner{
-		exploreNotes:   []string{"found three relevant sources"},
+		discoverNotes:   []string{"found three relevant sources"},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "the deliverable"}},
 	}
 	d := testDriver(store, runner)
@@ -1035,16 +1035,16 @@ func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T)
 	}
 }
 
-// TestDriverDiscoverGenerateExploreNotesReachThePlanlessPacket confirms
-// discover's findings (Mission.ExploreNotes) reach the generate turn's
+// TestDriverDiscoverGenerateDiscoverNotesReachThePlanlessPacket confirms
+// discover's findings (Mission.DiscoverNotes) reach the generate turn's
 // WorkPacket for flow=discover_generate, the whole point of running
 // discover before a planless pass. Light: true is also asserted, same
 // worker path as a D-069 light mission.
-func TestDriverDiscoverGenerateExploreNotesReachThePlanlessPacket(t *testing.T) {
+func TestDriverDiscoverGenerateDiscoverNotesReachThePlanlessPacket(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Flow: FlowDiscoverGenerate, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
-		ExploreNotes: "found three relevant sources",
+		DiscoverNotes: "found three relevant sources",
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "the deliverable"}},
@@ -1061,22 +1061,22 @@ func TestDriverDiscoverGenerateExploreNotesReachThePlanlessPacket(t *testing.T) 
 	if !p.Light {
 		t.Fatal("discover_generate worker packet Light = false, want true (same planless worker path as light)")
 	}
-	if p.ExploreNotes != "found three relevant sources" {
-		t.Fatalf("packet ExploreNotes = %q, want the mission's stored explore notes", p.ExploreNotes)
+	if p.DiscoverNotes != "found three relevant sources" {
+		t.Fatalf("packet DiscoverNotes = %q, want the mission's stored discover notes", p.DiscoverNotes)
 	}
 }
 
-// TestDriverPacketOmitsExploreNotesForNonPlanlessFlow confirms a
-// flow=full mission's packet never carries ExploreNotes, even when the
+// TestDriverPacketOmitsDiscoverNotesForNonPlanlessFlow confirms a
+// flow=full mission's packet never carries DiscoverNotes, even when the
 // mission has them stored (every mission that visits discover does):
-// WorkPacket.ExploreNotes is meant for a planless worker turn only
+// WorkPacket.DiscoverNotes is meant for a planless worker turn only
 // (D-090), and a full-flow generate turn gets its own Plan block
 // instead.
-func TestDriverPacketOmitsExploreNotesForNonPlanlessFlow(t *testing.T) {
+func TestDriverPacketOmitsDiscoverNotesForNonPlanlessFlow(t *testing.T) {
 	store := newFakeStore()
 	m := Mission{
 		ID: "m1", Kind: "general", Flow: FlowFull, Phase: PhaseGenerate, Status: StatusWorking,
-		ExploreNotes: "found three relevant sources",
+		DiscoverNotes: "found three relevant sources",
 		Spec:         Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
 	}
 	store.put("m1", m)
@@ -1089,8 +1089,8 @@ func TestDriverPacketOmitsExploreNotesForNonPlanlessFlow(t *testing.T) {
 	if p.Light {
 		t.Fatal("flow=full packet Light = true, want false")
 	}
-	if p.ExploreNotes != "" {
-		t.Fatalf("flow=full packet ExploreNotes = %q, want empty", p.ExploreNotes)
+	if p.DiscoverNotes != "" {
+		t.Fatalf("flow=full packet DiscoverNotes = %q, want empty", p.DiscoverNotes)
 	}
 }
 
@@ -1462,11 +1462,11 @@ func (r *blockingRunner) RunReview(ctx context.Context, m Mission, packet Review
 	return r.reviewV, &GatekeeperState{}, nil
 }
 
-func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
+func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
 	return r.planSpec, nil
 }
 
-func (r *blockingRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
+func (r *blockingRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
 	return "", nil
 }
 
@@ -2343,14 +2343,14 @@ func TestDriverReplanPreservesMatchingPassedUnitsResetsOthers(t *testing.T) {
 }
 
 // TestDriverReplanPromptCarriesStallContext confirms runPlan feeds the
-// planner an augmented exploreNotes on a replan: current plan status
+// planner an augmented discoverNotes on a replan: current plan status
 // and recent progress, plus the "previous plan stalled" instruction —
-// not just the bare explore notes a first-time plan gets.
+// not just the bare discover notes a first-time plan gets.
 func TestDriverReplanPromptCarriesStallContext(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
-		MaxIterations: 8, ReplanUsed: true, ExploreNotes: "original findings",
+		MaxIterations: 8, ReplanUsed: true, DiscoverNotes: "original findings",
 		Progress: []ProgressNote{{Note: "tried approach A, failed"}},
 		Spec:     Spec{Units: []PlanUnit{{Title: "unit0", Passes: true}}},
 	})
@@ -2360,10 +2360,10 @@ func TestDriverReplanPromptCarriesStallContext(t *testing.T) {
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if len(runner.planExploreNotes) != 1 {
-		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planExploreNotes))
+	if len(runner.planDiscoverNotes) != 1 {
+		t.Fatalf("PlanSession call count = %d, want 1", len(runner.planDiscoverNotes))
 	}
-	got := runner.planExploreNotes[0]
+	got := runner.planDiscoverNotes[0]
 	for _, want := range []string{"original findings", "previous plan is being replanned", "tried approach A, failed", "unit0"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("replan prompt = %q, want it to contain %q", got, want)
@@ -2372,13 +2372,13 @@ func TestDriverReplanPromptCarriesStallContext(t *testing.T) {
 }
 
 // TestDriverFirstPlanDoesNotGetReplanNotes confirms a mission's very
-// first planning pass (ReplanUsed false) passes exploreNotes through
+// first planning pass (ReplanUsed false) passes discoverNotes through
 // unchanged — no stall framing for a plan that never stalled.
 func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
-		MaxIterations: 8, ExploreNotes: "original findings",
+		MaxIterations: 8, DiscoverNotes: "original findings",
 	})
 	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0"}}}}}
 	d := testDriver(store, runner)
@@ -2386,8 +2386,8 @@ func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if got := runner.planExploreNotes[0]; got != "original findings" {
-		t.Fatalf("first-plan exploreNotes = %q, want unchanged %q", got, "original findings")
+	if got := runner.planDiscoverNotes[0]; got != "original findings" {
+		t.Fatalf("first-plan discoverNotes = %q, want unchanged %q", got, "original findings")
 	}
 }
 
@@ -2534,7 +2534,7 @@ func TestDriverAdvanceDeniesIdleToWorkingOnCapacity(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8,
 		SessionID: "already-provisioned", Workspace: "/already/provisioned",
 	})
-	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	runner := &scriptedRunner{discoverNotes: []string{"discovered"}}
 	d := testDriver(store, runner)
 	d.SetCapacityGate(fakeCapacityChecker{admit: false, reason: "mem_available 900MB < floor 1024 + per-sandbox 768"})
 
@@ -2547,7 +2547,7 @@ func TestDriverAdvanceDeniesIdleToWorkingOnCapacity(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusIdle || m.Phase != PhaseDiscover {
-		t.Fatalf("mission after capacity denial = %s/%s, want idle/explore untouched (phase run must not happen)", m.Status, m.Phase)
+		t.Fatalf("mission after capacity denial = %s/%s, want idle/discover untouched (phase run must not happen)", m.Status, m.Phase)
 	}
 }
 
@@ -2557,7 +2557,7 @@ func TestDriverAdvanceDeniesIdleToWorkingOnCapacity(t *testing.T) {
 func TestDriverAdvanceCapacityGateErrorAdmitsOpen(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8})
-	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	runner := &scriptedRunner{discoverNotes: []string{"discovered"}}
 	d := testDriver(store, runner)
 	d.SetCapacityGate(fakeCapacityChecker{err: fmt.Errorf("sandboxd unreachable")})
 
@@ -2575,7 +2575,7 @@ func TestDriverAdvanceCapacityGateErrorAdmitsOpen(t *testing.T) {
 func TestDriverAdvanceCapacityGateAdmitsRunsTurn(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8})
-	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	runner := &scriptedRunner{discoverNotes: []string{"discovered"}}
 	d := testDriver(store, runner)
 	d.SetCapacityGate(fakeCapacityChecker{admit: true})
 
@@ -2594,7 +2594,7 @@ func TestDriverAdvanceCapacityGateAdmitsRunsTurn(t *testing.T) {
 func TestDriverAdvanceNilCapacityGateRunsTurn(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8})
-	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	runner := &scriptedRunner{discoverNotes: []string{"discovered"}}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -2612,7 +2612,7 @@ func TestDriverAdvanceNilCapacityGateRunsTurn(t *testing.T) {
 func TestDriverAdvanceCapacityGateIgnoredWhenAlreadyWorking(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
-	runner := &scriptedRunner{exploreNotes: []string{"explored"}}
+	runner := &scriptedRunner{discoverNotes: []string{"discovered"}}
 	d := testDriver(store, runner)
 	d.SetCapacityGate(fakeCapacityChecker{admit: false, reason: "denied"})
 

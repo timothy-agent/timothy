@@ -690,7 +690,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- The discover phase's findings, carried into the plan phase's
     -- prompt (internal/brain/missions/driver.go's runPlan) so the
     -- planner sees what exploration turned up, not just the bare goal.
-    explore_notes         text NOT NULL DEFAULT '',
+    discover_notes        text NOT NULL DEFAULT '',
     -- A mission gets exactly one automatic replan attempt on stall
     -- (statemachine.go's stepWorkerRetry/stepReviewRework) before a
     -- second identical stall pauses for a human, same as always.

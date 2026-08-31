@@ -30,13 +30,13 @@ import {
 } from '../api/client'
 import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
+import { DiscoverSection } from '../components/missions/DiscoverSection'
+import { GoalSection } from '../components/missions/GoalSection'
 import { InputRequestBanner } from '../components/missions/InputRequestBanner'
 import { MarkdownField } from '../components/missions/MarkdownField'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanApprovalBanner } from '../components/missions/PlanApprovalBanner'
 import { PlanSection } from '../components/missions/PlanSection'
-import { ExploreSection } from '../components/missions/ExploreSection'
-import { GoalSection } from '../components/missions/GoalSection'
 import { ResultSection } from '../components/missions/ResultSection'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { Button } from '../components/ui/button'
@@ -974,10 +974,10 @@ export function MissionDetail() {
         </DialogContent>
       </Dialog>
 
-      {mission.explore_notes && (
+      {mission.discover_notes && (
         <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Explore</h2>
-          <ExploreSection notes={mission.explore_notes} />
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Discover</h2>
+          <DiscoverSection notes={mission.discover_notes} />
         </section>
       )}
 

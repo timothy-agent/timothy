@@ -72,7 +72,7 @@ const flowChoices: { value: Flow; label: string; description: string }[] = [
   {
     value: 'discover_generate',
     label: 'Discover + generate',
-    description: 'Explores first, then a single planless pass; the final message is the result.',
+    description: 'Discovers first, then a single planless pass; the final message is the result.',
   },
   { value: 'light', label: 'Light', description: "Single pass; the worker's final message is the result." },
 ]

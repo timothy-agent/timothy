@@ -83,7 +83,7 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			"mission_status": true,
 			"review_verdict": true,
 			"submit_plan":    true,
-			"explore_notes":  true,
+			"discover_notes": true,
 			// ask_user (D-088) is the same class: its Execute only
 			// records the question and parks the mission for the
 			// operator, who IS the permission authority. Routing it

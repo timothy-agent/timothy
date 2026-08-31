@@ -98,7 +98,7 @@ type askUserParker interface {
 // call: registered per-turn via loop.Request.ExtraTools AND
 // loop.Request.EndTurnTools (D-075's end-turn pattern): successful
 // execution parks the mission and ends the turn immediately, the same
-// mechanism mission_status/review_verdict/submit_plan/explore_notes
+// mechanism mission_status/review_verdict/submit_plan/discover_notes
 // already use. missionID/phase/asksUsed are the turn's own values,
 // closed over at construction (one tool built per turn, same as
 // kbSearchTool); parker records the durable park.

@@ -20,11 +20,11 @@ func TestOutcomeDigest(t *testing.T) {
 		wantExcludes  []string
 	}{
 		{
-			name: "goal explore units review done",
+			name: "goal discover units review done",
 			mission: Mission{
 				Goal: "add a widget", Name: "Widget mission", Kind: "coding",
-				ExploreNotes: "found the widget package",
-				Spec:         Spec{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
+				DiscoverNotes: "found the widget package",
+				Spec:          Spec{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
 			},
 			events: []Event{
 				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"generate","duration_ms":500}`)},

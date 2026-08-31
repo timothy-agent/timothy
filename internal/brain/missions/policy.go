@@ -18,13 +18,13 @@ const (
 	FlowFull Flow = "full"
 	// FlowDiscoverGenerate is a true planless flow: discover->generate
 	// ->result, no plan, no review. Discover runs as normal (its
-	// findings land in Mission.ExploreNotes); generate's own turn then
+	// findings land in Mission.DiscoverNotes); generate's own turn then
 	// runs the exact D-069 light worker path (Mission.RunsPlanless):
 	// WorkPacket.Light rendering, no plan units, the worker's final
 	// message (mission_status's final_output) is the deliverable. The
 	// only difference from a plain light mission is that this one runs
-	// discover first, and its explore notes reach the planless prompt
-	// via WorkPacket.ExploreNotes.
+	// discover first, and its discover notes reach the planless prompt
+	// via WorkPacket.DiscoverNotes.
 	FlowDiscoverGenerate Flow = "discover_generate"
 	// FlowNoProve is discover->plan->generate->result: skips only the
 	// LLM reviewer round. CheckArtifacts (harness evidence) still runs
@@ -53,7 +53,7 @@ type missionPolicy struct {
 	alwaysReview    bool // LLM review round can never be skipped
 	checksCitations bool // CheckCitations on verify
 	canDelegate     bool // harness (delegated CLI executor) allowed
-	skipsPlanning   bool // born in execute; no explore/plan/review
+	skipsPlanning   bool // born in generate; no discover/plan/prove
 	canPush         bool // on_complete push/push_pr allowed
 }
 

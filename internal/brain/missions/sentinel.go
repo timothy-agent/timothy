@@ -129,19 +129,19 @@ func PlanTool() *tools.Tool {
 	}
 }
 
-// exploreNotesToolName is the explore phase's end-of-turn sentinel
+// discoverNotesToolName is the discover phase's end-of-turn sentinel
 // call — advisory, unlike mission_status: a turn that never produces
 // it degrades to the raw turn text rather than failing the phase (see
-// runner.go's ExploreSession).
-const exploreNotesToolName = "explore_notes"
+// runner.go's DiscoverSession).
+const discoverNotesToolName = "discover_notes"
 
-// ExploreNotesTool defines the explorer's one tool call —
+// DiscoverNotesTool defines the discoverer's one tool call,
 // registered per-turn via loop.Request.ExtraTools, never in the shared
 // agent tool surface.
-func ExploreNotesTool() *tools.Tool {
+func DiscoverNotesTool() *tools.Tool {
 	return &tools.Tool{
-		Name:        exploreNotesToolName,
-		Description: "Report your exploration findings. Call this exactly once, as your final action.",
+		Name:        discoverNotesToolName,
+		Description: "Report your discovery findings. Call this exactly once, as your final action.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -158,8 +158,8 @@ func ExploreNotesTool() *tools.Tool {
 	}
 }
 
-// parseExploreFindings decodes an explore_notes tool call's arguments.
-func parseExploreFindings(args json.RawMessage) (string, error) {
+// parseDiscoverFindings decodes a discover_notes tool call's arguments.
+func parseDiscoverFindings(args json.RawMessage) (string, error) {
 	var v struct {
 		Findings string `json:"findings"`
 	}
@@ -226,7 +226,7 @@ func parseWorkerVerdict(args json.RawMessage) (WorkerVerdict, error) {
 var sentinelAttrs = map[string][]string{
 	missionStatusToolName: {"outcome", "evidence", "analysis", "question", "handoff", "final_output"},
 	reviewVerdictToolName: {"decision"},
-	exploreNotesToolName:  {"findings"},
+	discoverNotesToolName: {"findings"},
 }
 
 // sentinelDiscriminator names the field whose value is validated
@@ -235,12 +235,12 @@ var sentinelAttrs = map[string][]string{
 var sentinelDiscriminator = map[string]string{
 	missionStatusToolName: "outcome",
 	reviewVerdictToolName: "decision",
-	exploreNotesToolName:  "findings",
+	discoverNotesToolName: "findings",
 }
 
 // sentinelDiscriminatorValues enumerates the valid values for a
 // discriminator field with a fixed enum (mission_status's outcome,
-// review_verdict's decision). explore_notes' discriminator (findings)
+// review_verdict's decision). discover_notes' discriminator (findings)
 // is free text, not an enum — its absence here means extractTextSentinel
 // falls back to a plain non-empty check for that tool instead of an
 // enum membership test.
@@ -253,7 +253,7 @@ var sentinelDiscriminatorValues = map[string]map[string]bool{
 // sentinelDiscriminator must also have an entry in sentinelAttrs, or
 // extractTextSentinel bails silently for that tool with no signal a
 // tool was ever added incompletely. sentinelDiscriminatorValues is
-// deliberately NOT checked the same way — explore_notes has no enum
+// deliberately NOT checked the same way, discover_notes has no enum
 // (see its doc comment above) and is expected to be absent from it.
 func init() {
 	for tool := range sentinelDiscriminator {
@@ -303,7 +303,7 @@ func extractTextSentinel(text, toolName string) (json.RawMessage, bool) {
 	if discriminator == "" || len(knownAttrs) == 0 {
 		return nil, false
 	}
-	// A tool with no enum entry here (explore_notes) has a free-text
+	// A tool with no enum entry here (discover_notes) has a free-text
 	// discriminator: any non-empty value is valid, rather than membership
 	// in a fixed set.
 	validValues, hasEnum := sentinelDiscriminatorValues[toolName]

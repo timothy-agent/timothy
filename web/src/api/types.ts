@@ -722,11 +722,11 @@ export interface Mission {
   // nothing, 'push' pushes the branch, 'push_pr' pushes then opens a
   // pull request. Only ever set at create time, never by the model.
   on_complete?: '' | 'push' | 'push_pr'
-  // explore_notes is set once, at the end of the discover phase
-  // (driver.go's runExplore): absent/empty for a mission created
+  // discover_notes is set once, at the end of the discover phase
+  // (driver.go's runDiscover): absent/empty for a mission created
   // before the discover phase existed, or one that hasn't reached it
   // yet.
-  explore_notes?: string
+  discover_notes?: string
   spec: { units: PlanUnit[]; assumptions?: PlanAssumption[] }
   progress: ProgressNote[]
   iteration: number

@@ -159,12 +159,12 @@ func NewDelegatedRunner(native Runner, resolveRoute routeResolver, resolveCred c
 	}
 }
 
-func (r *delegatedRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
-	return r.native.ExploreSession(ctx, m)
+func (r *delegatedRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
+	return r.native.DiscoverSession(ctx, m)
 }
 
-func (r *delegatedRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
-	return r.native.PlanSession(ctx, m, exploreNotes)
+func (r *delegatedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
+	return r.native.PlanSession(ctx, m, discoverNotes)
 }
 
 func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {

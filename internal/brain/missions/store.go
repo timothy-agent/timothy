@@ -49,7 +49,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
 	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
-	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
+	discover_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds, pending_input, asks_used, flow`
 
@@ -123,7 +123,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
@@ -213,7 +213,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.ExploreNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
@@ -856,17 +856,17 @@ func (s *Store) SetFinalOutput(ctx context.Context, id, text string) error {
 	return nil
 }
 
-// SetExploreNotes stores the explore phase's findings for the
+// SetDiscoverNotes stores the discover phase's findings for the
 // planner. Like SetLastEvidence it bypasses the state machine: written
 // mid-phase, not at an Advance boundary.
-func (s *Store) SetExploreNotes(ctx context.Context, id, notes string) error {
+func (s *Store) SetDiscoverNotes(ctx context.Context, id, notes string) error {
 	db, err := s.db.Get()
 	if err != nil {
-		return fmt.Errorf("missions set explore notes: %w", err)
+		return fmt.Errorf("missions set discover notes: %w", err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE missions SET explore_notes = $2, updated_at = now() WHERE id = $1`,
+	if _, err := db.Exec(ctx, `UPDATE missions SET discover_notes = $2, updated_at = now() WHERE id = $1`,
 		id, notes); err != nil {
-		return fmt.Errorf("missions set explore notes: %w", err)
+		return fmt.Errorf("missions set discover notes: %w", err)
 	}
 	return nil
 }
@@ -895,7 +895,7 @@ func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
 // environment (D-05x) and appends a mission.environment_detected event
 // — sticky, like SetProvisioned: driver.go's ensureProvisioned only
 // calls this once, when Environment is still "". Bypasses the state
-// machine like SetExploreNotes/SetLastEvidence: detection happens
+// machine like SetDiscoverNotes/SetLastEvidence: detection happens
 // mid-provisioning, not at an Advance boundary.
 func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string) error {
 	db, err := s.db.Get()

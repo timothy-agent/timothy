@@ -113,7 +113,7 @@ func TestMissionCRUD(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if m.Phase != PhaseDiscover || m.Status != StatusIdle || m.MaxIterations != 3 {
-		t.Fatalf("Get = %+v, want default explore/idle/3", m)
+		t.Fatalf("Get = %+v, want default discover/idle/3", m)
 	}
 
 	list, err := s.List(ctx, ListFilter{})
@@ -223,7 +223,7 @@ func TestMissionDelete(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := s.Delete(ctx, id); !errors.Is(err, ErrNotTerminal) {
-		t.Fatalf("Delete of a live (explore/idle) mission = %v, want ErrNotTerminal", err)
+		t.Fatalf("Delete of a live (discover/idle) mission = %v, want ErrNotTerminal", err)
 	}
 
 	if err := s.AppendEvent(ctx, id, "mission.progress", map[string]any{"note": "hi"}); err != nil {
@@ -545,7 +545,7 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 		t.Fatal("Light = true, want false when not set")
 	}
 	if m2.Phase != PhaseDiscover {
-		t.Fatalf("Phase = %q, want explore for a non-light mission at create", m2.Phase)
+		t.Fatalf("Phase = %q, want discover for a non-light mission at create", m2.Phase)
 	}
 }
 

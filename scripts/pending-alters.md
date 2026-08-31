@@ -90,3 +90,31 @@ END $$;
 
 UPDATE missions SET flow = 'light' WHERE light AND flow <> 'light';
 ```
+
+## Phase rename leftovers (issue #472)
+
+Not required before deploy: the new binary reads/writes discover_notes
+only, so this is safe to run any time AFTER the new binary is live, on
+every instance. The RENAME has no IF EXISTS, so it is guarded with an
+information_schema check instead. approval_allowlist is a jsonb array
+of tool names; any row still naming the pre-rename sentinel tool gets
+it swapped for the current name.
+
+```sql
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'missions' AND column_name = 'explore_notes'
+    ) THEN
+        ALTER TABLE missions RENAME COLUMN explore_notes TO discover_notes;
+    END IF;
+END $$;
+
+UPDATE agents
+SET approval_allowlist = (
+    SELECT jsonb_agg(CASE WHEN elem = '"explore_notes"' THEN '"discover_notes"'::jsonb ELSE elem END)
+    FROM jsonb_array_elements(approval_allowlist) AS elem
+)
+WHERE approval_allowlist @> '["explore_notes"]';
+```

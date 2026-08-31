@@ -116,7 +116,7 @@ func (d *Driver) backfillMissionName(ctx context.Context, id, goal string) {
 }
 
 // OutcomeDigest assembles the curated extraction input: goal, title,
-// kind, explore notes, per-unit outcomes (title/status/verify evidence
+// kind, discover notes, per-unit outcomes (title/status/verify evidence
 // summary only, never shell output), the review verdict (or
 // review_skipped), and the terminal state/failure reason. Deliberately
 // excludes anything resembling the raw transcript — build-log noise
@@ -130,9 +130,9 @@ func OutcomeDigest(m Mission, events []Event, terminal Phase, failureReason stri
 		fmt.Fprintf(&b, "mission title: %s\n", m.Name)
 	}
 	fmt.Fprintf(&b, "mission kind: %s\n", m.Kind)
-	if m.ExploreNotes != "" {
-		b.WriteString("\nexplore notes:\n")
-		b.WriteString(m.ExploreNotes)
+	if m.DiscoverNotes != "" {
+		b.WriteString("\ndiscover notes:\n")
+		b.WriteString(m.DiscoverNotes)
 		b.WriteString("\n")
 	}
 	if len(m.Spec.Units) > 0 {

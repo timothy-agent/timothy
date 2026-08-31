@@ -15,7 +15,7 @@ import (
 )
 
 // TestDriverEndToEndCodingMission is M2's exit criterion: one mission
-// driven fully through explore -> plan -> execute -> review -> done
+// driven fully through discover -> plan -> generate -> prove -> done
 // against a real Postgres Store and a real git Workspace, with a
 // SCRIPTED FAKE Runner standing in for the model (no live model call,
 // no gateway dependency).
@@ -70,7 +70,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 		t.Fatalf("git commit: %v: %s", err, out)
 	}
 
-	// explore -> plan -> execute -> review -> done: drive to
+	// discover -> plan -> generate -> prove -> done: drive to
 	// completion (bounded, so a design bug can't hang the test suite).
 	for i := 0; i < 10; i++ {
 		cont, err := d.Advance(ctx, id)

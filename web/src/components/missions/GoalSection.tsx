@@ -6,11 +6,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 // GoalSection renders a mission's full goal as collapsed-by-default
-// markdown — same shape as ExploreSection, since the header only shows
+// markdown, same shape as DiscoverSection, since the header only shows
 // the mission's name (or a truncated goal fallback) and the full text
 // moves here. Plain-text goals render unchanged: markdown of a plain
 // paragraph is a no-op. The copy button overlays the content block's
-// top-right corner, same placement as ExploreSection/ResultSection's.
+// top-right corner, same placement as DiscoverSection/ResultSection's.
 export function GoalSection({ goal }: { goal: string }) {
   return (
     <TooltipProvider>

@@ -77,9 +77,9 @@ type Mission struct {
 	// having touched no tracked files) still gives the reviewer
 	// something real to judge instead of nothing.
 	LastEvidence string `json:"last_evidence,omitempty"`
-	// ExploreNotes is the explore phase's findings, carried forward
+	// DiscoverNotes is the discover phase's findings, carried forward
 	// into the plan phase's prompt (see runner.go's PlanSession).
-	ExploreNotes        string `json:"explore_notes,omitempty"`
+	DiscoverNotes       string `json:"discover_notes,omitempty"`
 	Iteration           int    `json:"iteration"`
 	MaxIterations       int    `json:"max_iterations"`
 	ConsecutiveFailures int    `json:"consecutive_failures"`
@@ -93,7 +93,7 @@ type Mission struct {
 	BudgetCurrency string   `json:"budget_currency,omitempty"`
 	Route          string   `json:"route"`
 	ReviewRoute    string   `json:"review_route"`
-	// PlanRoute, when non-empty, is the route oversight phases (explore,
+	// PlanRoute, when non-empty, is the route oversight phases (discover,
 	// plan, replan) run on instead of Route — "GLM plans, local
 	// executes": the oversight phases can run on a strong model while
 	// Route stays the cheap/local worker route. Empty means Route covers
@@ -111,7 +111,7 @@ type Mission struct {
 	// axis to one exact chain entry in the route it would otherwise
 	// resolve, as "provider name/model" — empty keeps the first-usable
 	// walk. Precedence mirrors the route helpers: RouteModel backs
-	// execute, PlanRouteModel backs explore/plan, ReviewRouteModel falls
+	// execute, PlanRouteModel backs discover/plan, ReviewRouteModel falls
 	// back ReviewRouteModel > PlanRouteModel > RouteModel (runner.go's
 	// reviewRouteModel). Never validated to name a chain entry that
 	// exists — the chain can change after create and the runtime already
@@ -201,18 +201,18 @@ type Mission struct {
 	ParentMissionID string `json:"parent_mission_id,omitempty"`
 	// ParentContext is the parent mission's outcome digest
 	// (OutcomeDigest), snapshotted at follow-up create time — rendered
-	// into this mission's explore/plan/work prompts.
+	// into this mission's discover/plan/work prompts.
 	ParentContext string `json:"parent_context,omitempty"`
 	// ReferencedContext is the picked composer #-mention references
 	// (missions/sessions/kb docs), resolved and snapshotted at create
-	// time, rendered into this mission's explore/plan/work prompts,
+	// time, rendered into this mission's discover/plan/work prompts,
 	// additive to ParentContext (a follow-up mission can also carry its
 	// own picked references).
 	ReferencedContext string `json:"referenced_context,omitempty"`
 	// Attachments are PDF documents attached at create time, each
 	// markitdown-converted ONCE (same rationale as chat's
 	// validateAttachments) and snapshotted onto the row — rendered into
-	// this mission's explore/plan/work prompts every turn.
+	// this mission's discover/plan/work prompts every turn.
 	Attachments []MissionAttachment `json:"attachments,omitempty"`
 	// SessionID is a hidden, non-chat-facing session row this mission's
 	// worker/reviewer/planner turns run under — loop.Agent's tool-call

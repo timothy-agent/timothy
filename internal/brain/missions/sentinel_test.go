@@ -21,15 +21,15 @@ func TestSentinelDiscriminatorKeysHaveAttrs(t *testing.T) {
 	}
 }
 
-// TestSentinelDiscriminatorValuesOmitsExploreNotes documents the one
-// deliberate exception to "all three maps stay in sync": explore_notes
+// TestSentinelDiscriminatorValuesOmitsDiscoverNotes documents the one
+// deliberate exception to "all three maps stay in sync": discover_notes
 // has a free-text discriminator (findings), not an enum, so it must
 // NOT appear in sentinelDiscriminatorValues. If this ever starts
-// failing because explore_notes gained an entry, the accompanying doc
+// failing because discover_notes gained an entry, the accompanying doc
 // comment on sentinelDiscriminatorValues needs updating too.
-func TestSentinelDiscriminatorValuesOmitsExploreNotes(t *testing.T) {
-	if _, ok := sentinelDiscriminatorValues[exploreNotesToolName]; ok {
-		t.Fatalf("sentinelDiscriminatorValues unexpectedly has an entry for %q, want it absent (free-text discriminator)", exploreNotesToolName)
+func TestSentinelDiscriminatorValuesOmitsDiscoverNotes(t *testing.T) {
+	if _, ok := sentinelDiscriminatorValues[discoverNotesToolName]; ok {
+		t.Fatalf("sentinelDiscriminatorValues unexpectedly has an entry for %q, want it absent (free-text discriminator)", discoverNotesToolName)
 	}
 }
 
@@ -119,51 +119,51 @@ func TestParseWorkerVerdictDecodesHandoff(t *testing.T) {
 	}
 }
 
-func TestParseExploreFindings(t *testing.T) {
-	findings, err := parseExploreFindings([]byte(`{"findings":"no prior implementation exists; goal is self-contained"}`))
+func TestParseDiscoverFindings(t *testing.T) {
+	findings, err := parseDiscoverFindings([]byte(`{"findings":"no prior implementation exists; goal is self-contained"}`))
 	if err != nil {
-		t.Fatalf("parseExploreFindings: %v", err)
+		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
 	if findings != "no prior implementation exists; goal is self-contained" {
-		t.Fatalf("parseExploreFindings = %q", findings)
+		t.Fatalf("parseDiscoverFindings = %q", findings)
 	}
 }
 
-// TestParseExploreFindingsCaseInsensitiveKey confirms encoding/json's
+// TestParseDiscoverFindingsCaseInsensitiveKey confirms encoding/json's
 // default case-insensitive field matching applies here too (same as
 // parseWorkerVerdict) — a model that emits "Findings" instead of
 // "findings" still decodes.
-func TestParseExploreFindingsCaseInsensitiveKey(t *testing.T) {
-	findings, err := parseExploreFindings([]byte(`{"Findings":"found an existing config loader to reuse"}`))
+func TestParseDiscoverFindingsCaseInsensitiveKey(t *testing.T) {
+	findings, err := parseDiscoverFindings([]byte(`{"Findings":"found an existing config loader to reuse"}`))
 	if err != nil {
-		t.Fatalf("parseExploreFindings: %v", err)
+		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
 	if findings != "found an existing config loader to reuse" {
-		t.Fatalf("parseExploreFindings = %q", findings)
+		t.Fatalf("parseDiscoverFindings = %q", findings)
 	}
 }
 
-func TestParseExploreFindingsEmpty(t *testing.T) {
-	findings, err := parseExploreFindings([]byte(`{"findings":""}`))
+func TestParseDiscoverFindingsEmpty(t *testing.T) {
+	findings, err := parseDiscoverFindings([]byte(`{"findings":""}`))
 	if err != nil {
-		t.Fatalf("parseExploreFindings: %v", err)
+		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
 	if findings != "" {
-		t.Fatalf("parseExploreFindings = %q, want empty", findings)
+		t.Fatalf("parseDiscoverFindings = %q, want empty", findings)
 	}
 }
 
-func TestParseExploreFindingsMalformed(t *testing.T) {
-	if _, err := parseExploreFindings([]byte(`not json`)); err == nil {
-		t.Fatal("parseExploreFindings accepted malformed JSON")
+func TestParseDiscoverFindingsMalformed(t *testing.T) {
+	if _, err := parseDiscoverFindings([]byte(`not json`)); err == nil {
+		t.Fatal("parseDiscoverFindings accepted malformed JSON")
 	}
 }
 
-// TestExtractTextSentinelExploreNotes covers explore_notes' text-form
+// TestExtractTextSentinelDiscoverNotes covers discover_notes' text-form
 // fallback — its discriminator (findings) is free text, not a fixed
 // enum, so a plain non-empty check gates validity instead of enum
 // membership.
-func TestExtractTextSentinelExploreNotes(t *testing.T) {
+func TestExtractTextSentinelDiscoverNotes(t *testing.T) {
 	tests := []struct {
 		name    string
 		text    string
@@ -172,39 +172,39 @@ func TestExtractTextSentinelExploreNotes(t *testing.T) {
 	}{
 		{
 			name:    "XML form",
-			text:    `<explore_notes findings="no existing implementation; goal is self-contained"/>`,
+			text:    `<discover_notes findings="no existing implementation; goal is self-contained"/>`,
 			wantOK:  true,
 			wantVal: "no existing implementation; goal is self-contained",
 		},
 		{
 			name:    "token+JSON form",
-			text:    "explore_notes\n{\"findings\": \"found a reusable config loader in internal/platform/config\"}",
+			text:    "discover_notes\n{\"findings\": \"found a reusable config loader in internal/platform/config\"}",
 			wantOK:  true,
 			wantVal: "found a reusable config loader in internal/platform/config",
 		},
 		{
 			name:   "empty findings value is not a match",
-			text:   `<explore_notes findings=""/>`,
+			text:   `<discover_notes findings=""/>`,
 			wantOK: false,
 		},
 		{
-			name:   "no explore_notes mention at all",
+			name:   "no discover_notes mention at all",
 			text:   "I looked around but found nothing worth noting.",
 			wantOK: false,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, ok := extractTextSentinel(tc.text, exploreNotesToolName)
+			raw, ok := extractTextSentinel(tc.text, discoverNotesToolName)
 			if ok != tc.wantOK {
 				t.Fatalf("extractTextSentinel(%q) ok = %v, want %v", tc.text, ok, tc.wantOK)
 			}
 			if !ok {
 				return
 			}
-			findings, err := parseExploreFindings(raw)
+			findings, err := parseDiscoverFindings(raw)
 			if err != nil {
-				t.Fatalf("parseExploreFindings: %v", err)
+				t.Fatalf("parseDiscoverFindings: %v", err)
 			}
 			if findings != tc.wantVal {
 				t.Fatalf("findings = %q, want %q", findings, tc.wantVal)

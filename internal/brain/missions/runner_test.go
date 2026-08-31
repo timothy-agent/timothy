@@ -1183,7 +1183,7 @@ func TestWorkerRoute(t *testing.T) {
 	}
 }
 
-// TestOversightRoute pins explore/plan/replan's route resolution:
+// TestOversightRoute pins discover/plan/replan's route resolution:
 // PlanRoute wins when set, Route otherwise: exact current behavior
 // when PlanRoute is empty.
 func TestOversightRoute(t *testing.T) {
@@ -1253,7 +1253,7 @@ func TestWorkerModel(t *testing.T) {
 	}
 }
 
-// TestOversightModel pins explore/plan's model-pin precedence: mirrors
+// TestOversightModel pins discover/plan's model-pin precedence: mirrors
 // oversightRoute exactly (plan_route_model wins when set, else
 // route_model).
 func TestOversightModel(t *testing.T) {
@@ -1402,28 +1402,28 @@ func TestRunWorkerOmitsConnectorReadsWhenResolverUnset(t *testing.T) {
 	}
 }
 
-// TestExploreSessionIncludesConnectorReadsWhenResolverSet mirrors
-// TestRunWorkerIncludesConnectorReadsWhenResolverSet for the explore
+// TestDiscoverSessionIncludesConnectorReadsWhenResolverSet mirrors
+// TestRunWorkerIncludesConnectorReadsWhenResolverSet for the discover
 // phase: scheduled missions may need connector reads before planning
 // too.
-func TestExploreSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
+func TestDiscoverSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"ok"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`)},
 	}}
 	r := newTestRunner(agent)
 	r.connectorReads = func(ctx context.Context, agentID string) []*tools.Tool {
 		return []*tools.Tool{{Name: "google-calendar_calendar_list_events", ReadOnly: true}}
 	}
 	m := Mission{ID: "m1", AgentID: "a1", Route: "default"}
-	if _, err := r.ExploreSession(context.Background(), m); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	var names []string
 	for _, tool := range agent.requests[0].ExtraTools {
 		names = append(names, tool.Name)
 	}
 	if !slices.Contains(names, "google-calendar_calendar_list_events") {
-		t.Fatalf("explore ExtraTools = %v, want google-calendar_calendar_list_events", names)
+		t.Fatalf("discover ExtraTools = %v, want google-calendar_calendar_list_events", names)
 	}
 }
 
@@ -1571,7 +1571,7 @@ func TestRunWorkerReportsPermissionDenied(t *testing.T) {
 // TestRunWorkerEmitsToolCallTraceInOrder covers issue #369's acceptance
 // criterion 1: every finished tool call in a worker turn reaches the
 // mission via parkNotifier as a mission.tool_call trace entry, in call
-// order, tagged with the execute phase and the correct outcome
+// order, tagged with the generate phase and the correct outcome
 // classification (ok/denied/error).
 func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
@@ -1653,226 +1653,226 @@ func TestKBSearchHitTraceCapsHitCount(t *testing.T) {
 // infra error: previously it returned a clean empty verdict, which
 // the caller read as a missing sentinel and burned a recovery re-run
 // plus a forced retry for one silent infra failure.
-// TestExploreSessionSentinelPresent mirrors TestRunWorkerSentinelPresent:
-// an explore_notes call on the first turn is trusted directly, no
+// TestDiscoverSessionSentinelPresent mirrors TestRunWorkerSentinelPresent:
+// an discover_notes call on the first turn is trusted directly, no
 // recovery needed.
-func TestExploreSessionSentinelPresent(t *testing.T) {
+func TestDiscoverSessionSentinelPresent(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{textEvent("looked around"), toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation; goal is self-contained"}`)},
+		{textEvent("looked around"), toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation; goal is self-contained"}`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if notes != "no prior implementation; goal is self-contained" {
-		t.Fatalf("ExploreSession notes = %q", notes)
+		t.Fatalf("DiscoverSession notes = %q", notes)
 	}
 	if agent.call != 1 {
 		t.Fatalf("expected exactly one turn when the sentinel is present, got %d", agent.call)
 	}
 }
 
-// TestExploreSessionUsesPlanRoute confirms explore runs on PlanRoute
+// TestDiscoverSessionUsesPlanRoute confirms discover runs on PlanRoute
 // when set, instead of Route.
-func TestExploreSessionUsesPlanRoute(t *testing.T) {
+func TestDiscoverSessionUsesPlanRoute(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "mini", PlanRoute: "strong", Goal: "test"}
-	if _, err := r.ExploreSession(context.Background(), m); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if got := agent.requests[0].Route; got != "strong" {
-		t.Fatalf("explorer request route = %q, want plan_route", got)
+		t.Fatalf("discoverer request route = %q, want plan_route", got)
 	}
 }
 
-// TestExploreSessionIncludesParentContext confirms a follow-up
-// mission's prior outcome digest reaches the explorer's user prompt.
-func TestExploreSessionIncludesParentContext(t *testing.T) {
+// TestDiscoverSessionIncludesParentContext confirms a follow-up
+// mission's prior outcome digest reaches the discoverer's user prompt.
+func TestDiscoverSessionIncludesParentContext(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "test", ParentContext: "prior mission fixed the signup bug"}
-	if _, err := r.ExploreSession(context.Background(), m); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	msgs := agent.requests[0].Messages
 	content := msgs[len(msgs)-1].Content
 	if !strings.Contains(content, "Previous mission outcome:") || !strings.Contains(content, "prior mission fixed the signup bug") {
-		t.Fatalf("explorer message missing parent context:\n%s", content)
+		t.Fatalf("discoverer message missing parent context:\n%s", content)
 	}
 }
 
-// TestExploreSessionIncludesReferencedContext confirms a mission's
-// picked composer #-mention references reach the explorer's user
+// TestDiscoverSessionIncludesReferencedContext confirms a mission's
+// picked composer #-mention references reach the discoverer's user
 // prompt, additive to (not instead of) ParentContext.
-func TestExploreSessionIncludesReferencedContext(t *testing.T) {
+func TestDiscoverSessionIncludesReferencedContext(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "test", ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: the login flow uses OAuth"}
-	if _, err := r.ExploreSession(context.Background(), m); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	msgs := agent.requests[0].Messages
 	content := msgs[len(msgs)-1].Content
 	if !strings.Contains(content, "Previous mission outcome:") {
-		t.Fatalf("explorer message missing parent context:\n%s", content)
+		t.Fatalf("discoverer message missing parent context:\n%s", content)
 	}
 	if !strings.Contains(content, "Referenced context:") || !strings.Contains(content, "kb doc: the login flow uses OAuth") {
-		t.Fatalf("explorer message missing referenced context:\n%s", content)
+		t.Fatalf("discoverer message missing referenced context:\n%s", content)
 	}
 }
 
-// TestExploreSessionIncludesAttachments confirms a create-time PDF
-// attachment's markdown reaches the explorer's user prompt.
-func TestExploreSessionIncludesAttachments(t *testing.T) {
+// TestDiscoverSessionIncludesAttachments confirms a create-time PDF
+// attachment's markdown reaches the discoverer's user prompt.
+func TestDiscoverSessionIncludesAttachments(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "test", Attachments: []MissionAttachment{
 		{ID: "att1", Name: "spec.pdf", Markdown: "the spec says fix it this way"},
 	}}
-	if _, err := r.ExploreSession(context.Background(), m); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	msgs := agent.requests[0].Messages
 	content := msgs[len(msgs)-1].Content
 	if !strings.Contains(content, "Attached document spec.pdf:") || !strings.Contains(content, "the spec says fix it this way") {
-		t.Fatalf("explorer message missing attachment:\n%s", content)
+		t.Fatalf("discoverer message missing attachment:\n%s", content)
 	}
 }
 
-// TestExploreSessionRecoversWhenSentinelMissingThenPresent mirrors
+// TestDiscoverSessionRecoversWhenSentinelMissingThenPresent mirrors
 // RunWorker's recovery ladder: a missing sentinel on the first turn
 // gets one recovery re-run before the sentinel is trusted.
-func TestExploreSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {
+func TestDiscoverSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{textEvent("still exploring")}, // no sentinel
-		{textEvent("done exploring"), toolEndEvent(exploreNotesToolName, `{"findings":"found a reusable config loader"}`)},
+		{textEvent("still discovering")}, // no sentinel
+		{textEvent("done discovering"), toolEndEvent(discoverNotesToolName, `{"findings":"found a reusable config loader"}`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if notes != "found a reusable config loader" {
-		t.Fatalf("ExploreSession notes = %q", notes)
+		t.Fatalf("DiscoverSession notes = %q", notes)
 	}
 	if agent.call != 2 {
 		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
 	}
 }
 
-// TestExploreSessionFallsBackToTextSentinel covers a explore turn
-// that expresses explore_notes as text (XML-ish tag), never as a tool
+// TestDiscoverSessionFallsBackToTextSentinel covers a discover turn
+// that expresses discover_notes as text (XML-ish tag), never as a tool
 // call: same fallback RunWorker/RunReview already rely on.
-func TestExploreSessionFallsBackToTextSentinel(t *testing.T) {
+func TestDiscoverSessionFallsBackToTextSentinel(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("no tool call here")},
-		{textEvent(`Done. <explore_notes findings="the goal needs no exploration; it is self-contained"/>`)},
+		{textEvent(`Done. <discover_notes findings="the goal needs no exploration; it is self-contained"/>`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if notes != "the goal needs no exploration; it is self-contained" {
-		t.Fatalf("ExploreSession notes via text fallback = %q", notes)
+		t.Fatalf("DiscoverSession notes via text fallback = %q", notes)
 	}
 }
 
-// TestExploreSessionFallsBackToRawText is the advisory-phase contract:
-// when NEITHER turn produces an explore_notes call in any form, the raw
-// turn text becomes the notes: never an error, since explore findings
+// TestDiscoverSessionFallsBackToRawText is the advisory-phase contract:
+// when NEITHER turn produces an discover_notes call in any form, the raw
+// turn text becomes the notes: never an error, since discover findings
 // are advisory input to the planner, not a gate on mission progress.
-func TestExploreSessionFallsBackToRawText(t *testing.T) {
+func TestDiscoverSessionFallsBackToRawText(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("Looked at the workspace, nothing notable.")},
 		{textEvent("Confirmed, nothing else to add.")},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	want := "Looked at the workspace, nothing notable.\nConfirmed, nothing else to add."
 	if notes != want {
-		t.Fatalf("ExploreSession fallback notes = %q, want %q", notes, want)
+		t.Fatalf("DiscoverSession fallback notes = %q, want %q", notes, want)
 	}
 	if agent.call != 2 {
 		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
 	}
 }
 
-// TestExploreSessionStreamErrorPropagates confirms an infra-level
+// TestDiscoverSessionStreamErrorPropagates confirms an infra-level
 // stream error (not a missing sentinel) is a real error, distinct from
 // the advisory "no sentinel, use raw text" fallback path.
-func TestExploreSessionStreamErrorPropagates(t *testing.T) {
+func TestDiscoverSessionStreamErrorPropagates(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
 		{Type: stream.EventError, Err: &stream.StreamError{Message: "connection lost"}},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err == nil {
-		t.Fatal("ExploreSession: expected the stream error to propagate")
+	if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err == nil {
+		t.Fatal("DiscoverSession: expected the stream error to propagate")
 	}
 }
 
-// TestExploreSessionGetsShellButNotWriteFile confirms the explore
+// TestDiscoverSessionGetsShellButNotWriteFile confirms the discover
 // turn's ExtraTools include a mission-scoped shell (for read-only
-// exploration) but never write_file: the execute phase does the
-// actual work, explore must not create or modify files.
-func TestExploreSessionGetsShellButNotWriteFile(t *testing.T) {
+// exploration) but never write_file: the generate phase does the
+// actual work, discover must not create or modify files.
+func TestDiscoverSessionGetsShellButNotWriteFile(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"nothing notable"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"nothing notable"}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "test", Workspace: "/workspace/missions/m1"}
-	if _, err := r.ExploreSession(context.Background(), m); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	var names []string
 	for _, tool := range agent.requests[0].ExtraTools {
 		names = append(names, tool.Name)
 	}
 	if !slices.Contains(names, "shell") {
-		t.Fatalf("explore ExtraTools = %v, want a mission-scoped shell", names)
+		t.Fatalf("discover ExtraTools = %v, want a mission-scoped shell", names)
 	}
 	if slices.Contains(names, "write_file") {
-		t.Fatalf("explore ExtraTools = %v, must not include write_file", names)
+		t.Fatalf("discover ExtraTools = %v, must not include write_file", names)
 	}
-	if !slices.Contains(names, exploreNotesToolName) {
-		t.Fatalf("explore ExtraTools = %v, want the explore_notes sentinel", names)
+	if !slices.Contains(names, discoverNotesToolName) {
+		t.Fatalf("discover ExtraTools = %v, want the discover_notes sentinel", names)
 	}
 	if agent.requests[0].ToolAllow != nil {
-		t.Fatalf("explore ToolAllow = %v, want nil so base tools (search_web/fetch_url) stay available", agent.requests[0].ToolAllow)
+		t.Fatalf("discover ToolAllow = %v, want nil so base tools (search_web/fetch_url) stay available", agent.requests[0].ToolAllow)
 	}
 }
 
-// TestExploreSessionKBNudge pins issue #367: the explorer's system
+// TestDiscoverSessionKBNudge pins issue #367: the discoverer's system
 // prompt nudges it to search_kb before declaring a goal self-contained,
 // exactly when search_kb is offered (kbSearch wired); attached
 // Knowledge collections are named as operator-prioritized; no backend
 // means no mention of a tool the model doesn't have.
-func TestExploreSessionKBNudge(t *testing.T) {
+func TestDiscoverSessionKBNudge(t *testing.T) {
 	notesBatch := [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"nothing notable"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"nothing notable"}`)},
 	}
 
 	t.Run("no backend wired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: notesBatch}
 		r := newTestRunner(agent)
-		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
-			t.Fatalf("ExploreSession: %v", err)
+		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("DiscoverSession: %v", err)
 		}
 		if strings.Contains(agent.requests[0].System, "search_kb") {
-			t.Fatalf("explore system prompt mentions search_kb with no backend wired: %s", agent.requests[0].System)
+			t.Fatalf("discover system prompt mentions search_kb with no backend wired: %s", agent.requests[0].System)
 		}
 	})
 
@@ -1882,15 +1882,15 @@ func TestExploreSessionKBNudge(t *testing.T) {
 		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 			return nil, nil
 		}
-		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
-			t.Fatalf("ExploreSession: %v", err)
+		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("DiscoverSession: %v", err)
 		}
 		system := agent.requests[0].System
 		if !strings.Contains(system, "search_kb") {
-			t.Fatalf("explore system prompt missing search_kb nudge with backend wired: %s", system)
+			t.Fatalf("discover system prompt missing search_kb nudge with backend wired: %s", system)
 		}
 		if strings.Contains(system, "operator attached") {
-			t.Fatalf("explore system prompt names attached collections with none set: %s", system)
+			t.Fatalf("discover system prompt names attached collections with none set: %s", system)
 		}
 	})
 
@@ -1901,15 +1901,15 @@ func TestExploreSessionKBNudge(t *testing.T) {
 			return nil, nil
 		}
 		m := Mission{ID: "m1", Route: "default", Goal: "test", Knowledge: []string{"System Design"}}
-		if _, err := r.ExploreSession(context.Background(), m); err != nil {
-			t.Fatalf("ExploreSession: %v", err)
+		if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+			t.Fatalf("DiscoverSession: %v", err)
 		}
 		system := agent.requests[0].System
 		if !strings.Contains(system, "search_kb") {
-			t.Fatalf("explore system prompt missing search_kb nudge: %s", system)
+			t.Fatalf("discover system prompt missing search_kb nudge: %s", system)
 		}
 		if !strings.Contains(system, "operator attached") || !strings.Contains(system, "System Design") {
-			t.Fatalf("explore system prompt doesn't name attached collection: %s", system)
+			t.Fatalf("discover system prompt doesn't name attached collection: %s", system)
 		}
 	})
 }
@@ -1999,7 +1999,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 }
 
 // TestMissionRunnerRequestsAreBuiltinsOnly guards the security fix:
-// every loop.Request the native runner builds: worker, explorer,
+// every loop.Request the native runner builds: worker, discoverer,
 // reviewer, planner: must set BuiltinsOnly, so a mission turn's base
 // tool surface never includes connector tools (e.g. a write-capable
 // GitHub MCP token) or the chat-only mission list/get/push tools. A
@@ -2018,14 +2018,14 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 	}
 
 	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"none"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"none"}`)},
 	}}
 	r = newTestRunner(agent)
-	if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
-		t.Fatalf("ExploreSession: %v", err)
+	if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
-		t.Fatal("ExploreSession's request must set BuiltinsOnly")
+		t.Fatal("DiscoverSession's request must set BuiltinsOnly")
 	}
 
 	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -2339,7 +2339,7 @@ func TestRunWorkerCollectsSeenURLsFromWebFetchAndWebSearch(t *testing.T) {
 // evidence must be recorded when the tool RUNS, never parsed from the
 // rendered result): executing the worker's search_kb tool must land
 // every returned document's kb:// ref in the sink, and a nil sink
-// (explore/plan turns) must stay safe.
+// (discover/plan turns) must stay safe.
 func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
 	r := &nativeRunner{log: slog.Default(), kbSearch: func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		return []builtin.KBSearchHit{
@@ -2611,32 +2611,32 @@ func TestRunWorkerWiresSteeringFromProgressReader(t *testing.T) {
 	})
 }
 
-// TestExploreSessionWiresSteeringFromProgressReader mirrors
+// TestDiscoverSessionWiresSteeringFromProgressReader mirrors
 // TestRunWorkerWiresSteeringFromProgressReader for the discover phase
 // (D-089, issue #458): a ProgressReader must produce a non-nil Steering
-// func on the explore turn's loop.Request, same seam RunWorker uses.
-func TestExploreSessionWiresSteeringFromProgressReader(t *testing.T) {
+// func on the discover turn's loop.Request, same seam RunWorker uses.
+func TestDiscoverSessionWiresSteeringFromProgressReader(t *testing.T) {
 	batch := [][]stream.StreamEvent{
-		{toolEndEvent(exploreNotesToolName, `{"findings":"no prior implementation"}`)},
+		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}
 
 	t.Run("wired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: batch}
 		r := newTestRunner(agent)
 		r.SetProgressReader(&fakeProgressReader{})
-		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
-			t.Fatalf("ExploreSession: %v", err)
+		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("DiscoverSession: %v", err)
 		}
 		if agent.requests[0].Steering == nil {
-			t.Fatal("Steering not wired on the explore request despite a ProgressReader")
+			t.Fatal("Steering not wired on the discover request despite a ProgressReader")
 		}
 	})
 
 	t.Run("unwired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: batch}
 		r := newTestRunner(agent)
-		if _, err := r.ExploreSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
-			t.Fatalf("ExploreSession: %v", err)
+		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+			t.Fatalf("DiscoverSession: %v", err)
 		}
 		if agent.requests[0].Steering != nil {
 			t.Fatal("Steering wired despite no ProgressReader")

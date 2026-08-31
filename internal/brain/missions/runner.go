@@ -32,7 +32,7 @@ var ErrModelFloor = errors.New("mission turn served by a below-floor model")
 
 // ErrAskedUser reports that a turn ended via a successful ask_user
 // call (D-088) rather than the phase's own sentinel: every phase
-// entry point (RunWorker/ExploreSession/PlanSession/RunReview) returns
+// entry point (RunWorker/DiscoverSession/PlanSession/RunReview) returns
 // this instead of running its normal recovery/parse ladder, so the
 // driver's runPhase can map it straight to InputAskUser without
 // mistaking the missing sentinel for a forced failure.
@@ -66,15 +66,15 @@ type Runner interface {
 	RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error)
 
 	// PlanSession runs the planning turn that produces a Spec (the list
-	// of PlanUnits) from the mission's goal and explore-phase findings.
-	PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error)
+	// of PlanUnits) from the mission's goal and discover-phase findings.
+	PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error)
 
-	// ExploreSession runs the explore turn: a tool-using session that
-	// explores the workspace and (via base tools) the web, ending with an
-	// explore_notes sentinel call. Exploration is advisory: a turn that
+	// DiscoverSession runs the discover turn: a tool-using session that
+	// explores the workspace and (via base tools) the web, ending with a
+	// discover_notes sentinel call. Discovery is advisory: a turn that
 	// never produces the sentinel degrades to the raw turn text rather
 	// than failing the phase.
-	ExploreSession(ctx context.Context, m Mission) (string, error)
+	DiscoverSession(ctx context.Context, m Mission) (string, error)
 }
 
 // agentStream is the narrow slice of *loop.Agent nativeRunner actually
@@ -124,7 +124,7 @@ func (p *StorePermissionParker) OnPermissionDenied(ctx context.Context, missionI
 	}
 }
 
-// OnToolCall records one tool call from a worker/explore/plan/review
+// OnToolCall records one tool call from a worker/discover/plan/prove
 // turn as a mission.tool_call event (issue #369): the UI's per-turn
 // trace reads these back grouped by phase, alongside the mission.turn
 // event the same runTurn call eventually produces. Best-effort like
@@ -157,7 +157,7 @@ type parkNotifier interface {
 	// most often the unattended-turn automatic denial (D-039), but any
 	// denial qualifies. Best-effort like the two methods above.
 	OnPermissionDenied(ctx context.Context, missionID, tool, digest string)
-	// OnToolCall reports every tool call a worker/explore/plan/review
+	// OnToolCall reports every tool call a worker/discover/plan/prove
 	// turn made, in call order: the trace the mission detail UI shows
 	// per turn (issue #369). Best-effort, same stance as the methods
 	// above. kbHits is search_kb's returned hit trace (issue #413), nil
@@ -201,7 +201,7 @@ type nativeRunner struct {
 	kbRead KBReadFunc
 
 	// connectorReads resolves a mission's agent to the read-only
-	// connector tools (gmail/calendar reads) it may use on worker/explore
+	// connector tools (gmail/calendar reads) it may use on worker/discover
 	// turns (see SetConnectorReads): nil-safe: unset means no connector
 	// reads are offered, same as before this existed.
 	connectorReads ConnectorReadsResolver
@@ -213,7 +213,7 @@ type nativeRunner struct {
 	progressReader ProgressReader
 
 	// location resolves the operator's configured timezone for the
-	// explore/plan prompts' date line; nil means UTC.
+	// discover/plan prompts' date line; nil means UTC.
 	location func(ctx context.Context) *time.Location
 
 	// askParker backs ask_user's park (D-088): nil means ask_user is
@@ -263,7 +263,7 @@ func (r *nativeRunner) SetProgressReader(pr ProgressReader) {
 }
 
 // SetLocation wires the operator timezone accessor used for the
-// explore/plan prompts' date line, same setter pattern as
+// discover/plan prompts' date line, same setter pattern as
 // SetProgressReader (cmd/brain/main.go holds the *settings.Store the
 // runner is built alongside).
 func (r *nativeRunner) SetLocation(loc func(ctx context.Context) *time.Location) {
@@ -335,7 +335,7 @@ func countOperatorNotes(notes []ProgressNote) int {
 // BuiltinsOnly for the base surface, and this resolver only ever
 // layers reads on top via ExtraTools: a worker can never side-channel
 // a connector write around the worktree/human-consented push
-// pipeline. Resolved at DRIVE time (every RunWorker/ExploreSession
+// pipeline. Resolved at DRIVE time (every RunWorker/DiscoverSession
 // call), not cached on the mission, so an agent's allowlist or a
 // connector's enabled state edited mid-mission applies on the very
 // next turn. Being offered a read tool here is separate from being
@@ -351,7 +351,7 @@ func countOperatorNotes(notes []ProgressNote) int {
 // be offered here) and ApprovalAllowlist (to be pre-approved).
 type ConnectorReadsResolver func(ctx context.Context, agentID string) []*tools.Tool
 
-// SetConnectorReads wires the resolver RunWorker/ExploreSession use to
+// SetConnectorReads wires the resolver RunWorker/DiscoverSession use to
 // layer read-only connector tools onto a mission turn: a setter (not
 // a NewNativeRunner parameter) because cmd/brain/main.go builds the
 // runner before the connectors.Manager it closes over.
@@ -428,15 +428,15 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 	})
 }
 
-// kbExploreNudge tells the explorer a curated knowledge base is
+// kbDiscoverNudge tells the discoverer a curated knowledge base is
 // available and to search it before concluding no research is needed
-// (issue #367): explore turns were finishing in seconds with zero
+// (issue #367): discover turns were finishing in seconds with zero
 // search_kb calls, silently skipping directly relevant curated
 // articles. Empty when no KB backend is wired, so the tool-absent case
 // never mentions a tool the model doesn't have. When the mission has
 // its own Knowledge collections, they are named as operator-attached
 // and prioritized (they already boost search_kb ranking, D-078).
-func (r *nativeRunner) kbExploreNudge(m Mission) string {
+func (r *nativeRunner) kbDiscoverNudge(m Mission) string {
 	if r.kbSearch == nil {
 		return ""
 	}
@@ -448,7 +448,7 @@ func (r *nativeRunner) kbExploreNudge(m Mission) string {
 }
 
 // connectorReadTools resolves m's read-only connector tools (nil
-// resolver or no agent id means none): appended to worker/explore
+// resolver or no agent id means none): appended to worker/discover
 // ExtraTools so a scheduled mission (daily inbox digest, calendar
 // summary) can read gmail/calendar without the base connector surface
 // (which BuiltinsOnly excludes) ever reopening for a write.
@@ -498,7 +498,7 @@ func (s *kbRefSink) all() []string {
 // a longer ceiling here is a capability tradeoff, not a safety one.
 const sandboxShellMaxTimeout = 15 * time.Minute
 
-// turnTimeout bounds one runTurn call (worker, explore, plan, or
+// turnTimeout bounds one runTurn call (worker, discover, plan, or
 // review). Without this, a stream that never emits an error or
 // terminal event: no chunk, no EventDone, no EventError, just
 // silence: hangs runTurn's `for ev := range events` forever: nothing
@@ -524,8 +524,8 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 // missionShell builds the turn-scoped shell tool rooted in the
 // mission's own directory, routed through the mission's sandbox
 // container: shared by missionTools (worker/reviewer, paired with
-// write_file) and ExploreSession (shell only, read-only exploration:
-// the execute phase does the actual work, so explore never gets
+// write_file) and DiscoverSession (shell only, read-only exploration:
+// the generate phase does the actual work, so discover never gets
 // write_file). Returns nil when the mission has no work root yet
 // (WorkRoot's Workspace/Worktree both empty).
 func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
@@ -606,7 +606,7 @@ func (r *nativeRunner) belowFloor(model string) bool {
 // (see finalSeg's doc below, formerly a bare 5th return value).
 // askedUser (D-088) reports whether the turn ended via a successful
 // ask_user call rather than the phase's own sentinel: the caller
-// (RunWorker/ExploreSession/PlanSession/RunReview) checks this BEFORE
+// (RunWorker/DiscoverSession/PlanSession/RunReview) checks this BEFORE
 // treating a missing sentinel as "no verdict," since ask_user's
 // EndTurnTools membership means the turn legitimately ends with no
 // sentinel call at all.
@@ -654,7 +654,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 	// D-075: the sentinel call's successful execution ends the turn:
-	// every mission phase (worker/explore/plan/review) goes through
+	// every mission phase (worker/discover/plan/prove) goes through
 	// this one call site. ask_user (D-088) ends the turn the same way
 	// when offered: naming it here even when the turn's ExtraTools
 	// don't include it (askParker unwired, budget exhausted) is
@@ -926,7 +926,7 @@ func workerRoute(m Mission) string {
 	return m.Route
 }
 
-// oversightRoute picks the route explore/plan/replan turns run on:
+// oversightRoute picks the route discover/plan/replan turns run on:
 // PlanRoute when set ("GLM plans, local executes": oversight runs on a
 // stronger route while Route stays the worker's cheap/local route),
 // otherwise Route unchanged (empty PlanRoute is exact current behavior).
@@ -1113,14 +1113,14 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}
 }
 
-// ExploreSession runs the mission's explore turn: explore the goal
+// DiscoverSession runs the mission's discover turn: explore the goal
 // before planning commits to a shape. Unlike RunWorker's sentinel
-// ladder, a missing explore_notes call never fails the phase: the
+// ladder, a missing discover_notes call never fails the phase: the
 // findings are advisory input to the planner, not a gate on progress,
 // so the ladder's last resort is the raw turn text rather than a forced
 // failure.
-func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, error) {
-	system := "You are exploring one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only — do not create or modify files; the execute phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one explore_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + r.kbExploreNudge(m) + r.execEnvironmentNote(ctx)
+func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the generate phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
@@ -1133,7 +1133,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	}
 	user += renderAttachments(m.Attachments)
 
-	extra := []*tools.Tool{ExploreNotesTool()}
+	extra := []*tools.Tool{DiscoverNotesTool()}
 	if shell := r.missionShell(m); shell != nil {
 		extra = append(extra, shell)
 	}
@@ -1151,7 +1151,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		SessionID:    m.SessionID,
 		Route:        oversightRoute(m),
 		ModelHint:    oversightModel(m),
-		Agent:        "mission-explorer",
+		Agent:        "mission-discoverer",
 		MissionID:    m.ID,
 		System:       system,
 		Messages:     []provider.Message{{Role: "user", Content: user}},
@@ -1159,12 +1159,12 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
 		// D-089: discover turns get the same mid-turn steering as worker
-		// turns (issue #458): a note posted while explore is in flight
+		// turns (issue #458): a note posted while discover is in flight
 		// reaches this turn instead of only the next phase's prompt.
 		Steering: r.steeringFor(m.ID, m.Progress),
 	}
 
-	res, err := r.runTurn(ctx, req, exploreNotesToolName, PhaseDiscover)
+	res, err := r.runTurn(ctx, req, discoverNotesToolName, PhaseDiscover)
 	text := res.text
 	if err != nil {
 		return "", err
@@ -1180,9 +1180,9 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	recoverReq := req
 	recoverReq.Messages = append(append([]provider.Message{}, req.Messages...),
 		provider.Message{Role: "assistant", Content: text},
-		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one explore_notes tool call containing your findings."},
+		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one discover_notes tool call containing your findings."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, exploreNotesToolName, PhaseDiscover)
+	recoverRes, err := r.runTurn(ctx, recoverReq, discoverNotesToolName, PhaseDiscover)
 	recoverText := recoverRes.text
 	if err != nil {
 		return "", err
@@ -1194,7 +1194,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 	// Neither turn produced a tool call: check for a text-form sentinel
 	// before giving up on structured output entirely.
 	combined := text + "\n" + recoverText
-	if raw, ok := extractTextSentinel(combined, exploreNotesToolName); ok {
+	if raw, ok := extractTextSentinel(combined, discoverNotesToolName); ok {
 		if notes, ok := tryParseFindings(raw); ok {
 			return notes, nil
 		}
@@ -1202,7 +1202,7 @@ func (r *nativeRunner) ExploreSession(ctx context.Context, m Mission) (string, e
 
 	// Advisory phase: never a forced failure. The raw turn text is still
 	// useful context for the planner even with no structured findings.
-	r.log.Warn("mission explore ended without an explore_notes call; using raw turn text", "mission_id", m.ID)
+	r.log.Warn("mission discover ended without a discover_notes call; using raw turn text", "mission_id", m.ID)
 	return strings.TrimSpace(combined), nil
 }
 
@@ -1212,7 +1212,7 @@ func tryParseFindings(args json.RawMessage) (string, bool) {
 	if len(args) == 0 {
 		return "", false
 	}
-	findings, err := parseExploreFindings(args)
+	findings, err := parseDiscoverFindings(args)
 	if err != nil || findings == "" {
 		return "", false
 	}
@@ -1367,17 +1367,17 @@ func renderReviewContent(p ReviewPacket) string {
 }
 
 // PlanSession runs the planning turn that produces a Spec from the
-// mission's goal and explore-phase findings. The plan is forced
+// mission's goal and discover-phase findings. The plan is forced
 // through the submit_plan tool call (mirroring RunWorker/RunReview's
 // sentinel ladder) rather than asked for as bare JSON prose: a model
 // free to preface its reply with prose was the root cause of a real
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
-func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, exploreNotes string) (Spec, error) {
+func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
 	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable — this applies regardless of the goal's subject matter. Every unit must list at least one artifact — the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
-	if exploreNotes != "" {
-		user += "\n\nExploration findings:\n" + NeutralizeSlot(exploreNotes)
+	if discoverNotes != "" {
+		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
 	}
 	if m.ParentContext != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
@@ -1494,7 +1494,7 @@ func execEnvironmentNote(loc *time.Location) string {
 	if loc == nil {
 		loc = time.UTC
 	}
-	// The date line rides along so every mission prompt (explore, plan,
+	// The date line rides along so every mission prompt (discover, plan,
 	// worker) knows "today": a model with no other way to know it
 	// anchors on training data or on dated examples in tool descriptions
 	// and mangles date-bounded calls (calendar windows, Gmail

@@ -564,26 +564,26 @@ describe('MissionDetail', () => {
     expect(screen.getAllByText('Fix the login bug').length).toBeGreaterThan(0)
   })
 
-  it('omits the Explore section when explore_notes is absent', async () => {
+  it('omits the Discover section when discover_notes is absent', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Explore')).toBeNull()
+    expect(screen.queryByText('Discover')).toBeNull()
   })
 
-  it('shows a collapsed Explore section above Plan when explore_notes is set', async () => {
+  it('shows a collapsed Discover section above Plan when discover_notes is set', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
-      explore_notes: 'found **three** prior approaches',
+      discover_notes: 'found **three** prior approaches',
     })
     renderPage()
     await screen.findByText('Fix the login bug')
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings.indexOf('Explore')).toBeGreaterThanOrEqual(0)
-    expect(headings.indexOf('Explore')).toBeLessThan(headings.indexOf('Plan'))
+    expect(headings.indexOf('Discover')).toBeGreaterThanOrEqual(0)
+    expect(headings.indexOf('Discover')).toBeLessThan(headings.indexOf('Plan'))
     expect(screen.queryByText('three')).toBeNull()
 
-    fireEvent.click(screen.getByText('Show exploration'))
+    fireEvent.click(screen.getByText('Show discovery'))
     expect(screen.getByText('three').tagName).toBe('STRONG')
   })
 

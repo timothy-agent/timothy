@@ -5,20 +5,20 @@ import { rehypePlugins, remarkPlugins } from '../../lib/markdown'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
-// ExploreSection renders a mission's explore_notes (set once, at the
-// end of the discover phase, see driver.go's runExplore) as
+// DiscoverSection renders a mission's discover_notes (set once, at the
+// end of the discover phase, see driver.go's runDiscover) as
 // collapsed-by-default markdown, the same rendering ResultSection uses
 // for last_evidence. The page only mounts this when notes is non-empty.
 // Uses CodeBlock (not the plain MarkdownPre) so fenced code gets the
 // same highlighted, GitHub-style treatment as chat/file markdown. The
 // copy button sits inside the content block, same placement as
 // ResultSection's, not in the collapsible's trigger row.
-export function ExploreSection({ notes }: { notes: string }) {
+export function DiscoverSection({ notes }: { notes: string }) {
   return (
     <TooltipProvider>
       <Collapsible>
         <CollapsibleTrigger className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
-          Show exploration
+          Show discovery
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="relative mt-2 rounded-lg border border-border bg-muted/30">
@@ -26,7 +26,7 @@ export function ExploreSection({ notes }: { notes: string }) {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex">
-                    <CopyButton text={notes} label="Copy exploration notes" alwaysVisible />
+                    <CopyButton text={notes} label="Copy discovery notes" alwaysVisible />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>Copy</TooltipContent>

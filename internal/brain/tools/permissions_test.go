@@ -179,7 +179,7 @@ func TestResolveShortCircuits(t *testing.T) {
 
 	t.Run("mission sentinel tools exempt", func(t *testing.T) {
 		t.Parallel()
-		for _, tool := range []string{"mission_status", "review_verdict", "submit_plan", "explore_notes", "ask_user"} {
+		for _, tool := range []string{"mission_status", "review_verdict", "submit_plan", "discover_notes", "ask_user"} {
 			res, err := p.Resolve(ctx, "s1", tool, json.RawMessage(`{}`))
 			if err != nil {
 				t.Fatalf("Resolve(%s): %v", tool, err)
