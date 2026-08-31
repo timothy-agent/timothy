@@ -825,7 +825,7 @@ export function MissionDetail() {
       {(mission.spec?.units?.length ?? 0) > 0 && (
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
-          <PlanSection units={mission.spec?.units ?? []} />
+          <PlanSection units={mission.spec?.units ?? []} assumptions={mission.spec?.assumptions} />
         </section>
       )}
 

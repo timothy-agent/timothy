@@ -28,6 +28,23 @@ describe('mission.unit_verified rendering', () => {
   })
 })
 
+describe('mission.plan_created rendering', () => {
+  it('shows unit count alone when the plan has no assumptions', () => {
+    expect(renderEvent(event({ units: 2 }, 'mission.plan_created'))).toBe('Plan created with 2 unit(s)')
+  })
+
+  it('appends the assumption count when the plan declared any', () => {
+    expect(
+      renderEvent(
+        event(
+          { units: 2, assumptions: [{ assumption: 'no language version was specified', default: 'Python 3.12' }] },
+          'mission.plan_created',
+        ),
+      ),
+    ).toBe('Plan created with 2 unit(s), 1 assumption(s)')
+  })
+})
+
 describe('mission.pushed rendering', () => {
   it('names the branch and remote host', () => {
     expect(renderEvent(event({ branch: 'mission/x', remote_host: 'github.com' }, 'mission.pushed'))).toBe(

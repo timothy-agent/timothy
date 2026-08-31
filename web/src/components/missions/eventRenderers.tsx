@@ -32,8 +32,10 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return `Phase started: ${String(phase ?? '?')}`
   },
   'mission.plan_created': (p) => {
-    const { units } = asRecord(p)
-    return `Plan created with ${String(units ?? '?')} unit(s)`
+    const { units, assumptions } = asRecord(p)
+    const count = Array.isArray(assumptions) ? assumptions.length : 0
+    const suffix = count > 0 ? `, ${count} assumption(s)` : ''
+    return `Plan created with ${String(units ?? '?')} unit(s)${suffix}`
   },
   'mission.worker_started': () => 'Worker turn started',
   'mission.worker_finished': () => 'Worker turn finished',

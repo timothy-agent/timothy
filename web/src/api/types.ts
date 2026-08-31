@@ -670,6 +670,13 @@ export interface PlanUnit {
   passes: boolean
 }
 
+// PlanAssumption is one ambiguity the planner resolved silently, and
+// the default it chose (issue #446): informational only, never a gate.
+export interface PlanAssumption {
+  assumption: string
+  default: string
+}
+
 export interface ProgressNote {
   at: string
   note: string
@@ -716,7 +723,7 @@ export interface Mission {
   // before the explore phase existed, or one that hasn't reached it
   // yet.
   explore_notes?: string
-  spec: { units: PlanUnit[] }
+  spec: { units: PlanUnit[]; assumptions?: PlanAssumption[] }
   progress: ProgressNote[]
   iteration: number
   max_iterations: number
