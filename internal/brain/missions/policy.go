@@ -16,17 +16,15 @@ const (
 	// FlowFull is discover->plan->generate->prove->result, today's
 	// default and the only flow that existed before #459.
 	FlowFull Flow = "full"
-	// FlowDiscoverGenerate is discover->plan->generate->result: same
-	// phase sequence as FlowNoProve (prove skipped, plan kept). A true
-	// planless generate after discover was ruled out (see #459's
-	// design doc): WorkPacket.Light's planless rendering and
-	// runExecute's D-069 short-circuit are both hard-tied to the light
-	// column, and generate has no review path that works without
-	// Spec.Units, so reusing them for a non-light flow would build a
-	// half-working mode. FlowDiscoverGenerate is kept as a distinct,
-	// separately-named choice for the operator, its intent (skip
-	// planning ceremony, not skip review) differs from FlowNoProve's,
-	// even though the phases run identically today.
+	// FlowDiscoverGenerate is a true planless flow: discover->generate
+	// ->result, no plan, no review. Discover runs as normal (its
+	// findings land in Mission.ExploreNotes); generate's own turn then
+	// runs the exact D-069 light worker path (Mission.RunsPlanless):
+	// WorkPacket.Light rendering, no plan units, the worker's final
+	// message (mission_status's final_output) is the deliverable. The
+	// only difference from a plain light mission is that this one runs
+	// discover first, and its explore notes reach the planless prompt
+	// via WorkPacket.ExploreNotes.
 	FlowDiscoverGenerate Flow = "discover_generate"
 	// FlowNoProve is discover->plan->generate->result: skips only the
 	// LLM reviewer round. CheckArtifacts (harness evidence) still runs
@@ -61,15 +59,18 @@ type missionPolicy struct {
 
 // policyFor derives kind's policy, then folds in light's effect
 // (general only, D-069) and flow's effect (D-090, issue #459):
-// flow=no_prove or flow=discover_generate forces alwaysReview false
-// on a general-shaped policy, since skipping the LLM reviewer is the
-// whole point of choosing either flow (CheckArtifacts in verifier.go
-// still runs via trySkipReview either way). Coding stays alwaysReview
-// true regardless of flow (ValidateCreate rejects any non-full flow
-// for kind=coding at create time, so this is a second, defensive
-// belt, not the enforcement point). An unknown kind also stays
-// alwaysReview true: fail conservative, a kind this table doesn't
-// recognize must never silently skip review.
+// flow=no_prove forces alwaysReview false on a general-shaped policy,
+// since skipping the LLM reviewer is the whole point of choosing it
+// (CheckArtifacts in verifier.go still runs via trySkipReview either
+// way). flow=discover_generate does NOT need this override: it never
+// reaches trySkipReview at all, its generate turn takes the same
+// planless short-circuit as light (Mission.RunsPlanless), which never
+// consults alwaysReview. Coding stays alwaysReview true regardless of
+// flow (ValidateCreate rejects any non-full flow for kind=coding at
+// create time, so this is a second, defensive belt, not the
+// enforcement point). An unknown kind also stays alwaysReview true:
+// fail conservative, a kind this table doesn't recognize must never
+// silently skip review.
 //
 // D-072: the single source of behavior-by-kind; every call site that
 // used to test Kind/Light directly now derives it from here instead.
@@ -96,7 +97,7 @@ func policyFor(kind string, light bool, flow Flow) missionPolicy {
 		if light {
 			p.skipsPlanning = true
 		}
-		if flow == FlowNoProve || flow == FlowDiscoverGenerate {
+		if flow == FlowNoProve {
 			p.alwaysReview = false
 		}
 		return p
@@ -115,6 +116,20 @@ func policyFor(kind string, light bool, flow Flow) missionPolicy {
 // missionPolicyFor is policyFor over a live Mission row.
 func missionPolicyFor(m Mission) missionPolicy {
 	return policyFor(m.Kind, m.Light, m.Flow)
+}
+
+// RunsPlanless reports whether m's generate phase runs the D-069
+// light worker path: no plan, no artifact check, the worker's final
+// message (mission_status's final_output) is the deliverable.
+// FlowDiscoverGenerate (D-090, issue #459) shares this exact worker
+// behavior with Light, the only difference being it runs discover
+// first; unlike Light (missionPolicy.skipsPlanning), it is NOT used
+// by initialPhase: a discover_generate mission is still born in
+// PhaseDiscover, only generate itself runs planless. Exported: read
+// outside this package by destinations.renderPayload, which needs the
+// same "final_output IS the result" gate memory.go's digest uses.
+func (m Mission) RunsPlanless() bool {
+	return m.Light || m.Flow == FlowDiscoverGenerate
 }
 
 // initialPhase is the phase a newly created mission row starts in:

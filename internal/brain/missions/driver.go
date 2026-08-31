@@ -1099,7 +1099,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
 		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed, Light: m.Light,
-		AutoApprovePlan: m.AutoApprovePlan,
+		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 	}
 }
 
@@ -1123,7 +1123,10 @@ func isLastUnit(spec Spec) bool {
 // review verdict, planner output). Light missions (D-069) are born in
 // PhaseGenerate and short-circuit out of runExecute's done branch
 // straight to InputReviewApprove, so they never reach the discover/plan/
-// prove cases below by construction.
+// prove cases below by construction. flow=discover_generate (D-090,
+// issue #459) DOES reach PhaseDiscover (it runs discover as normal),
+// but its own PhaseGenerate turn takes the same planless short-circuit
+// as light, so it never reaches PhasePlan or PhaseProve either.
 func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	switch m.Phase {
 	case PhaseDiscover:
@@ -1148,8 +1151,9 @@ func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 const exploreNotesCap = 8000
 
 // runExplore runs one explore turn: a tool-using session that
-// explores the goal before planning commits to a shape. The findings
-// are stored on the mission (SetExploreNotes) so the plan phase's own
+// explores the goal before planning (or, for flow=discover_generate,
+// D-090, the planless generate pass) commits to a shape. The findings
+// are stored on the mission (SetExploreNotes) so the next phase's own
 // (separate) Advance call reads them back via a fresh Get.
 func (d *Driver) runExplore(ctx context.Context, m Mission) (StepInput, error) {
 	notes, err := d.runner.ExploreSession(ctx, m)
@@ -1323,10 +1327,11 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
 			d.log.Warn("driver: record evidence failed", "mission_id", m.ID, "error", err)
 		}
-		if m.Light {
-			// D-069: a light mission has no plan/artifacts for
+		if m.RunsPlanless() {
+			// D-069/D-090: a planless mission (light, or
+			// flow=discover_generate) has no plan/artifacts for
 			// trySkipReview to check (it would bail into review for want
-			// of them) — the worker's final message IS the deliverable,
+			// of them); the worker's final message IS the deliverable,
 			// so approve directly instead. FinalMessage is the text
 			// written since the worker's last non-sentinel tool call, not
 			// the whole multi-turn transcript (text) — fall back to text
@@ -1346,7 +1351,11 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			if err := d.store.SetFinalOutput(ctx, m.ID, finalOutput); err != nil {
 				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
 			}
-			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": "light", "verified": false}); err != nil {
+			reason := "light"
+			if m.Flow == FlowDiscoverGenerate {
+				reason = "discover_generate"
+			}
+			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": reason, "verified": false}); err != nil {
 				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 			}
 			return StepInput{Input: InputReviewApprove}, nil
@@ -1385,40 +1394,20 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 // of passing harness checks adds tokens, latency, and (with the
 // reviewer being the least reliable link) failure modes, not safety.
 // Coding missions always review: a diff can be wrong in ways
-// existence checks can't see. A unit with no declared artifacts
-// normally falls through to a real review round too (no harness
-// evidence to stand on), UNLESS the mission's flow is no_prove or
-// discover_generate (D-090, issue #459), which promise the LLM
-// reviewer never runs at all: for those flows a unit with nothing to
-// check is approved directly rather than falling back to review, the
-// same way a light mission's single pass has no reviewer to fall back
-// to. A unit that DOES declare artifacts still runs CheckArtifacts
-// (verifyCurrentUnit) either way: no_prove/discover_generate skip
-// only the reviewer, never the harness evidence check.
+// existence checks can't see. Units with no declared artifacts always
+// review too: there is no harness evidence to stand on. flow=no_prove
+// (D-090, issue #459) forces alwaysReview false the same way general
+// kind already does (policyFor), so this function is its only skip
+// mechanism: a no_prove unit with no artifacts still falls through to
+// a real review round, same as flow=full. flow=discover_generate never
+// reaches this function at all: it takes the light-style planless
+// path in runExecute instead, with no plan units to check.
 func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string) (StepInput, bool) {
 	if missionPolicyFor(m).alwaysReview {
 		return StepInput{}, false
 	}
-	noReviewFlow := m.Flow == FlowNoProve || m.Flow == FlowDiscoverGenerate
 	unit, idx := currentUnit(m.Spec)
 	if unit == nil || len(unit.Artifacts) == 0 {
-		if noReviewFlow && unit != nil {
-			// No harness evidence to stand on, but the reviewer must never
-			// run either: mark the unit passed directly (the same write
-			// verifyCurrentUnit's own success path performs) so
-			// stepReviewApprove's LastUnit check sees real progress, not a
-			// unit stuck unverified forever.
-			if err := d.verify.markUnitPassed(ctx, m, idx); err != nil {
-				d.log.Warn("driver: mark unit passed failed", "mission_id", m.ID, "error", err)
-				return StepInput{}, false
-			}
-			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{
-				"unit": idx, "reason": "flow " + string(m.Flow) + " never runs the reviewer",
-			}); err != nil {
-				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
-			}
-			return StepInput{Input: InputReviewApprove}, true
-		}
 		return StepInput{}, false
 	}
 	if err := d.verify.verifyCurrentUnit(ctx, m, seenURLs); err != nil {
@@ -1571,7 +1560,14 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext, ReferencedContext: m.ReferencedContext, Attachments: m.Attachments,
-		Light: missionPolicyFor(m).skipsPlanning, Location: loc,
+		Light: m.RunsPlanless(), Location: loc,
+	}
+	// D-090: only flow=discover_generate ever has explore notes AND
+	// runs planless at the same time (Light is born in PhaseGenerate,
+	// never visits discover); gating on p.Light here is redundant but
+	// harmless, m.ExploreNotes is simply empty for every other case.
+	if p.Light {
+		p.ExploreNotes = m.ExploreNotes
 	}
 	if d.skillsIndex != nil && m.AgentID != "" {
 		p.SkillsIndex = d.skillsIndex(ctx, m.AgentID)

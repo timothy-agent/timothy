@@ -1298,9 +1298,11 @@ export interface CreateMissionInput {
   light?: boolean
   // flow selects the phase set this mission runs (D-090): omit (or "")
   // maps to "light" when light is true, else "full", the pre-#459
-  // default. "no_prove" keeps discover/plan but skips the LLM reviewer
-  // round; "discover_generate" skips plan too (prove still skipped).
-  // Only "full" is valid when kind === 'coding'.
+  // default. "no_prove" keeps discover/plan but skips only the LLM
+  // reviewer. "discover_generate" is a true planless flow: discover
+  // runs, then a single planless generate pass (no plan, no review),
+  // same worker behavior as light. Only "full" is valid when
+  // kind === 'coding'.
   flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
   // references name composer #-mention picks (missions/chats/kb docs)
   // to resolve at create time into ReferencedContext.

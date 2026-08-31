@@ -827,16 +827,19 @@ export interface Mission {
   // kind=general only, born in phase=generate, one bare worker turn.
   // final_output is that worker's verbatim final message: the
   // deliverable itself, absent/empty until the mission reaches done.
-  // Invariant: final_output is only ever populated when light is true;
-  // a non-light mission's Result comes from last_evidence instead (see
-  // MissionDetail.tsx's mutually exclusive light/!light Result blocks).
+  // Invariant: final_output is only ever populated when light is true
+  // OR flow is "discover_generate" (D-090, issue #459: also planless);
+  // any other mission's Result comes from last_evidence instead (see
+  // MissionDetail.tsx's runsPlanless helper picking the Result field).
   light?: boolean
   // flow is the phase set this mission runs (D-090, issue #459), chosen
   // once at create time and never model-mutable: "full" is discover ->
   // plan -> generate -> prove -> result (the pre-#459 default);
-  // "discover_generate" and "no_prove" both skip the LLM reviewer round
-  // (discover_generate skips plan too); "light" is the existing D-069
-  // behavior, always paired with light: true.
+  // "no_prove" keeps discover/plan but skips only the LLM reviewer;
+  // "discover_generate" is a true planless flow, discover -> generate
+  // -> result (no plan, no review, the worker's final message is the
+  // deliverable, same worker behavior as light); "light" is the
+  // existing D-069 behavior, always paired with light: true.
   flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
   final_output?: string
   // artifact_refs are this mission's declared artifact files, best-

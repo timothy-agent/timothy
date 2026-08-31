@@ -51,7 +51,12 @@ func TestPolicyFor(t *testing.T) {
 			want: missionPolicy{needsWorktree: false, alwaysReview: false, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},
 		{
-			name: "general discover_generate skips review",
+			// discover_generate never reaches trySkipReview (its generate
+			// turn takes the planless short-circuit instead), so policyFor
+			// does not special-case it: this is the plain general policy,
+			// same as flow=full; alwaysReview is false here only because
+			// that is KindGeneral's own baseline, not a flow override.
+			name: "general discover_generate: policyFor has no special case",
 			kind: KindGeneral, flow: FlowDiscoverGenerate,
 			want: missionPolicy{needsWorktree: false, alwaysReview: false, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},

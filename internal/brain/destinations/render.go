@@ -72,10 +72,11 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event, loc 
 	}
 	files, texts, oversize := resolveArtifactFiles(m)
 	body := "Mission complete: " + name
-	if m.Light && m.FinalOutput != "" {
-		// D-069: a light mission has no plan/artifacts, only its final
-		// worker message — that IS the result recipients want, not a
-		// completion line pointing them elsewhere.
+	if m.RunsPlanless() && m.FinalOutput != "" {
+		// D-069/D-090: a planless mission (light, or flow=discover_generate)
+		// has no plan/artifacts, only its final worker message; that IS the
+		// result recipients want, not a completion line pointing them
+		// elsewhere.
 		body = m.FinalOutput
 	}
 	return Payload{

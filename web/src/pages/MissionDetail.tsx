@@ -133,6 +133,14 @@ function turnStats(events: MissionEvent[]): { turns: number; processingMs: numbe
 const resumableStatuses = new Set(['paused', 'waiting_for_input'])
 const terminalPhases = new Set(['done', 'failed'])
 
+// runsPlanless mirrors missions.Mission.RunsPlanless (D-090, issue
+// #459): light and flow=discover_generate both run generate with no
+// plan, no review; the worker's final message is the deliverable
+// (final_output), not last_evidence.
+function runsPlanless(mission: Mission): boolean {
+  return !!mission.light || mission.flow === 'discover_generate'
+}
+
 // latestPROpened finds the most recent mission.pr_opened event so the
 // PR chip persists across reloads — the timeline is the durable record
 // of a PR having been opened, the immediate POST response is only the
@@ -981,11 +989,11 @@ export function MissionDetail() {
       )}
 
       {terminalPhases.has(mission.phase) &&
-        (mission.light ? mission.final_output : mission.last_evidence) && (
+        (runsPlanless(mission) ? mission.final_output : mission.last_evidence) && (
           <section>
             <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
             <ResultSection
-              evidence={(mission.light ? mission.final_output : mission.last_evidence) ?? ''}
+              evidence={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''}
             />
           </section>
         )}

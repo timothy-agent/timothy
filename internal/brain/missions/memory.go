@@ -145,7 +145,7 @@ func OutcomeDigest(m Mission, events []Event, terminal Phase, failureReason stri
 			fmt.Fprintf(&b, "- %s: %s\n", u.Title, status)
 		}
 	}
-	if m.Light && m.FinalOutput != "" {
+	if m.RunsPlanless() && m.FinalOutput != "" {
 		b.WriteString("\nfinal output:\n")
 		b.WriteString(truncateRunes(m.FinalOutput, finalOutputDigestCap))
 		b.WriteString("\n")

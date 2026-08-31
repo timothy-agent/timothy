@@ -17,24 +17,40 @@ const (
 	PhaseFailed Phase = "failed"
 )
 
-// phaseOrder is the fixed pipeline stepPhaseComplete walks: prove is
-// its last entry since a mission never reaches result via
-// InputPhaseComplete, only via stepReviewApprove/trySkipReview once
-// the plan's last unit is verified (reviewSkippedOrProvePassTransition).
+// phaseOrder is the fixed pipeline stepPhaseComplete walks for
+// FlowFull/FlowNoProve: prove is its last entry since a mission never
+// reaches result via InputPhaseComplete, only via
+// stepReviewApprove/trySkipReview once the plan's last unit is
+// verified (reviewSkippedOrProvePassTransition).
 var phaseOrder = []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve}
+
+// discoverGeneratePhaseOrder is FlowDiscoverGenerate's own pipeline
+// (D-090, issue #459): discover runs as normal, but its completion
+// routes straight to generate, skipping plan entirely: a true
+// planless flow, not merely a review skip. Generate's own exit takes
+// the same light-style short-circuit runExecute uses for Light
+// missions (straight to InputReviewApprove, never InputPhaseComplete),
+// so this slice never needs a generate successor.
+var discoverGeneratePhaseOrder = []Phase{PhaseDiscover, PhaseGenerate}
 
 // Terminal reports whether phase ends the mission.
 func (p Phase) Terminal() bool {
 	return p == PhaseDone || p == PhaseFailed
 }
 
-// nextPhase returns what phase follows p in the fixed pipeline, and
+// nextPhase returns what phase follows p in flow's pipeline, and
 // whether p has a successor (PhaseProve's success case is handled by
 // the caller, since it depends on whether the reviewed unit was last).
-func nextPhase(p Phase) (Phase, bool) {
-	for i, cur := range phaseOrder {
-		if cur == p && i+1 < len(phaseOrder) {
-			return phaseOrder[i+1], true
+// FlowDiscoverGenerate walks its own shorter pipeline (D-090); every
+// other flow, including the zero value, walks phaseOrder.
+func nextPhase(flow Flow, p Phase) (Phase, bool) {
+	order := phaseOrder
+	if flow == FlowDiscoverGenerate {
+		order = discoverGeneratePhaseOrder
+	}
+	for i, cur := range order {
+		if cur == p && i+1 < len(order) {
+			return order[i+1], true
 		}
 	}
 	return "", false
@@ -203,13 +219,30 @@ type StepState struct {
 	// stall can never replan into PhasePlan for one, since it never
 	// visits that phase.
 	Light bool
+	// Flow is the phase set this mission runs (D-090, issue #459):
+	// nextPhase consults it so discover's completion routes straight to
+	// generate for FlowDiscoverGenerate, skipping plan, the same way
+	// Light skips discover/plan by being born in PhaseGenerate. Empty
+	// (a zero-value StepState, every fixture that predates this field)
+	// behaves exactly like FlowFull.
+	Flow Flow
 	// AutoApprovePlan gates the plan phase's success transition
 	// (D-087, issue #456): true (the default) advances straight to
 	// generate, byte-identical to pre-#456 behavior. false parks the
 	// mission on PauseApproval instead, waiting for one of the three
 	// operator verbs. Light missions never visit PhasePlan, so this
-	// flag has no effect on them regardless of its value.
+	// flag has no effect on them regardless of its value; neither does
+	// FlowDiscoverGenerate, which also never visits PhasePlan.
 	AutoApprovePlan bool
+}
+
+// neverVisitsPlan reports whether s's mission can never be in
+// PhasePlan: Light (born in PhaseGenerate) and FlowDiscoverGenerate
+// (discover's completion routes straight to generate, D-090) both
+// qualify. Used wherever plan-specific state (the stall/replan brake)
+// must be skipped for a mission structurally incapable of reaching it.
+func (s StepState) neverVisitsPlan() bool {
+	return s.Light || s.Flow == FlowDiscoverGenerate
 }
 
 // StepInput bundles the triggering Input with whatever data it
@@ -382,17 +415,24 @@ func stepResume(s StepState) Transition {
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.resumed"}}}
 }
 
-// stepPhaseComplete advances discover/plan to the next fixed phase.
-// generate's completion goes through prove (a worker verdict of DONE
-// requests review, it doesn't itself complete the phase: the driver
-// routes DONE into a review round, whose outcome arrives as
-// InputReviewApprove/InputReviewRework, not InputPhaseComplete).
+// stepPhaseComplete advances discover/plan to the next phase in the
+// mission's flow. generate's completion goes through prove (a worker
+// verdict of DONE requests review, it doesn't itself complete the
+// phase: the driver routes DONE into a review round, whose outcome
+// arrives as InputReviewApprove/InputReviewRework, not
+// InputPhaseComplete), except FlowDiscoverGenerate (D-090, issue
+// #459), whose generate exit takes the same light-style short-circuit
+// straight to InputReviewApprove that Light missions use, so it never
+// reaches this function from PhaseGenerate either.
 //
 // The plan phase's own completion forks on AutoApprovePlan (D-087,
 // issue #456): true is the byte-identical default, straight through to
 // nextPhase like every other phase. false parks the mission instead:
 // the plan already landed (runPlan's own SetSpec ran before this
 // input arrives), so the park shows the real plan, not a stale one.
+// FlowDiscoverGenerate never visits PhasePlan, so this check never
+// applies to it: discover's own completion routes straight to
+// generate via nextPhase's flow-aware pipeline.
 func stepPhaseComplete(s StepState) Transition {
 	if s.Phase == PhasePlan && !s.AutoApprovePlan {
 		return Transition{
@@ -400,7 +440,7 @@ func stepPhaseComplete(s StepState) Transition {
 			Events: []EventDraft{{Kind: "mission.plan_awaiting_approval", Payload: map[string]any{}}},
 		}
 	}
-	next, ok := nextPhase(s.Phase)
+	next, ok := nextPhase(s.Flow, s.Phase)
 	if !ok {
 		return Transition{Next: s}
 	}
@@ -508,11 +548,12 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 			s.StallCount = 1
 		}
 		s.LastGapFingerprint = in.GapFingerprint
-		// D-069: light missions never visit PhasePlan, so a stall skips
-		// the replan/no-progress-pause brake entirely and falls straight
-		// through to the plain retry/max_iterations path below, same as
-		// stepWorkerFailed's backoff ceiling.
-		if s.StallCount >= cfg.StallRounds && !s.Light {
+		// D-069/D-090: a mission that never visits PhasePlan (light, or
+		// flow=discover_generate) skips the replan/no-progress-pause
+		// brake entirely and falls straight through to the plain
+		// retry/max_iterations path below, same as stepWorkerFailed's
+		// backoff ceiling.
+		if s.StallCount >= cfg.StallRounds && !s.neverVisitsPlan() {
 			if !s.ReplanUsed {
 				return replanTransition(s, in)
 			}
@@ -617,10 +658,12 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 func stepResultComplete(s StepState) Transition {
 	s.Phase = PhaseDone
 	s.Status = StatusDone
-	// verified: false for light missions, which reach done with zero
-	// harness verification (no spec units, no CheckArtifacts/RunVerify),
+	// verified: false for a planless mission (light, or
+	// flow=discover_generate, D-090), both of which reach done with zero
+	// harness verification (no spec units, no CheckArtifacts/RunVerify);
 	// distinguishes that in the event log from a harness-verified done.
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": !s.Light}}}}
+	verified := !s.Light && s.Flow != FlowDiscoverGenerate
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": verified}}}}
 }
 
 // stepResultFailed parks a mission whose result step hit a delivery,

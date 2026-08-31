@@ -93,6 +93,15 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle},
 		},
 		{
+			// D-090, issue #459: flow=discover_generate routes discover's
+			// completion straight to generate, never plan.
+			name:  "flow=discover_generate: phase_complete advances discover straight to generate, skipping plan",
+			state: StepState{Phase: PhaseDiscover, Status: StatusWorking, Flow: FlowDiscoverGenerate, Iteration: 2, ConsecutiveFailures: 1},
+			input: StepInput{Input: InputPhaseComplete},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, Flow: FlowDiscoverGenerate},
+		},
+		{
 			name:  "phase_complete advances plan to generate when auto_approve_plan is true",
 			state: StepState{Phase: PhasePlan, Status: StatusWorking, AutoApprovePlan: true},
 			input: StepInput{Input: InputPhaseComplete},
@@ -500,6 +509,21 @@ func TestStepLightApproveGoesResult(t *testing.T) {
 	}
 }
 
+// TestStepDiscoverGenerateApproveGoesResult confirms a discover_generate
+// mission (generate turn takes the same planless short-circuit as
+// light, empty spec so LastUnit is always true) advances to the
+// result phase on review_approve exactly like light, D-090.
+func TestStepDiscoverGenerateApproveGoesResult(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowDiscoverGenerate, LastUnit: true},
+		StepInput{Input: InputReviewApprove},
+		DefaultConfig,
+	)
+	if got.Next.Phase != PhaseResult || got.Next.Status != StatusIdle {
+		t.Fatalf("Step(discover_generate approve) = %+v, want phase=result status=idle", got.Next)
+	}
+}
+
 // TestStepResultCompleteEmitsVerifiedFlag confirms mission.done's
 // verified flag still distinguishes a light mission (zero harness
 // verification) from one whose units passed CheckArtifacts/RunVerify,
@@ -527,6 +551,17 @@ func TestStepResultCompleteEmitsVerifiedFlag(t *testing.T) {
 	}
 	if verified, ok := nonLight.Events[0].Payload["verified"].(bool); !ok || !verified {
 		t.Fatalf("non-light mission.done payload = %+v, want verified=true", nonLight.Events[0].Payload)
+	}
+
+	// D-090, issue #459: flow=discover_generate reaches done with zero
+	// harness verification too (no spec units, planless), same as light.
+	discoverGenerate := Step(
+		StepState{Phase: PhaseResult, Status: StatusWorking, Flow: FlowDiscoverGenerate},
+		StepInput{Input: InputResultComplete},
+		DefaultConfig,
+	)
+	if verified, ok := discoverGenerate.Events[0].Payload["verified"].(bool); !ok || verified {
+		t.Fatalf("discover_generate mission.done payload = %+v, want verified=false", discoverGenerate.Events[0].Payload)
 	}
 }
 
@@ -603,6 +638,24 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 	)
 	if final.Next.Phase != PhaseFailed {
 		t.Fatalf("Step(light stall at max_iterations) = %+v, want phase=failed", final.Next)
+	}
+}
+
+// TestStepDiscoverGenerateStallNeverReplans mirrors
+// TestStepLightStallNeverReplans for flow=discover_generate (D-090,
+// issue #459): its generate turn never visits PhasePlan either, so the
+// same replan-skip must apply.
+func TestStepDiscoverGenerateStallNeverReplans(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowDiscoverGenerate, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
+		DefaultConfig,
+	)
+	if got.Next.Phase == PhasePlan {
+		t.Fatalf("Step(discover_generate stall) = %+v, must never route to PhasePlan", got.Next)
+	}
+	if got.Next.Status == StatusPaused {
+		t.Fatalf("Step(discover_generate stall) = %+v, must not pause no_progress either", got.Next)
 	}
 }
 

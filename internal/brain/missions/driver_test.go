@@ -236,7 +236,12 @@ type scriptedRunner struct {
 	// workerText overrides the raw turn text RunWorker returns; empty
 	// means the "worker output" default, matching every pre-existing
 	// caller that doesn't care about the raw text.
-	workerText     string
+	workerText string
+	// workerPackets records the WorkPacket RunWorker was called with,
+	// one entry per call: lets a test assert the generate phase's
+	// packet actually carried what the driver built (e.g. ExploreNotes
+	// for flow=discover_generate, D-090).
+	workerPackets  []WorkPacket
 	reviewVerdicts []ReviewVerdict
 	reviewIdx      int
 	plans          []Spec
@@ -253,6 +258,7 @@ type scriptedRunner struct {
 }
 
 func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
+	r.workerPackets = append(r.workerPackets, packet)
 	if r.workerErr != nil {
 		return WorkerVerdict{}, "", r.workerErr
 	}
@@ -955,6 +961,139 @@ func TestDriverLightDoneFallsBackToFullTextWhenFinalMessageEmpty(t *testing.T) {
 	}
 }
 
+// TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult drives
+// a flow=discover_generate mission (D-090, issue #459) end to end and
+// confirms its exact phase/event sequence: discover -> generate ->
+// result -> done, with no plan_created and no review round of any
+// kind. The generate turn takes the same planless short-circuit as
+// light (mission.review_skipped, reason=discover_generate), never
+// mission.review_verdict or mission.plan_created.
+func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Flow: FlowDiscoverGenerate, Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8,
+	})
+	runner := &scriptedRunner{
+		exploreNotes:   []string{"found three relevant sources"},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "the deliverable"}},
+	}
+	d := testDriver(store, runner)
+
+	// discover -> generate (phase_complete routes straight to generate,
+	// never plan) -> generate's own turn (planless short-circuit to
+	// result) -> result's own deterministic step -> done.
+	driveN(t, d, "m1", 4)
+
+	m, err := store.Get(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Phase != PhaseDone {
+		t.Fatalf("mission = %+v, want phase=done", m)
+	}
+	if m.FinalOutput != "the deliverable" {
+		t.Fatalf("FinalOutput = %q, want the worker's FinalMessage", m.FinalOutput)
+	}
+
+	events, _ := store.Events(context.Background(), "m1")
+	var kinds []string
+	for _, e := range events {
+		kinds = append(kinds, e.Kind)
+	}
+	mustContain := []string{"mission.discover_complete", "mission.review_skipped", "mission.done"}
+	for _, want := range mustContain {
+		found := false
+		for _, k := range kinds {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("events = %v, want %q among them", kinds, want)
+		}
+	}
+	mustNotContain := []string{"mission.plan_created", "mission.review_verdict", "mission.plan_awaiting_approval"}
+	for _, forbidden := range mustNotContain {
+		for _, k := range kinds {
+			if k == forbidden {
+				t.Fatalf("events = %v, discover_generate must never emit %q", kinds, forbidden)
+			}
+		}
+	}
+
+	// The review_skipped event names discover_generate, not light.
+	for _, e := range events {
+		if e.Kind != "mission.review_skipped" {
+			continue
+		}
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload.Reason != "discover_generate" {
+			t.Fatalf("mission.review_skipped payload = %s, want reason=discover_generate", e.Payload)
+		}
+	}
+}
+
+// TestDriverDiscoverGenerateExploreNotesReachThePlanlessPacket confirms
+// discover's findings (Mission.ExploreNotes) reach the generate turn's
+// WorkPacket for flow=discover_generate, the whole point of running
+// discover before a planless pass. Light: true is also asserted, same
+// worker path as a D-069 light mission.
+func TestDriverDiscoverGenerateExploreNotesReachThePlanlessPacket(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Flow: FlowDiscoverGenerate, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+		ExploreNotes: "found three relevant sources",
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "the deliverable"}},
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(runner.workerPackets) != 1 {
+		t.Fatalf("RunWorker call count = %d, want 1", len(runner.workerPackets))
+	}
+	p := runner.workerPackets[0]
+	if !p.Light {
+		t.Fatal("discover_generate worker packet Light = false, want true (same planless worker path as light)")
+	}
+	if p.ExploreNotes != "found three relevant sources" {
+		t.Fatalf("packet ExploreNotes = %q, want the mission's stored explore notes", p.ExploreNotes)
+	}
+}
+
+// TestDriverPacketOmitsExploreNotesForNonPlanlessFlow confirms a
+// flow=full mission's packet never carries ExploreNotes, even when the
+// mission has them stored (every mission that visits discover does):
+// WorkPacket.ExploreNotes is meant for a planless worker turn only
+// (D-090), and a full-flow generate turn gets its own Plan block
+// instead.
+func TestDriverPacketOmitsExploreNotesForNonPlanlessFlow(t *testing.T) {
+	store := newFakeStore()
+	m := Mission{
+		ID: "m1", Kind: "general", Flow: FlowFull, Phase: PhaseGenerate, Status: StatusWorking,
+		ExploreNotes: "found three relevant sources",
+		Spec:         Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
+	}
+	store.put("m1", m)
+	d := testDriver(store, &scriptedRunner{})
+
+	p, err := d.packet(context.Background(), m)
+	if err != nil {
+		t.Fatalf("packet: %v", err)
+	}
+	if p.Light {
+		t.Fatal("flow=full packet Light = true, want false")
+	}
+	if p.ExploreNotes != "" {
+		t.Fatalf("flow=full packet ExploreNotes = %q, want empty", p.ExploreNotes)
+	}
+}
+
 // TestDriverNonLightDoneStillGoesThroughReview confirms the light
 // short-circuit is gated on m.Light: an ordinary general mission with a
 // unit that has no declared artifacts still falls through to
@@ -980,12 +1119,14 @@ func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
 	}
 }
 
-// TestDriverNoProveSkipsReviewEvenWithoutArtifacts confirms flow=no_prove
-// (D-090, issue #459) approves a unit with no declared artifacts
-// directly instead of falling through to a real review round, unlike
-// TestDriverNonLightDoneStillGoesThroughReview's flow=full mission,
-// which has nothing to skip on and must still review.
-func TestDriverNoProveSkipsReviewEvenWithoutArtifacts(t *testing.T) {
+// TestDriverNoProveStillReviewsWithoutArtifacts confirms flow=no_prove
+// does NOT approve a unit directly when it has no declared artifacts:
+// trySkipReview's skip mechanism requires real harness evidence
+// (artifacts + verify_cmd), same as an ordinary flow=full general
+// mission (TestDriverNonLightDoneStillGoesThroughReview). no_prove
+// keeps discover/plan and a real plan's units; it is not a planless
+// flow, unlike discover_generate.
+func TestDriverNoProveStillReviewsWithoutArtifacts(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Flow: FlowNoProve, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
@@ -998,17 +1139,8 @@ func TestDriverNoProveSkipsReviewEvenWithoutArtifacts(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseResult {
-		t.Fatalf("no_prove mission after done with no declared artifacts = %+v, want phase=result (reviewer never runs)", m)
-	}
-	found := false
-	for _, ev := range store.events["m1"] {
-		if ev.Kind == "mission.review_skipped" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("no_prove mission with no artifacts left no mission.review_skipped event")
+	if m.Phase != PhaseProve {
+		t.Fatalf("no_prove mission after done with no declared artifacts = %+v, want phase=prove (no harness evidence to skip on)", m)
 	}
 }
 
