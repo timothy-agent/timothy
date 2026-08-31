@@ -78,6 +78,7 @@ const baseMission: Mission = {
   route: 'default',
   review_route: 'default',
   auto_approve_safe: true,
+  auto_approve_plan: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 }

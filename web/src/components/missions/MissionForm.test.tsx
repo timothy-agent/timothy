@@ -195,6 +195,31 @@ describe('MissionForm: create mode, one-off mission', () => {
     )
   })
 
+  it('sends auto_approve_plan: true by default', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ auto_approve_plan: true })),
+    )
+  })
+
+  it('sends auto_approve_plan: false when the toggle is unchecked', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
+    fireEvent.click(screen.getByLabelText(/Auto-approve the plan/))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ auto_approve_plan: false })),
+    )
+  })
+
   it('disables submit until a goal is entered', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 

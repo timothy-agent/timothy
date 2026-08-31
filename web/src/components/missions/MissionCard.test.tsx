@@ -21,6 +21,7 @@ const baseMission: Mission = {
   route: 'default',
   review_route: 'default',
   auto_approve_safe: true,
+  auto_approve_plan: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 }
@@ -113,6 +114,18 @@ describe('MissionCard created timestamp', () => {
     renderCard({ ...baseMission, created_at: '2026-01-01T00:00:00Z' })
     const el = screen.getByText('3h ago')
     expect(el).toHaveAttribute('title', new Date('2026-01-01T00:00:00Z').toLocaleString())
+  })
+})
+
+describe('MissionCard needs-approval badge', () => {
+  it('shows the badge when parked on plan approval', () => {
+    renderCard({ ...baseMission, phase: 'plan', pause_reason: 'approval' })
+    expect(screen.getByText('needs approval')).toBeInTheDocument()
+  })
+
+  it('omits the badge for a mission not parked on plan approval', () => {
+    renderCard({ ...baseMission, phase: 'plan' })
+    expect(screen.queryByText('needs approval')).not.toBeInTheDocument()
   })
 })
 

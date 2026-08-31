@@ -705,7 +705,7 @@ export interface Mission {
   // mission's latest mission.failed event's payload.reason:
   // "cancelled" or "max_iterations": set only when phase is 'failed'.
   failure_reason?: string
-  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | ''
+  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | 'approval' | ''
   pause_message?: string
   workspace?: string
   worktree?: string
@@ -764,6 +764,11 @@ export interface Mission {
   permission_timeout_seconds?: number
   last_evidence?: string
   auto_approve_safe: boolean
+  // auto_approve_plan: true (default) advances straight from plan to
+  // generate; false parks the mission (status: "paused", pause_reason:
+  // "approval") once the plan phase produces a plan, until an operator
+  // approves, replans, or sends it back to discover.
+  auto_approve_plan: boolean
   // environment is the sandbox image key (D-05x) this coding mission's
   // container runs: "" means base, resolved server-side at create
   // time (explicit request > repo markers > goal keyword > base).

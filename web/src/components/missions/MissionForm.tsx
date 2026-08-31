@@ -378,6 +378,7 @@ export function MissionForm({
   const [budget, setBudget] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('USD')
   const [autoApproveSafe, setAutoApproveSafe] = useState(true)
+  const [autoApprovePlan, setAutoApprovePlan] = useState(true)
   const [harness, setHarness] = useState(initial?.harness ?? '')
   const [environment, setEnvironment] = useState(initial?.environment ?? '')
   const [branchPattern, setBranchPattern] = useState(initial?.branch_pattern ?? '')
@@ -733,6 +734,7 @@ export function MissionForm({
       budget_amount: budget ? Number(budget) : undefined,
       budget_currency: budget ? budgetCurrency : undefined,
       auto_approve_safe: autoApproveSafe,
+      auto_approve_plan: autoApprovePlan,
       harness: kind === 'coding' ? harness || undefined : undefined,
       environment: kind === 'coding' ? environment || undefined : undefined,
       branch_pattern: kind === 'coding' ? branchPattern.trim() || undefined : undefined,
@@ -1361,6 +1363,25 @@ export function MissionForm({
             </span>
           </span>
         </label>
+
+        {mode === 'create' && !repeat && (
+          <label htmlFor="mission-auto-approve-plan" className="flex items-start gap-2 text-sm">
+            <input
+              id="mission-auto-approve-plan"
+              type="checkbox"
+              checked={autoApprovePlan}
+              onChange={(e) => setAutoApprovePlan(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Auto-approve the plan
+              <span className="block text-xs text-muted-foreground">
+                Advances straight from plan to work. Turn off to review and approve the plan
+                yourself before work starts.
+              </span>
+            </span>
+          </label>
+        )}
 
         {destinations && destinations.length > 0 && (
           <div className="space-y-1.5">

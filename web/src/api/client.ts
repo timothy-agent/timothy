@@ -1244,6 +1244,10 @@ export interface CreateMissionInput {
   budget_amount?: number
   budget_currency?: string
   auto_approve_safe?: boolean
+  // auto_approve_plan: omit (or true) advances straight from plan to
+  // generate; false parks the mission awaiting operator approval once
+  // the plan phase produces a plan.
+  auto_approve_plan?: boolean
   // harness names the delegated coding-CLI executor a coding mission
   // runs under: omit (or "") to apply the settings default,
   // "native" to force the built-in agent loop. Only valid when
@@ -1438,6 +1442,28 @@ export async function answerMissionPermission(
     method: 'POST',
     body: JSON.stringify({ decision }),
   })
+}
+
+// approveMissionPlan approves a mission parked on plan approval
+// (pause_reason: "approval"): the mission moves to phase=generate.
+export async function approveMissionPlan(id: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/approve-plan`, { method: 'POST' })
+}
+
+// replanMission re-runs the plan phase, folding feedback into the next
+// planning prompt: the mission re-parks on plan approval once the new
+// plan lands.
+export async function replanMission(id: string, feedback?: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/replan`, {
+    method: 'POST',
+    body: JSON.stringify(feedback ? { feedback } : {}),
+  })
+}
+
+// rediscoverMission sends a mission parked on plan approval back to
+// the discover phase.
+export async function rediscoverMission(id: string): Promise<void> {
+  await request<void>(`/v1/missions/${id}/rediscover`, { method: 'POST' })
 }
 
 // pushMission pushes the mission's branch to its worktree's origin

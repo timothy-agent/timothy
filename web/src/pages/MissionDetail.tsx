@@ -12,6 +12,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   answerMissionPermission,
+  approveMissionPlan,
   cancelMission,
   deleteMission,
   getMission,
@@ -20,12 +21,15 @@ import {
   missionUsage,
   openMissionPR,
   pushMission,
+  rediscoverMission,
+  replanMission,
   resumeMission,
   sendMissionNote,
 } from '../api/client'
 import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
+import { PlanApprovalBanner } from '../components/missions/PlanApprovalBanner'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ExploreSection } from '../components/missions/ExploreSection'
 import { GoalSection } from '../components/missions/GoalSection'
@@ -245,6 +249,15 @@ export function MissionDetail() {
     id: string
     decision: 'once' | 'session' | 'deny'
   } | null>(null)
+  // answeredPlanDecision mirrors answeredPermission's own pattern: the
+  // decision POST resolves right away, but the mission's phase/
+  // pause_reason only clear once the harness has acted on it, so the
+  // card must stop being actionable before that refetch lands. Reset
+  // to null whenever the mission leaves the parked-on-approval state
+  // (a fresh park re-renders actionable).
+  const [answeredPlanDecision, setAnsweredPlanDecision] = useState<'approve' | 'replan' | 'rediscover' | null>(
+    null,
+  )
 
   const refreshSeq = useRef(0)
 
@@ -264,6 +277,8 @@ export function MissionDetail() {
 
   const pendingPermission = mission?.pending_permission
   const wasPendingRef = useRef(false)
+  const pendingPlanApproval = mission?.phase === 'plan' && mission?.pause_reason === 'approval'
+  const wasPlanParkedRef = useRef(false)
 
   useEffect(() => {
     refresh()
@@ -300,6 +315,15 @@ export function MissionDetail() {
     if (pendingPermission && !wasPendingRef.current) playAlertSound()
     wasPendingRef.current = !!pendingPermission
   }, [pendingPermission])
+
+  // Same chime-once-on-transition treatment for entering the
+  // parked-on-plan-approval state, tracked with its own ref so it
+  // doesn't conflate with the permission chime above.
+  useEffect(() => {
+    if (pendingPlanApproval && !wasPlanParkedRef.current) playAlertSound()
+    wasPlanParkedRef.current = pendingPlanApproval
+    if (!pendingPlanApproval) setAnsweredPlanDecision(null)
+  }, [pendingPlanApproval])
 
   if (!id) return null
   if (!mission) {
@@ -444,6 +468,39 @@ export function MissionDetail() {
     }
   }
 
+  const approvePlan = async () => {
+    try {
+      await approveMissionPlan(id)
+      setAnsweredPlanDecision('approve')
+    } catch (err) {
+      toast.error('Could not approve plan', { description: errText(err) })
+    } finally {
+      refresh()
+    }
+  }
+
+  const requestReplan = async (feedback: string) => {
+    try {
+      await replanMission(id, feedback || undefined)
+      setAnsweredPlanDecision('replan')
+    } catch (err) {
+      toast.error('Could not request a replan', { description: errText(err) })
+    } finally {
+      refresh()
+    }
+  }
+
+  const rediscover = async () => {
+    try {
+      await rediscoverMission(id)
+      setAnsweredPlanDecision('rediscover')
+    } catch (err) {
+      toast.error('Could not send mission back to discover', { description: errText(err) })
+    } finally {
+      refresh()
+    }
+  }
+
   // Cross-tab/refresh fallback: this tab may not have the optimistic
   // answeredPermission state (a fresh load, or the decision happened
   // in another tab) but the events list already fetched can still show
@@ -487,6 +544,17 @@ export function MissionDetail() {
           answeredDecision={answeredDecision}
           onDecide={(d) => void decidePermission(d)}
           timeoutSeconds={mission.permission_timeout_seconds}
+        />
+      )}
+
+      {pendingPlanApproval && (
+        <PlanApprovalBanner
+          units={mission.spec?.units ?? []}
+          assumptions={mission.spec?.assumptions}
+          answeredDecision={answeredPlanDecision ?? undefined}
+          onApprove={() => void approvePlan()}
+          onReplan={(feedback) => void requestReplan(feedback)}
+          onRediscover={() => void rediscover()}
         />
       )}
 
