@@ -84,6 +84,12 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			"review_verdict": true,
 			"submit_plan":    true,
 			"explore_notes":  true,
+			// ask_user (D-088) is the same class: its Execute only
+			// records the question and parks the mission for the
+			// operator, who IS the permission authority. Routing it
+			// through the permission chain double-parks the mission on
+			// a prompt about asking a question.
+			"ask_user": true,
 			// write_file is root-confined by construction (relative
 			// paths only, .. rejected, root fixed at registration) —
 			// there is nothing for a prompt to guard that the tool
