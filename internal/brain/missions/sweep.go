@@ -44,6 +44,13 @@ type permissionTimeoutStore interface {
 	ResolvePendingPermissionTimeout(ctx context.Context, id, tool string) error
 }
 
+// askTimeoutStore is the narrow slice of *Store the ask_user timeout
+// sweep needs (D-088), mirroring permissionTimeoutStore.
+type askTimeoutStore interface {
+	PendingInputs(ctx context.Context) ([]ParkedInput, error)
+	AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error
+}
+
 // sandboxSweeper is the narrow slice of the sandbox backend the
 // periodic orphan pass needs — kept as an interface (not an import of
 // sandboxd or sandboxclient) for the same reason as Driver's
@@ -158,9 +165,9 @@ func admitWork(ctx context.Context, gate capacityChecker, log *slog.Logger) (adm
 // is the live in-memory PermBroker's Resolve, best-effort. nil is valid
 // (a still-running turn just times out on its own permissionTimeout
 // instead of waking early).
-func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
+func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
 	recoverWorking(ctx, d, store, log)
-	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, resolveBroker, log)
+	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, globalAskTimeout, resolveBroker, log)
 }
 
 // sweepOrphanSandboxes runs on every runWorkSlotSweep tick (previously
@@ -231,7 +238,7 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 // auto-denies any pending_permission parked past its effective timeout,
 // all on the same tick. Runs until ctx is done; this call blocks, so
 // RecoverAndSweep's caller runs it in its own goroutine.
-func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
+func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
 	ticker := time.NewTicker(workSlotSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -244,6 +251,7 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 			autoResumeBackoff(ctx, d, store, notify, log)
 			autoResumeInfra(ctx, d, store, notify, log)
 			sweepPermissionTimeouts(ctx, d, store, globalPermissionTimeout, resolveBroker, notify, log)
+			sweepAskTimeouts(ctx, d, store, globalAskTimeout, notify, log)
 			// D-056: skip the claim entirely this tick if the host can't
 			// afford another working mission — the mission stays idle,
 			// and this same sweep retries it in workSlotSweepInterval; that
@@ -480,6 +488,74 @@ func sweepPermissionTimeouts(ctx context.Context, d permissionTimeoutDriver, sto
 		go func(id string) {
 			if err := d.Drive(ctx, id); err != nil {
 				log.Error("permission timeout sweep: drive failed", "mission_id", id, "error", err)
+			}
+		}(p.MissionID)
+	}
+}
+
+// shouldTimeoutAsk is shouldTimeoutPermission's ask_user counterpart
+// (D-088): identical elapsed-time decision, no per-mission override:
+// ask_user has no mission-level column analogous to
+// permission_timeout_seconds, only the global setting.
+func shouldTimeoutAsk(now, askedAt time.Time, globalSeconds int) bool {
+	if globalSeconds <= 0 {
+		return false
+	}
+	return now.Sub(askedAt) >= time.Duration(globalSeconds)*time.Second
+}
+
+// askTimeoutDriver is the narrow slice of *Driver sweepAskTimeouts
+// needs to rescue a mission whose worker goroutine died while parked:
+// same Drive-not-Signal reasoning as permissionTimeoutDriver: pending_input
+// never advances Status away from waiting_for_input on its own, so
+// re-Drive is always safe (Driver.claimDriving's no-op guard).
+type askTimeoutDriver interface {
+	Drive(ctx context.Context, id string) error
+}
+
+// sweepAskTimeouts auto-answers any mission whose pending_input has sat
+// unanswered past settings.ValueAskTimeoutSeconds (D-088, issue #457):
+// a deployment that never sets it (or sets it to 0) sees this do
+// nothing, the same park-forever default ValuePermissionTimeoutSeconds
+// has. Applies the question's own proposed_default, exactly as an
+// operator's own answer would (Store.AnswerPendingInput), so the next
+// turn of the same phase sees the default as the answer, distinguished
+// in the event log by mission.input_timed_out instead of
+// mission.input_answered.
+func sweepAskTimeouts(ctx context.Context, d askTimeoutDriver, store askTimeoutStore, globalAskTimeout func(context.Context) int, notify messageNotifier, log *slog.Logger) {
+	if globalAskTimeout == nil {
+		return
+	}
+	pending, err := store.PendingInputs(ctx)
+	if err != nil {
+		log.Error("ask timeout sweep: list failed", "error", err)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+	globalSeconds := globalAskTimeout(ctx)
+	now := time.Now().UTC()
+	for _, p := range pending {
+		if !shouldTimeoutAsk(now, p.Input.AskedAt, globalSeconds) {
+			continue
+		}
+		log.Warn("ask timeout sweep: auto-answering a parked question with its proposed default", "mission_id", p.MissionID)
+		if err := store.AnswerPendingInput(ctx, p.MissionID, "mission.input_timed_out", map[string]any{
+			"applied_default": p.Input.ProposedDefault,
+		}); err != nil {
+			log.Error("ask timeout sweep: resolve failed", "mission_id", p.MissionID, "error", err)
+			continue
+		}
+		if notify != nil {
+			if err := notify.NotifyMessage(ctx, p.MissionID, "ask_timed_out",
+				"a pending question timed out and the proposed default was applied automatically"); err != nil {
+				log.Warn("ask timeout sweep: notify failed", "mission_id", p.MissionID, "error", err)
+			}
+		}
+		go func(id string) {
+			if err := d.Drive(ctx, id); err != nil {
+				log.Error("ask timeout sweep: drive failed", "mission_id", id, "error", err)
 			}
 		}(p.MissionID)
 	}

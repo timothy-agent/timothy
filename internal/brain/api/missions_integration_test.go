@@ -503,6 +503,106 @@ func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
 	}
 }
 
+// TestMissionsAnswerRejectedWhenNotParked confirms POST .../answer 409s
+// on a mission with no pending_input (D-088, issue #457), same 409
+// convention as approve-plan/replan/rediscover on a non-parked mission.
+func TestMissionsAnswerRejectedWhenNotParked(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission answer not parked", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/answer", strings.NewReader(`{"answer":"yes"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("answer on a non-parked mission = %d, want 409: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestMissionsAnswerValidatesMCQOption confirms an mcq answer outside
+// the question's own options 400s before ever reaching the driver.
+func TestMissionsAnswerValidatesMCQOption(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission answer mcq validation", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SetPendingInput(ctx, id, missions.PendingInput{
+		Question: "which runtime?", Kind: "mcq", Options: []string{"node", "python"}, ProposedDefault: "node", Phase: missions.PhaseGenerate,
+	}); err != nil {
+		t.Fatalf("SetPendingInput: %v", err)
+	}
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/answer", strings.NewReader(`{"answer":"rust"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("answer with an out-of-set mcq option = %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestMissionsAnswerResumesMission confirms the full round trip: a
+// mission parked on pending_input, a valid answer clears it and
+// resumes the mission back to idle/working.
+func TestMissionsAnswerResumesMission(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission answer happy path", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.ApplyTransition(ctx, id, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusWaitingForInput},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	if err := store.SetPendingInput(ctx, id, missions.PendingInput{
+		Question: "continue?", Kind: "yes_no", ProposedDefault: "yes", Phase: missions.PhaseGenerate,
+	}); err != nil {
+		t.Fatalf("SetPendingInput: %v", err)
+	}
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/missions/"+id+"/answer", strings.NewReader(`{"answer":"yes"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("answer = %d, want 204: %s", w.Code, w.Body.String())
+	}
+
+	got, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.PendingInput != nil {
+		t.Fatalf("mission after answer still has PendingInput = %+v", got.PendingInput)
+	}
+	if got.Status != missions.StatusIdle && got.Status != missions.StatusWorking {
+		t.Fatalf("mission after answer status = %s, want idle-or-working (Drive may have already claimed it)", got.Status)
+	}
+}
+
 // TestMissionsCreateResponseCarriesDetectedEnvironment confirms the
 // POST /v1/missions response reflects the row create() actually
 // persisted — the create() handler resolves an omitted coding

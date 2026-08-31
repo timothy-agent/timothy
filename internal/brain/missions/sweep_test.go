@@ -407,3 +407,115 @@ func TestSweepPermissionTimeoutsNilResolveBrokerSafe(t *testing.T) {
 		t.Fatalf("resolved = %v, want exactly one", store.resolved)
 	}
 }
+
+// TestShouldTimeoutAsk mirrors TestShouldTimeoutPermission's table for
+// ask_user's own timeout decision (D-088, issue #457): no per-mission
+// override exists (unlike permission's), just the global setting.
+func TestShouldTimeoutAsk(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	cases := []struct {
+		name        string
+		askedAgo    time.Duration
+		global      int
+		wantTimeout bool
+	}{
+		{"global disabled (0): never times out", 999 * time.Hour, 0, false},
+		{"global negative: never times out", 999 * time.Hour, -1, false},
+		{"just before due", 59 * time.Second, 60, false},
+		{"just after due", 61 * time.Second, 60, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := shouldTimeoutAsk(now, now.Add(-tc.askedAgo), tc.global)
+			if got != tc.wantTimeout {
+				t.Errorf("shouldTimeoutAsk() = %v, want %v", got, tc.wantTimeout)
+			}
+		})
+	}
+}
+
+// fakeAskTimeoutStore scripts PendingInputs/AnswerPendingInput for
+// sweepAskTimeouts tests, mirroring fakePermissionTimeoutStore.
+type fakeAskTimeoutStore struct {
+	pending  []ParkedInput
+	resolved []string
+}
+
+func (f *fakeAskTimeoutStore) PendingInputs(ctx context.Context) ([]ParkedInput, error) {
+	return f.pending, nil
+}
+
+func (f *fakeAskTimeoutStore) AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error {
+	f.resolved = append(f.resolved, id+"|"+eventKind)
+	return nil
+}
+
+// fakeAskTimeoutDriver captures Drive calls, mirroring
+// fakePermissionTimeoutDriver.
+type fakeAskTimeoutDriver struct {
+	mu    sync.Mutex
+	wg    sync.WaitGroup
+	drove []string
+}
+
+func (f *fakeAskTimeoutDriver) Drive(ctx context.Context, id string) error {
+	defer f.wg.Done()
+	f.mu.Lock()
+	f.drove = append(f.drove, id)
+	f.mu.Unlock()
+	return nil
+}
+
+// TestSweepAskTimeoutsDisabledByDefault mirrors
+// TestSweepPermissionTimeoutsDisabledByDefault: a global setting of 0
+// leaves every parked question untouched.
+func TestSweepAskTimeoutsDisabledByDefault(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &fakeAskTimeoutStore{
+		pending: []ParkedInput{{MissionID: "m1", Input: PendingInput{AskedAt: time.Now().Add(-999 * time.Hour)}}},
+	}
+	driver := &fakeAskTimeoutDriver{}
+	notifier := &fakeMessageNotifier{}
+	sweepAskTimeouts(context.Background(), driver, store, func(context.Context) int { return 0 }, notifier, log)
+
+	if len(store.resolved) != 0 {
+		t.Fatalf("resolved = %v, want none (sweep disabled)", store.resolved)
+	}
+	if len(notifier.notified) != 0 {
+		t.Fatalf("notified = %v, want none (sweep disabled)", notifier.notified)
+	}
+}
+
+// TestSweepAskTimeoutsAppliesDefaultAndDrives covers the enabled path:
+// a mission parked past the effective timeout has its proposed_default
+// applied via mission.input_timed_out, is notified, and re-Driven; one
+// still within its window is left alone.
+func TestSweepAskTimeoutsAppliesDefaultAndDrives(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	now := time.Now()
+	store := &fakeAskTimeoutStore{
+		pending: []ParkedInput{
+			{MissionID: "timed-out", Input: PendingInput{ProposedDefault: "yes", AskedAt: now.Add(-10 * time.Minute)}},
+			{MissionID: "still-waiting", Input: PendingInput{ProposedDefault: "no", AskedAt: now.Add(-1 * time.Second)}},
+		},
+	}
+	driver := &fakeAskTimeoutDriver{}
+	driver.wg.Add(1) // exactly one mission (timed-out) crosses the 60s global timeout
+	notifier := &fakeMessageNotifier{}
+
+	sweepAskTimeouts(context.Background(), driver, store, func(context.Context) int { return 60 }, notifier, log)
+	driver.wg.Wait()
+
+	if len(store.resolved) != 1 || store.resolved[0] != "timed-out|mission.input_timed_out" {
+		t.Fatalf("resolved = %v, want exactly [timed-out|mission.input_timed_out]", store.resolved)
+	}
+	if len(notifier.notified) != 1 || notifier.notified[0] != "timed-out" {
+		t.Fatalf("notified = %v, want exactly [timed-out]", notifier.notified)
+	}
+	if len(driver.drove) != 1 || driver.drove[0] != "timed-out" {
+		t.Fatalf("drove = %v, want exactly [timed-out]", driver.drove)
+	}
+}

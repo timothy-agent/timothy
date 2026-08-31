@@ -87,6 +87,13 @@ const (
 	// behavior. A mission's own permission_timeout_seconds column
 	// overrides this per mission.
 	ValuePermissionTimeoutSeconds = "permission_timeout_seconds"
+	// ValueAskTimeoutSeconds bounds how long a mission may sit parked on
+	// pending_input (ask_user, D-088, issue #457) before the periodic
+	// sweep (missions/sweep.go) applies the question's proposed_default
+	// and resumes; "" or "0" (the default) disables the sweep, so an
+	// ask_user park waits forever unless the operator opts in, same
+	// 0-means-off convention as ValuePermissionTimeoutSeconds.
+	ValueAskTimeoutSeconds = "ask_timeout_seconds"
 )
 
 var knownValueKeys = map[string]bool{
@@ -96,7 +103,7 @@ var knownValueKeys = map[string]bool{
 	ValueCodingExecutor:   true,
 	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
 	ValueWebBaseURL: true, ValueTimezone: true,
-	ValuePermissionTimeoutSeconds: true,
+	ValuePermissionTimeoutSeconds: true, ValueAskTimeoutSeconds: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -182,6 +189,18 @@ func (s *Store) TokenBudget(ctx context.Context, def int) int {
 // behavior.
 func (s *Store) PermissionTimeoutSeconds(ctx context.Context) int {
 	if v := s.Value(ctx, ValuePermissionTimeoutSeconds); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// AskTimeoutSeconds parses the global ask_user timeout (D-088), falling
+// back to 0 (disabled) when unset or unparsable, same shape as
+// PermissionTimeoutSeconds.
+func (s *Store) AskTimeoutSeconds(ctx context.Context) int {
+	if v := s.Value(ctx, ValueAskTimeoutSeconds); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
 		}
@@ -335,7 +354,7 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
 	}
-	if key == ValuePermissionTimeoutSeconds && value != "" {
+	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds) && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer or empty", key)
 		}

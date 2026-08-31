@@ -119,6 +119,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("POST /v1/missions/{id}/approve-plan", a.auth(http.HandlerFunc(h.approvePlan)))
 	handle("POST /v1/missions/{id}/replan", a.auth(http.HandlerFunc(h.replan)))
 	handle("POST /v1/missions/{id}/rediscover", a.auth(http.HandlerFunc(h.rediscover)))
+	handle("POST /v1/missions/{id}/answer", a.auth(http.HandlerFunc(h.answer)))
 	handle("GET /v1/missions/{id}/files", a.auth(http.HandlerFunc(h.files)))
 	handle("GET /v1/missions/{id}/files/{path...}", a.auth(http.HandlerFunc(h.download)))
 	handle("GET /v1/missions/{id}/archive", a.auth(http.HandlerFunc(h.archive)))
@@ -1489,6 +1490,57 @@ func (h *missionAPI) replan(w http.ResponseWriter, r *http.Request) {
 // feedback text taken (unlike replan).
 func (h *missionAPI) rediscover(w http.ResponseWriter, r *http.Request) {
 	if err := h.driver.DecidePlan(r.Context(), r.PathValue("id"), missions.InputPlanRediscover, ""); err != nil {
+		failMission(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// answer handles POST /v1/missions/{id}/answer: the operator's reply to
+// a mission's parked ask_user question (D-088, issue #457). Valid only
+// while the mission is actually parked on one, 409 otherwise, same
+// convention as approve-plan's DecidePlan error mapping. mcq answers
+// must be one of the question's own options; yes_no answers must be
+// "yes" or "no"; open accepts any non-empty text.
+func (h *missionAPI) answer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Answer == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with a non-empty answer field")
+		return
+	}
+	id := r.PathValue("id")
+	m, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	if m.PendingInput == nil {
+		jsonError(w, http.StatusConflict, "not_awaiting_answer", "this mission is not awaiting an answer")
+		return
+	}
+	switch m.PendingInput.Kind {
+	case "mcq":
+		valid := false
+		for _, opt := range m.PendingInput.Options {
+			if opt == body.Answer {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			jsonError(w, http.StatusBadRequest, "bad_request", "answer must be one of the question's options")
+			return
+		}
+	case "yes_no":
+		if body.Answer != "yes" && body.Answer != "no" {
+			jsonError(w, http.StatusBadRequest, "bad_request", `answer must be "yes" or "no"`)
+			return
+		}
+	}
+	answer := truncateAnswer(body.Answer, resumeAnswerCap)
+	if err := h.driver.AnswerAskUser(r.Context(), id, answer); err != nil {
 		failMission(w, err)
 		return
 	}
