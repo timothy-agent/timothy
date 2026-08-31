@@ -946,7 +946,7 @@ export async function createKbCollection(c: { name: string; description: string 
 
 export async function updateKbCollection(
   id: string,
-  patch: { name?: string; description?: string },
+  patch: { name?: string; description?: string; retrieval_weight?: number },
 ): Promise<KbCollection> {
   return request<KbCollection>(`/v1/admin/kb/collections/${id}`, {
     method: 'PATCH',

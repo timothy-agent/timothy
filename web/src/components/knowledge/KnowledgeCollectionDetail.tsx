@@ -149,6 +149,7 @@ export function KnowledgeCollectionDetail() {
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState('')
   const [editDesc, setEditDesc] = useState('')
+  const [editWeight, setEditWeight] = useState('1.0')
   const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<KbDocument | null>(null)
 
   const refresh = useCallback(() => {
@@ -180,7 +181,11 @@ export function KnowledgeCollectionDetail() {
   const saveEdit = async () => {
     if (!id || editName.trim() === '') return
     try {
-      const updated = await updateKbCollection(id, { name: editName.trim(), description: editDesc })
+      const updated = await updateKbCollection(id, {
+        name: editName.trim(),
+        description: editDesc,
+        retrieval_weight: Number(editWeight),
+      })
       setCollection(updated)
       setEditing(false)
       toast.success('Collection updated')
@@ -247,6 +252,7 @@ export function KnowledgeCollectionDetail() {
             onClick={() => {
               setEditName(collection.name)
               setEditDesc(collection.description ?? '')
+              setEditWeight(String(collection.retrieval_weight ?? 1.0))
               setEditing(true)
             }}
           >
@@ -351,12 +357,32 @@ export function KnowledgeCollectionDetail() {
               placeholder="Description"
               aria-label="Collection description"
             />
+            <div>
+              <Input
+                type="number"
+                min={0.1}
+                max={2.0}
+                step={0.1}
+                value={editWeight}
+                onChange={(e) => setEditWeight(e.target.value)}
+                aria-label="Retrieval weight"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Lower keeps this collection out of general searches; 1.0 is normal.
+              </p>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <Button disabled={editName.trim() === ''} onClick={() => void saveEdit()}>
+            <Button
+              disabled={
+                editName.trim() === '' ||
+                !(Number(editWeight) > 0 && Number(editWeight) <= 2)
+              }
+              onClick={() => void saveEdit()}
+            >
               Save
             </Button>
           </DialogFooter>

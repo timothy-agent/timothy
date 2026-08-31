@@ -552,8 +552,8 @@ describe('Composer knowledge mentions', () => {
   it('shows a filtered popup, selects on Enter, strips the token, and stops intercepting Enter', async () => {
     const client = await import('../api/client')
     vi.mocked(client.listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
-      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
+      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     const onSend = vi.fn()
     render(<StatefulComposer onSend={onSend} />)
@@ -578,7 +578,7 @@ describe('Composer knowledge mentions', () => {
   it('closes the popup on Escape and lets Enter send', async () => {
     const client = await import('../api/client')
     vi.mocked(client.listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     const onSend = vi.fn()
     render(<StatefulComposer onSend={onSend} />)
@@ -613,7 +613,7 @@ describe('Composer knowledge mentions', () => {
     vi.mocked(client.listKbCollections)
       .mockRejectedValueOnce(new Error('network error'))
       .mockResolvedValueOnce([
-        { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+        { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
       ])
     const onSend = vi.fn()
     render(<StatefulComposer onSend={onSend} />)
@@ -632,8 +632,8 @@ describe('Composer knowledge mentions', () => {
   it('cycles the highlighted option with ArrowDown/ArrowUp, wrapping at both ends', async () => {
     const client = await import('../api/client')
     vi.mocked(client.listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
-      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
+      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     const onSend = vi.fn()
     render(<StatefulComposer onSend={onSend} />)
@@ -662,8 +662,8 @@ describe('Composer knowledge mentions', () => {
   it('selects the clicked popup option, adding a chip and stripping the token', async () => {
     const client = await import('../api/client')
     vi.mocked(client.listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
-      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
+      { id: '2', name: 'billing', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     const onSend = vi.fn()
     render(<StatefulComposer onSend={onSend} />)
@@ -682,7 +682,7 @@ describe('Composer knowledge mentions', () => {
   it('selects the highlighted option on Tab, same as Enter', async () => {
     const client = await import('../api/client')
     vi.mocked(client.listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     const onSend = vi.fn()
     render(<StatefulComposer onSend={onSend} />)
@@ -716,8 +716,8 @@ describe('Composer agent-bound knowledge chips', () => {
   it('excludes agent-bound names from the mention popup', async () => {
     const client = await import('../api/client')
     vi.mocked(client.listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
-      { id: '2', name: 'runbooks', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
+      { id: '2', name: 'runbooks', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     function StatefulWithAgentKnowledge() {
       const [draft, setDraft] = useState('')

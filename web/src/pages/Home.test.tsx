@@ -143,7 +143,7 @@ describe('Home', () => {
 
   it('carries picked #mention chips into the chat intent on send', async () => {
     vi.mocked(listKbCollections).mockResolvedValue([
-      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+      { id: '1', name: 'observability', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
     ])
     renderHome()
     const input = screen.getByLabelText('Message') as HTMLTextAreaElement

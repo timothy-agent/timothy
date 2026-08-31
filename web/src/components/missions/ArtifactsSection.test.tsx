@@ -214,7 +214,7 @@ describe('ArtifactsSection', () => {
 
     it('opens a dialog with a collection picker and promotes on submit', async () => {
       vi.mocked(listKbCollections).mockResolvedValue([
-        { id: 'c1', name: 'Reports', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+        { id: 'c1', name: 'Reports', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
       ])
       vi.mocked(promoteMissionToKB).mockResolvedValue({ promoted: 1 })
       render(<ArtifactsSection missionId="m1" phase="done" workspace={undefined} refs={refs} />)
@@ -232,7 +232,7 @@ describe('ArtifactsSection', () => {
 
     it('disables Promote until a collection is picked', async () => {
       vi.mocked(listKbCollections).mockResolvedValue([
-        { id: 'c1', name: 'Reports', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, created_at: '', updated_at: '' },
+        { id: 'c1', name: 'Reports', description: '', doc_count: 0, chunk_count: 0, failed_count: 0, retrieval_weight: 1.0, created_at: '', updated_at: '' },
       ])
       render(<ArtifactsSection missionId="m1" phase="done" workspace={undefined} refs={refs} />)
 

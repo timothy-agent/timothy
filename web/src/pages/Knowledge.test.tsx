@@ -41,6 +41,7 @@ const productDocs: KbCollection = {
   doc_count: 2,
   chunk_count: 40,
   failed_count: 0,
+  retrieval_weight: 1.0,
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-10T00:00:00Z',
 }
@@ -107,6 +108,7 @@ describe('Knowledge page', () => {
       expect(updateKbCollection).toHaveBeenCalledWith('c1', {
         name: 'Scalability',
         description: 'Product documentation for support agents.',
+        retrieval_weight: 1,
       }),
     )
     expect(await screen.findByText('Scalability')).toBeInTheDocument()
