@@ -78,6 +78,18 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	if m.Light && m.Kind != KindGeneral {
 		return fmt.Errorf("%w: light is only valid for kind=general missions", ErrInvalidMission)
 	}
+	if !ValidFlow(string(m.Flow)) {
+		return fmt.Errorf("%w: unknown flow %q", ErrInvalidMission, m.Flow)
+	}
+	if m.Kind == KindCoding && m.Flow != FlowFull {
+		return fmt.Errorf("%w: flow must be %q for kind=coding missions", ErrInvalidMission, FlowFull)
+	}
+	if m.Light && m.Flow != FlowLight {
+		return fmt.Errorf("%w: light=true requires flow=%q", ErrInvalidMission, FlowLight)
+	}
+	if m.Flow == FlowLight && !m.Light {
+		return fmt.Errorf("%w: flow=%q requires light=true", ErrInvalidMission, FlowLight)
+	}
 	if !missionPolicyFor(m).canDelegate {
 		switch {
 		case m.Harness != "":

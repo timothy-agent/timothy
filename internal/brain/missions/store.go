@@ -51,7 +51,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
 	explore_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
 	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
-	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds, pending_input, asks_used`
+	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds, pending_input, asks_used, flow`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -116,6 +116,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		promoteKBCollectionID                                         *string
 		permissionTimeoutSeconds                                      *int
 		pendingInputRaw                                               []byte
+		flow                                                          string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -127,10 +128,11 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed,
+		&pendingInputRaw, &m.AsksUsed, &flow,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
+	m.Flow = Flow(flow)
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	scanPendingPermission(&m, pendingPermissionRaw)
@@ -204,6 +206,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		promoteKBCollectionID                                         *string
 		permissionTimeoutSeconds                                      *int
 		pendingInputRaw                                               []byte
+		flow                                                          string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -215,9 +218,10 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.DestinationIDs, &m.Light, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed); err != nil {
+		&pendingInputRaw, &m.AsksUsed, &flow); err != nil {
 		return Mission{}, err
 	}
+	m.Flow = Flow(flow)
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	scanPendingPermission(&m, pendingPermissionRaw)
@@ -311,10 +315,17 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		destinationIDs = []string{}
 	}
 	phase := initialPhase(m.Kind, m.Light)
+	// flow defaults to full for any caller (test fixture, a pre-#459
+	// code path) that never set it: matches the column's own DB
+	// default and today's pre-#459 behavior exactly.
+	flow := m.Flow
+	if flow == "" {
+		flow = FlowFull
+	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, NULLIF($28, '')::uuid, $29, $30, $31, $32, $33, $34, NULLIF($35, '')::uuid, $36, NULLIF($37, '')::uuid, $38) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, NULLIF($28, '')::uuid, $29, $30, $31, $32, $33, $34, NULLIF($35, '')::uuid, $36, NULLIF($37, '')::uuid, $38, $39) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds, flow,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

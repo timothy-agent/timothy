@@ -129,6 +129,12 @@ type Mission struct {
 	// prove entirely: born in phase=generate, one bare worker turn, the
 	// final worker message is the deliverable, then result/done.
 	Light bool `json:"light"`
+	// Flow is the phase set this mission runs (D-090, issue #459),
+	// chosen once at create time, snapshotted here, never model-
+	// mutable. Light stays the source of truth for every existing
+	// D-069 code path; Flow=FlowLight always implies Light=true
+	// (api/missions.go's create normalizes this at write time).
+	Flow Flow `json:"flow"`
 	// FinalOutput is a light mission's verbatim final worker message,
 	// set on the done transition (driver.go's runExecute) — the
 	// deliverable for destinations delivery and memory extraction.

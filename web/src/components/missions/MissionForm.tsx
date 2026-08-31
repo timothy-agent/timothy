@@ -57,6 +57,26 @@ type Kind = 'coding' | 'general'
 
 type OnComplete = '' | 'push' | 'push_pr'
 
+// Flow selects the phase set a mission runs (D-090, issue #459); only
+// meaningful on kind=general (coding always stays 'full', enforced
+// server-side).
+type Flow = 'full' | 'discover_generate' | 'no_prove' | 'light'
+
+const flowChoices: { value: Flow; label: string; description: string }[] = [
+  { value: 'full', label: 'Full', description: 'Discover, plan, generate, review.' },
+  {
+    value: 'no_prove',
+    label: 'No review',
+    description: 'Discover and plan run, but the LLM reviewer is skipped.',
+  },
+  {
+    value: 'discover_generate',
+    label: 'Discover + generate',
+    description: 'Skips the review round; same phases as No review today.',
+  },
+  { value: 'light', label: 'Light', description: "Single pass; the worker's final message is the result." },
+]
+
 // Sentinel for the Deployment Select: Radix Select.Item rejects an
 // empty string value, so the "do nothing" choice (the wire value '')
 // is represented by this sentinel on the Select itself.
@@ -339,6 +359,14 @@ export function MissionForm({
   // unless the operator has touched the toggle directly (lightTouched).
   const [light, setLight] = useState(initial?.light ?? false)
   const [lightTouched, setLightTouched] = useState(!!initial?.light)
+  // flow (D-090, issue #459): defaults from kind/light (light=true ->
+  // "light", else "full") unless the operator has picked a flow
+  // directly (flowTouched), same "permanently defer once touched"
+  // pattern as lightTouched (#447). An explicit initial flow (editing
+  // a follow-up/repeat seeded from an existing mission) counts as
+  // touched, same as initial light above.
+  const [flow, setFlow] = useState<Flow>(initial?.flow ?? (initial?.light ? 'light' : 'full'))
+  const [flowTouched, setFlowTouched] = useState(!!initial?.flow)
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
   // Destinations multi-select: visible, not advanced; default is
   // empty (deliver nowhere). Offered for a one-off create, a new
@@ -650,6 +678,17 @@ export function MissionForm({
     if (looksLikeLightGoal(goal)) setLight(true)
   }, [goal, kind, lightTouched])
 
+  // Flow pre-fill (D-090, issue #459): follows light exactly, same
+  // "permanently defer once touched" pattern as light's own pre-fill
+  // above (flowTouched). Light is the only signal flow derives from,
+  // so one effect watching it covers every light pre-fill source
+  // (classify preview, the goal-shape heuristic, the operator's own
+  // toggle) without duplicating the derivation in each of them.
+  useEffect(() => {
+    if (flowTouched) return
+    setFlow(light ? 'light' : 'full')
+  }, [light, flowTouched])
+
   const onGoalChange = (v: string) => {
     setGoal(v)
     if (v.trim() === '') setKindLocked(false)
@@ -748,6 +787,7 @@ export function MissionForm({
       destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
       promote_kb_collection_id: promoteKBCollectionID || undefined,
       light: kind === 'general' ? light : undefined,
+      flow: kind === 'general' ? flow : undefined,
       references:
         references.length > 0 ? references.map((r) => ({ kind: r.kind, id: r.id })) : undefined,
     })
@@ -1591,6 +1631,38 @@ export function MissionForm({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              )}
+              {kind === 'general' && !repeat && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-flow">Flow</Label>
+                  <Select
+                    value={flow}
+                    onValueChange={(v) => {
+                      const next = v as Flow
+                      setFlow(next)
+                      setFlowTouched(true)
+                      // Keep light in sync with an explicit flow pick,
+                      // mirroring the server's own create-time
+                      // normalization (light=true iff flow=light).
+                      setLight(next === 'light')
+                      setLightTouched(true)
+                    }}
+                  >
+                    <SelectTrigger id="mission-flow" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {flowChoices.map((f) => (
+                        <SelectItem key={f.value} value={f.value}>
+                          {f.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {flowChoices.find((f) => f.value === flow)?.description}
+                  </p>
                 </div>
               )}
               {repeat && (

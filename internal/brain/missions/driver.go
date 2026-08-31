@@ -1385,14 +1385,40 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 // of passing harness checks adds tokens, latency, and (with the
 // reviewer being the least reliable link) failure modes, not safety.
 // Coding missions always review: a diff can be wrong in ways
-// existence checks can't see. Units with no declared artifacts always
-// review too — there is no harness evidence to stand on.
+// existence checks can't see. A unit with no declared artifacts
+// normally falls through to a real review round too (no harness
+// evidence to stand on), UNLESS the mission's flow is no_prove or
+// discover_generate (D-090, issue #459), which promise the LLM
+// reviewer never runs at all: for those flows a unit with nothing to
+// check is approved directly rather than falling back to review, the
+// same way a light mission's single pass has no reviewer to fall back
+// to. A unit that DOES declare artifacts still runs CheckArtifacts
+// (verifyCurrentUnit) either way: no_prove/discover_generate skip
+// only the reviewer, never the harness evidence check.
 func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string) (StepInput, bool) {
 	if missionPolicyFor(m).alwaysReview {
 		return StepInput{}, false
 	}
+	noReviewFlow := m.Flow == FlowNoProve || m.Flow == FlowDiscoverGenerate
 	unit, idx := currentUnit(m.Spec)
 	if unit == nil || len(unit.Artifacts) == 0 {
+		if noReviewFlow && unit != nil {
+			// No harness evidence to stand on, but the reviewer must never
+			// run either: mark the unit passed directly (the same write
+			// verifyCurrentUnit's own success path performs) so
+			// stepReviewApprove's LastUnit check sees real progress, not a
+			// unit stuck unverified forever.
+			if err := d.verify.markUnitPassed(ctx, m, idx); err != nil {
+				d.log.Warn("driver: mark unit passed failed", "mission_id", m.ID, "error", err)
+				return StepInput{}, false
+			}
+			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{
+				"unit": idx, "reason": "flow " + string(m.Flow) + " never runs the reviewer",
+			}); err != nil {
+				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
+			}
+			return StepInput{Input: InputReviewApprove}, true
+		}
 		return StepInput{}, false
 	}
 	if err := d.verify.verifyCurrentUnit(ctx, m, seenURLs); err != nil {

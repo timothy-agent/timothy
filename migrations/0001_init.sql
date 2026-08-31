@@ -787,7 +787,18 @@ CREATE TABLE IF NOT EXISTS missions (
     -- AsksUsed counts ask_user calls this mission has spent, enforced
     -- against askBudget (missions/asktool.go); a third call over
     -- budget is a plain tool error back to the model, no park.
-    asks_used              integer NOT NULL DEFAULT 0
+    asks_used              integer NOT NULL DEFAULT 0,
+    -- D-090 (issue #459): the phase set this mission runs, chosen once
+    -- at create time and never model-mutable. 'full' is
+    -- discover->plan->generate->prove->result (the pre-#459 default);
+    -- 'discover_generate' skips plan (generate runs planless, same as
+    -- light) and prove; 'no_prove' keeps plan but skips the LLM
+    -- reviewer round (harness CheckArtifacts still runs on generate's
+    -- exit); 'light' is the existing D-069 behavior. light column stays
+    -- the source of truth for D-069 code paths; flow='light' always
+    -- implies light=true (api/missions.go's create normalizes this).
+    flow                  text NOT NULL DEFAULT 'full'
+        CHECK (flow IN ('full', 'discover_generate', 'no_prove', 'light'))
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

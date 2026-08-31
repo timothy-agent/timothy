@@ -69,3 +69,24 @@ run before deploy.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS pending_input jsonb;
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS asks_used integer NOT NULL DEFAULT 0;
 ```
+
+## Mission flow selection (D-090, issue #459)
+
+Required on live DBs before/with the next deploy. Additive, safe to
+run before deploy.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS flow text NOT NULL DEFAULT 'full';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'missions_flow_check'
+    ) THEN
+        ALTER TABLE missions ADD CONSTRAINT missions_flow_check
+            CHECK (flow IN ('full', 'discover_generate', 'no_prove', 'light'));
+    END IF;
+END $$;
+
+UPDATE missions SET flow = 'light' WHERE light AND flow <> 'light';
+```

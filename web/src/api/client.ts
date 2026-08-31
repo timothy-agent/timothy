@@ -1296,6 +1296,12 @@ export interface CreateMissionInput {
   // single worker turn, final message delivered as the result. Only
   // valid when kind === 'general'.
   light?: boolean
+  // flow selects the phase set this mission runs (D-090): omit (or "")
+  // maps to "light" when light is true, else "full", the pre-#459
+  // default. "no_prove" keeps discover/plan but skips the LLM reviewer
+  // round; "discover_generate" skips plan too (prove still skipped).
+  // Only "full" is valid when kind === 'coding'.
+  flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
   // references name composer #-mention picks (missions/chats/kb docs)
   // to resolve at create time into ReferencedContext.
   references?: { kind: ReferenceKind; id: string }[]

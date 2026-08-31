@@ -475,8 +475,17 @@ type createMissionRequest struct {
 	// Light requests a mission that skips discover/plan/prove (D-069):
 	// kind=general only, rejected outright on kind=coding (explicit or
 	// classified). Always the operator's explicit choice — the classify
-	// preview only suggests a value, never sets it.
+	// preview only suggests a value, never sets it. Kept working
+	// unchanged alongside Flow (D-090, issue #459): Light=true maps to
+	// Flow=light below when Flow is omitted, and must never contradict
+	// an explicit Flow.
 	Light bool `json:"light"`
+	// Flow selects the phase set this mission runs (D-090, issue #459):
+	// "" (omitted, the default) maps to "light" when Light=true, else
+	// "full", today's exact pre-#459 behavior. Rejected outright on
+	// kind=coding (must stay "full"). Snapshotted once at create time,
+	// never model-mutable afterward.
+	Flow string `json:"flow"`
 	// PermissionTimeoutSeconds overrides the global
 	// settings.ValuePermissionTimeoutSeconds for this mission alone
 	// (issue #445): nil (omitted) inherits the global setting; 0 or a
@@ -650,6 +659,26 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
 	}
+	// flow/light normalization (D-090, issue #459): flow omitted maps to
+	// today's exact pre-#459 behavior (light=true -> "light", else
+	// "full"); flow="light" always implies light=true so every existing
+	// D-069 code path (policyFor, packet.go's WorkPacket.Light) keeps
+	// keying off the light column unchanged. Any other mismatch between
+	// an explicit flow and light (or kind=coding requesting a non-full
+	// flow) is left for missions.ValidateCreate to reject with the
+	// specific reason, not silently resolved here.
+	flow := req.Flow
+	light := req.Light
+	if flow == "" {
+		if light {
+			flow = string(missions.FlowLight)
+		} else {
+			flow = string(missions.FlowFull)
+		}
+	}
+	if flow == string(missions.FlowLight) {
+		light = true
+	}
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
@@ -659,7 +688,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
-		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID, Light: req.Light,
+		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID, Light: light,
+		Flow:                     missions.Flow(flow),
 		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
 	}
 	id, err := h.driver.Create(r.Context(), m)

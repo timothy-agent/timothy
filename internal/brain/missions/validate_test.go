@@ -11,7 +11,7 @@ import (
 // each table test case mutates a copy of this to isolate the one rule
 // under test.
 func baseValidMission() Mission {
-	return Mission{Kind: "general", Route: "default"}
+	return Mission{Kind: "general", Route: "default", Flow: FlowFull}
 }
 
 func TestValidateCreate(t *testing.T) {
@@ -39,7 +39,7 @@ func TestValidateCreate(t *testing.T) {
 			return m
 		}, ValidateDeps{}, true},
 		{"light on general", func(m Mission) Mission {
-			m.Light = true
+			m.Light, m.Flow = true, FlowLight
 			return m
 		}, ValidateDeps{}, false},
 		{"harness on general", func(m Mission) Mission {
@@ -202,6 +202,38 @@ func TestValidateCreate(t *testing.T) {
 			m.PromoteKBCollectionID = "c1"
 			return m
 		}, ValidateDeps{}, false},
+		{"unknown flow rejected", func(m Mission) Mission {
+			m.Flow = "bogus"
+			return m
+		}, ValidateDeps{}, true},
+		{"no_prove on general accepted", func(m Mission) Mission {
+			m.Flow = FlowNoProve
+			return m
+		}, ValidateDeps{}, false},
+		{"discover_generate on general accepted", func(m Mission) Mission {
+			m.Flow = FlowDiscoverGenerate
+			return m
+		}, ValidateDeps{}, false},
+		{"no_prove on coding rejected", func(m Mission) Mission {
+			m.Kind, m.Flow = "coding", FlowNoProve
+			return m
+		}, ValidateDeps{}, true},
+		{"discover_generate on coding rejected", func(m Mission) Mission {
+			m.Kind, m.Flow = "coding", FlowDiscoverGenerate
+			return m
+		}, ValidateDeps{}, true},
+		{"flow light on coding rejected", func(m Mission) Mission {
+			m.Kind, m.Flow = "coding", FlowLight
+			return m
+		}, ValidateDeps{}, true},
+		{"light true with flow full is contradictory", func(m Mission) Mission {
+			m.Light = true
+			return m
+		}, ValidateDeps{}, true},
+		{"flow light without light true is contradictory", func(m Mission) Mission {
+			m.Flow = FlowLight
+			return m
+		}, ValidateDeps{}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

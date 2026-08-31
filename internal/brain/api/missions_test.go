@@ -261,6 +261,69 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateFlowNormalization covers create()'s flow/light
+// mapping (D-090, issue #459): an omitted flow maps to light's value
+// exactly as before this field existed, flow=light always implies
+// light=true so every existing D-069 code path keeps keying off the
+// light column, and an invalid flow/kind/light combination is
+// rejected by ValidateCreate (wired via SetValidateDeps here so a
+// validation rejection is distinguishable from the generic degraded-
+// store 400, same pattern as TestMissionsCreateValidatesGitStrategy).
+func TestMissionsCreateFlowNormalization(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
+
+	post := func(body string) (int, string) {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		b, _ := io.ReadAll(w.Result().Body)
+		return w.Code, string(b)
+	}
+
+	// Omitted flow, light omitted: normalizes to "full", passes
+	// validation, reaches the degraded store (generic 400, no "flow"
+	// mention).
+	if code, body := post(`{"goal":"g","kind":"general"}`); code != 400 || strings.Contains(body, "flow") {
+		t.Fatalf("omitted flow/light: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	}
+	// Omitted flow, light=true: normalizes to flow="light", satisfying
+	// its own light=true requirement, passes validation.
+	if code, body := post(`{"goal":"g","kind":"general","light":true}`); code != 400 || strings.Contains(body, "flow") {
+		t.Fatalf("omitted flow, light=true: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	}
+	// Explicit flow=light with light omitted: normalization sets
+	// light=true to match, passes validation.
+	if code, body := post(`{"goal":"g","kind":"general","flow":"light"}`); code != 400 || strings.Contains(body, "flow") {
+		t.Fatalf("flow=light, light omitted: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	}
+	// Explicit flow=no_prove / discover_generate on kind=general both
+	// pass validation.
+	if code, body := post(`{"goal":"g","kind":"general","flow":"no_prove"}`); code != 400 || strings.Contains(body, "flow") {
+		t.Fatalf("flow=no_prove on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	}
+	if code, body := post(`{"goal":"g","kind":"general","flow":"discover_generate"}`); code != 400 || strings.Contains(body, "flow") {
+		t.Fatalf("flow=discover_generate on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	}
+	// Unknown flow value is rejected by ValidateCreate before Driver.Create
+	// ever touches the degraded store.
+	if code, body := post(`{"goal":"g","kind":"general","flow":"bogus"}`); code != 400 || !strings.Contains(body, "unknown flow") {
+		t.Fatalf("flow=bogus: code=%d body=%q, want 400 with an unknown-flow message", code, body)
+	}
+	// kind=coding requesting a non-full flow is rejected: the flow
+	// column must stay "full" for coding missions.
+	if code, body := post(`{"goal":"g","kind":"coding","flow":"no_prove"}`); code != 400 || !strings.Contains(body, "flow must be") {
+		t.Fatalf("flow=no_prove on coding: code=%d body=%q, want 400 with a flow-must-be-full message", code, body)
+	}
+}
+
 // TestMissionsCreateValidatesRepoURL covers repo_url/connector_id's
 // create() gate: repo_url is coding-only, requires connector_id,
 // connector_id is only valid alongside repo_url, and an unknown

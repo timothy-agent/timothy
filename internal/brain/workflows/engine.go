@@ -207,8 +207,15 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 	if route == "" && e.routeForRole != nil {
 		route = e.routeForRole(ctx, "default")
 	}
+	// flow follows light exactly, same normalization as
+	// api/missions.go's create handler (D-090, issue #459): a workflow
+	// step has no flow field of its own, only light.
+	flow := missions.FlowFull
+	if step.Light {
+		flow = missions.FlowLight
+	}
 	return e.spawner.Create(ctx, missions.Mission{
-		Goal: goal, Kind: step.Kind, Light: step.Light, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
+		Goal: goal, Kind: step.Kind, Light: step.Light, Flow: flow, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
 		OnComplete: step.OnComplete, DestinationIDs: step.DestinationIDs,
 		ParentMissionID: parentMissionID, ParentContext: outcome,
 		WorkflowRunID: runID, WorkflowStep: stepName,

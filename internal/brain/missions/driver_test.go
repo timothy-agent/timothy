@@ -980,6 +980,67 @@ func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
 	}
 }
 
+// TestDriverNoProveSkipsReviewEvenWithoutArtifacts confirms flow=no_prove
+// (D-090, issue #459) approves a unit with no declared artifacts
+// directly instead of falling through to a real review round, unlike
+// TestDriverNonLightDoneStillGoesThroughReview's flow=full mission,
+// which has nothing to skip on and must still review.
+func TestDriverNoProveSkipsReviewEvenWithoutArtifacts(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Flow: FlowNoProve, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseResult {
+		t.Fatalf("no_prove mission after done with no declared artifacts = %+v, want phase=result (reviewer never runs)", m)
+	}
+	found := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.review_skipped" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no_prove mission with no artifacts left no mission.review_skipped event")
+	}
+}
+
+// TestDriverNoProveStillChecksArtifacts confirms flow=no_prove skips
+// only the LLM reviewer, never the harness's own CheckArtifacts: a
+// worker claiming done without writing its declared artifact must
+// still be sent back to generate, exactly as TestDriverArtifactCheck-
+// BlocksTautologicalDone asserts for flow=full. passes flips only on
+// harness evidence, regardless of flow.
+func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Flow: FlowNoProve, Phase: PhaseGenerate, Status: StatusWorking,
+		MaxIterations: 8, Workspace: t.TempDir(),
+		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it (no it didn't)"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseGenerate || m.Spec.Units[0].Passes {
+		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Spec.Units[0].Passes)
+	}
+	if m.Iteration == 0 {
+		t.Fatal("a failed artifact check must cost an iteration under no_prove too")
+	}
+}
+
 func TestDriverBackoffPauseAfterThreeFailures(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
