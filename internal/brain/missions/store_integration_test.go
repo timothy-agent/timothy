@@ -1296,6 +1296,23 @@ func TestRecoverStaleWorking(t *testing.T) {
 		t.Fatalf("backdate updated_at: %v", err)
 	}
 
+	// A delegated run: updated_at is old (the CLI has run for an hour)
+	// but the poll loop appended executor.progress a moment ago (#497).
+	delegatedID := workingBackdated(t, s, marker+"stale-delegated-live")
+	if err := s.AppendEvent(ctx, delegatedID, "executor.progress", map[string]any{"turns": 80}); err != nil {
+		t.Fatalf("AppendEvent live progress: %v", err)
+	}
+
+	// A delegated run whose last progress is itself older than the
+	// staleness bound: the CLI stopped without exiting, genuinely stale.
+	delegatedStaleID := workingBackdated(t, s, marker+"stale-delegated-dead")
+	if err := s.AppendEvent(ctx, delegatedStaleID, "executor.progress", map[string]any{"turns": 3}); err != nil {
+		t.Fatalf("AppendEvent old progress: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE mission_events SET created_at = now() - interval '1 hour' WHERE mission_id = $1`, delegatedStaleID); err != nil {
+		t.Fatalf("backdate progress event: %v", err)
+	}
+
 	stale, err := s.RecoverStaleWorking(ctx, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("RecoverStaleWorking: %v", err)
@@ -1310,6 +1327,34 @@ func TestRecoverStaleWorking(t *testing.T) {
 	if byID[freshID] {
 		t.Fatal("RecoverStaleWorking incorrectly returned a fresh working mission")
 	}
+	if byID[delegatedID] {
+		t.Fatal("RecoverStaleWorking returned a delegated run with recent executor.progress")
+	}
+	if !byID[delegatedStaleID] {
+		t.Fatal("RecoverStaleWorking did not return a delegated run whose progress went stale")
+	}
+}
+
+// workingBackdated creates a working mission whose updated_at is an hour
+// old, the shape of a long delegated run's row.
+func workingBackdated(t *testing.T, s *Store, goal string) string {
+	t.Helper()
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: goal, Kind: "coding"})
+	if err != nil {
+		t.Fatalf("Create %s: %v", goal, err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseGenerate, Status: StatusWorking}}); err != nil {
+		t.Fatalf("ApplyTransition %s: %v", goal, err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("db.Get: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET updated_at = now() - interval '1 hour' WHERE id = $1`, id); err != nil {
+		t.Fatalf("backdate %s: %v", goal, err)
+	}
+	return id
 }
 
 func TestBackoffPausedAndCountBackoffPauses(t *testing.T) {
