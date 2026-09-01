@@ -322,7 +322,7 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
 			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, parent_mission_id, parent_context, referenced_context, attachments, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, NULLIF($31, '')::uuid, $32, $33, $34) RETURNING id`,
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, NULLIF($25, '')::uuid, $26, $27, $28, $29, $30, NULLIF($31, '')::uuid, $32, $33, $34) RETURNING id`,
 		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
 	).Scan(&id)
 	if err != nil {
