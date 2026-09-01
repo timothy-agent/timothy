@@ -117,9 +117,9 @@ type Mission struct {
 	// Environment selects the per-language sandbox image (D-05x) a
 	// coding mission's container runs: "" is the base image. Unlike
 	// Harness, there is no settings default — precedence is explicit
-	// request -> auto-detect from repo markers at provisioning ->
-	// base. Sticky once set (Store.SetEnvironment), never re-detected.
-	// General missions never set this.
+	// request -> repo markers right after the clone -> the discover
+	// turn's own report -> base (issue #495). Sticky once set
+	// (Store.SetEnvironment). General missions never set this.
 	Environment       string `json:"environment,omitempty"`
 	PendingPermission string `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked

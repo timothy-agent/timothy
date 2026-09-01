@@ -220,6 +220,23 @@ type nativeRunner struct {
 	// kbSearch/kbRead: a store wiring bug degrades to "no ask_user"
 	// rather than a panic.
 	askParker askUserParker
+
+	// environmentSink persists the discover turn's environment report
+	// (issue #495): nil means the report is ignored, same nil-safe
+	// contract as askParker.
+	environmentSink environmentSetter
+}
+
+// environmentSetter is the narrow slice of *Store DiscoverSession
+// writes the discover turn's environment report through.
+type environmentSetter interface {
+	SetEnvironment(ctx context.Context, id, environment, marker string) error
+}
+
+// SetEnvironmentSink wires the store the discover turn's environment
+// report is written to, same setter pattern as SetAskParker.
+func (r *nativeRunner) SetEnvironmentSink(s environmentSetter) {
+	r.environmentSink = s
 }
 
 // SetAskParker wires the store ask_user parks against: a setter (not
@@ -1131,7 +1148,7 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 // so the ladder's last resort is the raw turn text rather than a forced
 // failure.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
-	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the generate phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the generate phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if pc := m.ParentContext(); pc != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
@@ -1183,8 +1200,8 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 	if res.askedUser {
 		return "", ErrAskedUser
 	}
-	if notes, ok := tryParseFindings(res.sentinelArgs); ok {
-		return notes, nil
+	if report, ok := tryParseFindings(res.sentinelArgs); ok {
+		return r.applyDiscoverReport(ctx, m, report), nil
 	}
 
 	// One recovery re-run, same ladder shape as RunWorker/PlanSession.
@@ -1198,16 +1215,16 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 	if err != nil {
 		return "", err
 	}
-	if notes, ok := tryParseFindings(recoverRes.sentinelArgs); ok {
-		return notes, nil
+	if report, ok := tryParseFindings(recoverRes.sentinelArgs); ok {
+		return r.applyDiscoverReport(ctx, m, report), nil
 	}
 
 	// Neither turn produced a tool call: check for a text-form sentinel
 	// before giving up on structured output entirely.
 	combined := text + "\n" + recoverText
 	if raw, ok := extractTextSentinel(combined, discoverNotesToolName); ok {
-		if notes, ok := tryParseFindings(raw); ok {
-			return notes, nil
+		if report, ok := tryParseFindings(raw); ok {
+			return r.applyDiscoverReport(ctx, m, report), nil
 		}
 	}
 
@@ -1219,15 +1236,48 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 
 // tryParseFindings reports whether args decodes to a non-empty findings
 // string.
-func tryParseFindings(args json.RawMessage) (string, bool) {
+func tryParseFindings(args json.RawMessage) (discoverReport, bool) {
 	if len(args) == 0 {
-		return "", false
+		return discoverReport{}, false
 	}
-	findings, err := parseDiscoverFindings(args)
-	if err != nil || findings == "" {
-		return "", false
+	report, err := parseDiscoverFindings(args)
+	if err != nil || report.Findings == "" {
+		return discoverReport{}, false
 	}
-	return findings, true
+	return report, true
+}
+
+// discoverEnvironmentNudge asks the discover turn to report the
+// project's toolchain only while the mission has none yet (issue
+// #495): a repo whose markers already decided it, or an operator's
+// explicit pick, is not up for debate.
+func (r *nativeRunner) discoverEnvironmentNudge(m Mission) string {
+	if m.Kind != KindCoding || m.Environment != "" {
+		return ""
+	}
+	return " Also fill the environment field with the sandbox toolchain this project needs (from what is in the workspace, or what the goal asks to build); when the language is none of the listed values, leave environment empty and name it in the stack field."
+}
+
+// applyDiscoverReport persists the report's environment when the
+// mission has none yet and the value is a registered image key other
+// than base (issue #495); the driver recreates the sandbox container
+// afterwards. A stack the sandbox has no image for is prefixed onto
+// the findings so the planner budgets a bootstrap unit instead of
+// finding out at generate time.
+func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, report discoverReport) string {
+	if m.Kind == KindCoding && m.Environment == "" && r.environmentSink != nil {
+		env := strings.ToLower(strings.TrimSpace(report.Environment))
+		if env != "" && env != "base" && Environments[env] {
+			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover"); err != nil {
+				r.log.Warn("mission discover: set environment failed", "mission_id", m.ID, "environment", env, "error", err)
+			}
+		}
+	}
+	stack := strings.TrimSpace(report.Stack)
+	if stack == "" {
+		return report.Findings
+	}
+	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan must include a unit that installs what the work needs before building or testing.\n\n%s", NeutralizeSlot(stack), report.Findings)
 }
 
 // RunReview judges the packet: the mission's goal and plan, the

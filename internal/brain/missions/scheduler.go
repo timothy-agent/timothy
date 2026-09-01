@@ -588,11 +588,7 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 		t.Harness, _ = ResolveHarness(ctx, t.Kind, t.Harness, agentHarness, codingExecutorDefault)
 	}
 	// Environment (D-05x): no settings default (unlike Harness above) —
-	// an omitted template auto-detects from the goal at fire time. No
-	// worktree exists yet, so only the goal-keyword heuristic can fire;
-	// repo-marker detection has nothing to check.
-	if policy.needsWorktree && t.Environment == "" {
-		t.Environment, _ = DetectEnvironment("", t.Goal)
-	}
+	// an omitted template stays "" and is detected against the real
+	// workspace once it exists (issue #495), never from goal text.
 	return t, promptOverlay
 }

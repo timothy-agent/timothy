@@ -173,6 +173,15 @@ func (f *fakeStore) SetDiscoverNotes(ctx context.Context, id, notes string) erro
 	return nil
 }
 
+func (f *fakeStore) SetEnvironment(ctx context.Context, id, environment, marker string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.Environment = environment
+	f.missions[id] = m
+	return nil
+}
+
 // SetNameIfEmpty mirrors the real Store's empty-name guard — a second
 // call for a mission that already has a name is a no-op, not an
 // overwrite.
@@ -264,6 +273,10 @@ type scriptedRunner struct {
 	discoverNotes []string
 	discoverIdx   int
 	discoverErr   error
+	// onDiscover runs inside DiscoverSession before the scripted notes
+	// return: lets a test stand in for the native runner's side effects
+	// (its environment sink write, issue #495).
+	onDiscover func(ctx context.Context, m Mission)
 }
 
 func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
@@ -302,6 +315,9 @@ func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNot
 func (r *scriptedRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
 	if r.discoverErr != nil {
 		return "", r.discoverErr
+	}
+	if r.onDiscover != nil {
+		r.onDiscover(ctx, m)
 	}
 	if len(r.discoverNotes) == 0 {
 		return "", nil
@@ -542,6 +558,100 @@ func TestDriverDiscoverStoresNotesAndAdvances(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("events = %+v, want a mission.discover_complete event", events)
+	}
+}
+
+// TestDriverDiscoverRecreatesSandboxOnEnvironmentChange covers issue
+// #495: when the discover turn set an environment on a mission that had
+// none, the driver removes the sandbox container (created on base by
+// discover's own shell calls) so the next exec recreates it on the new
+// image, and records mission.sandbox_recreated.
+func TestDriverDiscoverRecreatesSandboxOnEnvironmentChange(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: KindCoding, Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
+		SessionID: "s1", Workspace: "/already/provisioned"})
+	remover := &fakeSandboxRemover{}
+	runner := &scriptedRunner{
+		discoverNotes: []string{"fresh vite project"},
+		onDiscover: func(ctx context.Context, m Mission) {
+			_ = store.SetEnvironment(ctx, m.ID, "node", "discover")
+		},
+		plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
+	}
+	d := NewDriver(store, runner, nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got := remover.calls(); len(got) != 1 || got[0] != "m1" {
+		t.Fatalf("sandbox Remove calls = %v, want exactly [m1]", got)
+	}
+	found := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.sandbox_recreated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("events = %+v, want a mission.sandbox_recreated event", store.events["m1"])
+	}
+}
+
+// TestDriverDiscoverLeavesSandboxWhenEnvironmentUnchanged is the
+// counterpart: no environment change, no container churn.
+func TestDriverDiscoverLeavesSandboxWhenEnvironmentUnchanged(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: KindCoding, Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
+		SessionID: "s1", Workspace: "/already/provisioned"})
+	remover := &fakeSandboxRemover{}
+	runner := &scriptedRunner{
+		discoverNotes: []string{"nothing to report"},
+		plans:         []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
+	}
+	d := NewDriver(store, runner, nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got := remover.calls(); len(got) != 0 {
+		t.Fatalf("sandbox Remove calls = %v, want none", got)
+	}
+}
+
+// TestDriverProvisionDetectsEnvironmentFromRepoMarkers covers the
+// reported bug behind issue #495: a cloned repo's marker file decides
+// the environment right after the clone, before any sandbox exec.
+func TestDriverProvisionDetectsEnvironmentFromRepoMarkers(t *testing.T) {
+	requireGitForPush(t)
+	bare := t.TempDir()
+	gitRun(t, bare, "init", "-q", "--bare", "-b", "main")
+	seed := t.TempDir()
+	gitRun(t, seed, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "package.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, seed, "add", "package.json")
+	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
+	gitRun(t, seed, "remote", "add", "origin", bare)
+	gitRun(t, seed, "push", "-q", "origin", "main")
+
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "go ahead and fix the login page", Kind: "coding",
+		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: bare, ConnectorID: "conn1"}},
+		Phase:   PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+	})
+	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetCloneTokenResolver(func(context.Context, string) (string, error) { return "dummy-token", nil })
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Environment != "node" {
+		t.Fatalf("Environment = %q, want node from package.json (goal text mentioning \"go\" must not matter)", m.Environment)
 	}
 }
 

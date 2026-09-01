@@ -120,12 +120,12 @@ func TestParseWorkerVerdictDecodesHandoff(t *testing.T) {
 }
 
 func TestParseDiscoverFindings(t *testing.T) {
-	findings, err := parseDiscoverFindings([]byte(`{"findings":"no prior implementation exists; goal is self-contained"}`))
+	report, err := parseDiscoverFindings([]byte(`{"findings":"no prior implementation exists; goal is self-contained"}`))
 	if err != nil {
 		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
-	if findings != "no prior implementation exists; goal is self-contained" {
-		t.Fatalf("parseDiscoverFindings = %q", findings)
+	if report.Findings != "no prior implementation exists; goal is self-contained" {
+		t.Fatalf("parseDiscoverFindings = %q", report.Findings)
 	}
 }
 
@@ -134,22 +134,35 @@ func TestParseDiscoverFindings(t *testing.T) {
 // parseWorkerVerdict) — a model that emits "Findings" instead of
 // "findings" still decodes.
 func TestParseDiscoverFindingsCaseInsensitiveKey(t *testing.T) {
-	findings, err := parseDiscoverFindings([]byte(`{"Findings":"found an existing config loader to reuse"}`))
+	report, err := parseDiscoverFindings([]byte(`{"Findings":"found an existing config loader to reuse"}`))
 	if err != nil {
 		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
-	if findings != "found an existing config loader to reuse" {
-		t.Fatalf("parseDiscoverFindings = %q", findings)
+	if report.Findings != "found an existing config loader to reuse" {
+		t.Fatalf("parseDiscoverFindings = %q", report.Findings)
+	}
+	if report.Environment != "" || report.Stack != "" {
+		t.Fatalf("parseDiscoverFindings environment/stack = %q/%q, want empty when omitted", report.Environment, report.Stack)
+	}
+}
+
+func TestParseDiscoverFindingsEnvironmentAndStack(t *testing.T) {
+	report, err := parseDiscoverFindings([]byte(`{"findings":"vite app","environment":"node","stack":"Rust CLI"}`))
+	if err != nil {
+		t.Fatalf("parseDiscoverFindings: %v", err)
+	}
+	if report.Environment != "node" || report.Stack != "Rust CLI" {
+		t.Fatalf("parseDiscoverFindings environment/stack = %q/%q, want node/Rust CLI", report.Environment, report.Stack)
 	}
 }
 
 func TestParseDiscoverFindingsEmpty(t *testing.T) {
-	findings, err := parseDiscoverFindings([]byte(`{"findings":""}`))
+	report, err := parseDiscoverFindings([]byte(`{"findings":""}`))
 	if err != nil {
 		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
-	if findings != "" {
-		t.Fatalf("parseDiscoverFindings = %q, want empty", findings)
+	if report.Findings != "" {
+		t.Fatalf("parseDiscoverFindings = %q, want empty", report.Findings)
 	}
 }
 
@@ -202,12 +215,12 @@ func TestExtractTextSentinelDiscoverNotes(t *testing.T) {
 			if !ok {
 				return
 			}
-			findings, err := parseDiscoverFindings(raw)
+			report, err := parseDiscoverFindings(raw)
 			if err != nil {
 				t.Fatalf("parseDiscoverFindings: %v", err)
 			}
-			if findings != tc.wantVal {
-				t.Fatalf("findings = %q, want %q", findings, tc.wantVal)
+			if report.Findings != tc.wantVal {
+				t.Fatalf("findings = %q, want %q", report.Findings, tc.wantVal)
 			}
 		})
 	}

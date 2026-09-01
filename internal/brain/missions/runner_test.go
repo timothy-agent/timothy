@@ -1792,6 +1792,75 @@ func TestDiscoverSessionIncludesAttachments(t *testing.T) {
 }
 
 // TestDiscoverSessionRecoversWhenSentinelMissingThenPresent mirrors
+// fakeEnvironmentSink records SetEnvironment calls.
+type fakeEnvironmentSink struct {
+	calls []string
+}
+
+func (f *fakeEnvironmentSink) SetEnvironment(ctx context.Context, id, environment, marker string) error {
+	f.calls = append(f.calls, id+":"+environment+":"+marker)
+	return nil
+}
+
+// TestDiscoverSessionReportsEnvironment covers issue #495: a coding
+// mission with no environment yet gets the discover turn's registered
+// value written through the sink; base and unknown keys never do.
+func TestDiscoverSessionReportsEnvironment(t *testing.T) {
+	cases := []struct {
+		name      string
+		mission   Mission
+		args      string
+		wantCalls []string
+	}{
+		{"registered key on an undecided coding mission", Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "build a vite app"},
+			`{"findings":"fresh repo","environment":"node"}`, []string{"m1:node:discover"}},
+		{"base is not a detection", Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "docs"},
+			`{"findings":"docs only","environment":"base"}`, nil},
+		{"unknown key ignored", Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "rust cli"},
+			`{"findings":"cargo project","environment":"rust"}`, nil},
+		{"already decided by markers", Mission{ID: "m1", Kind: KindCoding, Environment: "go", Route: "default", Goal: "x"},
+			`{"findings":"go module","environment":"node"}`, nil},
+		{"general missions never set one", Mission{ID: "m1", Kind: "general", Route: "default", Goal: "x"},
+			`{"findings":"n/a","environment":"node"}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+				{toolEndEvent(discoverNotesToolName, tc.args)},
+			}}
+			r := newTestRunner(agent)
+			sink := &fakeEnvironmentSink{}
+			r.SetEnvironmentSink(sink)
+			if _, err := r.DiscoverSession(context.Background(), tc.mission); err != nil {
+				t.Fatalf("DiscoverSession: %v", err)
+			}
+			if strings.Join(sink.calls, ",") != strings.Join(tc.wantCalls, ",") {
+				t.Fatalf("SetEnvironment calls = %v, want %v", sink.calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// TestDiscoverSessionPrefixesUnsupportedStack confirms a stack the
+// sandbox has no image for lands at the top of the findings with the
+// bootstrap instruction the planner needs (issue #495).
+func TestDiscoverSessionPrefixesUnsupportedStack(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(discoverNotesToolName, `{"findings":"Cargo.toml at the root","stack":"Rust CLI"}`)},
+	}}
+	r := newTestRunner(agent)
+	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "test"})
+	if err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
+	}
+	if !strings.HasPrefix(notes, "Stack: Rust CLI. The sandbox has no preinstalled toolchain") {
+		t.Fatalf("notes = %q, want the stack note first", notes)
+	}
+	if !strings.HasSuffix(notes, "Cargo.toml at the root") {
+		t.Fatalf("notes = %q, want the findings kept after the stack note", notes)
+	}
+}
+
 // RunWorker's recovery ladder: a missing sentinel on the first turn
 // gets one recovery re-run before the sentinel is trusted.
 func TestDiscoverSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {

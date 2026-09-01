@@ -1045,6 +1045,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
 	}
 	nativeRunner.SetProgressReader(store)
+	nativeRunner.SetEnvironmentSink(store)
 	nativeRunner.SetLocation(flags.Location)
 	nativeRunner.SetAskParker(store)
 	// The delegated runner wraps native with D-051/D-052's CLI-executor

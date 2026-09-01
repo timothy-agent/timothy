@@ -662,14 +662,13 @@ func TestMissionsAnswerResumesMission(t *testing.T) {
 	}
 }
 
-// TestMissionsCreateResponseCarriesDetectedEnvironment confirms the
-// POST /v1/missions response reflects the row create() actually
-// persisted — the create() handler resolves an omitted coding
-// mission's environment (D-05x, goal-keyword heuristic) BEFORE
-// building the Mission it hands to Driver.Create, but the original bug
-// was returning only {"id": id}: the detected value was stored (a
-// later GET showed it) yet never reached the create response itself.
-func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
+// TestMissionsCreateLeavesEnvironmentForDetection covers issue #495: a
+// coding mission created without an explicit environment stays "" in
+// both the create response and the row, even when the goal text
+// mentions a language — detection happens against the real workspace
+// (repo markers after the clone, then the discover turn), never from
+// goal keywords, which misread "go ahead" as the Go toolchain.
+func TestMissionsCreateLeavesEnvironmentForDetection(t *testing.T) {
 	store := testMissionStore(t)
 
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
@@ -677,7 +676,7 @@ func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
-	body := `{"goal":"itest-api-mission write a Go CLI that parses logs","kind":"coding"}`
+	body := `{"goal":"itest-api-mission go ahead and write a CLI that parses logs","kind":"coding"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
@@ -690,23 +689,23 @@ func TestMissionsCreateResponseCarriesDetectedEnvironment(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if created.Environment != "go" {
-		t.Fatalf("create response environment = %q, want %q", created.Environment, "go")
+	if created.Environment != "" {
+		t.Fatalf("create response environment = %q, want empty (no goal-keyword detection)", created.Environment)
 	}
 
 	got, err := store.Get(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Environment != created.Environment {
-		t.Fatalf("stored environment = %q, create response = %q, want equal", got.Environment, created.Environment)
+	if got.Environment != "" {
+		t.Fatalf("stored environment = %q, want empty until the workspace decides it", got.Environment)
 	}
 }
 
 // TestMissionsCreateCarriesPlanRoute confirms a create request's
 // plan_route reaches the created mission row (both the create
 // response and a subsequent store read) — mirrors
-// TestMissionsCreateResponseCarriesDetectedEnvironment's round-trip
+// TestMissionsCreateLeavesEnvironmentForDetection's round-trip
 // shape for the new field.
 func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
 	store := testMissionStore(t)

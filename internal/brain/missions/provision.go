@@ -135,6 +135,20 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 			return m, err
 		}
 		m.Workspace, m.Branch, m.BaseCommit = workspace, branch, baseCommit
+		// Repo markers are the authoritative environment signal and are
+		// only readable now that the clone exists; this runs before any
+		// sandbox exec, so the container is created on the right image
+		// (its image is fixed at create, issue #495). A repo with no
+		// marker leaves "" for the discover turn to fill in.
+		if m.Environment == "" {
+			if env, marker := detectEnvironmentFromMarkers(worktree); env != "" {
+				if err := p.store.SetEnvironment(ctx, m.ID, env, marker); err != nil {
+					p.log.Warn("driver: set environment from markers failed", "mission_id", m.ID, "error", err)
+				} else {
+					m.Environment = env
+				}
+			}
+		}
 		if m.ParentMissionID != "" && missionPolicyFor(m).needsWorktree {
 			ref := baseUsed
 			if ref == "" {

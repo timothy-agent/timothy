@@ -74,6 +74,7 @@ type driverStore interface {
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	SetFinalOutput(ctx context.Context, id, text string) error
 	SetDiscoverNotes(ctx context.Context, id, notes string) error
+	SetEnvironment(ctx context.Context, id, environment, marker string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error
@@ -1278,7 +1279,33 @@ func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) 
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.discover_complete", map[string]any{"chars": len(notes)}); err != nil {
 		d.log.Warn("driver: record discover complete failed", "mission_id", m.ID, "error", err)
 	}
+	d.recreateSandboxIfEnvironmentChanged(ctx, m)
 	return StepInput{Input: InputPhaseComplete}, nil
+}
+
+// recreateSandboxIfEnvironmentChanged removes the mission's sandbox
+// container when the discover turn just set an environment (issue
+// #495): the container's image is fixed at create, and discover's own
+// shell calls already created it on base, so without this the mission
+// would keep running on base whatever Environment now says. Discover
+// holds no CLI session, so nothing in the container is lost; the next
+// exec recreates it on the right image. Best-effort: a removal failure
+// leaves the mission on base, which is what it had before.
+func (d *Driver) recreateSandboxIfEnvironmentChanged(ctx context.Context, before Mission) {
+	if d.sandboxRemove == nil {
+		return
+	}
+	after, err := d.store.Get(ctx, before.ID)
+	if err != nil || after.Environment == before.Environment {
+		return
+	}
+	if err := d.sandboxRemove.Remove(ctx, before.ID); err != nil {
+		d.log.Warn("driver: sandbox recreate after environment change failed; mission stays on base", "mission_id", before.ID, "environment", after.Environment, "error", err)
+		return
+	}
+	if err := d.store.AppendEvent(ctx, before.ID, "mission.sandbox_recreated", map[string]any{"environment": after.Environment}); err != nil {
+		d.log.Warn("driver: record sandbox recreate failed", "mission_id", before.ID, "error", err)
+	}
 }
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {

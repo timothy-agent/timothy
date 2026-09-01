@@ -643,16 +643,9 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		agentHarness, _ = h.resolveAgentHarness(r.Context(), req.AgentID)
 	}
 	req.Harness, _ = missions.ResolveHarness(r.Context(), req.Kind, req.Harness, agentHarness, h.codingExecutorDefault)
-	if req.Kind == missions.KindCoding && req.Environment == "" {
-		// Auto-detect (D-05x), resolved server-side at create time so
-		// the environment is fixed before the sandbox container is ever
-		// created: no worktree exists yet (it's provisioned after this
-		// handler returns), so only the goal-keyword heuristic can fire
-		// here — repo-marker detection has nothing to check against a
-		// mission that hasn't been provisioned. Never wins over an
-		// explicit request; "" stays "" (base) when nothing matches.
-		req.Environment, _ = missions.DetectEnvironment("", req.Goal)
-	}
+	// Environment stays "" unless the request names one: detection runs
+	// against the real workspace (repo markers after the clone, then
+	// the discover turn's report, issue #495), never against goal text.
 	// connector_id existence + kind check is a store lookup ValidateCreate
 	// can't perform (it takes no connectors dependency); repo_url's other
 	// shape rules (coding-only, requires connector_id) are ValidateCreate's.
