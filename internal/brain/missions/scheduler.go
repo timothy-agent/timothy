@@ -463,11 +463,19 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // creation time.
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
 	t, promptOverlay, knowledge := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
-	// destination_ids is NOT NULL; a nil slice binds as a NULL array
-	// parameter, same fix as store.go's Create.
+	// destinations is NOT NULL; entries built from the (fire-time
+	// re-checked) template destination ids. Destination (kind) is left
+	// empty here: the deliverer resolves the live kind by id at
+	// delivery time (destinations.Deliverer.deliverOne), so nothing
+	// downstream reads this entry's own kind field.
 	destinationIDs := s.filterDestinationIDs(ctx, t.DestinationIDs)
-	if destinationIDs == nil {
-		destinationIDs = []string{}
+	entries := make([]DestinationEntry, 0, len(destinationIDs))
+	for _, id := range destinationIDs {
+		entries = append(entries, DestinationEntry{DestinationID: id})
+	}
+	destinationsJSON, err := json.Marshal(entries)
+	if err != nil {
+		return fmt.Errorf("marshal destinations: %w", err)
 	}
 	spec, _ := json.Marshal(Spec{})
 	budgetCurrency := t.BudgetCurrency
@@ -500,10 +508,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	// template (D-087, issue #456): a scheduler-fired mission runs
 	// unattended, so nobody is watching to approve its plan.
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, auto_approve_plan, spec, schedule_id, harness, environment, destination_ids, phase, flow)
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, auto_approve_plan, spec, schedule_id, harness, environment, destinations, phase, flow)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, knowledgeJSON, t.AutoApproveSafe, true, spec, sc.ID, t.Harness, t.Environment, destinationIDs, phase, flow)
+		promptOverlay, knowledgeJSON, t.AutoApproveSafe, true, spec, sc.ID, t.Harness, t.Environment, destinationsJSON, phase, flow)
 	return err
 }
 

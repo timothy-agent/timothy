@@ -131,3 +131,52 @@ it going forward, never reads the old column again).
 ALTER TABLE missions DROP COLUMN IF EXISTS light;
 ALTER TABLE missions DROP COLUMN IF EXISTS worktree;
 ```
+
+## Schema restructure slice 2 (issue #480)
+
+Required on live DBs before/with the next deploy. destinations (the
+new jsonb column) is added additive first; the data migration below
+folds destination_ids/promote_kb_collection_id/on_complete/
+branch_pattern/commit_style into it (guarded so a re-run is a no-op:
+it only touches rows still at destinations = '[]' and only runs while
+the old columns still exist); the five old columns are then dropped.
+Run all three steps together: the data migration reads columns the
+last step removes.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS destinations jsonb NOT NULL DEFAULT '[]';
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'missions' AND column_name = 'destination_ids'
+    ) THEN
+        UPDATE missions m SET destinations = (
+            COALESCE((
+                SELECT jsonb_agg(jsonb_build_object('destination', d.kind, 'destination_id', d.id::text))
+                FROM unnest(m.destination_ids) AS did(id)
+                JOIN destinations d ON d.id = did.id
+            ), '[]'::jsonb)
+            || CASE WHEN m.promote_kb_collection_id IS NOT NULL
+                THEN jsonb_build_array(jsonb_build_object('destination', 'kb', 'collection_id', m.promote_kb_collection_id::text))
+                ELSE '[]'::jsonb END
+            || CASE WHEN m.on_complete <> '' OR m.branch_pattern <> '' OR m.commit_style <> ''
+                THEN jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+                    'destination', 'github', 'mode', NULLIF(m.on_complete, ''),
+                    'branch_pattern', NULLIF(m.branch_pattern, ''), 'commit_style', NULLIF(m.commit_style, '')
+                )))
+                ELSE '[]'::jsonb END
+        )
+        WHERE m.destinations = '[]'::jsonb
+          AND (array_length(m.destination_ids, 1) > 0 OR m.promote_kb_collection_id IS NOT NULL
+               OR m.on_complete <> '' OR m.branch_pattern <> '' OR m.commit_style <> '');
+    END IF;
+END $$;
+
+ALTER TABLE missions DROP COLUMN IF EXISTS destination_ids;
+ALTER TABLE missions DROP COLUMN IF EXISTS on_complete;
+ALTER TABLE missions DROP COLUMN IF EXISTS branch_pattern;
+ALTER TABLE missions DROP COLUMN IF EXISTS commit_style;
+ALTER TABLE missions DROP COLUMN IF EXISTS promote_kb_collection_id;
+```

@@ -32,15 +32,15 @@ type ValidateDeps struct {
 	RouteExists func(ctx context.Context, name string) bool
 	// DestinationEnabled reports whether id names a real, enabled
 	// destinations row (destinations.Store.EnabledByID) — nil skips
-	// destination_ids validation entirely (same as api/missions.go's
+	// destination-entry validation entirely (same as api/missions.go's
 	// validateDestinationIDs with h.destinations == nil, except this
 	// degrades to "unchecked" rather than "reject every non-empty list",
 	// since a caller with no destinations wiring has nothing to check
 	// against).
 	DestinationEnabled func(ctx context.Context, id string) (bool, error)
 	// KBCollectionExists reports whether id names a real kb_collections
-	// row: nil skips promote_kb_collection_id validation entirely, same
-	// degrade-to-unchecked reasoning as DestinationEnabled.
+	// row: nil skips a "kb" destination entry's collection_id validation
+	// entirely, same degrade-to-unchecked reasoning as DestinationEnabled.
 	KBCollectionExists func(ctx context.Context, id string) (bool, error)
 }
 
@@ -84,6 +84,7 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	if m.Flow == FlowLight && m.Kind != KindGeneral {
 		return fmt.Errorf("%w: flow=%q is only valid for kind=general missions", ErrInvalidMission, FlowLight)
 	}
+	githubEntry, hasGitHub := m.GitHubEntry()
 	if !missionPolicyFor(m).canDelegate {
 		switch {
 		case m.Harness != "":
@@ -92,12 +93,8 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			return fmt.Errorf("%w: environment is only valid for kind=coding missions", ErrInvalidMission)
 		case m.RepoURL != "":
 			return fmt.Errorf("%w: repo_url is only valid for kind=coding missions", ErrInvalidMission)
-		case m.BranchPattern != "":
-			return fmt.Errorf("%w: branch_pattern is only valid for kind=coding missions", ErrInvalidMission)
-		case m.CommitStyle != "":
-			return fmt.Errorf("%w: commit_style is only valid for kind=coding missions", ErrInvalidMission)
-		case m.OnComplete != "":
-			return fmt.Errorf("%w: on_complete is only valid for kind=coding missions", ErrInvalidMission)
+		case hasGitHub:
+			return fmt.Errorf("%w: a github destination is only valid for kind=coding missions", ErrInvalidMission)
 		}
 	}
 	if m.Harness != "" {
@@ -114,22 +111,27 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	case m.RepoURL == "" && m.ConnectorID != "":
 		return fmt.Errorf("%w: connector_id is only valid alongside repo_url", ErrInvalidMission)
 	}
-	switch m.OnComplete {
-	case "":
-	case "push", "push_pr":
-		if m.RepoURL == "" || m.ConnectorID == "" {
-			return fmt.Errorf("%w: on_complete requires repo_url and connector_id on a kind=coding mission", ErrInvalidMission)
+	if hasGitHub {
+		switch githubEntry.Mode {
+		case "":
+			// A github entry can carry only BranchPattern/CommitStyle with
+			// no on_complete choice: the operator overriding the git
+			// strategy without opting into auto-push.
+		case "push", "push_pr":
+			if m.RepoURL == "" || m.ConnectorID == "" {
+				return fmt.Errorf("%w: on_complete requires repo_url and connector_id on a kind=coding mission", ErrInvalidMission)
+			}
+		default:
+			return fmt.Errorf(`%w: on_complete must be "", "push", or "push_pr"`, ErrInvalidMission)
 		}
-	default:
-		return fmt.Errorf(`%w: on_complete must be "", "push", or "push_pr"`, ErrInvalidMission)
-	}
-	if m.BranchPattern != "" {
-		if err := ValidateBranchPattern(m.BranchPattern); err != nil {
+		if githubEntry.BranchPattern != "" {
+			if err := ValidateBranchPattern(githubEntry.BranchPattern); err != nil {
+				return fmt.Errorf("%w: %s", ErrInvalidMission, err.Error())
+			}
+		}
+		if err := ValidateCommitStyle(githubEntry.CommitStyle); err != nil {
 			return fmt.Errorf("%w: %s", ErrInvalidMission, err.Error())
 		}
-	}
-	if err := ValidateCommitStyle(m.CommitStyle); err != nil {
-		return fmt.Errorf("%w: %s", ErrInvalidMission, err.Error())
 	}
 	if m.Route == "" {
 		return fmt.Errorf("%w: route is required", ErrInvalidMission)
@@ -142,9 +144,9 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	case m.ReviewRouteModel != "" && !validModelPin(m.ReviewRouteModel):
 		return fmt.Errorf(`%w: review_route_model must be "provider name/model"`, ErrInvalidMission)
 	}
-	if deps.DestinationEnabled != nil && len(m.DestinationIDs) > 0 {
+	if deps.DestinationEnabled != nil {
 		var invalid []string
-		for _, id := range m.DestinationIDs {
+		for _, id := range m.DestinationIDs() {
 			ok, err := deps.DestinationEnabled(ctx, id)
 			if err != nil {
 				return fmt.Errorf("%w: destination_ids: %s", ErrInvalidMission, err.Error())
@@ -157,13 +159,15 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			return fmt.Errorf("%w: unknown or disabled destination id(s): %s", ErrInvalidMission, strings.Join(invalid, ", "))
 		}
 	}
-	if deps.KBCollectionExists != nil && m.PromoteKBCollectionID != "" {
-		ok, err := deps.KBCollectionExists(ctx, m.PromoteKBCollectionID)
-		if err != nil {
-			return fmt.Errorf("%w: promote_kb_collection_id: %s", ErrInvalidMission, err.Error())
-		}
-		if !ok {
-			return fmt.Errorf("%w: unknown promote_kb_collection_id %q", ErrInvalidMission, m.PromoteKBCollectionID)
+	if deps.KBCollectionExists != nil {
+		if collectionID := m.KBCollectionID(); collectionID != "" {
+			ok, err := deps.KBCollectionExists(ctx, collectionID)
+			if err != nil {
+				return fmt.Errorf("%w: promote_kb_collection_id: %s", ErrInvalidMission, err.Error())
+			}
+			if !ok {
+				return fmt.Errorf("%w: unknown promote_kb_collection_id %q", ErrInvalidMission, collectionID)
+			}
 		}
 	}
 	return nil

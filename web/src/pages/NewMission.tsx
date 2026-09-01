@@ -19,8 +19,6 @@ function missionToInitial(m: Mission): Partial<CreateMissionInput> {
     escalation_route: m.escalation_route,
     harness: m.harness,
     environment: m.environment,
-    branch_pattern: m.branch_pattern,
-    commit_style: m.commit_style,
     on_complete: m.on_complete,
   }
 }

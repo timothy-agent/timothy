@@ -23,15 +23,27 @@ type recordingDeliver struct {
 }
 
 func (r *recordingDeliver) fn() DestinationDeliver {
-	return func(ctx context.Context, m Mission, destinationIDs []string) error {
+	return func(ctx context.Context, m Mission, entries []DestinationEntry) ([]DestinationEntry, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		ids := make([]string, len(entries))
+		for i, e := range entries {
+			ids[i] = e.DestinationID
+		}
 		r.calls = append(r.calls, struct {
 			missionID string
 			destIDs   []string
 			mission   Mission
-		}{m.ID, destinationIDs, m})
-		return r.err
+		}{m.ID, ids, m})
+		if r.err != nil {
+			return entries, r.err
+		}
+		updated := make([]DestinationEntry, len(entries))
+		for i, e := range entries {
+			e.DeliveredAt = "2026-01-01T00:00:00Z"
+			updated[i] = e
+		}
+		return updated, nil
 	}
 }
 
@@ -43,7 +55,7 @@ func (r *recordingDeliver) count() int {
 
 func TestDriverDeliversToDestinationsOnDone(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, DestinationIDs: []string{"d1", "d2"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -69,7 +81,7 @@ func TestDriverDeliversToDestinationsOnDone(t *testing.T) {
 
 func TestDriverSkipsDeliveryOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, DestinationIDs: []string{"d1"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}
@@ -117,7 +129,7 @@ func TestDriverSkipsDeliveryWhenNoDestinations(t *testing.T) {
 // backfilled one rather than empty.
 func TestDriverBackfillsNameBeforeDestinationDelivery(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, DestinationIDs: []string{"d1"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -141,7 +153,7 @@ func TestDriverBackfillsNameBeforeDestinationDelivery(t *testing.T) {
 
 func TestDriverSkipsDeliveryWhenNilHook(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, DestinationIDs: []string{"d1"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -165,7 +177,7 @@ func TestDriverSkipsDeliveryWhenNilHook(t *testing.T) {
 // transition.
 func TestDriverParksInResultOnDeliveryFailure(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, DestinationIDs: []string{"d1"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -193,7 +205,7 @@ func TestDriverParksInResultOnDeliveryFailure(t *testing.T) {
 // recorded delivered is never re-sent).
 func TestDriverResultRetryOnlyRedeliversFailedDestination(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, DestinationIDs: []string{"d1", "d2"}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -236,15 +248,16 @@ func TestDriverResultRetryOnlyRedeliversFailedDestination(t *testing.T) {
 }
 
 // idempotentFakeDeliverer models destinations.Deliverer's own
-// alreadyDelivered contract closely enough to test result-step retry
-// behavior without a real Postgres-backed events store: a destination
-// once delivered is tracked as such and never re-sent; one that
-// failed stays retryable.
+// dedup contract closely enough to test result-step retry behavior
+// without a real Postgres-backed events store: an entry whose
+// DeliveredAt is already set (persisted onto the mission row by the
+// driver's own SetDestinations call between rounds, see
+// mergeDestinationEntries) is never re-sent; one with Error set (or
+// never attempted) stays retryable.
 type idempotentFakeDeliverer struct {
-	mu        sync.Mutex
-	failOnce  map[string]bool // destination id -> fail exactly the next attempt
-	delivered map[string]bool
-	attempts  map[string]int
+	mu       sync.Mutex
+	failOnce map[string]bool // destination id -> fail exactly the next attempt
+	attempts map[string]int
 }
 
 func (f *idempotentFakeDeliverer) callsFor(destID string) int {
@@ -253,31 +266,34 @@ func (f *idempotentFakeDeliverer) callsFor(destID string) int {
 	return f.attempts[destID]
 }
 
-func (f *idempotentFakeDeliverer) deliver(ctx context.Context, m Mission, destinationIDs []string) error {
+func (f *idempotentFakeDeliverer) deliver(ctx context.Context, m Mission, entries []DestinationEntry) ([]DestinationEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.attempts == nil {
 		f.attempts = map[string]int{}
 	}
-	if f.delivered == nil {
-		f.delivered = map[string]bool{}
-	}
 
 	var failed []string
-	for _, id := range destinationIDs {
-		if f.delivered[id] {
-			continue // delivered on a prior attempt: never re-sent
-		}
-		f.attempts[id]++
-		if f.failOnce[id] {
-			f.failOnce[id] = false // only the next attempt fails
-			failed = append(failed, id)
+	out := make([]DestinationEntry, len(entries))
+	for i, e := range entries {
+		if e.DeliveredAt != "" {
+			out[i] = e // delivered on a prior round: never re-sent
 			continue
 		}
-		f.delivered[id] = true
+		f.attempts[e.DestinationID]++
+		if f.failOnce[e.DestinationID] {
+			f.failOnce[e.DestinationID] = false // only the next attempt fails
+			e.Error = "delivery failed for: " + e.DestinationID
+			failed = append(failed, e.DestinationID)
+			out[i] = e
+			continue
+		}
+		e.DeliveredAt = "2026-01-01T00:00:00Z"
+		e.Error = ""
+		out[i] = e
 	}
 	if len(failed) > 0 {
-		return errors.New("delivery failed for: " + failed[0])
+		return out, errors.New("delivery failed for: " + failed[0])
 	}
-	return nil
+	return out, nil
 }

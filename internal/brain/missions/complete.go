@@ -204,7 +204,8 @@ func (c *Completer) OpenPR(ctx context.Context, m Mission, token string) (url st
 // itself is untouched either way. No retry loop — one attempt, the
 // manual push/pr endpoints remain available for the operator.
 func (c *Completer) RunOnComplete(ctx context.Context, m Mission) error {
-	if m.OnComplete == "" {
+	onComplete := m.OnComplete()
+	if onComplete == "" {
 		return nil
 	}
 	if reason := NotPushable(m); reason != "" {
@@ -217,7 +218,7 @@ func (c *Completer) RunOnComplete(ctx context.Context, m Mission) error {
 	if err != nil {
 		return fmt.Errorf("on_complete: resolve token: %w", err)
 	}
-	switch m.OnComplete {
+	switch onComplete {
 	case "push":
 		_, err := c.PushBranch(ctx, m, token)
 		return err
@@ -225,6 +226,6 @@ func (c *Completer) RunOnComplete(ctx context.Context, m Mission) error {
 		_, _, err := c.OpenPR(ctx, m, token)
 		return err
 	default:
-		return fmt.Errorf("on_complete: unknown value %q", m.OnComplete)
+		return fmt.Errorf("on_complete: unknown value %q", onComplete)
 	}
 }

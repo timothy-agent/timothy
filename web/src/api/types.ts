@@ -717,10 +717,11 @@ export interface Mission {
   // authenticated the clone; only present alongside repo_url.
   repo_url?: string
   connector_id?: string
-  // on_complete is the operator's consent-at-create choice for what the
-  // harness does automatically when this mission reaches done: '' does
-  // nothing, 'push' pushes the branch, 'push_pr' pushes then opens a
-  // pull request. Only ever set at create time, never by the model.
+  // on_complete is derived server-side from the mission's "github"
+  // destinations entry (issue #480 dropped the on_complete column):
+  // '' does nothing, 'push' pushes the branch, 'push_pr' pushes then
+  // opens a pull request. Only ever set at create time, never by the
+  // model.
   on_complete?: '' | 'push' | 'push_pr'
   // discover_notes is set once, at the end of the discover phase
   // (driver.go's runDiscover): absent/empty for a mission created
@@ -792,11 +793,6 @@ export interface Mission {
   // dispatch, "claude-cli"/"pi"/"codex-cli"/"opencode"/"cursor-cli" name
   // a registered executor.
   harness?: string
-  // branch_pattern/commit_style are this mission's own override of the
-  // settings-configured git strategy defaults; "" or absent means the
-  // settings default applied at provisioning/commit time.
-  branch_pattern?: string
-  commit_style?: string
   // top_model/top_model_provider are decorated onto the list/get
   // response from the cost ledger's top-served-model-per-mission
   // lookup (internal/brain/api/missions.go's decorateTopModels): the
@@ -813,16 +809,6 @@ export interface Mission {
   // attachments are PDF documents attached at create time: markdown is
   // never sent over the wire (see api/missions.go's sanitizeMission).
   attachments?: { id: string; mime: string; name?: string }[]
-  // destination_ids names operator-created destinations (email,
-  // webhook) this mission delivers its outcome digest to in the result
-  // phase's step (D-086). Validated against the destinations table
-  // at create time: never model-decided.
-  destination_ids?: string[]
-  // promote_kb_collection_id names a kb collection this mission's
-  // markdown artifacts promote into in the result phase's step
-  // (D-081, issue #370; D-086). Absent/'' promotes nothing automatically;
-  // the operator can still promote manually via POST .../promote-kb.
-  promote_kb_collection_id?: string
   // light marks a mission that skips discover/plan/prove (D-069):
   // kind=general only, born in phase=generate, one bare worker turn.
   // final_output is that worker's verbatim final message: the

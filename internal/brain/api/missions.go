@@ -332,8 +332,13 @@ type missionResponse struct {
 	// Light is derived from Flow == FlowLight (issue #479): the web
 	// client's own light checks (e.g. MissionDetail.tsx's runsPlanless)
 	// read this exactly as before the light column was dropped.
-	Light            bool   `json:"light"`
-	Worktree         string `json:"worktree,omitempty"`
+	Light    bool   `json:"light"`
+	Worktree string `json:"worktree,omitempty"`
+	// OnComplete is derived from the mission's github Destinations entry
+	// (issue #480 dropped the on_complete column): the web client's own
+	// auto-push/auto-PR badge (MissionDetail.tsx) reads this exactly as
+	// before.
+	OnComplete       string `json:"on_complete,omitempty"`
 	TopModel         string `json:"top_model,omitempty"`
 	TopModelProvider string `json:"top_model_provider,omitempty"`
 }
@@ -345,7 +350,7 @@ type missionResponse struct {
 func (h *missionAPI) decorateTopModels(ctx context.Context, rows []missions.Mission) []missionResponse {
 	out := make([]missionResponse, len(rows))
 	for i, m := range rows {
-		out[i] = missionResponse{Mission: m, Light: m.Flow == missions.FlowLight, Worktree: m.WorktreePath()}
+		out[i] = missionResponse{Mission: m, Light: m.Flow == missions.FlowLight, Worktree: m.WorktreePath(), OnComplete: m.OnComplete()}
 	}
 	if h.topModels == nil || len(rows) == 0 {
 		return out
@@ -444,13 +449,15 @@ type createMissionRequest struct {
 	// happens when this mission reaches done: "" (default), "push", or
 	// "push_pr". Requires RepoURL+ConnectorID (a github-connection
 	// mission) and kind=coding — a model never decides this, only the
-	// human choosing it here.
+	// human choosing it here. Normalized into a "github" Destinations
+	// entry by destinationEntries below (issue #480).
 	OnComplete string `json:"on_complete"`
 	// BranchPattern/CommitStyle override the settings-configured git
 	// strategy defaults for this mission alone; "" (the default) applies
 	// the settings default at provisioning/commit time. Validated the
 	// same way settings.Store.SetValue validates the global default —
-	// only known placeholders/styles, never model-decided.
+	// only known placeholders/styles, never model-decided. Folded into
+	// the same "github" Destinations entry as OnComplete.
 	BranchPattern string `json:"branch_pattern"`
 	CommitStyle   string `json:"commit_style"`
 	// ParentMissionID, when set, makes this a follow-up mission: the
@@ -471,15 +478,17 @@ type createMissionRequest struct {
 	// DestinationIDs names operator-created destinations (email,
 	// webhook) to deliver this mission's outcome digest to on the
 	// terminal done transition — every id is validated to exist AND be
-	// enabled at create time (see create() below); the model never
-	// supplies or addresses a destination (D-061).
+	// enabled at create time (missions.ValidateCreate); the model never
+	// supplies or addresses a destination (D-061). Normalized into bare
+	// Destinations entries by destinationEntries below (issue #480).
 	DestinationIDs []string `json:"destination_ids"`
 	// PromoteKBCollectionID (D-081, issue #370) names a kb collection to
 	// promote this mission's markdown artifacts into on the terminal
 	// done transition: "" (default) promotes nothing automatically;
 	// validated to exist at create time (missions.ValidateCreate), the
 	// model never supplies or addresses it, same invariant as
-	// DestinationIDs.
+	// DestinationIDs. Normalized into a "kb" Destinations entry by
+	// destinationEntries below.
 	PromoteKBCollectionID string `json:"promote_kb_collection_id"`
 	// Light requests a mission that skips discover/plan/prove (D-069):
 	// kind=general only, rejected outright on kind=coding (explicit or
@@ -501,6 +510,30 @@ type createMissionRequest struct {
 	// positive integer sets this mission's own park-forever/auto-deny
 	// bound. Never negative.
 	PermissionTimeoutSeconds *int `json:"permission_timeout_seconds"`
+}
+
+// destinationEntries normalizes the request's separate DestinationIDs/
+// PromoteKBCollectionID/OnComplete/BranchPattern/CommitStyle fields
+// into missions.Mission's single Destinations slice (issue #480): one
+// bare entry per destination id, one "kb" entry when
+// PromoteKBCollectionID is set, one "github" entry when OnComplete is
+// set. The wire request shape is unchanged; only the internal Mission
+// representation moved.
+func (r createMissionRequest) destinationEntries() []missions.DestinationEntry {
+	var entries []missions.DestinationEntry
+	for _, id := range r.DestinationIDs {
+		entries = append(entries, missions.DestinationEntry{DestinationID: id})
+	}
+	if r.PromoteKBCollectionID != "" {
+		entries = append(entries, missions.DestinationEntry{Destination: missions.DestinationKindKB, CollectionID: r.PromoteKBCollectionID})
+	}
+	if r.OnComplete != "" || r.BranchPattern != "" || r.CommitStyle != "" {
+		entries = append(entries, missions.DestinationEntry{
+			Destination: missions.DestinationKindGitHub, Mode: r.OnComplete,
+			BranchPattern: r.BranchPattern, CommitStyle: r.CommitStyle,
+		})
+	}
+	return entries
 }
 
 // missionAttachmentInput names one already-uploaded attachment to
@@ -689,10 +722,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
-		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
-		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
+		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID,
 		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
-		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID,
+		Attachments:  missionAtts,
+		Destinations: req.destinationEntries(),
 		Flow:                     missions.Flow(flow),
 		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
 	}

@@ -76,6 +76,7 @@ type driverStore interface {
 	SetDiscoverNotes(ctx context.Context, id, notes string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
+	SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error
 	AppendProgress(ctx context.Context, id, note string) error
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
 	AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error
@@ -412,8 +413,8 @@ func (d *Driver) SetPRStateResolver(resolve PRStateResolver) {
 }
 
 // SetGitCommitStyle wires the live settings getter runExecute falls
-// back to when a mission's own CommitStyle is empty — a setter for the
-// same reason SetGitBranchPattern is.
+// back to when a mission's github destination entry has no CommitStyle,
+// a setter for the same reason SetGitBranchPattern is.
 func (d *Driver) SetGitCommitStyle(get func(ctx context.Context) string) {
 	d.gitCommitStyle = get
 }
@@ -459,32 +460,79 @@ func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
 }
 
 // DestinationDeliver delivers a mission's generated output to its
-// attached destination_ids, returning an error naming any destination
-// that failed: destinations.Deliverer.Deliver satisfies this
-// signature. Called SYNCHRONOUSLY from the result phase's step
+// attached destination entries (Mission.Destinations, filtered to
+// email/webhook/telegram kinds by the caller), returning the entries
+// with delivered_at/error updated in place plus an error naming any
+// destination that failed: destinations.Deliverer.Deliver satisfies
+// this signature. Called SYNCHRONOUSLY from the result phase's step
 // (runResult, slice 1 of the phase redesign): a returned error parks
 // the mission in result rather than being logged and lost. Idempotent
-// per destination: a destination already recorded delivered is
-// skipped on retry, only a destination recorded delivery_failed (or
-// never attempted) is retried.
-type DestinationDeliver func(ctx context.Context, m Mission, destinationIDs []string) error
+// per destination: an entry whose DeliveredAt is already set is
+// skipped on retry, only one with Error set (or never attempted) is
+// retried.
+type DestinationDeliver func(ctx context.Context, m Mission, entries []DestinationEntry) ([]DestinationEntry, error)
 
 // SetDestinationDeliver wires the destinations delivery hook run by
 // the result phase's step (see deliverToDestinations): a setter for
 // the same reason SetMemoryExtract is. Optional, nil skips delivery
-// entirely, same as a mission with no destination_ids.
+// entirely, same as a mission with no destination entries.
 func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 	d.deliverDestinations = fn
 }
 
-// deliverToDestinations runs the destinations delivery hook when the
-// mission actually has destination_ids attached, returning its error
-// (if any) for the result step to fold into its overall outcome.
+// deliverableEntries filters m.Destinations down to the kinds
+// DestinationDeliver actually delivers: email/webhook/telegram, i.e.
+// every entry naming an operator-owned destinations table row. "kb"
+// and "github" entries are acted on by promoteToKB/fireOnComplete
+// instead.
+func deliverableEntries(entries []DestinationEntry) []DestinationEntry {
+	var out []DestinationEntry
+	for _, e := range entries {
+		if e.DestinationID != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// deliverToDestinations runs the destinations delivery hook against
+// the mission's deliverable entries (if any), writing back each
+// entry's delivered_at/error via SetDestinations and returning the
+// hook's error (if any) for the result step to fold into its overall
+// outcome.
 func (d *Driver) deliverToDestinations(ctx context.Context, m Mission) error {
-	if d.deliverDestinations == nil || len(m.DestinationIDs) == 0 {
+	targets := deliverableEntries(m.Destinations)
+	if d.deliverDestinations == nil || len(targets) == 0 {
 		return nil
 	}
-	return d.deliverDestinations(ctx, m, m.DestinationIDs)
+	updated, err := d.deliverDestinations(ctx, m, targets)
+	if len(updated) > 0 {
+		merged := mergeDestinationEntries(m.Destinations, updated)
+		if setErr := d.store.SetDestinations(ctx, m.ID, merged); setErr != nil {
+			d.log.Warn("driver: persist destination delivery state failed", "mission_id", m.ID, "error", setErr)
+		}
+	}
+	return err
+}
+
+// mergeDestinationEntries replaces each of all's entries with its
+// updated counterpart (matched by DestinationID) when one was
+// delivered; entries deliverableEntries excluded (kb/github) pass
+// through untouched.
+func mergeDestinationEntries(all, updated []DestinationEntry) []DestinationEntry {
+	byID := make(map[string]DestinationEntry, len(updated))
+	for _, e := range updated {
+		byID[e.DestinationID] = e
+	}
+	merged := make([]DestinationEntry, len(all))
+	for i, e := range all {
+		if u, ok := byID[e.DestinationID]; ok && e.DestinationID != "" {
+			merged[i] = u
+			continue
+		}
+		merged[i] = e
+	}
+	return merged
 }
 
 // PromoteKB promotes a mission's markdown artifacts into a kb
@@ -499,19 +547,20 @@ type PromoteKB func(ctx context.Context, m Mission, collectionID string) error
 // SetPromoteKB wires the kb-promotion hook run by the result phase's
 // step (see promoteToKB): a setter for the same reason
 // SetDestinationDeliver is. Optional: nil skips promotion entirely,
-// same as a mission with no promote_kb_collection_id.
+// same as a mission with no "kb" destination entry.
 func (d *Driver) SetPromoteKB(fn PromoteKB) {
 	d.promoteKB = fn
 }
 
-// promoteToKB runs the kb-promotion hook when the mission has
-// promote_kb_collection_id set, returning its error (if any) for the
-// result step to fold into its overall outcome.
+// promoteToKB runs the kb-promotion hook when the mission has a "kb"
+// destination entry, returning its error (if any) for the result step
+// to fold into its overall outcome.
 func (d *Driver) promoteToKB(ctx context.Context, m Mission) error {
-	if d.promoteKB == nil || m.PromoteKBCollectionID == "" {
+	collectionID := m.KBCollectionID()
+	if d.promoteKB == nil || collectionID == "" {
 		return nil
 	}
-	return d.promoteKB(ctx, m, m.PromoteKBCollectionID)
+	return d.promoteKB(ctx, m, collectionID)
 }
 
 // ArtifactCopy best-effort copies a terminal mission's declared
@@ -605,13 +654,14 @@ func (d *Driver) fireOnTerminal(m Mission) {
 // create time, so a failure here must be visible and retryable, not
 // silently swallowed).
 func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) error {
-	if d.completer == nil || m.OnComplete == "" {
+	onComplete := m.OnComplete()
+	if d.completer == nil || onComplete == "" {
 		return nil
 	}
 	if err := d.completer.RunOnComplete(ctx, m); err != nil {
-		d.log.Error("driver: on_complete auto-fire failed", "mission_id", id, "on_complete", m.OnComplete, "error", err)
+		d.log.Error("driver: on_complete auto-fire failed", "mission_id", id, "on_complete", onComplete, "error", err)
 		if d.notifyPushFailed != nil {
-			d.notifyPushFailed(ctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, m.OnComplete, err.Error()))
+			d.notifyPushFailed(ctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, onComplete, err.Error()))
 		}
 		return err
 	}
@@ -653,25 +703,28 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 	summary := map[string]any{}
 	var failures []string
 
+	targets := deliverableEntries(m.Destinations)
 	if err := d.deliverToDestinations(ctx, m); err != nil {
 		failures = append(failures, "delivery: "+err.Error())
 		summary["delivery_error"] = err.Error()
-	} else if len(m.DestinationIDs) > 0 {
-		summary["delivered"] = len(m.DestinationIDs)
+	} else if len(targets) > 0 {
+		summary["delivered"] = len(targets)
 	}
 
+	kbCollectionID := m.KBCollectionID()
 	if err := d.promoteToKB(ctx, m); err != nil {
 		failures = append(failures, "kb promotion: "+err.Error())
 		summary["promote_kb_error"] = err.Error()
-	} else if m.PromoteKBCollectionID != "" {
-		summary["promoted_kb_collection_id"] = m.PromoteKBCollectionID
+	} else if kbCollectionID != "" {
+		summary["promoted_kb_collection_id"] = kbCollectionID
 	}
 
+	onComplete := m.OnComplete()
 	if err := d.fireOnComplete(ctx, m.ID, m); err != nil {
 		failures = append(failures, "on_complete: "+err.Error())
 		summary["on_complete_error"] = err.Error()
-	} else if m.OnComplete != "" {
-		summary["on_complete"] = m.OnComplete
+	} else if onComplete != "" {
+		summary["on_complete"] = onComplete
 	}
 
 	if len(m.ArtifactRefs) > 0 {
@@ -1309,8 +1362,8 @@ func restorePassedUnits(spec *Spec, prior Spec) {
 // effectiveCommitStyle resolves the precedence mission override >
 // settings default > CommitMessage's own conventional-style default.
 func (d *Driver) effectiveCommitStyle(ctx context.Context, m Mission) string {
-	if m.CommitStyle != "" {
-		return m.CommitStyle
+	if e, ok := m.GitHubEntry(); ok && e.CommitStyle != "" {
+		return e.CommitStyle
 	}
 	if d.gitCommitStyle != nil {
 		return d.gitCommitStyle(ctx)

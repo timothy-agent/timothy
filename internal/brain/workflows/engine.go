@@ -214,9 +214,20 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 	if step.Light {
 		flow = missions.FlowLight
 	}
+	// step.OnComplete/DestinationIDs become destination entries, same
+	// "github" (kind=coding, mode=on_complete) and bare-id shape
+	// api/missions.go's create handler normalizes a request into (see
+	// missions.DestinationEntry).
+	var destinations []missions.DestinationEntry
+	for _, id := range step.DestinationIDs {
+		destinations = append(destinations, missions.DestinationEntry{DestinationID: id})
+	}
+	if step.OnComplete != "" {
+		destinations = append(destinations, missions.DestinationEntry{Destination: missions.DestinationKindGitHub, Mode: step.OnComplete})
+	}
 	return e.spawner.Create(ctx, missions.Mission{
 		Goal: goal, Kind: step.Kind, Flow: flow, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
-		OnComplete: step.OnComplete, DestinationIDs: step.DestinationIDs,
+		Destinations:    destinations,
 		ParentMissionID: parentMissionID, ParentContext: outcome,
 		WorkflowRunID: runID, WorkflowStep: stepName,
 		// Forced true (D-087, issue #456): a workflow-spawned mission

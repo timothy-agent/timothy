@@ -53,23 +53,7 @@ type Mission struct {
 	// token itself is never stored, only resolved fresh at provisioning.
 	RepoURL     string `json:"repo_url,omitempty"`
 	ConnectorID string `json:"connector_id,omitempty"`
-	// BranchPattern/CommitStyle are this mission's own override of the
-	// settings-configured git strategy defaults (git_branch_pattern/
-	// git_commit_style), snapshotted at create time: "" means "use the
-	// settings default," resolved fresh at provisioning/commit time
-	// (driver.go), never baked in here. See branchtemplate.go for the
-	// template placeholders and style values.
-	BranchPattern string `json:"branch_pattern,omitempty"`
-	CommitStyle   string `json:"commit_style,omitempty"`
-	// OnComplete is the operator's consent-at-create choice for what
-	// happens when this mission reaches phase=done: "" (default) does
-	// nothing, "push" pushes the branch, "push_pr" pushes then opens a
-	// pull request. Only ever set at create time (api/missions.go's
-	// validation); the harness (driver.go) executes it automatically on
-	// the done transition using the SAME push/PR code path the manual
-	// push/pr endpoints use.
-	OnComplete string         `json:"on_complete,omitempty"`
-	Spec       Spec           `json:"spec"`
+	Spec        Spec   `json:"spec"`
 	Progress   []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's
 	// evidence text — carried from execute into review so a
@@ -219,22 +203,19 @@ type Mission struct {
 	// bookkeeping (session_events, audit) hard-requires a real session
 	// id, which a mission otherwise has no reason to have.
 	SessionID string `json:"-"`
-	// DestinationIDs names the operator-created destinations (email,
-	// webhook) this mission's outcome digest delivers to on the
-	// terminal done transition (driver.go's deliverToDestinations) —
-	// validated against the destinations table at create time
-	// (api/missions.go), never model-decided.
-	DestinationIDs []string `json:"destination_ids,omitempty"`
-	// PromoteKBCollectionID (D-081, issue #370) is the kb collection this
-	// mission's markdown artifacts promote into on the terminal done
-	// transition (driver.go's promoteToKB): an explicit id, same
-	// operator-owned pattern as DestinationIDs, never a model choice or
-	// an auto-created default collection. "" (default) promotes nothing
-	// automatically; the operator can still promote manually via
-	// POST .../promote-kb after the mission is done.
-	PromoteKBCollectionID string    `json:"promote_kb_collection_id,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	// Destinations names every sink this mission's outcome delivers to
+	// or acts on in the result phase's step (issue #480, replacing the
+	// five columns destination_ids/on_complete/branch_pattern/
+	// commit_style/promote_kb_collection_id): destination/webhook/email/
+	// telegram entries (D-061, validated against the operator-owned
+	// destinations table at create time), a "kb" entry (D-081), and a
+	// "github" entry (the operator's consent-at-create push/push_pr
+	// choice). Never model-decided. Each entry's delivered_at/error
+	// fields are the result step's own delivery-state record, written
+	// back by runResult (see SetDestinations).
+	Destinations []DestinationEntry `json:"destinations,omitempty"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
 	// WorkflowRunID/WorkflowStep name the workflow run and step
 	// (internal/brain/workflows) this mission was spawned as, if any —
 	// empty for an ordinary mission. Set only at create time; the
@@ -257,6 +238,103 @@ type ArtifactRef struct {
 	ID   string `json:"id"`
 	Mime string `json:"mime"`
 	Name string `json:"name,omitempty"`
+}
+
+// destinationKind names DestinationEntry.Destination's known values:
+// "email"/"webhook"/"telegram" ride an operator-created destinations
+// table row (DestinationID); "kb" and "github" are harness-native
+// sinks with no such row.
+const (
+	DestinationKindKB     = "kb"
+	DestinationKindGitHub = "github"
+)
+
+// DestinationEntry is one sink this mission's result phase delivers to
+// or acts on (issue #480): the union of what were five separate mission
+// columns (destination_ids, promote_kb_collection_id, on_complete,
+// branch_pattern, commit_style). Destination names the kind
+// ("email"/"webhook"/"telegram"/"kb"/"github"); DestinationID, when
+// set, names the operator-owned destinations table row carrying that
+// sink's auth/channel config. DeliveredAt/Error are the result step's
+// own delivery-state record (runResult, SetDestinations): DeliveredAt
+// (RFC3339) is set on success, Error on failure, mutually exclusive,
+// both empty before the first attempt. A retry skips an entry whose
+// DeliveredAt is already set and retries one whose Error is set (or
+// which was never attempted).
+type DestinationEntry struct {
+	Destination   string `json:"destination"`
+	DestinationID string `json:"destination_id,omitempty"`
+	// CollectionID names a kb_collections row for a "kb" entry (D-081):
+	// the collection this mission's markdown artifacts promote into.
+	CollectionID string `json:"collection_id,omitempty"`
+	// ConnectorID/RepoURL/Mode/BranchPattern/CommitStyle are a "github"
+	// entry's fields: the operator's consent-at-create push automation
+	// (mirrors the old on_complete/branch_pattern/commit_style columns).
+	// Mode is "push" or "push_pr". BranchPattern/CommitStyle empty means
+	// "use the settings default," resolved fresh at provisioning/commit
+	// time (driver.go), same precedence the old columns had.
+	ConnectorID   string `json:"connector_id,omitempty"`
+	RepoURL       string `json:"repo_url,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	BranchPattern string `json:"branch_pattern,omitempty"`
+	CommitStyle   string `json:"commit_style,omitempty"`
+	DeliveredAt   string `json:"delivered_at,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+// GitHubEntry returns this mission's "github" destination entry, if
+// any: there is at most one per mission (api/missions.go's create
+// only ever appends one from on_complete). ok is false when the
+// mission has none.
+func (m Mission) GitHubEntry() (DestinationEntry, bool) {
+	for _, e := range m.Destinations {
+		if e.Destination == DestinationKindGitHub {
+			return e, true
+		}
+	}
+	return DestinationEntry{}, false
+}
+
+// OnComplete is the effective on_complete value the pre-#480 Mission
+// column used to carry: "" when there is no github entry, else its
+// Mode ("push" or "push_pr"). Kept as a read-only derivation for the
+// handful of call sites (Completer, NotPushable, the missions builtin
+// tool) that only ever need this one field, not the full entry.
+func (m Mission) OnComplete() string {
+	e, ok := m.GitHubEntry()
+	if !ok {
+		return ""
+	}
+	return e.Mode
+}
+
+// KBCollectionID is the effective promote_kb_collection_id the
+// pre-#480 Mission column used to carry: "" when the mission has no
+// "kb" destination entry.
+func (m Mission) KBCollectionID() string {
+	for _, e := range m.Destinations {
+		if e.Destination == DestinationKindKB {
+			return e.CollectionID
+		}
+	}
+	return ""
+}
+
+// DestinationIDs returns every entry's DestinationID in order, empty
+// entries (kb/github, which have none) skipped: the shape
+// destinations.Deliverer historically took, kept for call sites that
+// only need the id list, not the full entry (e.g. the webhook payload's
+// dedup against mission_events was the pre-#480 mechanism; delivery
+// dedup itself now reads Destinations directly, see driver.go's
+// deliverToDestinations).
+func (m Mission) DestinationIDs() []string {
+	var ids []string
+	for _, e := range m.Destinations {
+		if e.DestinationID != "" {
+			ids = append(ids, e.DestinationID)
+		}
+	}
+	return ids
 }
 
 // MissionAttachment is one PDF document attached at mission create

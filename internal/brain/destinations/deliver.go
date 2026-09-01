@@ -2,7 +2,6 @@ package destinations
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -73,31 +72,27 @@ func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdap
 }
 
 // eventDelivered/eventDeliveryFailed name the mission_events rows
-// Deliver appends — one per destination per mission, guarded below so
-// a re-drive (Signal racing Advance) never double-delivers.
+// Deliver appends, one per destination per mission, purely for the
+// Timeline/history now that delivery dedup itself reads each entry's
+// own delivered_at/error (issue #480).
 const (
 	eventDelivered      = "mission.delivered"
 	eventDeliveryFailed = "mission.delivery_failed"
 )
 
-// Deliver runs delivery for every id in destinationIDs, best-effort
-// per destination. Recipients get the mission's generated output
-// (Render's Files, from the mission's declared plan-unit artifacts)
-// plus a short completion line, never the goal/plan/review process
-// digest. Idempotent under a re-drive: a destination that already
-// recorded mission.delivered is skipped, one that recorded
-// mission.delivery_failed (or was never attempted) is retried. No-ops
-// immediately for an empty destinationIDs. Returns an error naming
-// every destination that failed this round, or nil if all succeeded
-// (or there was nothing to deliver).
-func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destinationIDs []string) error {
-	if len(destinationIDs) == 0 {
-		return nil
-	}
-	delivered, err := d.alreadyDelivered(ctx, m.ID)
-	if err != nil {
-		d.log.Warn("destinations: load prior delivery events failed", "mission_id", m.ID, "error", err)
-		return err
+// Deliver runs delivery for every entry in entries, best-effort per
+// destination. Recipients get the mission's generated output (Render's
+// Files, from the mission's declared plan-unit artifacts) plus a short
+// completion line, never the goal/plan/review process digest.
+// Idempotent under a re-drive: an entry whose DeliveredAt is already
+// set is skipped, one with Error set (or never attempted) is retried.
+// Returns the entries with DeliveredAt/Error updated in place (the
+// caller persists them, see missions.Driver.deliverToDestinations)
+// plus an error naming every destination that failed this round, or
+// nil if all succeeded. No-ops immediately for an empty entries.
+func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []missions.DestinationEntry) ([]missions.DestinationEntry, error) {
+	if len(entries) == 0 {
+		return nil, nil
 	}
 	events, err := d.events.Events(ctx, m.ID)
 	if err != nil {
@@ -116,37 +111,44 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, destination
 	}
 	payload := Render(m, webBaseURL, events, loc)
 
+	out := make([]missions.DestinationEntry, len(entries))
 	var failed []string
-	for _, id := range destinationIDs {
-		if delivered[id] {
+	for i, e := range entries {
+		if e.DeliveredAt != "" {
+			out[i] = e
 			continue
 		}
-		if err := d.deliverOne(ctx, m.ID, id, payload); err != nil {
-			failed = append(failed, id)
+		if err := d.deliverOne(ctx, m.ID, &e, payload); err != nil {
+			failed = append(failed, e.DestinationID)
 		}
+		out[i] = e
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("delivery failed for destination(s): %s", strings.Join(failed, ", "))
+		return out, fmt.Errorf("delivery failed for destination(s): %s", strings.Join(failed, ", "))
 	}
-	return nil
+	return out, nil
 }
 
-func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID string, payload Payload) error {
+// deliverOne attempts one entry's delivery, mutating it in place with
+// the outcome (DeliveredAt on success, Error on failure) and recording
+// the same outcome as a mission_events row for the Timeline.
+func (d *Deliverer) deliverOne(ctx context.Context, missionID string, e *missions.DestinationEntry, payload Payload) error {
+	destinationID := e.DestinationID
 	dest, err := d.store.Get(ctx, destinationID)
 	if err != nil {
 		reason := "destination not found: " + err.Error()
-		d.recordOutcome(ctx, missionID, destinationID, "", false, reason)
+		d.recordOutcome(ctx, missionID, e, "", reason)
 		return errors.New(reason)
 	}
 	if !dest.Enabled {
 		reason := "destination is disabled"
-		d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, reason)
+		d.recordOutcome(ctx, missionID, e, dest.Name, reason)
 		return errors.New(reason)
 	}
 	adapter := d.adapters[dest.Kind]
 	if adapter == nil {
 		reason := "no adapter for kind " + dest.Kind
-		d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, reason)
+		d.recordOutcome(ctx, missionID, e, dest.Name, reason)
 		return errors.New(reason)
 	}
 
@@ -158,14 +160,14 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID str
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, ctx.Err().Error())
+				d.recordOutcome(ctx, missionID, e, dest.Name, ctx.Err().Error())
 				return ctx.Err()
 			case <-timer.C:
 			}
 		}
 		lastErr = adapter.Deliver(ctx, dest.Config, dest.CredentialRef, payload)
 		if lastErr == nil {
-			d.recordOutcome(ctx, missionID, destinationID, dest.Name, true, "")
+			d.recordOutcome(ctx, missionID, e, dest.Name, "")
 			return nil
 		}
 		d.log.Warn("destinations: delivery attempt failed", "mission_id", missionID, "destination_id", destinationID, "attempt", i+1, "error", lastErr)
@@ -176,19 +178,26 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID, destinationID str
 			break
 		}
 	}
-	d.recordOutcome(ctx, missionID, destinationID, dest.Name, false, lastErr.Error())
+	d.recordOutcome(ctx, missionID, e, dest.Name, lastErr.Error())
 	return lastErr
 }
 
-func (d *Deliverer) recordOutcome(ctx context.Context, missionID, destinationID, name string, ok bool, reason string) {
+// recordOutcome sets entry's DeliveredAt (success, reason == "") or
+// Error (failure) and appends the matching mission_events row for the
+// Timeline.
+func (d *Deliverer) recordOutcome(ctx context.Context, missionID string, e *missions.DestinationEntry, name, reason string) {
 	kind := eventDelivered
-	payload := map[string]any{"destination_id": destinationID, "destination_name": name}
-	if !ok {
+	payload := map[string]any{"destination_id": e.DestinationID, "destination_name": name}
+	if reason == "" {
+		e.DeliveredAt = time.Now().UTC().Format(time.RFC3339)
+		e.Error = ""
+	} else {
 		kind = eventDeliveryFailed
+		e.Error = reason
 		payload["reason"] = reason
 	}
 	if err := d.events.AppendEvent(ctx, missionID, kind, payload); err != nil {
-		d.log.Warn("destinations: record outcome event failed", "mission_id", missionID, "destination_id", destinationID, "error", err)
+		d.log.Warn("destinations: record outcome event failed", "mission_id", missionID, "destination_id", e.DestinationID, "error", err)
 	}
 }
 
@@ -242,30 +251,4 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 		return "", "", err
 	}
 	return dest.Name, dest.Kind, nil
-}
-
-// alreadyDelivered scans a mission's events for prior mission.delivered
-// rows, keyed by destination_id: a destination already delivered is
-// never re-sent on a result-phase retry (D-086), but one that only
-// recorded mission.delivery_failed (or was never attempted) IS
-// retried, so a park in result actually makes progress instead of
-// replaying the same permanent failure forever.
-func (d *Deliverer) alreadyDelivered(ctx context.Context, missionID string) (map[string]bool, error) {
-	events, err := d.events.Events(ctx, missionID)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]bool{}
-	for _, ev := range events {
-		if ev.Kind != eventDelivered {
-			continue
-		}
-		var payload struct {
-			DestinationID string `json:"destination_id"`
-		}
-		if jsonErr := json.Unmarshal(ev.Payload, &payload); jsonErr == nil && payload.DestinationID != "" {
-			out[payload.DestinationID] = true
-		}
-	}
-	return out, nil
 }

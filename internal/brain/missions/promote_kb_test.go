@@ -40,7 +40,7 @@ func (r *recordingPromoteKB) count() int {
 
 func TestDriverPromotesToKBOnDone(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, PromoteKBCollectionID: "c1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -62,7 +62,7 @@ func TestDriverPromotesToKBOnDone(t *testing.T) {
 
 func TestDriverSkipsPromoteKBOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, PromoteKBCollectionID: "c1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, Destinations: []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}
@@ -105,7 +105,7 @@ func TestDriverSkipsPromoteKBWhenNoCollection(t *testing.T) {
 
 func TestDriverSkipsPromoteKBWhenNilHook(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, PromoteKBCollectionID: "c1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -128,7 +128,7 @@ func TestDriverSkipsPromoteKBWhenNilHook(t *testing.T) {
 // the mission IN result rather than being logged and lost.
 func TestDriverParksInResultOnPromoteKBFailure(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, PromoteKBCollectionID: "c1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},

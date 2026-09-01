@@ -1219,7 +1219,7 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
 		UnitsPassed: passed, UnitsTotal: len(m.Spec.Units),
 		PauseReason: string(m.PauseReason), PauseMessage: m.PauseMessage,
-		OnComplete:        m.OnComplete,
+		OnComplete:        m.OnComplete(),
 		NotPushableReason: missions.NotPushable(m),
 	}
 }

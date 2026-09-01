@@ -49,9 +49,9 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
 	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
-	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, final_output, created_at, updated_at,
-	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds, pending_input, asks_used, flow`
+	discover_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id,
+	parent_mission_id, parent_context, referenced_context, attachments, destinations, final_output, created_at, updated_at,
+	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -106,17 +106,16 @@ func scanPendingInput(m *Mission, raw []byte) {
 // web UI's mission list/detail views read.
 func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	var (
-		m                                                             Mission
-		agentID, scheduleID, sessionID, parentMission                 *string
-		phase, status                                                 string
-		pendingPermissionRaw                                          []byte
-		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
-		failureReason                                                 *string
-		workflowRunID                                                 *string
-		promoteKBCollectionID                                         *string
-		permissionTimeoutSeconds                                      *int
-		pendingInputRaw                                               []byte
-		flow                                                          string
+		m                                                                              Mission
+		agentID, scheduleID, sessionID, parentMission                                  *string
+		phase, status                                                                  string
+		pendingPermissionRaw                                                           []byte
+		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
+		failureReason                                                                  *string
+		workflowRunID                                                                  *string
+		permissionTimeoutSeconds                                                       *int
+		pendingInputRaw                                                                []byte
+		flow                                                                           string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -124,10 +123,10 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
-		&m.DestinationIDs, &m.FinalOutput,
+		&m.RepoURL, &m.ConnectorID, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
+		&destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow,
 		&failureReason); err != nil {
 		return Mission{}, err
@@ -135,6 +134,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	m.Flow = Flow(flow)
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
+	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
 	scanPendingInput(&m, pendingInputRaw)
 	if agentID != nil {
@@ -153,9 +153,6 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		m.WorkflowRunID = *workflowRunID
 	}
 	m.PermissionTimeoutSeconds = permissionTimeoutSeconds
-	if promoteKBCollectionID != nil {
-		m.PromoteKBCollectionID = *promoteKBCollectionID
-	}
 	if failureReason != nil {
 		m.FailureReason = *failureReason
 	}
@@ -197,16 +194,15 @@ const failureReasonJoin = `
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
-		m                                                             Mission
-		agentID, scheduleID, sessionID, parentMission                 *string
-		phase, status                                                 string
-		pendingPermissionRaw                                          []byte
-		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw []byte
-		workflowRunID                                                 *string
-		promoteKBCollectionID                                         *string
-		permissionTimeoutSeconds                                      *int
-		pendingInputRaw                                               []byte
-		flow                                                          string
+		m                                                                              Mission
+		agentID, scheduleID, sessionID, parentMission                                  *string
+		phase, status                                                                  string
+		pendingPermissionRaw                                                           []byte
+		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
+		workflowRunID                                                                  *string
+		permissionTimeoutSeconds                                                       *int
+		pendingInputRaw                                                                []byte
+		flow                                                                           string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -214,16 +210,17 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
-		&m.DestinationIDs, &m.FinalOutput,
+		&m.RepoURL, &m.ConnectorID, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
+		&destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
-		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
+		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = Flow(flow)
 	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
+	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
 	scanPendingInput(&m, pendingInputRaw)
 	if agentID != nil {
@@ -240,9 +237,6 @@ func scanMission(row pgx.Row) (Mission, error) {
 	}
 	if workflowRunID != nil {
 		m.WorkflowRunID = *workflowRunID
-	}
-	if promoteKBCollectionID != nil {
-		m.PromoteKBCollectionID = *promoteKBCollectionID
 	}
 	m.PermissionTimeoutSeconds = permissionTimeoutSeconds
 	// Fail-safe degrade: an unrecognized phase/status (e.g. a future
@@ -307,12 +301,16 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
 	}
-	// destination_ids is NOT NULL; a nil slice binds as a NULL array
-	// parameter, so a mission with no destinations gets an empty slice
-	// instead.
-	destinationIDs := m.DestinationIDs
-	if destinationIDs == nil {
-		destinationIDs = []string{}
+	// destinations is NOT NULL; a nil slice marshals to "null", which
+	// would violate that, so a mission with no destinations gets "[]"
+	// instead (same fix as attachments/knowledge above).
+	destinations := m.Destinations
+	if destinations == nil {
+		destinations = []DestinationEntry{}
+	}
+	destinationsJSON, err := json.Marshal(destinations)
+	if err != nil {
+		return "", fmt.Errorf("missions create destinations: %w", err)
 	}
 	// flow defaults to full for any caller (test fixture, a pre-#459
 	// code path) that never set it: matches the column's own DB
@@ -323,9 +321,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, NULLIF($28, '')::uuid, $29, $30, $31, $32, $33, NULLIF($34, '')::uuid, $35, NULLIF($36, '')::uuid, $37, $38) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds, flow,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, parent_mission_id, parent_context, referenced_context, attachments, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, NULLIF($31, '')::uuid, $32, $33, $34) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -495,6 +493,29 @@ func (s *Store) SetArtifactRefs(ctx context.Context, id string, refs []ArtifactR
 	}
 	if _, err := db.Exec(ctx, `UPDATE missions SET artifact_refs = $2, updated_at = now() WHERE id = $1`, id, data); err != nil {
 		return fmt.Errorf("missions set artifact refs: %w", err)
+	}
+	return nil
+}
+
+// SetDestinations persists the mission's destinations entries whole,
+// written by the result phase's step (runResult) after each delivery
+// attempt records its own delivered_at/error onto its entry. Bypasses
+// the state machine, same as SetSpec/SetArtifactRefs: a delivery-state
+// update doesn't coincide with a phase/status change.
+func (s *Store) SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set destinations: %w", err)
+	}
+	if entries == nil {
+		entries = []DestinationEntry{}
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return fmt.Errorf("missions set destinations: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET destinations = $2, updated_at = now() WHERE id = $1`, id, data); err != nil {
+		return fmt.Errorf("missions set destinations: %w", err)
 	}
 	return nil
 }
@@ -1367,9 +1388,9 @@ func (s *Store) RecoverStaleWorking(ctx context.Context, staleAfter time.Duratio
 
 // ActiveMissionReferencesDestination reports whether any NON-terminal
 // mission (phase NOT IN ('done', 'failed')) still names destinationID
-// in its destination_ids — the guard destinations.Store.Delete calls
-// before removing a row, so a live mission's delivery target can't
-// vanish out from under it. A historical (terminal) mission's
+// in its destinations entries, the guard destinations.Store.Delete
+// calls before removing a row, so a live mission's delivery target
+// can't vanish out from under it. A historical (terminal) mission's
 // reference never blocks deletion.
 func (s *Store) ActiveMissionReferencesDestination(ctx context.Context, destinationID string) (bool, error) {
 	db, err := s.db.Get()
@@ -1379,7 +1400,8 @@ func (s *Store) ActiveMissionReferencesDestination(ctx context.Context, destinat
 	var exists bool
 	err = db.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM missions
-		WHERE phase NOT IN ('done', 'failed') AND $1 = ANY(destination_ids)
+		WHERE phase NOT IN ('done', 'failed')
+		AND EXISTS (SELECT 1 FROM jsonb_array_elements(destinations) d WHERE d->>'destination_id' = $1)
 	)`, destinationID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("missions active destination reference: %w", err)

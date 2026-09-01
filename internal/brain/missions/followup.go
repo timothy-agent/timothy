@@ -37,12 +37,11 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID, goal string) (str
 		AutoApproveSafe: parent.AutoApproveSafe, AutoApprovePlan: parent.AutoApprovePlan, PromptOverlay: parent.PromptOverlay,
 		Knowledge: parent.Knowledge, Harness: parent.Harness, Environment: parent.Environment,
 		RepoURL: parent.RepoURL, ConnectorID: parent.ConnectorID,
-		BranchPattern: parent.BranchPattern, CommitStyle: parent.CommitStyle,
 		Flow: parent.Flow, ParentMissionID: parent.ID, ParentContext: parentContext,
-		// Deliberately NOT copied from parent: OnComplete (push consent is
-		// a per-mission human choice), DestinationIDs (D-061, operator
-		// addresses outputs per mission), Attachments (a follow-up's own
-		// documents, not the parent's).
+		// Deliberately NOT copied from parent: Destinations (push consent,
+		// destination_ids, and kb promotion are per-mission human choices,
+		// D-061, operator addresses outputs per mission), Attachments (a
+		// follow-up's own documents, not the parent's).
 	}
 	id, err := d.Create(ctx, child)
 	if err != nil {

@@ -47,10 +47,11 @@ type provisioner struct {
 
 	// gitBranchPattern resolves the settings-configured default branch
 	// pattern (see SetGitBranchPattern) — consulted by ensureProvisioned
-	// only when the mission's own BranchPattern is empty (mission
-	// override > settings > worktree.go's DefaultBranchPattern). nil-safe:
-	// unset falls straight through to Provision's own DefaultBranchPattern
-	// fallback, same as before this setting existed.
+	// only when the mission's own github destination entry has no
+	// BranchPattern (mission override > settings > worktree.go's
+	// DefaultBranchPattern). nil-safe: unset falls straight through to
+	// Provision's own DefaultBranchPattern fallback, same as before this
+	// setting existed.
 	gitBranchPattern func(ctx context.Context) string
 
 	// resolvePRState resolves whether a github PR has been merged (see
@@ -116,7 +117,10 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 				}
 			}
 		}
-		branchPattern := m.BranchPattern
+		branchPattern := ""
+		if e, ok := m.GitHubEntry(); ok {
+			branchPattern = e.BranchPattern
+		}
 		if branchPattern == "" && p.gitBranchPattern != nil {
 			branchPattern = p.gitBranchPattern(ctx)
 		}

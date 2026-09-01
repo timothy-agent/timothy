@@ -721,38 +721,24 @@ CREATE TABLE IF NOT EXISTS missions (
     -- connector_id's credential_ref at provisioning time only.
     repo_url              text NOT NULL DEFAULT '',
     connector_id          text NOT NULL DEFAULT '',
-    -- Consent-at-create for the mission's auto-completion action: ''
-    -- (default) does nothing in the result phase's step; 'push'
-    -- pushes the branch; 'push_pr' pushes then opens a pull request.
-    -- Chosen by the operator at create time (api/missions.go), never
-    -- decided by the model -- keeps the pushes-stay-human invariant:
-    -- the harness only ever executes a choice a human already made.
-    -- Requires repo_url+connector_id and kind='coding', same guards as
-    -- the manual push/pr endpoints.
-    on_complete           text NOT NULL DEFAULT '',
-    -- This mission's own override of the settings-configured git
-    -- strategy defaults (settings.ValueGitBranchPattern/
-    -- ValueGitCommitStyle): '' (the default) means "use the settings
-    -- default," resolved fresh at provisioning/commit time
-    -- (internal/brain/missions/driver.go), never baked in here.
-    -- branch_pattern is a validated template (internal/brain/missions/
-    -- branchtemplate.go); commit_style is 'conventional' or 'plain'.
-    branch_pattern        text NOT NULL DEFAULT '',
-    commit_style          text NOT NULL DEFAULT '',
-    -- Destination ids to deliver this mission's outcome digest to in
-    -- the result phase's step (destinations.go's Deliverer,
-    -- driver.go's runResult, D-086). Never model-decided: api/missions.go's
-    -- create validates every id against the operator-owned destinations
-    -- table before it lands here.
-    destination_ids       uuid[] NOT NULL DEFAULT '{}',
-    -- D-081 (issue #370): kb collection to promote this mission's
-    -- markdown artifacts into in the result phase's step
-    -- (kb.go's promoteToKB, driver.go's runResult, D-086). ''
-    -- (default) does nothing. Explicit id, never a default "Missions"
-    -- collection auto-create, same as destination_ids above; the
-    -- operator can also promote manually via POST .../promote-kb after
-    -- the mission is done, using the same code path.
-    promote_kb_collection_id uuid,
+    -- destinations replaces the five separate columns issue #480
+    -- dropped (destination_ids, on_complete, branch_pattern,
+    -- commit_style, promote_kb_collection_id): a jsonb array of
+    -- entries, each {"destination": <kind>, "destination_id": <uuid>?,
+    -- ...per-kind fields, "delivered_at"?, "error"?}
+    -- (missions.DestinationEntry). "email"/"webhook"/"telegram" entries
+    -- carry destination_id, naming an operator-owned destinations table
+    -- row; "kb" carries collection_id (D-081); "github" carries the
+    -- operator's consent-at-create push automation (connector_id,
+    -- repo_url, mode "push"/"push_pr", optional branch_pattern/
+    -- commit_style overriding the settings-configured git strategy
+    -- defaults). delivered_at/error are the result phase's own
+    -- delivery-state record (driver.go's runResult,
+    -- destinations.Deliverer, D-086), written back per entry. Never
+    -- model-decided: api/missions.go's create validates every
+    -- destination_id against the operator-owned destinations table
+    -- before it lands here.
+    destinations          jsonb NOT NULL DEFAULT '[]',
     -- workflow_run_id/workflow_step name the workflow run and step
     -- (internal/brain/workflows) this mission was spawned as, if any.
     -- NULL/'' for an ordinary mission. The workflow engine reads these

@@ -196,6 +196,15 @@ func (f *fakeStore) SetArtifactRefs(ctx context.Context, id string, refs []Artif
 	return nil
 }
 
+func (f *fakeStore) SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.Destinations = entries
+	f.missions[id] = m
+	return nil
+}
+
 func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -409,7 +418,7 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
 		Workspace: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
-		OnComplete: "push_pr",
+		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}},
 	})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
@@ -462,7 +471,7 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
 		Workspace: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
-		OnComplete: "push",
+		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}},
 	})
 	runner := &scriptedRunner{
 		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
@@ -1874,13 +1883,15 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 }
 
 // TestDriverProvisionUsesMissionBranchPatternOverSettings confirms the
-// precedence order ensureProvisioned resolves: a mission's own
-// BranchPattern wins over the settings-configured default.
+// precedence order ensureProvisioned resolves: a mission's own github
+// destination entry's BranchPattern wins over the settings-configured
+// default.
 func TestDriverProvisionUsesMissionBranchPatternOverSettings(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Goal: "Fix the login bug", Kind: "coding", BranchPattern: "custom/{slug}",
-		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
+		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, BranchPattern: "custom/{slug}"}},
+		Phase:        PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 	})
 	sessions := &fakeSessionCreator{}
 	wsRoot := t.TempDir()
@@ -2017,7 +2028,11 @@ func TestDriverEffectiveCommitStylePrecedence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &Driver{gitCommitStyle: tc.settingsStyle, log: slog.Default()}
-			got := d.effectiveCommitStyle(context.Background(), Mission{CommitStyle: tc.missionStyle})
+			var destinations []DestinationEntry
+			if tc.missionStyle != "" {
+				destinations = []DestinationEntry{{Destination: DestinationKindGitHub, CommitStyle: tc.missionStyle}}
+			}
+			got := d.effectiveCommitStyle(context.Background(), Mission{Destinations: destinations})
 			if got != tc.want {
 				t.Fatalf("effectiveCommitStyle = %q, want %q", got, tc.want)
 			}

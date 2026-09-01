@@ -158,7 +158,7 @@ func pushableMission(t *testing.T) Mission {
 func TestCompleterRunOnCompletePush(t *testing.T) {
 	t.Parallel()
 	m := pushableMission(t)
-	m.OnComplete = "push"
+	m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
 	store := &fakeEventAppender{}
 	pusher := &fakeBranchPusher{host: "github.com"}
 	resolveToken := func(ctx context.Context, connectorID string) (string, error) { return "dummy-token", nil }
@@ -181,7 +181,7 @@ func TestCompleterRunOnCompletePush(t *testing.T) {
 func TestCompleterRunOnCompletePushPR(t *testing.T) {
 	t.Parallel()
 	m := pushableMission(t)
-	m.OnComplete = "push_pr"
+	m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}}
 	store := &fakeEventAppender{}
 	pusher := &fakeBranchPusher{host: "github.com"}
 	resolveToken := func(ctx context.Context, connectorID string) (string, error) { return "dummy-token", nil }
@@ -209,7 +209,7 @@ func TestCompleterRunOnCompletePushPR(t *testing.T) {
 func TestCompleterRunOnCompletePushFailureNoPR(t *testing.T) {
 	t.Parallel()
 	m := pushableMission(t)
-	m.OnComplete = "push_pr"
+	m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}}
 	store := &fakeEventAppender{}
 	pusher := &fakeBranchPusher{err: ErrPushRejected}
 	resolveToken := func(ctx context.Context, connectorID string) (string, error) { return "dummy-token", nil }
@@ -233,7 +233,7 @@ func TestCompleterRunOnCompleteEmptyIsNoop(t *testing.T) {
 	t.Parallel()
 	store := &fakeEventAppender{}
 	c := NewCompleter(nil, store, nil, nil)
-	if err := c.RunOnComplete(context.Background(), Mission{OnComplete: ""}); err != nil {
+	if err := c.RunOnComplete(context.Background(), Mission{}); err != nil {
 		t.Fatalf("RunOnComplete with empty on_complete: %v", err)
 	}
 	if len(store.kinds()) != 0 {
@@ -249,7 +249,7 @@ func TestCompleterRunOnCompletePushFailureRecordsEvent(t *testing.T) {
 	t.Parallel()
 	store := &fakeEventAppender{}
 	c := NewCompleter(nil, store, nil, nil)
-	m := Mission{Kind: "general", OnComplete: "push"} // NotPushable rejects kind != coding
+	m := Mission{Kind: "general", Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}} // NotPushable rejects kind != coding
 	err := c.RunOnComplete(context.Background(), m)
 	if err == nil {
 		t.Fatal("RunOnComplete should fail for an unpushable mission")
@@ -264,7 +264,7 @@ func TestCompleterRunOnCompletePushFailureRecordsEvent(t *testing.T) {
 func TestCompleterRunOnCompleteNoResolverFails(t *testing.T) {
 	t.Parallel()
 	m := pushableMission(t)
-	m.OnComplete = "push"
+	m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
 	store := &fakeEventAppender{}
 	c := NewCompleter(nil, store, nil, nil)
 	if err := c.RunOnComplete(context.Background(), m); err == nil {

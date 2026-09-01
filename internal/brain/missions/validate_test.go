@@ -75,43 +75,54 @@ func TestValidateCreate(t *testing.T) {
 			return m
 		}, ValidateDeps{}, true},
 		{"branch_pattern on general", func(m Mission) Mission {
-			m.BranchPattern = "{type}/{slug}"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, BranchPattern: "{type}/{slug}"}}
 			return m
 		}, ValidateDeps{}, true},
 		{"commit_style on general", func(m Mission) Mission {
-			m.CommitStyle = CommitStylePlain
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, CommitStyle: CommitStylePlain}}
 			return m
 		}, ValidateDeps{}, true},
 		{"on_complete on general", func(m Mission) Mission {
-			m.OnComplete = "push"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
 			return m
 		}, ValidateDeps{}, true},
 		{"invalid branch_pattern on coding", func(m Mission) Mission {
-			m.Kind, m.BranchPattern = "coding", "{oops}/{slug}"
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", BranchPattern: "{oops}/{slug}"}}
+			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
 			return m
 		}, ValidateDeps{}, true},
 		{"valid branch_pattern on coding", func(m Mission) Mission {
-			m.Kind, m.BranchPattern = "coding", "{type}/{slug}"
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", BranchPattern: "{type}/{slug}"}}
+			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
 			return m
 		}, ValidateDeps{}, false},
 		{"invalid commit_style on coding", func(m Mission) Mission {
-			m.Kind, m.CommitStyle = "coding", "loud"
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CommitStyle: "loud"}}
+			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
 			return m
 		}, ValidateDeps{}, true},
 		{"valid commit_style on coding", func(m Mission) Mission {
-			m.Kind, m.CommitStyle = "coding", CommitStylePlain
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CommitStyle: CommitStylePlain}}
+			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
 			return m
 		}, ValidateDeps{}, false},
 		{"on_complete unknown value", func(m Mission) Mission {
-			m.Kind, m.OnComplete = "coding", "bogus"
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "bogus"}}
 			return m
 		}, ValidateDeps{}, true},
 		{"on_complete push without repo/connector", func(m Mission) Mission {
-			m.Kind, m.OnComplete = "coding", "push"
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
 			return m
 		}, ValidateDeps{}, true},
 		{"on_complete push with repo/connector", func(m Mission) Mission {
-			m.Kind, m.OnComplete = "coding", "push"
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
 			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
 			return m
 		}, ValidateDeps{}, false},
@@ -159,47 +170,47 @@ func TestValidateCreate(t *testing.T) {
 			return m
 		}, ValidateDeps{}, false},
 		{"destination_ids all enabled", func(m Mission) Mission {
-			m.DestinationIDs = []string{"d1", "d2"}
+			m.Destinations = []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}
 			return m
 		}, ValidateDeps{DestinationEnabled: func(ctx context.Context, id string) (bool, error) {
 			return true, nil
 		}}, false},
 		{"destination_ids one disabled", func(m Mission) Mission {
-			m.DestinationIDs = []string{"d1", "d2"}
+			m.Destinations = []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}
 			return m
 		}, ValidateDeps{DestinationEnabled: func(ctx context.Context, id string) (bool, error) {
 			return id == "d1", nil
 		}}, true},
 		{"destination_ids lookup error", func(m Mission) Mission {
-			m.DestinationIDs = []string{"d1"}
+			m.Destinations = []DestinationEntry{{DestinationID: "d1"}}
 			return m
 		}, ValidateDeps{DestinationEnabled: func(ctx context.Context, id string) (bool, error) {
 			return false, fmt.Errorf("db unavailable")
 		}}, true},
 		{"destination_ids unchecked when dep nil", func(m Mission) Mission {
-			m.DestinationIDs = []string{"d1"}
+			m.Destinations = []DestinationEntry{{DestinationID: "d1"}}
 			return m
 		}, ValidateDeps{}, false},
 		{"promote_kb_collection_id exists", func(m Mission) Mission {
-			m.PromoteKBCollectionID = "c1"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}
 			return m
 		}, ValidateDeps{KBCollectionExists: func(ctx context.Context, id string) (bool, error) {
 			return id == "c1", nil
 		}}, false},
 		{"promote_kb_collection_id unknown", func(m Mission) Mission {
-			m.PromoteKBCollectionID = "bogus"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "bogus"}}
 			return m
 		}, ValidateDeps{KBCollectionExists: func(ctx context.Context, id string) (bool, error) {
 			return id == "c1", nil
 		}}, true},
 		{"promote_kb_collection_id lookup error", func(m Mission) Mission {
-			m.PromoteKBCollectionID = "c1"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}
 			return m
 		}, ValidateDeps{KBCollectionExists: func(ctx context.Context, id string) (bool, error) {
 			return false, fmt.Errorf("db unavailable")
 		}}, true},
 		{"promote_kb_collection_id unchecked when dep nil", func(m Mission) Mission {
-			m.PromoteKBCollectionID = "c1"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}
 			return m
 		}, ValidateDeps{}, false},
 		{"unknown flow rejected", func(m Mission) Mission {

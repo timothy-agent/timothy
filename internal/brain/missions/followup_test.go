@@ -45,8 +45,8 @@ func TestCreateFollowUpUnknownParent(t *testing.T) {
 
 // TestCreateFollowUpCopiesParentSettings proves the child mission
 // inherits the parent's kind/agent/routes/repo/harness settings, carries
-// a non-empty ParentContext, and does NOT inherit OnComplete or
-// DestinationIDs.
+// a non-empty ParentContext, and does NOT inherit Destinations (push
+// consent, destination ids, kb promotion).
 func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{
@@ -56,8 +56,11 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
 		AutoApproveSafe: true, PromptOverlay: "be terse", Knowledge: []string{"kb1"},
 		Harness: "claude-cli", Environment: "node", RepoURL: "https://github.com/o/r.git",
-		ConnectorID: "conn1", BranchPattern: "custom/{slug}", CommitStyle: "conventional",
-		OnComplete: "push_pr", DestinationIDs: []string{"dest-1"},
+		ConnectorID: "conn1",
+		Destinations: []DestinationEntry{
+			{Destination: DestinationKindGitHub, Mode: "push_pr", BranchPattern: "custom/{slug}", CommitStyle: "conventional"},
+			{DestinationID: "dest-1"},
+		},
 	})
 	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
@@ -76,7 +79,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		child.ReviewRoute != "route-b" || child.PlanRoute != "route-c" || child.EscalationRoute != "route-d" ||
 		child.MaxIterations != 12 || child.AutoApproveSafe != true || child.PromptOverlay != "be terse" ||
 		child.Harness != "claude-cli" || child.Environment != "node" || child.RepoURL != "https://github.com/o/r.git" ||
-		child.ConnectorID != "conn1" || child.BranchPattern != "custom/{slug}" || child.CommitStyle != "conventional" ||
+		child.ConnectorID != "conn1" ||
 		child.RouteModel != "P/m-a" || child.PlanRouteModel != "P/m-c" || child.ReviewRouteModel != "P/m-b" {
 		t.Fatalf("child did not inherit parent settings: %+v", child)
 	}
@@ -92,11 +95,8 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	if !strings.Contains(child.ParentContext, "fix the login bug") {
 		t.Fatalf("child.ParentContext = %q, want it to mention the parent's goal", child.ParentContext)
 	}
-	if child.OnComplete != "" {
-		t.Fatalf("child.OnComplete = %q, want empty — push consent is a per-mission choice", child.OnComplete)
-	}
-	if len(child.DestinationIDs) != 0 {
-		t.Fatalf("child.DestinationIDs = %v, want empty — destinations are a per-mission choice", child.DestinationIDs)
+	if len(child.Destinations) != 0 {
+		t.Fatalf("child.Destinations = %+v, want empty, destinations are a per-mission choice", child.Destinations)
 	}
 }
 
