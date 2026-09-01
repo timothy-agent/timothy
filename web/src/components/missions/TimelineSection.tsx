@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { renderEvent, toolCallStatusClass } from './eventRenderers'
 import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
 import { formatDuration } from '../../lib/format'
+import { phaseColors, phaseLabel } from '../../lib/phaseColors'
 
 // How close to the bottom (px) counts as "already following the tail"
 //: auto-scroll only kicks in within this margin, so a reader who has
@@ -45,6 +46,38 @@ function turnToolCalls(events: MissionEvent[]): Map<number, MissionEvent[]> {
     }
   }
   return byTurn
+}
+
+// rowPhases maps each rendered row's seq to the phase chip it should
+// show: the phase most recently started (mission.phase_started) before
+// that row, or the first phase_started's phase for rows that precede
+// it (nothing has started yet, so the mission's opening phase is the
+// closest honest label, see mission.phase_started's payload). A
+// mission with no phase_started event at all (shouldn't happen past
+// create, but a defensive default) leaves every row unchipped.
+function rowPhases(rows: MissionEvent[]): Map<number, string> {
+  const starts = rows.filter((e) => e.kind === 'mission.phase_started')
+  if (starts.length === 0) return new Map()
+  const firstPhase = String((starts[0].payload as { phase?: string }).phase ?? '')
+  const chips = new Map<number, string>()
+  let current = firstPhase
+  for (const e of rows) {
+    if (e.kind === 'mission.phase_started') {
+      current = String((e.payload as { phase?: string }).phase ?? current)
+    }
+    chips.set(e.seq, current)
+  }
+  return chips
+}
+
+// PhaseChip renders a small color-coded phase label (issue #473): one
+// consistent color per phase (lib/phaseColors), shared with anywhere
+// else a phase gets colored.
+function PhaseChip({ phase }: { phase: string }) {
+  const label = phaseLabel(phase)
+  const color = phaseColors[label]
+  if (!color) return null
+  return <span className={`mr-1.5 rounded px-1 py-0.5 text-[10px] font-semibold whitespace-nowrap ${color}`}>{label}</span>
 }
 
 // TurnTraceToggle renders the expand/collapse control and, when
@@ -115,6 +148,7 @@ function timelineText(rows: MissionEvent[]): string {
 export function TimelineSection({ events }: { events: MissionEvent[] }) {
   const rows = events.filter(rowKind)
   const toolCallsByTurn = turnToolCalls(events)
+  const phasesBySeq = rowPhases(rows)
   const containerRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
   const { fullscreen, toggle, close } = useFullscreenPanel()
@@ -203,6 +237,7 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
                   {new Date(e.created_at).toLocaleTimeString()}
                 </span>
                 <span className="flex-1 break-words">
+                  {phasesBySeq.has(e.seq) && <PhaseChip phase={phasesBySeq.get(e.seq)!} />}
                   {renderEvent(e, rows)}
                   {e.kind === 'mission.turn' && <TurnTraceToggle calls={toolCallsByTurn.get(e.seq) ?? []} />}
                 </span>

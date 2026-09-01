@@ -58,12 +58,22 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return <span className={approved ? 'text-green-400' : 'text-amber-400'}>Review verdict: {String(decision ?? '?')}</span>
   },
   'mission.turn': (p) => {
-    const { phase, duration_ms, ok, reason } = p as MissionTurnPayload
+    const { phase, duration_ms, ok, reason, route, agent } = p as MissionTurnPayload
     const base = `Turn (${phase}): ${ok ? 'ok' : 'failed'} · ${formatDuration(duration_ms)}`
-    if (ok || !reason) return <span className={ok ? undefined : 'text-red-400'}>{base}</span>
+    const context = [agent, route].filter(Boolean).join(' · ')
+    const contextEl = context && <span className="ml-1 text-zinc-500">{context}</span>
+    if (ok || !reason) {
+      return (
+        <span className={ok ? undefined : 'text-red-400'}>
+          {base}
+          {contextEl}
+        </span>
+      )
+    }
     return (
       <span className="text-red-400" title={reason}>
         {base}: {truncateForDisplay(reason, 160)}
+        {contextEl}
       </span>
     )
   },

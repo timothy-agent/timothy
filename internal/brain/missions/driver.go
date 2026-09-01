@@ -308,6 +308,21 @@ func (d *Driver) SetAgentResolver(resolve AgentResolver) {
 	d.provision.resolveAgent = resolve
 }
 
+// agentName resolves a mission's agent to its display name for the
+// mission.turn event payload (issue #473). Empty agentID or an unwired/
+// missing resolver both return "" rather than erroring: a label is a
+// nicety, never worth failing turn telemetry over.
+func (d *Driver) agentName(ctx context.Context, agentID string) string {
+	if agentID == "" || d.provision.resolveAgent == nil {
+		return ""
+	}
+	defaults, ok := d.provision.resolveAgent(ctx, agentID)
+	if !ok {
+		return ""
+	}
+	return defaults.Name
+}
+
 // SetSkillsIndex wires the resolver packet() uses to render the
 // mission agent's skill index into worker prompts — a setter for the
 // same construction-order reason SetAgentResolver is. nil (unwired)
@@ -794,7 +809,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	// never got an immediate Drive at all.
 	if m.Status == StatusIdle {
 		if admit, reason := admitWork(ctx, d.capacity, d.log); !admit {
-			d.log.Info("driver: capacity denied, mission stays idle", "mission_id", id, "reason", reason)
+			d.log.Info("driver: capacity denied, mission stays idle", "mission_id", id, "phase", m.Phase, "reason", reason)
 			return false, nil
 		}
 	}
@@ -811,7 +826,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// the work-slot sweep to retry ensureProvisioned every 30s
 			// forever. Pause it as an infra failure instead, same path a
 			// phase-run error takes below.
-			d.log.Error("driver: provisioning failed", "mission_id", id, "error", provErr)
+			d.log.Error("driver: provisioning failed", "mission_id", id, "agent", d.agentName(ctx, m.AgentID), "error", provErr)
 			in := StepInput{Input: InputReviewInfraFailure, Reason: "provisioning failed: " + provErr.Error()}
 			t := Step(d.toStepState(ctx, m), in, d.cfg)
 			if err := d.store.ApplyTransition(ctx, id, t); err != nil {
@@ -835,7 +850,8 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		err = nil
 	}
 	if err != nil {
-		d.log.Error("driver: phase run failed", "mission_id", id, "phase", m.Phase, "error", err)
+		d.log.Error("driver: phase run failed", "mission_id", id, "phase", m.Phase,
+			"route", phaseRoute(m), "agent", d.agentName(ctx, m.AgentID), "error", err)
 		switch {
 		case errors.Is(err, ErrModelFloor):
 			// A below-floor fallback model served this turn: it cannot
@@ -873,6 +889,17 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if m.Phase == PhaseGenerate && workerRoute(m) != m.Route {
 		payload["escalated_route"] = workerRoute(m)
 	}
+	// Route/agent context (issue #473): route is the mission's own
+	// effective route for the phase that just ran (same helpers
+	// runner.go's request builders already use), never the resolved
+	// model, since the runner doesn't surface which chain entry
+	// actually served the turn, and guessing one is worse than omitting it.
+	if route := phaseRoute(m); route != "" {
+		payload["route"] = route
+	}
+	if agent := d.agentName(ctx, m.AgentID); agent != "" {
+		payload["agent"] = agent
+	}
 	if evErr := d.store.AppendEvent(ctx, id, "mission.turn", payload); evErr != nil {
 		d.log.Warn("driver: record turn failed", "mission_id", id, "error", evErr)
 	}
@@ -895,7 +922,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// row. Cancel's own transition already tore down the sandbox;
 			// this is the belt for a turn that raced past that teardown and
 			// may have started a fresh container of its own.
-			d.log.Info("driver: mission reached terminal state mid-turn, discarding turn result", "mission_id", id)
+			d.log.Info("driver: mission reached terminal state mid-turn, discarding turn result", "mission_id", id, "phase", m.Phase)
 			delete(d.gatekeepers, id)
 			d.removeSandbox(id)
 			return false, nil

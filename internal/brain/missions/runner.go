@@ -947,6 +947,24 @@ func reviewRoute(m Mission) string {
 	return oversightRoute(m)
 }
 
+// phaseRoute reports the route a mission's just-run phase actually
+// used, mirroring the same helper each phase's request builder calls
+// (discover/plan -> oversightRoute, generate -> workerRoute, prove ->
+// reviewRoute). Used only for the mission.turn event's telemetry
+// (issue #473); result runs no LLM turn, so it reports "".
+func phaseRoute(m Mission) string {
+	switch m.Phase {
+	case PhaseDiscover, PhasePlan:
+		return oversightRoute(m)
+	case PhaseGenerate:
+		return workerRoute(m)
+	case PhaseProve:
+		return reviewRoute(m)
+	default:
+		return ""
+	}
+}
+
 // workerModel is workerRoute's model-pin counterpart (D-078): RouteModel
 // pins execute turns to one chain entry in workerRoute(m). Cleared
 // whenever workerRoute has swapped to EscalationRoute: RouteModel names
@@ -1064,7 +1082,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	combined := text + "\n" + recoverText
 	if raw, ok := extractTextSentinel(combined, missionStatusToolName); ok {
 		if v, ok := r.tryParseVerdict(raw); ok {
-			r.log.Warn("mission worker expressed mission_status as text, not a tool call", "mission_id", m.ID)
+			r.log.Warn("mission worker expressed mission_status as text, not a tool call", "mission_id", m.ID, "route", workerRoute(m))
 			v.SeenURLs = append(seenURLs, kbSeen.all()...)
 			v.FinalMessage = recoverRes.finalSeg
 			return v, combined, nil
@@ -1074,9 +1092,9 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	// Still missing: bail detection informs the log, but either way this
 	// is a forced retry: detection accuracy never gates the outcome.
 	if detectBail(combined) {
-		r.log.Warn("mission worker bailed without a sentinel call", "mission_id", m.ID)
+		r.log.Warn("mission worker bailed without a sentinel call", "mission_id", m.ID, "route", workerRoute(m))
 	} else {
-		r.log.Warn("mission worker ended without a sentinel call", "mission_id", m.ID)
+		r.log.Warn("mission worker ended without a sentinel call", "mission_id", m.ID, "route", workerRoute(m))
 	}
 	return forcedRetryVerdict("the worker did not report a status; treated as a failed attempt"), combined, nil
 }
@@ -1202,7 +1220,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 
 	// Advisory phase: never a forced failure. The raw turn text is still
 	// useful context for the planner even with no structured findings.
-	r.log.Warn("mission discover ended without a discover_notes call; using raw turn text", "mission_id", m.ID)
+	r.log.Warn("mission discover ended without a discover_notes call; using raw turn text", "mission_id", m.ID, "route", oversightRoute(m))
 	return strings.TrimSpace(combined), nil
 }
 
@@ -1289,7 +1307,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 			// tolerates.
 			combined := text + "\n" + recoverText
 			if raw, ok := extractTextSentinel(combined, reviewVerdictToolName); ok {
-				r.log.Warn("mission reviewer expressed review_verdict as text, not a tool call", "mission_id", m.ID)
+				r.log.Warn("mission reviewer expressed review_verdict as text, not a tool call", "mission_id", m.ID, "route", reviewRoute(m))
 				text, args = combined, raw
 			} else {
 				return ReviewVerdict{}, nil, fmt.Errorf("mission runner: reviewer ended without a review_verdict call")
@@ -1459,12 +1477,12 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		return Spec{}, err
 	}
 	if len(recoverArgs) == 0 {
-		r.log.Warn("mission planner ended without a submit_plan call", "mission_id", m.ID, "text", text, "recover_text", recoverText)
+		r.log.Warn("mission planner ended without a submit_plan call", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText)
 		return Spec{}, fmt.Errorf("mission runner: planner ended without a submit_plan call")
 	}
 	spec, err := parseSpec(string(recoverArgs))
 	if err != nil {
-		r.log.Warn("mission planner submitted an invalid plan twice", "mission_id", m.ID, "text", text, "recover_text", recoverText, "error", err)
+		r.log.Warn("mission planner submitted an invalid plan twice", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText, "error", err)
 		return Spec{}, err
 	}
 	return spec, nil

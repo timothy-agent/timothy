@@ -2523,6 +2523,50 @@ func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	}
 }
 
+// TestDriverTurnEventCarriesRouteAndAgent covers issue #473: the
+// mission.turn event payload records the phase's effective route
+// (phaseRoute) and the mission agent's display name (via the wired
+// AgentResolver), never a guessed model.
+func TestDriverTurnEventCarriesRouteAndAgent(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
+		MaxIterations: 8, Route: "mini", AgentID: "coder-agent",
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "complete"}}}
+	d := testDriver(store, runner)
+	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+		if agentID != "coder-agent" {
+			return AgentDefaults{}, false
+		}
+		return AgentDefaults{Name: "Coder"}, true
+	})
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	events, _ := store.Events(context.Background(), "m1")
+	var turn Event
+	for _, e := range events {
+		if e.Kind == "mission.turn" {
+			turn = e
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(turn.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal mission.turn payload: %v", err)
+	}
+	if payload["route"] != "mini" {
+		t.Fatalf("payload[route] = %v, want mini", payload["route"])
+	}
+	if payload["agent"] != "Coder" {
+		t.Fatalf("payload[agent] = %v, want Coder", payload["agent"])
+	}
+	if _, ok := payload["model"]; ok {
+		t.Fatalf("payload[model] = %v, want absent (never guessed)", payload["model"])
+	}
+}
+
 // TestDriverAdvanceDeniesIdleToWorkingOnCapacity covers D-056's driver-
 // path gate: an idle mission whose capacity gate denies must not run
 // its turn at all (the runner is never called) and canContinue=false so

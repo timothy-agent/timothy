@@ -1228,6 +1228,30 @@ func TestReviewRoute(t *testing.T) {
 	}
 }
 
+// TestPhaseRoute pins the mission.turn event's route field (issue
+// #473) to whichever route helper the phase's own request builder
+// actually uses, and to "" for result (no LLM turn runs there).
+func TestPhaseRoute(t *testing.T) {
+	tests := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"discover uses oversight route", Mission{Phase: PhaseDiscover, Route: "mini", PlanRoute: "strong"}, "strong"},
+		{"plan uses oversight route", Mission{Phase: PhasePlan, Route: "mini", PlanRoute: "strong"}, "strong"},
+		{"generate uses worker route", Mission{Phase: PhaseGenerate, Route: "mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, "coding"},
+		{"prove uses review route", Mission{Phase: PhaseProve, Route: "mini", ReviewRoute: "reviewer"}, "reviewer"},
+		{"result runs no LLM turn", Mission{Phase: PhaseResult, Route: "mini"}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := phaseRoute(tc.m); got != tc.want {
+				t.Fatalf("phaseRoute = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestWorkerModel pins route_model's precedence: it backs execute
 // exactly like Route, but must NOT carry over once workerRoute has
 // swapped to EscalationRoute: it names an entry in the base route's

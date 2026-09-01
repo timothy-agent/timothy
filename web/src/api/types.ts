@@ -958,6 +958,12 @@ export interface MissionSteeredPayload {
 // MissionTurnPayload is mission.turn's payload: one event per phase
 // run (driver.go's Advance), recording wall time and the StepInput that
 // resulted regardless of which phase actually ran.
+// route/agent (issue #473) are the phase's effective route and the
+// mission agent's display name, both absent on a legacy event
+// recorded before this field existed and absent when unresolvable
+// (e.g. no agent set), never a placeholder string. model is
+// deliberately not carried here: the runner doesn't surface which
+// chain entry actually served the turn, and driver.go never guesses one.
 export interface MissionTurnPayload {
   phase: string
   duration_ms: number
@@ -965,6 +971,8 @@ export interface MissionTurnPayload {
   input: string
   reason?: string
   escalated_route?: string
+  route?: string
+  agent?: string
 }
 
 // MissionRetryPayload is mission.retry's payload (statemachine.go);

@@ -933,6 +933,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 			return missions.AgentDefaults{}, false
 		}
 		return missions.AgentDefaults{
+			Name:  a.Name,
 			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
 			ApprovalAllowlist: a.ApprovalAllowlist,
 			Knowledge:         a.Knowledge, Harness: a.Harness,

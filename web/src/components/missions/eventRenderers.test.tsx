@@ -298,6 +298,30 @@ describe('mission.turn rendering', () => {
     )
     expect(screen.getByText('Turn (execute): ok · 800ms')).toBeInTheDocument()
   })
+
+  it('renders route and agent as muted context when the payload carries them', () => {
+    render(
+      <div>
+        {renderEvent(
+          event(
+            { phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry', route: 'coding', agent: 'Coder' },
+            'mission.turn',
+          ),
+        )}
+      </div>,
+    )
+    const row = screen.getByText(/Turn \(generate\): ok/)
+    expect(row).toHaveTextContent('Coder · coding')
+  })
+
+  it('renders exactly as before when route/agent are absent (legacy event)', () => {
+    render(
+      <div>{renderEvent(event({ phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+    )
+    const row = screen.getByText('Turn (generate): ok · 1.5s')
+    expect(row).toBeInTheDocument()
+    expect(row).not.toHaveTextContent('undefined')
+  })
 })
 
 describe('mission.discover_complete / mission.explore_complete rendering', () => {

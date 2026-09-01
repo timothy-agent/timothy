@@ -245,3 +245,50 @@ describe('TimelineSection tool call trace', () => {
     expect(screen.queryByText(/tool call/)).toBeNull()
   })
 })
+
+describe('TimelineSection phase chips', () => {
+  it('chips each row with the phase most recently started before it', () => {
+    const phaseEvents: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.phase_started',
+        payload: { phase: 'discover' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.discover_complete',
+        payload: { chars: 10 },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:01Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 3,
+        kind: 'mission.phase_started',
+        payload: { phase: 'plan' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:02Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 4,
+        kind: 'mission.plan_created',
+        payload: { units: 1 },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:03Z',
+      },
+    ]
+    render(<TimelineSection events={phaseEvents} />)
+    expect(screen.getAllByText('discover')).toHaveLength(2) // phase_started row + discover_complete row
+    expect(screen.getAllByText('plan')).toHaveLength(2) // phase_started row + plan_created row
+  })
+
+  it('renders no chip when the mission has no phase_started event at all', () => {
+    render(<TimelineSection events={events} />)
+    expect(screen.queryByText('discover')).toBeNull()
+  })
+})

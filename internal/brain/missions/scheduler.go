@@ -106,6 +106,11 @@ type MissionTemplate struct {
 // api/missions.go's create-handler resolution so a scheduler-fired
 // mission gets the same defaults a UI-created one would.
 type AgentDefaults struct {
+	// Name is the agent's display name, used to label a mission's
+	// turns in the timeline (issue #473), resolved fresh here rather
+	// than snapshotted on the mission, same freshness reasoning as the
+	// rest of this struct.
+	Name              string
 	Route             string
 	ReviewRoute       string
 	PromptOverlay     string
