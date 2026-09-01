@@ -114,16 +114,24 @@ type fakeSandbox struct {
 	seedExitCode int
 	seedIdle     bool
 
-	launches  int
-	launchErr error
-	pollErrN  int // fail this many poll calls with an infra error before succeeding
-	pollErrs  int
+	launches   int
+	launchErr  error
+	lastLaunch string
+	pollErrN   int // fail this many poll calls with an infra error before succeeding
+	pollErrs   int
 
 	stderrText string
 }
 
 func newFakeSandbox() *fakeSandbox {
 	return &fakeSandbox{runs: map[string]*fakeRun{}}
+}
+
+// lastLaunchCmd is the full shell command of the most recent launch.
+func (s *fakeSandbox) lastLaunchCmd() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastLaunch
 }
 
 func (s *fakeSandbox) Exec(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (int, error) {
@@ -199,6 +207,7 @@ func (s *fakeSandbox) launch(command string, env map[string]string) (int, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.launches++
+	s.lastLaunch = command
 	if s.launchErr != nil {
 		return 1, s.launchErr
 	}
@@ -405,7 +414,7 @@ func (f *fakeNative) callCount() int {
 // newTestDelegatedRunner builds a delegatedRunner with short test
 // timings so scenarios never wait real production minutes.
 func newTestDelegatedRunner(native Runner, resolve routeResolver, cred credResolver, sandbox *fakeSandbox, events eventSink, lastRun lastRunStateFunc, led usageRecorder) *delegatedRunner {
-	r := NewDelegatedRunner(native, resolve, cred, sandbox.Exec, events, lastRun, led, slog.Default()).(*delegatedRunner)
+	r := NewDelegatedRunner(native, resolve, cred, sandbox.Exec, events, lastRun, led, nil, slog.Default()).(*delegatedRunner)
 	r.pollInterval = 2 * time.Millisecond
 	r.idleTimeout = 30 * time.Millisecond
 	return r
@@ -505,6 +514,46 @@ func TestDelegatedRunWorker_MissingResult_ForcedRetry(t *testing.T) {
 	}
 	if events.count("executor.died") != 1 {
 		t.Fatalf("executor.died count = %d, want 1", events.count("executor.died"))
+	}
+}
+
+// --- scenario 2b: wall-clock run budget hit (issue #498) -----------------
+
+func TestDelegatedRunWorker_RunBudgetExit_RecordedAsRunBudget(t *testing.T) {
+	fixture := loadDelegatedFixture(t, "schema.ndjson")
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = fixture[:len(fixture)-1]
+	sandbox.seedExitCode = runBudgetExitCode
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	budgetReads := 0
+	r.runBudgetFn = func(context.Context) time.Duration { budgetReads++; return 3 * time.Hour }
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "retry" || !verdict.Forced {
+		t.Fatalf("verdict = %+v, want forced retry", verdict)
+	}
+	if budgetReads != 1 {
+		t.Fatalf("run budget read %d times, want once per launch", budgetReads)
+	}
+	if !strings.Contains(sandbox.lastLaunchCmd(), "timeout -k 30 10800 ") {
+		t.Fatalf("launch cmd does not carry the settings-backed budget: %s", sandbox.lastLaunchCmd())
+	}
+	died, ok := events.last("executor.died")
+	if !ok {
+		t.Fatal("no executor.died event")
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(died.Payload, &payload)
+	if payload["reason"] != "run_budget" {
+		t.Fatalf("executor.died reason = %v, want run_budget", payload["reason"])
 	}
 }
 
@@ -638,7 +687,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	r.recordSpawned(context.Background(), m.ID, m.Harness, entry, runID, rdir, authMode)
-	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv); err != nil {
+	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	// One poll tick's worth of progress, then the "process" (this test's

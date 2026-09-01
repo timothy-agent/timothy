@@ -147,6 +147,21 @@ func TestRuntimeValueSettings(t *testing.T) {
 	if err := s.SetValue(ctx, "nope", "x"); err == nil {
 		t.Fatal("unknown value key accepted")
 	}
+	if err := s.SetValue(ctx, ValueExecutorRunBudgetMinutes, "0"); err == nil {
+		t.Fatal("zero run budget accepted")
+	}
+	if got := s.ExecutorRunBudget(ctx); got != DefaultExecutorRunBudget {
+		t.Fatalf("ExecutorRunBudget default = %v, want %v", got, DefaultExecutorRunBudget)
+	}
+	if err := s.SetValue(ctx, ValueExecutorRunBudgetMinutes, "90"); err != nil {
+		t.Fatalf("SetValue run budget: %v", err)
+	}
+	if got := s.ExecutorRunBudget(ctx); got != 90*time.Minute {
+		t.Fatalf("ExecutorRunBudget = %v, want 90m", got)
+	}
+	if err := s.SetValue(ctx, ValueExecutorRunBudgetMinutes, ""); err != nil {
+		t.Fatalf("clear run budget: %v", err)
+	}
 
 	if err := s.SetValue(ctx, ValueTokenBudget, "120000"); err != nil {
 		t.Fatalf("SetValue budget: %v", err)

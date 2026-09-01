@@ -22,7 +22,10 @@ const workSlotSweepInterval = 30 * time.Second
 // still genuinely mid-turn (only claimDriving's no-op saves it from a
 // second concurrent Drive loop). Derived from turnTimeout plus margin
 // rather than a bare constant so that invariant can't silently drift out
-// of sync if turnTimeout ever changes.
+// of sync if turnTimeout ever changes. A delegated executor turn is not
+// bounded by turnTimeout at all (its cap is the CLI run budget), so for
+// those RecoverStaleWorking treats a recent executor.progress event as
+// the liveness signal instead of updated_at (issue #497).
 var staleWorkingAfter = turnTimeout + 5*time.Minute
 
 // recoverWorkingRetries and recoverWorkingRetryDelay bound the boot

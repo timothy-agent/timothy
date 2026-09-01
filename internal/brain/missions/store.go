@@ -1350,13 +1350,23 @@ func (s *Store) RecoverWorking(ctx context.Context) ([]Mission, error) {
 // process restart, so RecoverWorking's boot-only pass never sees it) —
 // same re-Drive path, just periodic and staleness-gated so it never
 // interferes with a mission genuinely mid-turn.
+//
+// A delegated executor run is one Advance that can outlast staleAfter
+// many times over and never touches the mission row while the CLI
+// runs; its liveness signal is the executor.progress event the poll
+// loop appends (issue #497). A mission with one newer than staleAfter
+// is mid-turn, not stale, whatever updated_at says.
 func (s *Store) RecoverStaleWorking(ctx context.Context, staleAfter time.Duration) ([]Mission, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("missions recover stale working: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT `+missionColumns+` FROM missions
-		WHERE status = 'working' AND updated_at < now() - $1::interval`, staleAfter)
+	rows, err := db.Query(ctx, `SELECT `+missionColumns+` FROM missions m
+		WHERE m.status = 'working' AND m.updated_at < now() - $1::interval
+		  AND NOT EXISTS (
+		    SELECT 1 FROM mission_events e
+		    WHERE e.mission_id = m.id AND e.kind = 'executor.progress'
+		      AND e.created_at >= now() - $1::interval)`, staleAfter)
 	if err != nil {
 		return nil, fmt.Errorf("missions recover stale working: %w", err)
 	}
