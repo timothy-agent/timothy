@@ -482,6 +482,63 @@ describe('MissionDetail on_complete badge', () => {
   })
 })
 
+describe('MissionDetail destinations (issue #483)', () => {
+  it('omits the Destinations section when the mission has none', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(screen.queryByText('Destinations')).toBeNull()
+  })
+
+  it('renders a github destination entry with repo/mode and delivered status', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [
+        {
+          destination: 'github',
+          repo_url: 'https://github.com/octocat/hello-world.git',
+          mode: 'push_pr',
+          create_if_missing: true,
+          delivered_at: '2026-08-05T00:00:00Z',
+        },
+      ],
+    })
+    renderPage()
+    expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText(/octocat\/hello-world/)).toBeTruthy()
+    expect(screen.getByText(/push \+ PR/)).toBeTruthy()
+    expect(screen.getByText(/create if missing/)).toBeTruthy()
+    expect(screen.getByText('delivered')).toBeTruthy()
+  })
+
+  it('renders a failed github delivery with the error as a badge title', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [
+        {
+          destination: 'github',
+          mode: 'push',
+          create_if_missing: true,
+          error: 'repo does not exist and create_if_missing is not set',
+        },
+      ],
+    })
+    renderPage()
+    expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText(/repo not yet created/)).toBeTruthy()
+    expect(screen.getByText('failed')).toBeTruthy()
+  })
+
+  it('renders an email/webhook destination entry by its destination_id', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination: 'email', destination_id: 'dest-1', delivered_at: '2026-08-05T00:00:00Z' }],
+    })
+    renderPage()
+    expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText('dest-1')).toBeTruthy()
+  })
+})
+
 describe('MissionDetail created timestamp', () => {
   it('shows the relative created time with an absolute tooltip', async () => {
     const createdAt = new Date(Date.now() - 3 * 3_600_000).toISOString()

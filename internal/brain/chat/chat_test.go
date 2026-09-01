@@ -2151,6 +2151,60 @@ func TestClassifyCollectionOverGatewayFallsBackOnMalformedReply(t *testing.T) {
 	}
 }
 
+// TestExtractGitHubDestinationOverGatewayNeverErrors table-tests
+// ExtractGitHubDestinationOverGateway's never-errors contract (issue
+// #483): a gateway error, an empty reply, a reply that matches
+// neither NONE nor owner/repo, and a valid owner/repo match (with and
+// without push_pr) all resolve without the caller ever seeing an
+// error; mission creation must never block on this.
+func TestExtractGitHubDestinationOverGatewayNeverErrors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		gw   Gateway
+		want GitHubDestinationProposal
+	}{
+		{
+			name: "gateway error: not found",
+			gw:   &erroringGW{},
+			want: GitHubDestinationProposal{},
+		},
+		{
+			name: "empty reply: not found",
+			gw:   &fakeGW{events: okEvents("")},
+			want: GitHubDestinationProposal{},
+		},
+		{
+			name: "explicit NONE: not found",
+			gw:   &fakeGW{events: okEvents("NONE")},
+			want: GitHubDestinationProposal{},
+		},
+		{
+			name: "malformed reply: not found",
+			gw:   &fakeGW{events: okEvents("sure, github.com/octocat/hello-world")},
+			want: GitHubDestinationProposal{},
+		},
+		{
+			name: "valid owner/repo: push",
+			gw:   &fakeGW{events: okEvents("octocat/hello-world")},
+			want: GitHubDestinationProposal{Found: true, Owner: "octocat", Repo: "hello-world", Mode: "push"},
+		},
+		{
+			name: "valid owner/repo with push_pr mode",
+			gw:   &fakeGW{events: okEvents("octocat/hello-world push_pr")},
+			want: GitHubDestinationProposal{Found: true, Owner: "octocat", Repo: "hello-world", Mode: "push_pr"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExtractGitHubDestinationOverGateway(tc.gw, discard())(context.Background(), "work on this and push to github.com/octocat/hello-world")
+			if got != tc.want {
+				t.Fatalf("proposal = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestValidTitle table-tests each rejection class and a set of
 // accepted titles, including a 6-word and a unicode one.
 func TestValidTitle(t *testing.T) {

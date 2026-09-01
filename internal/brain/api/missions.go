@@ -75,7 +75,7 @@ type missionAttachmentStore interface {
 // (not *attachments.Store) so the caller's own nil-box guard (a nil
 // *attachments.Store boxed here would be a non-nil interface value)
 // happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, extractGitHubDestination func(context.Context, string) chat.GitHubDestinationProposal) {
 	if store == nil {
 		return
 	}
@@ -103,10 +103,11 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, extractGitHubDestination: extractGitHubDestination}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
+	handle("POST /v1/missions/detect-destination", a.auth(http.HandlerFunc(h.detectDestination)))
 	handle("GET /v1/missions/executor-options", a.auth(http.HandlerFunc(h.executorOptions)))
 	handle("GET /v1/missions/execution-plan", a.auth(http.HandlerFunc(h.executionPlan)))
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
@@ -220,6 +221,11 @@ type missionAPI struct {
 	// the operator-owned destinations table (D-061's exfiltration
 	// guard: an id must exist AND be enabled) — nil (destinations
 	// disabled) rejects any non-empty destination_ids.
+	// extractGitHubDestination backs POST /v1/missions/detect-destination
+	// (issue #483, chat.ExtractGitHubDestinationOverGateway): nil (no
+	// gateway wiring) makes the endpoint always report found=false, same
+	// never-errors degrade as the function itself.
+	extractGitHubDestination func(context.Context, string) chat.GitHubDestinationProposal
 }
 
 // destinationLookup is the narrow slice of *destinations.Store the
@@ -496,6 +502,27 @@ type createMissionRequest struct {
 	// the same "github" Destinations entry as OnComplete.
 	BranchPattern string `json:"branch_pattern"`
 	CommitStyle   string `json:"commit_style"`
+	// CreateIfMissing (issue #483) opts the github destination entry
+	// into create-if-missing delivery (missions.DestinationEntry's own
+	// field): false (the default) never creates a repo, matching every
+	// pre-#483 request. Only meaningful alongside OnComplete; folded
+	// into the same "github" Destinations entry destinationEntries
+	// below builds. No flat-field precedent to mirror (issue #480's
+	// columns predate create-if-missing entirely), so this is new
+	// surface, not a compat shim.
+	CreateIfMissing bool `json:"create_if_missing"`
+	// DestinationConnectorID/DestinationRepoURL (issue #483) name the
+	// github destination entry's OWN push target, distinct from
+	// RepoURL/ConnectorID above (the mission's clone SOURCE): a scratch
+	// mission (RepoURL empty, self-init'd worktree) can still push
+	// somewhere via CreateIfMissing, and even a cloned mission can push
+	// to a different repo than it cloned from. DestinationRepoURL empty
+	// with CreateIfMissing=true derives a repo name from the mission's
+	// goal at delivery time (missions.Completer.ensureRepo);
+	// DestinationConnectorID empty falls back to ConnectorID (the same
+	// connector authenticates both clone and push, the common case).
+	DestinationConnectorID string `json:"destination_connector_id"`
+	DestinationRepoURL     string `json:"destination_repo_url"`
 	// ParentMissionID, when set, makes this a follow-up mission: the
 	// named mission must already be terminal (done/failed). Its
 	// outcome digest (missions.OutcomeDigest) is snapshotted onto this
@@ -549,12 +576,13 @@ type createMissionRequest struct {
 }
 
 // destinationEntries normalizes the request's separate DestinationIDs/
-// PromoteKBCollectionID/OnComplete/BranchPattern/CommitStyle fields
-// into missions.Mission's single Destinations slice (issue #480): one
-// bare entry per destination id, one "kb" entry when
-// PromoteKBCollectionID is set, one "github" entry when OnComplete is
-// set. The wire request shape is unchanged; only the internal Mission
-// representation moved.
+// PromoteKBCollectionID/OnComplete/BranchPattern/CommitStyle/
+// CreateIfMissing fields into missions.Mission's single Destinations
+// slice (issue #480, extended #483): one bare entry per destination
+// id, one "kb" entry when PromoteKBCollectionID is set, one "github"
+// entry when OnComplete, BranchPattern, CommitStyle, or
+// CreateIfMissing is set. The wire request shape is unchanged; only
+// the internal Mission representation moved.
 func (r createMissionRequest) destinationEntries() []missions.DestinationEntry {
 	var entries []missions.DestinationEntry
 	for _, id := range r.DestinationIDs {
@@ -563,10 +591,13 @@ func (r createMissionRequest) destinationEntries() []missions.DestinationEntry {
 	if r.PromoteKBCollectionID != "" {
 		entries = append(entries, missions.DestinationEntry{Destination: missions.DestinationKindKB, CollectionID: r.PromoteKBCollectionID})
 	}
-	if r.OnComplete != "" || r.BranchPattern != "" || r.CommitStyle != "" {
+	if r.OnComplete != "" || r.BranchPattern != "" || r.CommitStyle != "" || r.CreateIfMissing {
 		entries = append(entries, missions.DestinationEntry{
 			Destination: missions.DestinationKindGitHub, Mode: r.OnComplete,
 			BranchPattern: r.BranchPattern, CommitStyle: r.CommitStyle,
+			CreateIfMissing: r.CreateIfMissing,
+			ConnectorID:     r.DestinationConnectorID,
+			RepoURL:         r.DestinationRepoURL,
 		})
 	}
 	return entries
@@ -1077,6 +1108,43 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	kind, light := classifyKindAndLight(r.Context(), h.classify, req.Goal)
 	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light})
+}
+
+// detectDestination serves POST /v1/missions/detect-destination
+// (issue #483): an on-demand "Detect from goal" action the create
+// form calls explicitly, never fired automatically, so a proposal is
+// always something the operator saw before it could ever end up on
+// the create request. chat.ExtractGitHubDestinationOverGateway's
+// never-errors contract means this 200s with found=false rather than
+// erroring on any gateway failure/ambiguity -- there is nothing the
+// caller needs to distinguish from "genuinely nothing detected."
+func (h *missionAPI) detectDestination(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Goal string `json:"goal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if req.Goal == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
+		return
+	}
+	if h.extractGitHubDestination == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"found": false})
+		return
+	}
+	p := h.extractGitHubDestination(r.Context(), req.Goal)
+	if !p.Found {
+		writeJSON(w, http.StatusOK, map[string]any{"found": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"found": true,
+		"owner": p.Owner,
+		"repo":  p.Repo,
+		"mode":  p.Mode,
+	})
 }
 
 // executorOption is one registered harness's live pairing preview for
@@ -2169,6 +2237,30 @@ func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 		return "", 0, err
 	}
 	return created.HTMLURL, created.Number, nil
+}
+
+// RepoExists/CreateRepo satisfy missions.PRSource's create-if-missing
+// methods (issue #483); see cmd/brain/main.go's connsPRSource for the
+// full doc comments, identical adapter logic duplicated here since
+// this handler builds its own short-lived Completer per call (see
+// completer() above) rather than sharing the driver's.
+func (c connsPRSource) RepoExists(ctx context.Context, connectorID, owner, repo string) (bool, error) {
+	_, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, connectors.ErrRepoNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (c connsPRSource) CreateRepo(ctx context.Context, connectorID, name string, private bool) (string, error) {
+	repo, err := c.conns.CreateRepo(ctx, connectorID, name, private)
+	if err != nil {
+		return "", err
+	}
+	return repo.CloneURL, nil
 }
 
 // pushStatusCode maps a Push error to the HTTP status/code pair the

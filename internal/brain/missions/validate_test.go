@@ -104,6 +104,21 @@ func TestValidateCreate(t *testing.T) {
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", BranchPattern: "{type}/{slug}"}}
 			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
 		}, ValidateDeps{}, false},
+		{"create_if_missing with no connector_id anywhere rejected (issue #483)", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CreateIfMissing: true}}
+			return m
+		}, ValidateDeps{}, true},
+		{"create_if_missing with entry's own connector_id, no repo_url needed", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CreateIfMissing: true, ConnectorID: "conn-1"}}
+			return m
+		}, ValidateDeps{}, false},
+		{"create_if_missing falls back to the clone-source connector_id", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CreateIfMissing: true}}
+			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
+		}, ValidateDeps{}, false},
 		{"invalid commit_style on coding", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CommitStyle: "loud"}}

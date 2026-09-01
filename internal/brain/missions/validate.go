@@ -119,7 +119,25 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			// no on_complete choice: the operator overriding the git
 			// strategy without opting into auto-push.
 		case "push", "push_pr":
-			if repoURL == "" || connectorID == "" {
+			// connector_id is always required: it authenticates the
+			// eventual push/PR call regardless of source. repo_url is
+			// required UNLESS CreateIfMissing is set (issue #483): a
+			// create-if-missing github entry legitimately has no repo yet
+			// at create time (a scratch mission whose repo Completer.
+			// ensureRepo creates at delivery, named from the mission's own
+			// goal): its own ConnectorID (or, absent that, the mission's
+			// clone-source connector_id) still has to authenticate that
+			// create call.
+			entryConnectorID := githubEntry.ConnectorID
+			if entryConnectorID == "" {
+				entryConnectorID = connectorID
+			}
+			switch {
+			case githubEntry.CreateIfMissing:
+				if entryConnectorID == "" {
+					return fmt.Errorf("%w: create_if_missing requires connector_id on a kind=coding mission", ErrInvalidMission)
+				}
+			case repoURL == "" || connectorID == "":
 				return fmt.Errorf("%w: on_complete requires repo_url and connector_id on a kind=coding mission", ErrInvalidMission)
 			}
 		default:

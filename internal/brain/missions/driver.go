@@ -653,12 +653,27 @@ func (d *Driver) fireOnTerminal(m Mission) {
 // step's own signal to park (an explicit operator choice, made at
 // create time, so a failure here must be visible and retryable, not
 // silently swallowed).
+//
+// RunOnComplete's create-if-missing path (issue #483) may create a
+// repo and resolve the github destination entry's final RepoURL: when
+// that happened (updated), this persists it via SetDestinations before
+// returning, same "write back what actually changed" pattern
+// deliverToDestinations/promoteToKB already follow. A retry (the
+// autoResumeInfra sweep) then sees the created repo on its next
+// attempt instead of trying to create it again.
 func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) error {
 	onComplete := m.OnComplete()
 	if d.completer == nil || onComplete == "" {
 		return nil
 	}
-	if err := d.completer.RunOnComplete(ctx, m); err != nil {
+	entry, updated, err := d.completer.RunOnComplete(ctx, m)
+	if updated {
+		merged := mergeGitHubDestinationEntry(m.Destinations, entry)
+		if setErr := d.store.SetDestinations(ctx, id, merged); setErr != nil {
+			d.log.Warn("driver: persist github destination entry failed", "mission_id", id, "error", setErr)
+		}
+	}
+	if err != nil {
 		d.log.Error("driver: on_complete auto-fire failed", "mission_id", id, "on_complete", onComplete, "error", err)
 		if d.notifyPushFailed != nil {
 			d.notifyPushFailed(ctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, onComplete, err.Error()))
@@ -666,6 +681,22 @@ func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) error
 		return err
 	}
 	return nil
+}
+
+// mergeGitHubDestinationEntry replaces all's "github" entry with
+// updated, leaving every other entry untouched: mergeDestinationEntries'
+// counterpart for the single github entry (which, unlike email/webhook/
+// telegram entries, has no DestinationID to match on).
+func mergeGitHubDestinationEntry(all []DestinationEntry, updated DestinationEntry) []DestinationEntry {
+	merged := make([]DestinationEntry, len(all))
+	for i, e := range all {
+		if e.Destination == DestinationKindGitHub {
+			merged[i] = updated
+			continue
+		}
+		merged[i] = e
+	}
+	return merged
 }
 
 // resultStepOrder documents runResult's fixed sequence (slice 1 of the

@@ -24,6 +24,7 @@ vi.mock('../../api/client', () => ({
   listMissions: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
   searchKbDocuments: vi.fn().mockResolvedValue([]),
+  detectMissionDestination: vi.fn().mockResolvedValue({ found: false }),
 }))
 
 import {
@@ -31,6 +32,7 @@ import {
   createConnectorRepo,
   createMission,
   createSchedule,
+  detectMissionDestination,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
   getSettings,
@@ -144,6 +146,7 @@ beforeEach(() => {
   vi.mocked(getMissionExecutorOptions).mockResolvedValue([])
   vi.mocked(getMissionExecutionPlan).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([])
+  vi.mocked(detectMissionDestination).mockResolvedValue({ found: false })
 })
 
 describe('MissionForm: create mode, one-off mission', () => {
@@ -455,7 +458,7 @@ describe('MissionForm: destinations multi-select', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await waitFor(() => expect(listDestinations).toHaveBeenCalled())
-    expect(screen.queryByText('Deliver results to')).toBeNull()
+    expect(screen.queryByText('Destinations')).toBeNull()
   })
 
   it('renders a checkbox per destination, unchecked by default, and submits the picked ids', async () => {
@@ -463,7 +466,7 @@ describe('MissionForm: destinations multi-select', () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    await screen.findByText('Deliver results to')
+    await screen.findByText('Destinations')
     const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
     const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
     expect(opsInbox.checked).toBe(false)
@@ -485,7 +488,7 @@ describe('MissionForm: destinations multi-select', () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    await screen.findByText('Deliver results to')
+    await screen.findByText('Destinations')
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'No delivery please' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
 
@@ -503,7 +506,7 @@ describe('MissionForm: destinations multi-select', () => {
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Weekly digest' } })
     fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
 
-    await screen.findByText('Deliver results to')
+    await screen.findByText('Destinations')
     fireEvent.click(screen.getByLabelText(/^ops-hook/))
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
 
@@ -525,7 +528,7 @@ describe('MissionForm: destinations multi-select', () => {
     }
     renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    await screen.findByText('Deliver results to')
+    await screen.findByText('Destinations')
     const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
     const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
     expect(opsInbox.checked).toBe(true)
@@ -1149,72 +1152,143 @@ describe('MissionForm: repository source', () => {
   })
 })
 
-describe('MissionForm: deployment (on_complete)', () => {
-  it('hides the Deployment section until a repo (or new-repo name) is chosen', async () => {
+// toCodingMissionWithRepo drives the form through toCodingMission, the
+// GitHub repo source, and picking connector "personal-gh" + repo
+// "octocat/hello-world": the shared setup destinations (github) tests
+// below build on.
+async function toCodingMissionWithRepo() {
+  await toCodingMission()
+  fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+  fireEvent.click(await screen.findByLabelText('Connector'))
+  fireEvent.click(await screen.findByText('personal-gh'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
+  fireEvent.click(await screen.findByText('octocat/hello-world'))
+}
+
+describe('MissionForm: destinations (github, issue #483)', () => {
+  it('shows one Destinations section with a GitHub checkbox for a coding mission, unchecked by default', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    await toCodingMission()
-    expect(screen.queryByText('Deployment')).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
-    expect(screen.queryByText('Deployment')).toBeNull()
-
-    fireEvent.click(await screen.findByLabelText('Connector'))
-    fireEvent.click(await screen.findByText('personal-gh'))
-    expect(screen.queryByText('Deployment')).toBeNull()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
-    fireEvent.click(await screen.findByText('octocat/hello-world'))
-    expect(await screen.findByText('Deployment')).toBeInTheDocument()
+    await toCodingMissionWithRepo()
+    expect(await screen.findByText('Destinations')).toBeInTheDocument()
+    const githubToggle = screen.getByLabelText(/^GitHub/) as HTMLInputElement
+    expect(githubToggle.checked).toBe(false)
+    // Sub-fields (Mode select, create-if-missing) stay hidden until the
+    // destination is explicitly added.
+    expect(screen.queryByLabelText('Mode')).toBeNull()
   })
 
-  it('hides the Deployment section for the None repo source', async () => {
+  it('hides the Destinations section for a general mission', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-    await toCodingMission()
-    expect(screen.queryByText('Deployment')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    await screen.findByText('General · scratch workspace')
+    expect(screen.queryByText('Destinations')).toBeNull()
   })
 
-  it('defaults to Nothing and omits on_complete from the create payload', async () => {
+  it('reveals Mode/create-if-missing once GitHub is checked, and omits on_complete when left unchecked', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(createMission).mockResolvedValue({ id: 'm11' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
-    fireEvent.click(await screen.findByLabelText('Connector'))
-    fireEvent.click(await screen.findByText('personal-gh'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
-    fireEvent.click(await screen.findByText('octocat/hello-world'))
-
+    await toCodingMissionWithRepo()
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
-      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ on_complete: undefined })),
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ on_complete: undefined, create_if_missing: undefined }),
+      ),
     )
   })
 
-  it('submits on_complete="push_pr" when Push and open a PR is chosen', async () => {
+  it('submits on_complete="push_pr" when GitHub is added with push_pr mode', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(createMission).mockResolvedValue({ id: 'm12' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
-    fireEvent.click(await screen.findByLabelText('Connector'))
-    fireEvent.click(await screen.findByText('personal-gh'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
-    fireEvent.click(await screen.findByText('octocat/hello-world'))
-
-    fireEvent.click(await screen.findByLabelText('Deployment'))
+    await toCodingMissionWithRepo()
+    fireEvent.click(screen.getByLabelText(/^GitHub/))
+    expect(await screen.findByLabelText('Mode')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Mode'))
     fireEvent.click(await screen.findByText('Push and open a PR when done'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ on_complete: 'push_pr' })),
     )
+  })
+
+  it('submits create_if_missing when the checkbox is checked', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm13' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionWithRepo()
+    fireEvent.click(screen.getByLabelText(/^GitHub/))
+    fireEvent.click(await screen.findByLabelText(/Create the repository if it doesn't exist/))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ create_if_missing: true })),
+    )
+  })
+
+  it('detects a repo from the goal and applies it via Use this', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    vi.mocked(detectMissionDestination).mockResolvedValue({
+      found: true,
+      owner: 'octocat',
+      repo: 'detected-repo',
+      mode: 'push',
+    })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm14' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMission()
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'work on this and push to github.com/octocat/detected-repo' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detect from goal' }))
+    expect(await screen.findByText(/Detected/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Use this' }))
+
+    expect((screen.getByLabelText(/^GitHub/) as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create_if_missing: true,
+          destination_repo_url: 'https://github.com/octocat/detected-repo',
+          on_complete: 'push',
+        }),
+      ),
+    )
+  })
+
+  it('never auto-adds the github destination from a detected proposal without Use this', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    vi.mocked(detectMissionDestination).mockResolvedValue({
+      found: true,
+      owner: 'octocat',
+      repo: 'detected-repo',
+      mode: 'push',
+    })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMission()
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'work on this and push to github.com/octocat/detected-repo' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Detect from goal' }))
+    await screen.findByText(/Detected/)
+
+    expect((screen.getByLabelText(/^GitHub/) as HTMLInputElement).checked).toBe(false)
   })
 })
 

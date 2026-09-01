@@ -65,6 +65,31 @@ func (w *Workspace) Push(ctx context.Context, worktree, branch, token string) (s
 	return host, rawPush(ctx, worktree, branch, token)
 }
 
+// SetOrigin points worktree's origin remote at remoteURL, adding it if
+// the worktree has none (a self-init'd scratch mission's clone never
+// gets one, see initSelfRepo) or repointing it if one already exists:
+// the create-if-missing delivery path's own step before pushing to a
+// repo the mission was never cloned from (issue #483). remoteURL is
+// validated the same way Push's own read-back is (validateRemote),
+// so a bad origin can never slip through unnoticed here either.
+func (w *Workspace) SetOrigin(ctx context.Context, worktree, remoteURL string) error {
+	if _, err := validateRemote(remoteURL); err != nil {
+		return err
+	}
+	gctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
+	defer cancel()
+	if _, err := runGit(gctx, worktree, "remote", "get-url", "origin"); err != nil {
+		if out, err := runGit(gctx, worktree, "remote", "add", "origin", remoteURL); err != nil {
+			return fmt.Errorf("set origin: remote add: %w: %s", err, out)
+		}
+		return nil
+	}
+	if out, err := runGit(gctx, worktree, "remote", "set-url", "origin", remoteURL); err != nil {
+		return fmt.Errorf("set origin: remote set-url: %w: %s", err, out)
+	}
+	return nil
+}
+
 // rawPush execs the authenticated git push, independent of remote
 // validation — split out so tests can exercise the exec/env/dir
 // plumbing against a local bare repo (which validateRemote's

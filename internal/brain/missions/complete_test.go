@@ -99,7 +99,10 @@ func (f *fakeEventAppender) kinds() []string {
 }
 
 // fakePRSource scripts PRSource for RunOnComplete's push_pr path
-// without a real GitHub connector.
+// without a real GitHub connector. repoExists/existsErr/newCloneURL/
+// createRepoErr back ensureRepo's create-if-missing path (issue #483);
+// existsCalls/createRepoCalls count those specifically, distinct from
+// createCalls (CreatePR, the pull-request call).
 type fakePRSource struct {
 	defaultBranch string
 	defaultErr    error
@@ -107,6 +110,13 @@ type fakePRSource struct {
 	prNumber      int
 	createErr     error
 	createCalls   int
+
+	repoExists      bool
+	existsErr       error
+	existsCalls     int
+	newCloneURL     string
+	createRepoErr   error
+	createRepoCalls int
 }
 
 func (f *fakePRSource) DefaultBranch(ctx context.Context, connectorID, owner, repo string) (string, error) {
@@ -121,14 +131,35 @@ func (f *fakePRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 	return f.prURL, f.prNumber, nil
 }
 
+func (f *fakePRSource) RepoExists(ctx context.Context, connectorID, owner, repo string) (bool, error) {
+	f.existsCalls++
+	if f.existsErr != nil {
+		return false, f.existsErr
+	}
+	return f.repoExists, nil
+}
+
+func (f *fakePRSource) CreateRepo(ctx context.Context, connectorID, name string, private bool) (string, error) {
+	f.createRepoCalls++
+	if f.createRepoErr != nil {
+		return "", f.createRepoErr
+	}
+	return f.newCloneURL, nil
+}
+
 // fakeBranchPusher scripts branchPusher — the https-only remote
 // validation Workspace.Push itself enforces is push_test.go's own
 // coverage; Completer's job (proven here) is what it does with a push
-// that succeeds or fails, not git plumbing.
+// that succeeds or fails, not git plumbing. setOriginCalls/
+// setOriginErr back ensureRepo's create-if-missing path (issue #483).
 type fakeBranchPusher struct {
 	host      string
 	err       error
 	pushCalls int
+
+	setOriginCalls int
+	setOriginErr   error
+	lastOriginURL  string
 }
 
 func (f *fakeBranchPusher) Push(ctx context.Context, worktree, branch, token string) (string, error) {
@@ -137,6 +168,12 @@ func (f *fakeBranchPusher) Push(ctx context.Context, worktree, branch, token str
 		return "", f.err
 	}
 	return f.host, nil
+}
+
+func (f *fakeBranchPusher) SetOrigin(ctx context.Context, worktree, remoteURL string) error {
+	f.setOriginCalls++
+	f.lastOriginURL = remoteURL
+	return f.setOriginErr
 }
 
 // pushableMission is a coding mission with the guards NotPushable
@@ -167,7 +204,7 @@ func TestCompleterRunOnCompletePush(t *testing.T) {
 	resolveToken := func(ctx context.Context, connectorID string) (string, error) { return "dummy-token", nil }
 	c := &Completer{workspace: pusher, store: store, resolveToken: resolveToken}
 
-	if err := c.RunOnComplete(context.Background(), m); err != nil {
+	if _, _, err := c.RunOnComplete(context.Background(), m); err != nil {
 		t.Fatalf("RunOnComplete: %v", err)
 	}
 	if pusher.pushCalls != 1 {
@@ -191,7 +228,7 @@ func TestCompleterRunOnCompletePushPR(t *testing.T) {
 	pr := &fakePRSource{defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
 	c := &Completer{workspace: pusher, store: store, resolveToken: resolveToken, pr: pr}
 
-	if err := c.RunOnComplete(context.Background(), m); err != nil {
+	if _, _, err := c.RunOnComplete(context.Background(), m); err != nil {
 		t.Fatalf("RunOnComplete: %v", err)
 	}
 	if pusher.pushCalls != 1 {
@@ -219,7 +256,7 @@ func TestCompleterRunOnCompletePushFailureNoPR(t *testing.T) {
 	pr := &fakePRSource{defaultBranch: "main"}
 	c := &Completer{workspace: pusher, store: store, resolveToken: resolveToken, pr: pr}
 
-	if err := c.RunOnComplete(context.Background(), m); err == nil {
+	if _, _, err := c.RunOnComplete(context.Background(), m); err == nil {
 		t.Fatal("RunOnComplete should surface the push failure")
 	}
 	if pr.createCalls != 0 {
@@ -236,7 +273,7 @@ func TestCompleterRunOnCompleteEmptyIsNoop(t *testing.T) {
 	t.Parallel()
 	store := &fakeEventAppender{}
 	c := NewCompleter(nil, store, nil, nil)
-	if err := c.RunOnComplete(context.Background(), Mission{}); err != nil {
+	if _, _, err := c.RunOnComplete(context.Background(), Mission{}); err != nil {
 		t.Fatalf("RunOnComplete with empty on_complete: %v", err)
 	}
 	if len(store.kinds()) != 0 {
@@ -253,7 +290,7 @@ func TestCompleterRunOnCompletePushFailureRecordsEvent(t *testing.T) {
 	store := &fakeEventAppender{}
 	c := NewCompleter(nil, store, nil, nil)
 	m := Mission{Kind: "general", Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}} // NotPushable rejects kind != coding
-	err := c.RunOnComplete(context.Background(), m)
+	_, _, err := c.RunOnComplete(context.Background(), m)
 	if err == nil {
 		t.Fatal("RunOnComplete should fail for an unpushable mission")
 	}
@@ -270,7 +307,7 @@ func TestCompleterRunOnCompleteNoResolverFails(t *testing.T) {
 	m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
 	store := &fakeEventAppender{}
 	c := NewCompleter(nil, store, nil, nil)
-	if err := c.RunOnComplete(context.Background(), m); err == nil {
+	if _, _, err := c.RunOnComplete(context.Background(), m); err == nil {
 		t.Fatal("RunOnComplete with no token resolver should fail")
 	}
 	if len(store.kinds()) != 0 {
@@ -278,3 +315,171 @@ func TestCompleterRunOnCompleteNoResolverFails(t *testing.T) {
 	}
 }
 
+// TestEnsureRepo table-tests ensureRepo's create-if-missing decision
+// (issue #483): repo already exists, repo missing with
+// create_if_missing=true, repo missing with create_if_missing=false,
+// and the retry-after-already-created idempotency path (RepoExists
+// now reports true because a prior attempt already created it).
+func TestEnsureRepo(t *testing.T) {
+	t.Parallel()
+	baseEntry := DestinationEntry{Destination: DestinationKindGitHub, ConnectorID: "conn1"}
+
+	cases := []struct {
+		name string
+		// entry.RepoURL is set for every case except the "no repo_url at
+		// all, derive from goal" case.
+		repoURL         string
+		createIfMissing bool
+		repoExists      bool
+		existsErr       error
+		createErr       error
+		newCloneURL     string
+
+		wantErr           bool
+		wantUpdated       bool
+		wantCreateCalls   int
+		wantSetOriginCall int
+		wantFinalRepoURL  string
+	}{
+		{
+			name:              "repo exists: no-op",
+			repoURL:           "https://github.com/octo/repo.git",
+			createIfMissing:   true,
+			repoExists:        true,
+			wantErr:           false,
+			wantUpdated:       false,
+			wantCreateCalls:   0,
+			wantSetOriginCall: 0,
+			wantFinalRepoURL:  "https://github.com/octo/repo.git",
+		},
+		{
+			name:              "repo missing, create_if_missing=true: creates and redirects origin",
+			repoURL:           "https://github.com/octo/repo.git",
+			createIfMissing:   true,
+			repoExists:        false,
+			newCloneURL:       "https://github.com/octo/repo.git",
+			wantErr:           false,
+			wantUpdated:       true,
+			wantCreateCalls:   1,
+			wantSetOriginCall: 1,
+			wantFinalRepoURL:  "https://github.com/octo/repo.git",
+		},
+		{
+			name:              "repo missing, create_if_missing=false: fails honestly, never creates",
+			repoURL:           "https://github.com/octo/repo.git",
+			createIfMissing:   false,
+			repoExists:        false,
+			wantErr:           true,
+			wantUpdated:       false,
+			wantCreateCalls:   0,
+			wantSetOriginCall: 0,
+		},
+		{
+			name:              "retry after already created: idempotent, no second create",
+			repoURL:           "https://github.com/octo/repo.git",
+			createIfMissing:   true,
+			repoExists:        true, // a prior attempt already created it
+			wantErr:           false,
+			wantUpdated:       false,
+			wantCreateCalls:   0,
+			wantSetOriginCall: 0,
+			wantFinalRepoURL:  "https://github.com/octo/repo.git",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := baseEntry
+			entry.RepoURL = tc.repoURL
+			entry.CreateIfMissing = tc.createIfMissing
+			pr := &fakePRSource{repoExists: tc.repoExists, existsErr: tc.existsErr, newCloneURL: tc.newCloneURL, createRepoErr: tc.createErr}
+			pusher := &fakeBranchPusher{}
+			c := &Completer{workspace: pusher, pr: pr}
+			m := pushableMission(t)
+
+			got, updated, err := c.ensureRepo(context.Background(), m, entry)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("ensureRepo error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if updated != tc.wantUpdated {
+				t.Fatalf("updated = %v, want %v", updated, tc.wantUpdated)
+			}
+			if pr.createRepoCalls != tc.wantCreateCalls {
+				t.Fatalf("CreateRepo called %d times, want %d", pr.createRepoCalls, tc.wantCreateCalls)
+			}
+			if pusher.setOriginCalls != tc.wantSetOriginCall {
+				t.Fatalf("SetOrigin called %d times, want %d", pusher.setOriginCalls, tc.wantSetOriginCall)
+			}
+			if !tc.wantErr && got.RepoURL != tc.wantFinalRepoURL {
+				t.Fatalf("final RepoURL = %q, want %q", got.RepoURL, tc.wantFinalRepoURL)
+			}
+		})
+	}
+}
+
+// TestEnsureRepoNoRepoURLDerivesNameFromGoal proves an entry with no
+// RepoURL at all but create_if_missing=true derives a repo name from
+// the mission's goal (via Slug) instead of failing: the "brand new
+// scratch mission gets its own repo" case.
+func TestEnsureRepoNoRepoURLDerivesNameFromGoal(t *testing.T) {
+	t.Parallel()
+	entry := DestinationEntry{Destination: DestinationKindGitHub, ConnectorID: "conn1", CreateIfMissing: true}
+	pr := &fakePRSource{newCloneURL: "https://github.com/octo/fix-the-thing.git"}
+	pusher := &fakeBranchPusher{}
+	c := &Completer{workspace: pusher, pr: pr}
+	m := pushableMission(t)
+	m.Goal = "fix the thing"
+
+	got, updated, err := c.ensureRepo(context.Background(), m, entry)
+	if err != nil {
+		t.Fatalf("ensureRepo: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected updated=true")
+	}
+	if got.RepoURL != "https://github.com/octo/fix-the-thing.git" {
+		t.Fatalf("RepoURL = %q, want the created clone URL", got.RepoURL)
+	}
+	if pr.existsCalls != 0 {
+		t.Fatalf("RepoExists called %d times, want 0 (no owner/repo to check without a name)", pr.existsCalls)
+	}
+	if pr.createRepoCalls != 1 {
+		t.Fatalf("CreateRepo called %d times, want 1", pr.createRepoCalls)
+	}
+}
+
+// TestRunOnCompletePersistsCreatedRepo proves RunOnComplete's
+// create-if-missing path actually pushes to the newly created repo (an
+// end-to-end proof that PushBranch runs after SetOrigin, not against a
+// stale origin) and reports updated=true so the caller
+// (Driver.fireOnComplete) knows to persist the entry.
+func TestRunOnCompletePersistsCreatedRepo(t *testing.T) {
+	t.Parallel()
+	m := pushableMission(t)
+	m.Destinations = []DestinationEntry{{
+		Destination: DestinationKindGitHub, Mode: "push",
+		ConnectorID: "conn1", RepoURL: "https://github.com/octo/new-repo.git", CreateIfMissing: true,
+	}}
+	store := &fakeEventAppender{}
+	pusher := &fakeBranchPusher{host: "github.com"}
+	pr := &fakePRSource{repoExists: false, newCloneURL: "https://github.com/octo/new-repo.git"}
+	resolveToken := func(ctx context.Context, connectorID string) (string, error) { return "dummy-token", nil }
+	c := &Completer{workspace: pusher, store: store, resolveToken: resolveToken, pr: pr}
+
+	entry, updated, err := c.RunOnComplete(context.Background(), m)
+	if err != nil {
+		t.Fatalf("RunOnComplete: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected updated=true after creating the repo")
+	}
+	if entry.RepoURL != "https://github.com/octo/new-repo.git" {
+		t.Fatalf("entry.RepoURL = %q, want the created clone URL", entry.RepoURL)
+	}
+	if pusher.setOriginCalls != 1 || pusher.lastOriginURL != "https://github.com/octo/new-repo.git" {
+		t.Fatalf("SetOrigin calls = %d, lastURL = %q, want 1 call at the created URL", pusher.setOriginCalls, pusher.lastOriginURL)
+	}
+	if pusher.pushCalls != 1 {
+		t.Fatalf("Push called %d times, want exactly 1", pusher.pushCalls)
+	}
+}

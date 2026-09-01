@@ -993,6 +993,51 @@ export function MissionDetail() {
           </section>
         )}
 
+      {mission.destinations && mission.destinations.length > 0 && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Destinations</h2>
+          <div className="space-y-1.5 rounded-lg border border-border p-3 text-sm">
+            {mission.destinations.map((d, i) => (
+              <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground uppercase">{d.destination || 'destination'}</span>
+                {d.destination === 'github' ? (
+                  <span className="truncate">
+                    {d.repo_url ? (
+                      <a
+                        href={githubHTMLURL(d.repo_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        {githubFullName(d.repo_url)}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">repo not yet created</span>
+                    )}
+                    {d.mode && ` · ${d.mode === 'push_pr' ? 'push + PR' : 'push'}`}
+                    {d.create_if_missing && ' · create if missing'}
+                  </span>
+                ) : d.destination === 'kb' ? (
+                  <span className="text-muted-foreground">promoted to knowledge base</span>
+                ) : (
+                  <span className="text-muted-foreground">{d.destination_id}</span>
+                )}
+                {d.delivered_at && (
+                  <Badge variant="secondary" title={`Delivered ${formatDate(d.delivered_at)}`}>
+                    delivered
+                  </Badge>
+                )}
+                {d.error && (
+                  <Badge variant="destructive" title={d.error}>
+                    failed
+                  </Badge>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <ArtifactsSection
         missionId={id}
         missionName={mission.name}

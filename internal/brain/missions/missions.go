@@ -265,8 +265,15 @@ type DestinationEntry struct {
 	Mode          string `json:"mode,omitempty"`
 	BranchPattern string `json:"branch_pattern,omitempty"`
 	CommitStyle   string `json:"commit_style,omitempty"`
-	DeliveredAt   string `json:"delivered_at,omitempty"`
-	Error         string `json:"error,omitempty"`
+	// CreateIfMissing (issue #483), github entries only: when the
+	// entry's repo doesn't exist yet at delivery time, create it
+	// through ConnectorID's credential instead of failing the push/PR.
+	// "" RepoURL with this set derives the repo name from the mission
+	// (see Completer.ensureRepo); false (the default) never creates:
+	// delivery fails honestly into Error instead of inventing a repo.
+	CreateIfMissing bool   `json:"create_if_missing,omitempty"`
+	DeliveredAt     string `json:"delivered_at,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // GitHubEntry returns this mission's "github" destination entry, if

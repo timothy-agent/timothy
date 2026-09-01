@@ -218,6 +218,13 @@ type GitHubPR struct {
 // of erroring.
 const githubPRAlreadyExistsMarker = "A pull request already exists for"
 
+// ErrRepoNotFound marks GetRepo's 404: the repo doesn't exist (or the
+// PAT can't see it), the create-if-missing delivery path's signal to
+// create it rather than treat the lookup as a hard failure (issue
+// #483). Distinct from connectors.ErrNotFound, which names a missing
+// connectors table row, not a missing GitHub repo.
+var ErrRepoNotFound = fmt.Errorf("github: repo not found")
+
 // GetRepo resolves the connector's PAT and returns owner/repo's
 // metadata (default_branch is all the PR flow needs from it).
 func (s *githubSource) GetRepo(ctx context.Context, owner, repo string) (GitHubRepo, error) {
@@ -292,6 +299,9 @@ func fetchGitHubRepo(ctx context.Context, client *http.Client, token, owner, rep
 		return GitHubRepo{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return GitHubRepo{}, fmt.Errorf("get repo: %w", ErrRepoNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return GitHubRepo{}, fmt.Errorf("get repo: %w", githubStatusError(resp))
 	}

@@ -7,7 +7,9 @@ import {
   createConnectorRepo,
   createMission,
   createSchedule,
+  detectMissionDestination,
   type ExecutorOption,
+  type GitHubDestinationDetection,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
   getSettings,
@@ -77,9 +79,9 @@ const flowChoices: { value: Flow; label: string; description: string }[] = [
   { value: 'light', label: 'Light', description: "Single pass; the worker's final message is the result." },
 ]
 
-// Sentinel for the Deployment Select: Radix Select.Item rejects an
-// empty string value, so the "do nothing" choice (the wire value '')
-// is represented by this sentinel on the Select itself.
+// Sentinel for the github destination's Mode Select: Radix Select.Item
+// rejects an empty string value, so the "do nothing" choice (the wire
+// value '') is represented by this sentinel on the Select itself.
 const ON_COMPLETE_NONE = '__none__'
 
 const onCompleteChoices: { value: string; label: string }[] = [
@@ -457,23 +459,63 @@ export function MissionForm({
     }
   }, [repoAttached, kindLocked])
 
-  // Consent-at-create for the mission's auto-completion action:
-  // resets whenever the GitHub source is unpicked, since on_complete is
-  // only ever valid alongside repo_url/connector_id.
+  // Consent-at-create for the mission's auto-completion action.
+  // githubDestinationAdded (issue #483) tracks whether the operator has
+  // added a github entry to the unified Destinations section below,
+  // separate from repoSource, since a github destination no longer
+  // requires the Repository section's own clone-source github pick
+  // (create_if_missing lets a scratch mission push to a repo it never
+  // cloned from). Turning the destination off resets onComplete/
+  // createIfMissing/the detected proposal together.
+  const [githubDestinationAdded, setGithubDestinationAdded] = useState(
+    !!(initial?.on_complete || initial?.create_if_missing),
+  )
   const [onComplete, setOnComplete] = useState<OnComplete>(initial?.on_complete ?? '')
-  useEffect(() => {
-    if (repoSource !== 'github') setOnComplete('')
-  }, [repoSource])
+  const [createIfMissing, setCreateIfMissing] = useState(!!initial?.create_if_missing)
+  // destinationConnectorID/destinationRepoURL override the github
+  // destination's own push target when it differs from the Repository
+  // section's clone source (or when there IS no clone source: a
+  // scratch mission with create_if_missing). Empty defers to
+  // connectorID/the clone repo, the common case.
+  const [destinationConnectorID, setDestinationConnectorID] = useState(
+    initial?.destination_connector_id ?? '',
+  )
+  const [destinationRepoURL, setDestinationRepoURL] = useState(initial?.destination_repo_url ?? '')
+  // detectingDestination/detectedDestination back the "Detect from
+  // goal" action (issue #483): on-demand only, never automatic. The
+  // proposal is shown for the operator to review before it can ever
+  // populate destinationRepoURL.
+  const [detectingDestination, setDetectingDestination] = useState(false)
+  const [detectedDestination, setDetectedDestination] = useState<GitHubDestinationDetection | null>(
+    null,
+  )
+  const detectDestinationFromGoal = () => {
+    if (!goal.trim()) return
+    setDetectingDestination(true)
+    setDetectedDestination(null)
+    detectMissionDestination(goal.trim())
+      .then(setDetectedDestination)
+      .catch(() => setDetectedDestination(null))
+      .finally(() => setDetectingDestination(false))
+  }
+  const applyDetectedDestination = () => {
+    if (!detectedDestination?.found || !detectedDestination.owner || !detectedDestination.repo) return
+    setGithubDestinationAdded(true)
+    setDestinationRepoURL(`https://github.com/${detectedDestination.owner}/${detectedDestination.repo}`)
+    setCreateIfMissing(true)
+    setOnComplete(detectedDestination.mode ?? 'push')
+    setDetectedDestination(null)
+  }
 
   // Fetch github-kind connectors once the operator picks the GitHub
-  // source: most missions never touch this, so it's not loaded
-  // upfront with agents/routes.
+  // clone source OR adds a github destination: most missions touch
+  // neither, so this isn't loaded upfront with agents/routes.
   useEffect(() => {
-    if (repoSource !== 'github' || githubConnectors !== null) return
+    if ((repoSource !== 'github' && !githubDestinationAdded) || githubConnectors !== null) return
     listConnectors()
       .then((all) => setGithubConnectors(all.filter((c) => c.kind === 'github' && c.enabled)))
       .catch(() => setGithubConnectors([]))
-  }, [repoSource, githubConnectors])
+  }, [repoSource, githubDestinationAdded, githubConnectors])
 
   // Fetch the connector's repo list whenever it changes: best-effort,
   // an error surfaces inline rather than blocking the form.
@@ -490,18 +532,21 @@ export function MissionForm({
       .finally(() => setReposLoading(false))
   }, [repoSource, connectorID])
 
-  // Resolve the connection's GitHub identity so the Deployment section
-  // can say who commits and PRs will be authored as: best-effort, an
-  // unresolved identity just hides the line.
+  // Resolve the effective push connector's GitHub identity so the
+  // github destination's fields can say who commits and PRs will be
+  // authored as: best-effort, an unresolved identity just hides the
+  // line. destinationConnectorID wins when set (the destination names
+  // its own connector); otherwise falls back to the clone source's.
+  const effectiveDestinationConnectorID = destinationConnectorID || connectorID
   useEffect(() => {
-    if (repoSource !== 'github' || !connectorID) {
+    if (!githubDestinationAdded || !effectiveDestinationConnectorID) {
       setConnIdentity(null)
       return
     }
-    testConnector(connectorID)
+    testConnector(effectiveDestinationConnectorID)
       .then((res) => setConnIdentity(res.identity ?? null))
       .catch(() => setConnIdentity(null))
-  }, [repoSource, connectorID])
+  }, [githubDestinationAdded, effectiveDestinationConnectorID])
 
   const filteredRepos = useMemo(() => {
     if (!repos) return []
@@ -740,12 +785,23 @@ export function MissionForm({
     repoSource !== 'github' ||
     !!connectorID && (newRepo ? newRepoName.trim() !== '' : !!selectedRepo)
 
+  // The github destination is ready once it can resolve to SOME push
+  // target: either it reuses the Repository section's clone source
+  // (destinationRepoURL empty, connectorID set from repoSource=github),
+  // or it names its own connector with create_if_missing (a scratch
+  // mission can push without ever cloning) or its own repo_url.
+  const githubDestinationReady =
+    !githubDestinationAdded ||
+    !!effectiveDestinationConnectorID &&
+      (!!destinationRepoURL || !!repoAttached || createIfMissing)
+
   const canSubmit =
     mode === 'edit'
       ? scheduleName.trim() !== '' && goal.trim() !== '' && validCronShape(cron)
       : goal.trim() !== '' &&
         (!repeat || validCronShape(cron)) &&
         githubSourceReady &&
+        githubDestinationReady &&
         !attachments.some((a) => a.uploading)
 
   const submitMission = async () => {
@@ -780,7 +836,11 @@ export function MissionForm({
       commit_style: kind === 'coding' ? commitStyle || undefined : undefined,
       repo_url: repoURL,
       connector_id: repoURL ? connectorID : undefined,
-      on_complete: repoURL && onComplete ? onComplete : undefined,
+      on_complete: githubDestinationAdded && onComplete ? onComplete : undefined,
+      create_if_missing: githubDestinationAdded && createIfMissing ? true : undefined,
+      destination_connector_id:
+        githubDestinationAdded && destinationConnectorID ? destinationConnectorID : undefined,
+      destination_repo_url: githubDestinationAdded && destinationRepoURL ? destinationRepoURL : undefined,
       parent_mission_id: parentMissionId,
       attachments:
         attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
@@ -1126,41 +1186,6 @@ export function MissionForm({
             </div>
           )}
 
-          {repoSource === 'github' && githubSourceReady && (
-            <div className="space-y-1.5">
-              <Label htmlFor="mission-on-complete">Deployment</Label>
-              <Select
-                value={onComplete || ON_COMPLETE_NONE}
-                onValueChange={(v) =>
-                  setOnComplete(v === ON_COMPLETE_NONE ? '' : (v as OnComplete))
-                }
-              >
-                <SelectTrigger id="mission-on-complete" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {onCompleteChoices.map((c) => (
-                    <SelectItem key={c.value} value={c.value}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                What happens automatically when the mission finishes. A human always chooses this
-                up front — the model never decides.
-              </p>
-              {connIdentity && (
-                <p className="text-xs text-muted-foreground">
-                  Commits and pull requests will be authored as{' '}
-                  <span className="font-medium text-foreground">
-                    {connIdentity.name || connIdentity.login}
-                  </span>{' '}
-                  ({connIdentity.email})
-                </p>
-              )}
-            </div>
-          )}
         </section>
       )}
 
@@ -1423,26 +1448,219 @@ export function MissionForm({
           </label>
         )}
 
-        {destinations && destinations.length > 0 && (
+        {((destinations && destinations.length > 0) ||
+          (kind === 'coding' && mode === 'create' && !repeat)) && (
           <div className="space-y-1.5">
-            <Label>Deliver results to</Label>
-            <div className="space-y-1.5 rounded-xl border border-border p-3">
-              {destinations.map((d) => (
-                <label key={d.id} htmlFor={`mission-destination-${d.id}`} className="flex items-center gap-2 text-sm">
-                  <input
-                    id={`mission-destination-${d.id}`}
-                    type="checkbox"
-                    checked={destinationIDs.includes(d.id)}
-                    onChange={(e) =>
-                      setDestinationIDs((prev) =>
-                        e.target.checked ? [...prev, d.id] : prev.filter((id) => id !== d.id),
-                      )
-                    }
-                  />
-                  <span>{d.name}</span>
-                  <span className="text-xs text-muted-foreground uppercase">{d.kind}</span>
-                </label>
-              ))}
+            <Label>Destinations</Label>
+            <p className="text-xs text-muted-foreground">
+              Where this mission's result is delivered or pushed when it finishes.
+            </p>
+            <div className="space-y-3 rounded-xl border border-border p-3">
+              {destinations && destinations.length > 0 && (
+                <div className="space-y-1.5">
+                  {destinations.map((d) => (
+                    <label
+                      key={d.id}
+                      htmlFor={`mission-destination-${d.id}`}
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <input
+                        id={`mission-destination-${d.id}`}
+                        type="checkbox"
+                        checked={destinationIDs.includes(d.id)}
+                        onChange={(e) =>
+                          setDestinationIDs((prev) =>
+                            e.target.checked ? [...prev, d.id] : prev.filter((id) => id !== d.id),
+                          )
+                        }
+                      />
+                      <span>{d.name}</span>
+                      <span className="text-xs text-muted-foreground uppercase">{d.kind}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {kind === 'coding' && mode === 'create' && !repeat && (
+                <div className={destinations && destinations.length > 0 ? 'border-t border-border pt-3' : undefined}>
+                  <div className="flex items-center justify-between gap-2">
+                    <label htmlFor="mission-destination-github" className="flex items-center gap-2 text-sm">
+                      <input
+                        id="mission-destination-github"
+                        type="checkbox"
+                        checked={githubDestinationAdded}
+                        onChange={(e) => {
+                          setGithubDestinationAdded(e.target.checked)
+                          if (!e.target.checked) {
+                            setOnComplete('')
+                            setCreateIfMissing(false)
+                            setDestinationConnectorID('')
+                            setDestinationRepoURL('')
+                            setDetectedDestination(null)
+                          } else if (!onComplete) {
+                            setOnComplete('push')
+                          }
+                        }}
+                      />
+                      <span>GitHub</span>
+                      <span className="text-xs text-muted-foreground uppercase">push / pr</span>
+                    </label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!goal.trim() || detectingDestination}
+                      onClick={detectDestinationFromGoal}
+                    >
+                      {detectingDestination ? 'Detecting…' : 'Detect from goal'}
+                    </Button>
+                  </div>
+
+                  {detectedDestination && (
+                    <div className="mt-3 rounded-md border border-border bg-muted/30 p-2.5 text-sm">
+                      {detectedDestination.found ? (
+                        <div className="flex items-center justify-between gap-2">
+                          <span>
+                            Detected{' '}
+                            <span className="font-medium text-foreground">
+                              {detectedDestination.owner}/{detectedDestination.repo}
+                            </span>{' '}
+                            ({detectedDestination.mode === 'push_pr' ? 'push + PR' : 'push'})
+                          </span>
+                          <div className="flex shrink-0 gap-2">
+                            <Button type="button" size="sm" onClick={applyDetectedDestination}>
+                              Use this
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDetectedDestination(null)}
+                            >
+                              Discard
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          No repository detected in the goal text.
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {githubDestinationAdded && (
+                    <div className="mt-3 space-y-3 rounded-lg border border-border p-3">
+                      <p className="text-xs text-muted-foreground">
+                        Reuses the Repository section's connector/repo by default. Override below to
+                        push somewhere else.
+                      </p>
+
+                      {githubConnectors === null ? (
+                        <p className="text-sm text-muted-foreground">Loading connectors…</p>
+                      ) : githubConnectors.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No GitHub connectors configured yet.{' '}
+                          <Link to="/settings/connectors" className="underline underline-offset-2">
+                            Add one in Settings → Connectors
+                          </Link>
+                          .
+                        </p>
+                      ) : (
+                        <>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="mission-destination-connector">
+                              Connector (override)
+                            </Label>
+                            <Select
+                              value={destinationConnectorID || connectorID}
+                              onValueChange={(v) =>
+                                setDestinationConnectorID(v === connectorID ? '' : v)
+                              }
+                            >
+                              <SelectTrigger id="mission-destination-connector" className="w-full">
+                                <SelectValue placeholder="Same as repository connector" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {githubConnectors.map((c) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label htmlFor="mission-destination-repo-url">Repository (override)</Label>
+                            <Input
+                              id="mission-destination-repo-url"
+                              value={destinationRepoURL}
+                              onChange={(e) => setDestinationRepoURL(e.target.value)}
+                              placeholder="Same as the Repository section's clone URL"
+                            />
+                          </div>
+
+                          <label
+                            htmlFor="mission-create-if-missing"
+                            className="flex items-start gap-2 text-sm"
+                          >
+                            <input
+                              id="mission-create-if-missing"
+                              type="checkbox"
+                              checked={createIfMissing}
+                              onChange={(e) => setCreateIfMissing(e.target.checked)}
+                              className="mt-0.5"
+                            />
+                            <span>
+                              Create the repository if it doesn't exist
+                              <span className="block text-xs text-muted-foreground">
+                                Lets a scratch mission (or a repo that hasn't been created yet) push
+                                somewhere new instead of failing.
+                              </span>
+                            </span>
+                          </label>
+
+                          <div className="space-y-1.5">
+                            <Label htmlFor="mission-on-complete">Mode</Label>
+                            <Select
+                              value={onComplete || ON_COMPLETE_NONE}
+                              onValueChange={(v) =>
+                                setOnComplete(v === ON_COMPLETE_NONE ? '' : (v as OnComplete))
+                              }
+                            >
+                              <SelectTrigger id="mission-on-complete" className="w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {onCompleteChoices.map((c) => (
+                                  <SelectItem key={c.value} value={c.value}>
+                                    {c.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                              What happens automatically when the mission finishes. A human always
+                              chooses this up front; the model never decides.
+                            </p>
+                          </div>
+
+                          {connIdentity && (
+                            <p className="text-xs text-muted-foreground">
+                              Commits and pull requests will be authored as{' '}
+                              <span className="font-medium text-foreground">
+                                {connIdentity.name || connIdentity.login}
+                              </span>{' '}
+                              ({connIdentity.email})
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

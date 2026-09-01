@@ -730,7 +730,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), destinationStore, destinationTest, workflowStore, workflowEngine, pdfService)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), destinationStore, destinationTest, workflowStore, workflowEngine, pdfService, chat.ExtractGitHubDestinationOverGateway(gwc, app.Log))
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -1198,6 +1198,32 @@ func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 		return "", 0, err
 	}
 	return created.HTMLURL, created.Number, nil
+}
+
+// RepoExists backs missions.Completer.ensureRepo's create-if-missing
+// existence check (issue #483): connectors.ErrRepoNotFound (GetRepo's
+// 404) is the only "safe to create" signal, distinguished from every
+// other lookup failure (network, auth), which propagates as a hard
+// error instead.
+func (c connsPRSource) RepoExists(ctx context.Context, connectorID, owner, repo string) (bool, error) {
+	_, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, connectors.ErrRepoNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
+// CreateRepo backs ensureRepo's create path, returning the new repo's
+// https clone URL.
+func (c connsPRSource) CreateRepo(ctx context.Context, connectorID, name string, private bool) (string, error) {
+	repo, err := c.conns.CreateRepo(ctx, connectorID, name, private)
+	if err != nil {
+		return "", err
+	}
+	return repo.CloneURL, nil
 }
 
 // toMissionRecord adapts a missions.Mission into the builtin package's
