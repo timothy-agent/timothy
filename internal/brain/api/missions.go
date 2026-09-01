@@ -322,9 +322,18 @@ func sanitizeMission(m missions.Mission) missions.Mission {
 // missionResponse is missions.Mission plus fields the store itself
 // has no business computing: top_model/top_model_provider come from
 // the cost ledger (a different service's data), decorated on here at
-// serve time rather than added to missions.Mission itself.
+// serve time. Light/Worktree (issue #479) are likewise computed here
+// rather than stored: dropping their columns means Mission itself no
+// longer carries them, but the web client still reads mission.light
+// and mission.worktree unchanged, so the API response derives both
+// from Flow/WorktreePath() on the way out.
 type missionResponse struct {
 	missions.Mission
+	// Light is derived from Flow == FlowLight (issue #479): the web
+	// client's own light checks (e.g. MissionDetail.tsx's runsPlanless)
+	// read this exactly as before the light column was dropped.
+	Light            bool   `json:"light"`
+	Worktree         string `json:"worktree,omitempty"`
 	TopModel         string `json:"top_model,omitempty"`
 	TopModelProvider string `json:"top_model_provider,omitempty"`
 }
@@ -336,7 +345,7 @@ type missionResponse struct {
 func (h *missionAPI) decorateTopModels(ctx context.Context, rows []missions.Mission) []missionResponse {
 	out := make([]missionResponse, len(rows))
 	for i, m := range rows {
-		out[i] = missionResponse{Mission: m}
+		out[i] = missionResponse{Mission: m, Light: m.Flow == missions.FlowLight, Worktree: m.WorktreePath()}
 	}
 	if h.topModels == nil || len(rows) == 0 {
 		return out
@@ -661,23 +670,18 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	// flow/light normalization (D-090, issue #459): flow omitted maps to
 	// today's exact pre-#459 behavior (light=true -> "light", else
-	// "full"); flow="light" always implies light=true so every existing
-	// D-069 code path (policyFor, packet.go's WorkPacket.Light) keeps
-	// keying off the light column unchanged. Any other mismatch between
-	// an explicit flow and light (or kind=coding requesting a non-full
-	// flow) is left for missions.ValidateCreate to reject with the
-	// specific reason, not silently resolved here.
+	// "full"). Any other mismatch between an explicit flow and light (or
+	// kind=coding requesting a non-full flow) is left for
+	// missions.ValidateCreate to reject with the specific reason, not
+	// silently resolved here. issue #479 dropped the mission.light
+	// column: flow alone drives every downstream code path now.
 	flow := req.Flow
-	light := req.Light
 	if flow == "" {
-		if light {
+		if req.Light {
 			flow = string(missions.FlowLight)
 		} else {
 			flow = string(missions.FlowFull)
 		}
-	}
-	if flow == string(missions.FlowLight) {
-		light = true
 	}
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
@@ -688,7 +692,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID, OnComplete: req.OnComplete,
 		BranchPattern: req.BranchPattern, CommitStyle: req.CommitStyle,
 		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
-		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID, Light: light,
+		Attachments: missionAtts, DestinationIDs: req.DestinationIDs, PromoteKBCollectionID: req.PromoteKBCollectionID,
 		Flow:                     missions.Flow(flow),
 		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
 	}
@@ -715,7 +719,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 		return
 	}
-	writeJSON(w, http.StatusCreated, sanitizeMission(created))
+	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
 }
 
 // resolveReferenceContext resolves a create request's picked
@@ -1320,7 +1324,7 @@ func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if m.Workspace != "" && h.workspace != nil {
-		if err := h.workspace.Teardown(r.Context(), m.Workspace, m.Worktree, m.Kind); err != nil {
+		if err := h.workspace.Teardown(r.Context(), m.Workspace, m.WorktreePath(), m.Kind); err != nil {
 			h.log.Warn("mission delete: workspace cleanup failed", "mission_id", m.ID, "workspace", m.Workspace, "error", err)
 		}
 	}

@@ -91,7 +91,7 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 		m.SessionID = sessionID
 		p.grantSessionDefaults(ctx, m)
 	}
-	if p.workspace != nil && m.Workspace == "" && m.Worktree == "" {
+	if p.workspace != nil && m.Workspace == "" {
 		var token string
 		var connIdentity *GitIdentity
 		if m.RepoURL != "" {
@@ -125,10 +125,10 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
-		if err := p.store.SetProvisioned(ctx, m.ID, workspace, worktree, branch, baseCommit); err != nil {
+		if err := p.store.SetProvisioned(ctx, m.ID, workspace, branch, baseCommit); err != nil {
 			return m, err
 		}
-		m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
+		m.Workspace, m.Branch, m.BaseCommit = workspace, branch, baseCommit
 		if m.ParentMissionID != "" && missionPolicyFor(m).needsWorktree {
 			ref := baseUsed
 			if ref == "" {

@@ -57,24 +57,24 @@ type missionPolicy struct {
 	canPush         bool // on_complete push/push_pr allowed
 }
 
-// policyFor derives kind's policy, then folds in light's effect
-// (general only, D-069) and flow's effect (D-090, issue #459):
-// flow=no_prove forces alwaysReview false on a general-shaped policy,
-// since skipping the LLM reviewer is the whole point of choosing it
-// (CheckArtifacts in verifier.go still runs via trySkipReview either
-// way). flow=discover_generate does NOT need this override: it never
-// reaches trySkipReview at all, its generate turn takes the same
-// planless short-circuit as light (Mission.RunsPlanless), which never
-// consults alwaysReview. Coding stays alwaysReview true regardless of
-// flow (ValidateCreate rejects any non-full flow for kind=coding at
-// create time, so this is a second, defensive belt, not the
-// enforcement point). An unknown kind also stays alwaysReview true:
-// fail conservative, a kind this table doesn't recognize must never
-// silently skip review.
+// policyFor derives kind's policy, then folds in flow's effect
+// (D-090, issue #459): flow=light (general only, D-069) sets
+// skipsPlanning; flow=no_prove forces alwaysReview false on a
+// general-shaped policy, since skipping the LLM reviewer is the whole
+// point of choosing it (CheckArtifacts in verifier.go still runs via
+// trySkipReview either way). flow=discover_generate does NOT need this
+// override: it never reaches trySkipReview at all, its generate turn
+// takes the same planless short-circuit as flow=light
+// (Mission.RunsPlanless), which never consults alwaysReview. Coding
+// stays alwaysReview true regardless of flow (ValidateCreate rejects
+// any non-full flow for kind=coding at create time, so this is a
+// second, defensive belt, not the enforcement point). An unknown kind
+// also stays alwaysReview true: fail conservative, a kind this table
+// doesn't recognize must never silently skip review.
 //
 // D-072: the single source of behavior-by-kind; every call site that
 // used to test Kind/Light directly now derives it from here instead.
-func policyFor(kind string, light bool, flow Flow) missionPolicy {
+func policyFor(kind string, flow Flow) missionPolicy {
 	switch kind {
 	case KindCoding:
 		return missionPolicy{
@@ -94,7 +94,7 @@ func policyFor(kind string, light bool, flow Flow) missionPolicy {
 			skipsPlanning:   false,
 			canPush:         false,
 		}
-		if light {
+		if flow == FlowLight {
 			p.skipsPlanning = true
 		}
 		if flow == FlowNoProve {
@@ -115,30 +115,30 @@ func policyFor(kind string, light bool, flow Flow) missionPolicy {
 
 // missionPolicyFor is policyFor over a live Mission row.
 func missionPolicyFor(m Mission) missionPolicy {
-	return policyFor(m.Kind, m.Light, m.Flow)
+	return policyFor(m.Kind, m.Flow)
 }
 
 // RunsPlanless reports whether m's generate phase runs the D-069
 // light worker path: no plan, no artifact check, the worker's final
 // message (mission_status's final_output) is the deliverable.
 // FlowDiscoverGenerate (D-090, issue #459) shares this exact worker
-// behavior with Light, the only difference being it runs discover
-// first; unlike Light (missionPolicy.skipsPlanning), it is NOT used
-// by initialPhase: a discover_generate mission is still born in
+// behavior with FlowLight, the only difference being it runs discover
+// first; unlike FlowLight (missionPolicy.skipsPlanning), it is NOT
+// used by initialPhase: a discover_generate mission is still born in
 // PhaseDiscover, only generate itself runs planless. Exported: read
 // outside this package by destinations.renderPayload, which needs the
 // same "final_output IS the result" gate memory.go's digest uses.
 func (m Mission) RunsPlanless() bool {
-	return m.Light || m.Flow == FlowDiscoverGenerate
+	return m.Flow == FlowLight || m.Flow == FlowDiscoverGenerate
 }
 
 // initialPhase is the phase a newly created mission row starts in:
-// PhaseGenerate for a light mission (D-069, skips discover/plan),
+// PhaseGenerate for a flow=light mission (D-069, skips discover/plan),
 // PhaseDiscover otherwise. Shared by store.go's Create and
 // scheduler.go's createFromTemplate, which both used to duplicate
 // this check inline.
-func initialPhase(kind string, light bool) Phase {
-	if policyFor(kind, light, FlowFull).skipsPlanning {
+func initialPhase(kind string, flow Flow) Phase {
+	if policyFor(kind, flow).skipsPlanning {
 		return PhaseGenerate
 	}
 	return PhaseDiscover

@@ -500,7 +500,7 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 // phase now sits between the last unit's approval and done.
 func TestStepLightApproveGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Light: true, LastUnit: true},
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight, LastUnit: true},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
@@ -530,7 +530,7 @@ func TestStepDiscoverGenerateApproveGoesResult(t *testing.T) {
 // now emitted by stepResultComplete rather than stepReviewApprove.
 func TestStepResultCompleteEmitsVerifiedFlag(t *testing.T) {
 	light := Step(
-		StepState{Phase: PhaseResult, Status: StatusWorking, Light: true},
+		StepState{Phase: PhaseResult, Status: StatusWorking, Flow: FlowLight},
 		StepInput{Input: InputResultComplete},
 		DefaultConfig,
 	)
@@ -542,7 +542,7 @@ func TestStepResultCompleteEmitsVerifiedFlag(t *testing.T) {
 	}
 
 	nonLight := Step(
-		StepState{Phase: PhaseResult, Status: StatusWorking, Light: false},
+		StepState{Phase: PhaseResult, Status: StatusWorking, Flow: FlowFull},
 		StepInput{Input: InputResultComplete},
 		DefaultConfig,
 	)
@@ -615,7 +615,7 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 	// mission (StallCount already at the threshold, ReplanUsed false)
 	// must instead fall through to the plain retry path for a light one.
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Light: true, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
 		DefaultConfig,
 	)
@@ -632,7 +632,7 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 	// Repeated identical-fingerprint stalls still respect the hard
 	// max_iterations ceiling, exactly like worker_failed.
 	final := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Light: true, MaxIterations: 1, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight, MaxIterations: 1, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
 		DefaultConfig,
 	)

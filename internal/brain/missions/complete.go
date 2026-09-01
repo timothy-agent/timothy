@@ -95,7 +95,7 @@ func NotPushable(m Mission) string {
 	case m.Branch == "":
 		return "mission has no branch"
 	default:
-		if _, err := os.Stat(m.Worktree); err != nil {
+		if _, err := os.Stat(m.WorktreePath()); err != nil {
 			return "mission worktree is not available"
 		}
 	}
@@ -108,7 +108,7 @@ func NotPushable(m Mission) string {
 // driver's auto-fire hook use, so the Timeline reads identically
 // regardless of which one fired.
 func (c *Completer) PushBranch(ctx context.Context, m Mission, token string) (host string, err error) {
-	host, pushErr := c.workspace.Push(ctx, m.Worktree, m.Branch, token)
+	host, pushErr := c.workspace.Push(ctx, m.WorktreePath(), m.Branch, token)
 	if pushErr != nil {
 		reason := "push failed"
 		switch {

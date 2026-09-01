@@ -558,7 +558,6 @@ CREATE TABLE IF NOT EXISTS missions (
     pause_reason          text NOT NULL DEFAULT '',
     pause_message         text NOT NULL DEFAULT '',
     workspace             text NOT NULL DEFAULT '',
-    worktree              text NOT NULL DEFAULT '',
     branch                text NOT NULL DEFAULT '',
     base_commit           text NOT NULL DEFAULT '',
     spec                  jsonb NOT NULL DEFAULT '{}',
@@ -652,10 +651,6 @@ CREATE TABLE IF NOT EXISTS missions (
     -- settings at dispatch. "" is native; "claude-cli" (etc) names a
     -- registered delegated executor (internal/brain/missions/executor).
     harness               text NOT NULL DEFAULT '',
-    -- Light missions (D-069, general kind only) skip discover/plan/
-    -- prove: born in phase=generate, one bare worker turn, the final
-    -- worker message is the deliverable, then result/done.
-    light                 boolean NOT NULL DEFAULT false,
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
     -- a real session_id uuid FK -- a mission has no chat session of its
@@ -794,9 +789,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- 'discover_generate' skips plan (generate runs planless, same as
     -- light) and prove; 'no_prove' keeps plan but skips the LLM
     -- reviewer round (harness CheckArtifacts still runs on generate's
-    -- exit); 'light' is the existing D-069 behavior. light column stays
-    -- the source of truth for D-069 code paths; flow='light' always
-    -- implies light=true (api/missions.go's create normalizes this).
+    -- exit); 'light' is the existing D-069 behavior (general kind only:
+    -- born in phase=generate, one bare worker turn, the final worker
+    -- message is the deliverable). flow is the single source of truth
+    -- for D-069 code paths (issue #479 dropped the redundant light
+    -- column).
     flow                  text NOT NULL DEFAULT 'full'
         CHECK (flow IN ('full', 'discover_generate', 'no_prove', 'light'))
 );

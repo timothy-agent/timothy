@@ -45,12 +45,12 @@ func (s *Store) SetHub(hub *Hub) {
 }
 
 const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_reason, pause_message,
-	workspace, worktree, branch, base_commit, spec, progress, iteration, max_iterations,
+	workspace, branch, base_commit, spec, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
 	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
 	discover_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id, on_complete,
-	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, final_output, created_at, updated_at,
+	branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, promote_kb_collection_id, permission_timeout_seconds, pending_input, asks_used, flow`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
@@ -119,13 +119,13 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		flow                                                          string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
-		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
+		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
-		&m.DestinationIDs, &m.Light, &m.FinalOutput,
+		&m.DestinationIDs, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow,
@@ -209,13 +209,13 @@ func scanMission(row pgx.Row) (Mission, error) {
 		flow                                                          string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
-		&m.Workspace, &m.Worktree, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
+		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&m.RepoURL, &m.ConnectorID, &m.OnComplete, &m.BranchPattern, &m.CommitStyle, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
-		&m.DestinationIDs, &m.Light, &m.FinalOutput,
+		&m.DestinationIDs, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &promoteKBCollectionID, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow); err != nil {
@@ -314,7 +314,6 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if destinationIDs == nil {
 		destinationIDs = []string{}
 	}
-	phase := initialPhase(m.Kind, m.Light)
 	// flow defaults to full for any caller (test fixture, a pre-#459
 	// code path) that never set it: matches the column's own DB
 	// default and today's pre-#459 behavior exactly.
@@ -322,10 +321,11 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if flow == "" {
 		flow = FlowFull
 	}
+	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, light, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, NULLIF($28, '')::uuid, $29, $30, $31, $32, $33, $34, NULLIF($35, '')::uuid, $36, NULLIF($37, '')::uuid, $38, $39) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, m.Light, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds, flow,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, on_complete, branch_pattern, commit_style, parent_mission_id, parent_context, referenced_context, attachments, destination_ids, phase, workflow_run_id, workflow_step, promote_kb_collection_id, permission_timeout_seconds, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, $25, $26, $27, NULLIF($28, '')::uuid, $29, $30, $31, $32, $33, NULLIF($34, '')::uuid, $35, NULLIF($36, '')::uuid, $37, $38) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.OnComplete, m.BranchPattern, m.CommitStyle, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationIDs, phase, m.WorkflowRunID, m.WorkflowStep, m.PromoteKBCollectionID, m.PermissionTimeoutSeconds, flow,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -1222,11 +1222,14 @@ func (s *Store) SetSession(ctx context.Context, id, sessionID string) error {
 	return nil
 }
 
-// SetProvisioned checks-and-writes workspace/worktree/branch/base_commit
-// in one txn (SELECT ... FOR UPDATE across active missions sharing the
-// same workspace+branch), refusing with ErrBranchConflict if another
-// ACTIVE mission (phase NOT IN ('done','failed')) already holds it.
-func (s *Store) SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error {
+// SetProvisioned checks-and-writes workspace/branch/base_commit in one
+// txn (SELECT ... FOR UPDATE across active missions sharing the same
+// workspace+branch), refusing with ErrBranchConflict if another ACTIVE
+// mission (phase NOT IN ('done','failed')) already holds it. worktree
+// is no longer persisted (issue #479): it's a fixed derivation of
+// workspace (Mission.WorktreePath), so the caller-provided value is
+// only used by ensureProvisioned itself, never written here.
+func (s *Store) SetProvisioned(ctx context.Context, id, workspace, branch, baseCommit string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("missions set provisioned: %w", err)
@@ -1251,8 +1254,8 @@ func (s *Store) SetProvisioned(ctx context.Context, id, workspace, worktree, bra
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
-			workspace = $2, worktree = $3, branch = $4, base_commit = $5, updated_at = now()
-		WHERE id = $1`, id, workspace, worktree, branch, baseCommit); err != nil {
+			workspace = $2, branch = $3, base_commit = $4, updated_at = now()
+		WHERE id = $1`, id, workspace, branch, baseCommit); err != nil {
 		return fmt.Errorf("missions set provisioned update: %w", err)
 	}
 	if err := appendEventTx(ctx, tx, id, "mission.provisioned", map[string]any{

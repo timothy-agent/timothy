@@ -504,7 +504,7 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
-	id, err := s.Create(ctx, Mission{Goal: marker + "light", Kind: "general", Route: "default", Light: true})
+	id, err := s.Create(ctx, Mission{Goal: marker + "light", Kind: "general", Route: "default", Flow: FlowLight})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -512,8 +512,8 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if !m.Light {
-		t.Fatal("Light = false, want true")
+	if m.Flow != FlowLight {
+		t.Fatalf("Flow = %q, want %q", m.Flow, FlowLight)
 	}
 	if m.Phase != PhaseGenerate {
 		t.Fatalf("Phase = %q, want execute for a light mission at create", m.Phase)
@@ -541,8 +541,8 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m2.Light {
-		t.Fatal("Light = true, want false when not set")
+	if m2.Flow == FlowLight {
+		t.Fatal("Flow = light, want full when not set")
 	}
 	if m2.Phase != PhaseDiscover {
 		t.Fatalf("Phase = %q, want discover for a non-light mission at create", m2.Phase)
@@ -1102,17 +1102,17 @@ func TestSetProvisionedBranchCollision(t *testing.T) {
 		t.Fatalf("Create 2: %v", err)
 	}
 
-	if err := s.SetProvisioned(ctx, id1, "/ws", "/ws/wt1", "mission/shared-branch", "abc123"); err != nil {
+	if err := s.SetProvisioned(ctx, id1, "/ws", "mission/shared-branch", "abc123"); err != nil {
 		t.Fatalf("SetProvisioned 1: %v", err)
 	}
 	// Same workspace+branch, different mission, still active: refused.
-	err = s.SetProvisioned(ctx, id2, "/ws", "/ws/wt2", "mission/shared-branch", "abc123")
+	err = s.SetProvisioned(ctx, id2, "/ws", "mission/shared-branch", "abc123")
 	if err == nil {
 		t.Fatal("SetProvisioned allowed a branch collision with an active mission")
 	}
 
 	// A different branch on the same workspace is fine.
-	if err := s.SetProvisioned(ctx, id2, "/ws", "/ws/wt2", "mission/other-branch", "abc123"); err != nil {
+	if err := s.SetProvisioned(ctx, id2, "/ws", "mission/other-branch", "abc123"); err != nil {
 		t.Fatalf("SetProvisioned distinct branch: %v", err)
 	}
 
@@ -1124,7 +1124,7 @@ func TestSetProvisionedBranchCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create 3: %v", err)
 	}
-	if err := s.SetProvisioned(ctx, id3, "/ws", "/ws/wt3", "mission/shared-branch", "def456"); err != nil {
+	if err := s.SetProvisioned(ctx, id3, "/ws", "mission/shared-branch", "def456"); err != nil {
 		t.Fatalf("SetProvisioned after mission 1 terminal: %v", err)
 	}
 }

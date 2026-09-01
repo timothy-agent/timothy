@@ -49,11 +49,14 @@ func TestResolveArtifactFilesReadsUnderWorkspace(t *testing.T) {
 
 func TestResolveArtifactFilesUsesWorktreeOverWorkspace(t *testing.T) {
 	workspace := t.TempDir()
-	worktree := t.TempDir()
+	worktree := filepath.Join(workspace, "wt")
+	if err := os.MkdirAll(worktree, 0o750); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(worktree, "out.md"), []byte("from worktree"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	m := missions.Mission{Workspace: workspace, Worktree: worktree, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{Kind: "coding", Flow: "full", Workspace: workspace, Spec: missions.Spec{Units: []missions.PlanUnit{
 		{Artifacts: []string{"out.md"}},
 	}}}
 

@@ -215,34 +215,31 @@ type StepState struct {
 	// stepReviewRework), a second stall pauses for a human same as
 	// before this feature existed.
 	ReplanUsed bool
-	// Light marks a mission that skips discover/plan/prove (D-069), a
-	// stall can never replan into PhasePlan for one, since it never
-	// visits that phase.
-	Light bool
 	// Flow is the phase set this mission runs (D-090, issue #459):
 	// nextPhase consults it so discover's completion routes straight to
 	// generate for FlowDiscoverGenerate, skipping plan, the same way
-	// Light skips discover/plan by being born in PhaseGenerate. Empty
-	// (a zero-value StepState, every fixture that predates this field)
-	// behaves exactly like FlowFull.
+	// FlowLight skips discover/plan by being born in PhaseGenerate
+	// (D-069), so a stall can never replan into PhasePlan for either.
+	// Empty (a zero-value StepState, every fixture that predates this
+	// field) behaves exactly like FlowFull.
 	Flow Flow
 	// AutoApprovePlan gates the plan phase's success transition
 	// (D-087, issue #456): true (the default) advances straight to
 	// generate, byte-identical to pre-#456 behavior. false parks the
 	// mission on PauseApproval instead, waiting for one of the three
-	// operator verbs. Light missions never visit PhasePlan, so this
+	// operator verbs. FlowLight missions never visit PhasePlan, so this
 	// flag has no effect on them regardless of its value; neither does
 	// FlowDiscoverGenerate, which also never visits PhasePlan.
 	AutoApprovePlan bool
 }
 
 // neverVisitsPlan reports whether s's mission can never be in
-// PhasePlan: Light (born in PhaseGenerate) and FlowDiscoverGenerate
+// PhasePlan: FlowLight (born in PhaseGenerate) and FlowDiscoverGenerate
 // (discover's completion routes straight to generate, D-090) both
 // qualify. Used wherever plan-specific state (the stall/replan brake)
 // must be skipped for a mission structurally incapable of reaching it.
 func (s StepState) neverVisitsPlan() bool {
-	return s.Light || s.Flow == FlowDiscoverGenerate
+	return s.Flow == FlowLight || s.Flow == FlowDiscoverGenerate
 }
 
 // StepInput bundles the triggering Input with whatever data it
@@ -658,11 +655,11 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 func stepResultComplete(s StepState) Transition {
 	s.Phase = PhaseDone
 	s.Status = StatusDone
-	// verified: false for a planless mission (light, or
+	// verified: false for a planless mission (flow=light, or
 	// flow=discover_generate, D-090), both of which reach done with zero
 	// harness verification (no spec units, no CheckArtifacts/RunVerify);
 	// distinguishes that in the event log from a harness-verified done.
-	verified := !s.Light && s.Flow != FlowDiscoverGenerate
+	verified := s.Flow != FlowLight && s.Flow != FlowDiscoverGenerate
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": verified}}}}
 }
 

@@ -70,7 +70,7 @@ type driverStore interface {
 	Events(ctx context.Context, id string) ([]Event, error)
 	SetSpec(ctx context.Context, id string, spec Spec) error
 	SetSession(ctx context.Context, id, sessionID string) error
-	SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error
+	SetProvisioned(ctx context.Context, id, workspace, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	SetFinalOutput(ctx context.Context, id, text string) error
 	SetDiscoverNotes(ctx context.Context, id, notes string) error
@@ -819,7 +819,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	// turn that actually drives it, rather than leaving the worker with
 	// no shell/write_file tools (runner.go's missionTools returns nil for
 	// an empty WorkRoot).
-	if m.SessionID == "" || (m.Workspace == "" && m.Worktree == "") {
+	if m.SessionID == "" || m.Workspace == "" {
 		provisioned, provErr := d.ensureProvisioned(ctx, m)
 		if provErr != nil {
 			// Returning the error here would leave the mission idle for
@@ -1125,7 +1125,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
-		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed, Light: m.Light,
+		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed,
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 	}
 }
@@ -1340,14 +1340,14 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 
 	switch verdict.Outcome {
 	case "done":
-		if m.Worktree != "" {
+		if wt := m.WorktreePath(); wt != "" {
 			var unitTitle string
 			if unit, _ := currentUnit(m.Spec); unit != nil {
 				unitTitle = unit.Title
 			}
 			body := "mission " + m.ID + " iteration " + fmt.Sprint(m.Iteration)
 			msg := CommitMessage(unitTitle, m.Goal, body, d.effectiveCommitStyle(ctx, m))
-			if err := d.workspace.CommitUnit(ctx, m.Worktree, msg); err != nil {
+			if err := d.workspace.CommitUnit(ctx, wt, msg); err != nil {
 				d.log.Warn("driver: commit unit failed", "mission_id", m.ID, "error", err)
 			}
 		}
@@ -1394,8 +1394,8 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	case "blocked":
 		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question}, nil
 	default: // "retry" or anything unrecognized
-		if m.Worktree != "" {
-			if err := d.workspace.Rollback(ctx, m.Worktree, m.Kind); err != nil {
+		if wt := m.WorktreePath(); wt != "" {
+			if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
 				d.log.Warn("driver: rollback failed", "mission_id", m.ID, "error", err)
 			}
 		}
@@ -1474,9 +1474,9 @@ func currentUnit(spec Spec) (*PlanUnit, int) {
 
 func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	var diff string
-	if m.Worktree != "" {
+	if wt := m.WorktreePath(); wt != "" {
 		var err error
-		diff, err = BaselineDiff(ctx, m.Worktree, m.BaseCommit)
+		diff, err = BaselineDiff(ctx, wt, m.BaseCommit)
 		if err != nil {
 			return StepInput{}, err
 		}
@@ -1498,8 +1498,8 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	d.gatekeepers[m.ID] = nextGK
 	// The reviewer's own worktree side effects (it may run tests) are
 	// rolled back unconditionally after every review round.
-	if m.Worktree != "" {
-		if err := d.workspace.Rollback(ctx, m.Worktree, m.Kind); err != nil {
+	if wt := m.WorktreePath(); wt != "" {
+		if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
 			d.log.Warn("driver: post-review rollback failed", "mission_id", m.ID, "error", err)
 		}
 	}
@@ -1576,8 +1576,8 @@ func (d *Driver) markUnitPassed(ctx context.Context, m Mission, unit int) error 
 // directly from mission fields — no unused indirection.
 func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	gitLog := ""
-	if m.Worktree != "" {
-		gitLog, _ = gitLogSince(ctx, m.Worktree, m.BaseCommit)
+	if wt := m.WorktreePath(); wt != "" {
+		gitLog, _ = gitLogSince(ctx, wt, m.BaseCommit)
 	}
 	var loc *time.Location
 	if d.location != nil {

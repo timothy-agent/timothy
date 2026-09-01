@@ -485,24 +485,25 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	if name == "" {
 		name = sc.Name
 	}
-	phase := initialPhase(t.Kind, t.Light)
 	// flow follows light exactly at fire time (D-090, issue #459): a
 	// schedule template has no flow field of its own, only light, but
 	// a digest schedule that runs light must still produce flow='light'
 	// so all D-069 code paths (policyFor, packet.go's WorkPacket.Light)
-	// key off the same column consistently.
+	// key off the same value consistently (issue #479 dropped the
+	// redundant light column, flow is now the only column written).
 	flow := FlowFull
 	if t.Light {
 		flow = FlowLight
 	}
+	phase := initialPhase(t.Kind, flow)
 	// auto_approve_plan is forced true here, never taken from the
 	// template (D-087, issue #456): a scheduler-fired mission runs
 	// unattended, so nobody is watching to approve its plan.
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, auto_approve_plan, spec, schedule_id, harness, environment, destination_ids, light, phase, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, auto_approve_plan, spec, schedule_id, harness, environment, destination_ids, phase, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, knowledgeJSON, t.AutoApproveSafe, true, spec, sc.ID, t.Harness, t.Environment, destinationIDs, t.Light, phase, flow)
+		promptOverlay, knowledgeJSON, t.AutoApproveSafe, true, spec, sc.ID, t.Harness, t.Environment, destinationIDs, phase, flow)
 	return err
 }
 
@@ -567,7 +568,7 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 			agentHarness = defaults.Harness
 		}
 	}
-	policy := policyFor(t.Kind, t.Light, FlowFull)
+	policy := policyFor(t.Kind, FlowFull)
 	defaultRoute := ""
 	if routeForRole != nil {
 		defaultRoute = routeForRole(ctx, "default")

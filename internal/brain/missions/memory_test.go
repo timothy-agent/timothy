@@ -73,7 +73,7 @@ func TestOutcomeDigest(t *testing.T) {
 		{
 			name: "light mission includes final output",
 			mission: Mission{
-				Goal: "summarize the doc", Kind: "general", Light: true,
+				Goal: "summarize the doc", Kind: "general", Flow: FlowLight,
 				FinalOutput: "the doc says X, Y, and Z",
 			},
 			events:       []Event{{Kind: "mission.review_skipped", Payload: json.RawMessage(`{"reason":"light"}`)}},
@@ -110,7 +110,7 @@ func TestOutcomeDigest(t *testing.T) {
 // deliverable verbatim.
 func TestOutcomeDigestTruncatesLightFinalOutput(t *testing.T) {
 	long := strings.Repeat("é", finalOutputDigestCap+500) // multi-byte rune, proves rune- not byte-counting
-	m := Mission{Goal: "g", Kind: "general", Light: true, FinalOutput: long}
+	m := Mission{Goal: "g", Kind: "general", Flow: FlowLight, FinalOutput: long}
 	digest := OutcomeDigest(m, nil, PhaseDone, "")
 	i := strings.Index(digest, "final output:\n")
 	if i < 0 {

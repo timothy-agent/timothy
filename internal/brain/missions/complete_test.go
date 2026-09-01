@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -64,7 +65,7 @@ func TestNotPushableGuards(t *testing.T) {
 	if reason := NotPushable(Mission{Kind: "coding"}); reason == "" {
 		t.Fatal("coding mission with no branch should not be pushable")
 	}
-	if reason := NotPushable(Mission{Kind: "coding", Branch: "mission/x", Worktree: "/does/not/exist"}); reason == "" {
+	if reason := NotPushable(Mission{Kind: "coding", Branch: "mission/x", Workspace: "/does/not/exist"}); reason == "" {
 		t.Fatal("coding mission with a missing worktree should not be pushable")
 	}
 }
@@ -140,11 +141,15 @@ func (f *fakeBranchPusher) Push(ctx context.Context, worktree, branch, token str
 
 // pushableMission is a coding mission with the guards NotPushable
 // requires already satisfied (worktree present, branch set) — t.TempDir()
-// stands in for a real worktree since fakeBranchPusher never touches
-// the filesystem.
+// stands in for a real workspace since fakeBranchPusher never touches
+// the filesystem; WorktreePath() derives workspace/wt from it.
 func pushableMission(t *testing.T) Mission {
 	t.Helper()
-	return Mission{ID: "m1", Kind: "coding", Worktree: t.TempDir(), Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/wt", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return Mission{ID: "m1", Kind: "coding", Workspace: dir, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}
 }
 
 // TestCompleterRunOnCompletePush proves on_complete="push" pushes the

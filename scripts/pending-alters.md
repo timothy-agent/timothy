@@ -118,3 +118,16 @@ SET approval_allowlist = (
 )
 WHERE approval_allowlist @> '["explore_notes"]';
 ```
+
+## Schema restructure slice 1 (issue #479)
+
+Required on live DBs before/with the next deploy. Data is already
+coherent before either drop: flow='light' iff light (normalized at
+create since D-090), and worktree is always workspace + "/wt" for a
+mission whose kind/flow policy needs one (Mission.WorktreePath derives
+it going forward, never reads the old column again).
+
+```sql
+ALTER TABLE missions DROP COLUMN IF EXISTS light;
+ALTER TABLE missions DROP COLUMN IF EXISTS worktree;
+```

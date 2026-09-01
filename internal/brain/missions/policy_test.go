@@ -4,11 +4,10 @@ import "testing"
 
 func TestPolicyFor(t *testing.T) {
 	cases := []struct {
-		name  string
-		kind  string
-		light bool
-		flow  Flow
-		want  missionPolicy
+		name string
+		kind string
+		flow Flow
+		want missionPolicy
 	}{
 		{
 			name: "coding",
@@ -16,8 +15,8 @@ func TestPolicyFor(t *testing.T) {
 			want: missionPolicy{needsWorktree: true, alwaysReview: true, checksCitations: false, canDelegate: true, skipsPlanning: false, canPush: true},
 		},
 		{
-			name: "coding light is meaningless but still coding-shaped",
-			kind: KindCoding, light: true, flow: FlowFull,
+			name: "coding stays coding-shaped regardless of flow rejected elsewhere",
+			kind: KindCoding, flow: FlowFull,
 			want: missionPolicy{needsWorktree: true, alwaysReview: true, checksCitations: false, canDelegate: true, skipsPlanning: false, canPush: true},
 		},
 		{
@@ -27,7 +26,7 @@ func TestPolicyFor(t *testing.T) {
 		},
 		{
 			name: "general light",
-			kind: KindGeneral, light: true, flow: FlowLight,
+			kind: KindGeneral, flow: FlowLight,
 			want: missionPolicy{needsWorktree: false, alwaysReview: false, checksCitations: true, canDelegate: false, skipsPlanning: true, canPush: false},
 		},
 		{
@@ -36,8 +35,8 @@ func TestPolicyFor(t *testing.T) {
 			want: missionPolicy{needsWorktree: false, alwaysReview: true, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},
 		{
-			name: "unknown kind with light stays conservative, ignores light",
-			kind: "bogus", light: true, flow: FlowFull,
+			name: "unknown kind with light flow stays conservative, ignores flow",
+			kind: "bogus", flow: FlowLight,
 			want: missionPolicy{needsWorktree: false, alwaysReview: true, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},
 		{
@@ -63,18 +62,18 @@ func TestPolicyFor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := policyFor(tc.kind, tc.light, tc.flow)
+			got := policyFor(tc.kind, tc.flow)
 			if got != tc.want {
-				t.Fatalf("policyFor(%q, %v, %q) = %+v, want %+v", tc.kind, tc.light, tc.flow, got, tc.want)
+				t.Fatalf("policyFor(%q, %q) = %+v, want %+v", tc.kind, tc.flow, got, tc.want)
 			}
 		})
 	}
 }
 
 func TestMissionPolicyFor(t *testing.T) {
-	m := Mission{Kind: KindGeneral, Light: true, Flow: FlowLight}
+	m := Mission{Kind: KindGeneral, Flow: FlowLight}
 	got := missionPolicyFor(m)
-	want := policyFor(KindGeneral, true, FlowLight)
+	want := policyFor(KindGeneral, FlowLight)
 	if got != want {
 		t.Fatalf("missionPolicyFor(%+v) = %+v, want %+v", m, got, want)
 	}
@@ -82,20 +81,20 @@ func TestMissionPolicyFor(t *testing.T) {
 
 func TestInitialPhase(t *testing.T) {
 	cases := []struct {
-		name  string
-		kind  string
-		light bool
-		want  Phase
+		name string
+		kind string
+		flow Flow
+		want Phase
 	}{
-		{name: "coding starts at discover", kind: KindCoding, want: PhaseDiscover},
-		{name: "general starts at discover", kind: KindGeneral, want: PhaseDiscover},
-		{name: "light general starts at generate", kind: KindGeneral, light: true, want: PhaseGenerate},
-		{name: "unknown kind starts at discover even if light requested", kind: "bogus", light: true, want: PhaseDiscover},
+		{name: "coding starts at discover", kind: KindCoding, flow: FlowFull, want: PhaseDiscover},
+		{name: "general starts at discover", kind: KindGeneral, flow: FlowFull, want: PhaseDiscover},
+		{name: "light general starts at generate", kind: KindGeneral, flow: FlowLight, want: PhaseGenerate},
+		{name: "unknown kind starts at discover even if light requested", kind: "bogus", flow: FlowLight, want: PhaseDiscover},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := initialPhase(tc.kind, tc.light); got != tc.want {
-				t.Fatalf("initialPhase(%q, %v) = %v, want %v", tc.kind, tc.light, got, tc.want)
+			if got := initialPhase(tc.kind, tc.flow); got != tc.want {
+				t.Fatalf("initialPhase(%q, %q) = %v, want %v", tc.kind, tc.flow, got, tc.want)
 			}
 		})
 	}

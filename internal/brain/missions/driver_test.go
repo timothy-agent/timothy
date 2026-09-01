@@ -68,11 +68,11 @@ func (f *fakeStore) Create(ctx context.Context, m Mission) (string, error) {
 	return m.ID, nil
 }
 
-func (f *fakeStore) SetProvisioned(ctx context.Context, id, workspace, worktree, branch, baseCommit string) error {
+func (f *fakeStore) SetProvisioned(ctx context.Context, id, workspace, branch, baseCommit string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.missions[id]
-	m.Workspace, m.Worktree, m.Branch, m.BaseCommit = workspace, worktree, branch, baseCommit
+	m.Workspace, m.Branch, m.BaseCommit = workspace, branch, baseCommit
 	f.missions[id] = m
 	return nil
 }
@@ -376,22 +376,27 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	}
 }
 
-// codingWorktree inits a real git repo with one commit — coding
-// missions run BaselineDiff/CommitUnit against a real worktree even
-// with a scripted Runner, so on_complete tests (which need Kind=coding
-// for NotPushable to accept them) need a real git dir, not merely a
-// TempDir. Returns the dir and its HEAD commit hash for BaseCommit.
-func codingWorktree(t *testing.T) (dir, baseCommit string) {
+// codingWorktree inits a real git repo with one commit, laid out as
+// workspace/wt (WorktreePath's fixed derivation), since coding missions
+// run BaselineDiff/CommitUnit against a real worktree even with a scripted
+// Runner, so on_complete tests (which need Kind=coding for NotPushable
+// to accept them) need a real git dir, not merely a TempDir. Returns
+// the workspace root and the repo's HEAD commit hash for BaseCommit.
+func codingWorktree(t *testing.T) (workspace, baseCommit string) {
 	t.Helper()
 	requireGitForPush(t)
-	dir = t.TempDir()
+	workspace = t.TempDir()
+	dir := filepath.Join(workspace, "wt")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	gitRun(t, dir, "init", "-q")
 	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, dir, "add", "seed.txt")
 	gitRun(t, dir, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
-	return dir, strings.TrimSpace(gitRun(t, dir, "rev-parse", "HEAD"))
+	return workspace, strings.TrimSpace(gitRun(t, dir, "rev-parse", "HEAD"))
 }
 
 // TestDriverFiresOnCompletePushPROnDone proves a coding mission with
@@ -403,7 +408,7 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	dir, base := codingWorktree(t)
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		Worktree: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		Workspace: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
 		OnComplete: "push_pr",
 	})
 	runner := &scriptedRunner{
@@ -456,7 +461,7 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	dir, base := codingWorktree(t)
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		Worktree: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		Workspace: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
 		OnComplete: "push",
 	})
 	runner := &scriptedRunner{
@@ -902,7 +907,7 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 // more Advance call away from done.
 func TestDriverLightDoneSetsFinalOutputAndSkipsToResult(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Light: true, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Flow: FlowLight, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "here is the complete deliverable"}},
 		workerText:     "draft1 tool-retry-narration here is the complete deliverable",
@@ -945,7 +950,7 @@ func TestDriverLightDoneSetsFinalOutputAndSkipsToResult(t *testing.T) {
 // after) still records something rather than an empty FinalOutput.
 func TestDriverLightDoneFallsBackToFullTextWhenFinalMessageEmpty(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Light: true, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Flow: FlowLight, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing"}}, // FinalMessage left empty
 		workerText:     "the only text the runner produced",
@@ -1095,9 +1100,10 @@ func TestDriverPacketOmitsDiscoverNotesForNonPlanlessFlow(t *testing.T) {
 }
 
 // TestDriverNonLightDoneStillGoesThroughReview confirms the light
-// short-circuit is gated on m.Light: an ordinary general mission with a
-// unit that has no declared artifacts still falls through to
-// InputPhaseComplete (review), unchanged from before this feature.
+// short-circuit is gated on m.RunsPlanless() (Flow == FlowLight): an
+// ordinary general mission with a unit that has no declared artifacts
+// still falls through to InputPhaseComplete (review), unchanged from
+// before this feature.
 func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
@@ -1711,7 +1717,7 @@ func TestDriverCreateRejectsInvalidMissionWhenValidateDepsWired(t *testing.T) {
 	d.SetValidateDeps(ValidateDeps{})
 
 	_, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "coding", Route: "route-x", Light: true, // light is general-only
+		Goal: "test", Kind: "coding", Route: "route-x", Flow: FlowLight, // light is general-only
 		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 	})
 	if err == nil {
@@ -1734,7 +1740,7 @@ func TestDriverCreateSkipsValidationWhenDepsUnset(t *testing.T) {
 	d := testDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}})
 
 	if _, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "coding", Light: true, // would be rejected if validated
+		Goal: "test", Kind: "coding", Flow: FlowLight, // would be rejected if validated
 		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 	}); err != nil {
 		t.Fatalf("Create with no ValidateDeps wired: %v, want nil (validation skipped)", err)
@@ -1982,14 +1988,14 @@ func TestDriverProvisionThreadsSigningKeyFromIdentityResolver(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Worktree == "" {
+	if m.WorktreePath() == "" {
 		t.Fatal("Advance did not provision a worktree")
 	}
 	keyPath := filepath.Join(m.Workspace, signingKeyFileName)
 	if _, err := os.Stat(keyPath); err != nil {
 		t.Fatalf("signing key file missing: %v", err)
 	}
-	got, ok := gitConfigLocal(context.Background(), m.Worktree, "user.signingkey")
+	got, ok := gitConfigLocal(context.Background(), m.WorktreePath(), "user.signingkey")
 	if !ok || got != keyPath {
 		t.Fatalf("local user.signingkey = %q (ok=%v), want %q", got, ok, keyPath)
 	}
@@ -2181,21 +2187,23 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 // for Kind == "coding". The scriptedRunner has a review verdict
 // scripted since coding missions always review.
 func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://example.com/invented)"), 0o600); err != nil {
+	root, base := codingWorktree(t)
+	if err := os.WriteFile(filepath.Join(root, "wt", "report.md"), []byte("source: [docs](https://example.com/invented)"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking,
-		MaxIterations: 8, Workspace: root,
+		MaxIterations: 8, Workspace: root, BaseCommit: base,
 		Spec: Spec{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
-	d := testDriver(store, runner)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d.retryDelayFn = func(int) time.Duration { return 0 }
 
 	driveN(t, d, "m1", 3) // generate -> prove -> result -> done
 
@@ -2395,21 +2403,23 @@ func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
 // to coding missions — a diff can be wrong in ways existence checks
 // cannot see.
 func TestDriverCodingMissionsAlwaysReview(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o600); err != nil {
+	root, base := codingWorktree(t)
+	if err := os.WriteFile(filepath.Join(root, "wt", "main.go"), []byte("package main"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking,
-		MaxIterations: 8, Workspace: root,
+		MaxIterations: 8, Workspace: root, BaseCommit: base,
 		Spec: Spec{Units: []PlanUnit{{Title: "write code", Artifacts: []string{"main.go"}}}},
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
-	d := testDriver(store, runner)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d.retryDelayFn = func(int) time.Duration { return 0 }
 
 	driveN(t, d, "m1", 3)
 

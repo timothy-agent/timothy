@@ -1256,11 +1256,13 @@ func createGitHubConnectorRow(t *testing.T, mgr *connectors.Manager) string {
 }
 
 // createGitHubConnectionMission fabricates a mission row with
-// connector_id/repo_url set and SetProvisioned pointed at worktree —
-// the shape Driver.ensureProvisioned would have produced for a real
-// repo_url mission, without actually running provisioning (these tests
-// only exercise push/pr, not clone/authorship, which worktree_test.go
-// already covers).
+// connector_id/repo_url set and SetProvisioned pointed at worktree's
+// parent workspace dir, the shape Driver.ensureProvisioned would have
+// produced for a real repo_url mission, without actually running
+// provisioning (these tests only exercise push/pr, not clone/
+// authorship, which worktree_test.go already covers). worktree must be
+// workspace/wt (Mission.WorktreePath's fixed derivation, issue #479):
+// every caller passes seedBareRepoWithMissionBranch's own tmpdir+"/wt".
 func createGitHubConnectionMission(t *testing.T, store *missions.Store, connectorID, repoURL, worktree, branch string) string {
 	t.Helper()
 	id, err := store.Create(t.Context(), missions.Mission{
@@ -1269,7 +1271,7 @@ func createGitHubConnectionMission(t *testing.T, store *missions.Store, connecto
 	if err != nil {
 		t.Fatalf("create mission: %v", err)
 	}
-	if err := store.SetProvisioned(t.Context(), id, worktree+"/..", worktree, branch, "deadbeef"); err != nil {
+	if err := store.SetProvisioned(t.Context(), id, worktree+"/..", branch, "deadbeef"); err != nil {
 		t.Fatalf("SetProvisioned: %v", err)
 	}
 	return id
@@ -1594,7 +1596,7 @@ func testExportMission(t *testing.T, store *missions.Store, goal string) (id, wo
 		t.Fatalf("Create: %v", err)
 	}
 	workRoot = t.TempDir()
-	if err := store.SetProvisioned(t.Context(), id, workRoot, "", "", ""); err != nil {
+	if err := store.SetProvisioned(t.Context(), id, workRoot, "", ""); err != nil {
 		t.Fatalf("SetProvisioned: %v", err)
 	}
 	return id, workRoot

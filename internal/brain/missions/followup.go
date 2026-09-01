@@ -38,7 +38,7 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID, goal string) (str
 		Knowledge: parent.Knowledge, Harness: parent.Harness, Environment: parent.Environment,
 		RepoURL: parent.RepoURL, ConnectorID: parent.ConnectorID,
 		BranchPattern: parent.BranchPattern, CommitStyle: parent.CommitStyle,
-		Light: parent.Light, Flow: parent.Flow, ParentMissionID: parent.ID, ParentContext: parentContext,
+		Flow: parent.Flow, ParentMissionID: parent.ID, ParentContext: parentContext,
 		// Deliberately NOT copied from parent: OnComplete (push consent is
 		// a per-mission human choice), DestinationIDs (D-061, operator
 		// addresses outputs per mission), Attachments (a follow-up's own

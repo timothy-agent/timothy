@@ -10,6 +10,7 @@ package missions
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"time"
 )
 
@@ -43,7 +44,6 @@ type Mission struct {
 	PauseReason   PauseReason `json:"pause_reason,omitempty"`
 	PauseMessage  string      `json:"pause_message,omitempty"`
 	Workspace     string      `json:"workspace,omitempty"`
-	Worktree      string      `json:"worktree,omitempty"`
 	Branch        string      `json:"branch,omitempty"`
 	BaseCommit    string      `json:"base_commit,omitempty"`
 	// RepoURL is the GitHub repo this coding mission was cloned from
@@ -125,15 +125,15 @@ type Mission struct {
 	// (internal/brain/missions/executor). Coding-only; a general mission
 	// always runs native.
 	Harness string `json:"harness,omitempty"`
-	// Light missions (D-069, general kind only) skip discover/plan/
-	// prove entirely: born in phase=generate, one bare worker turn, the
-	// final worker message is the deliverable, then result/done.
-	Light bool `json:"light"`
 	// Flow is the phase set this mission runs (D-090, issue #459),
 	// chosen once at create time, snapshotted here, never model-
-	// mutable. Light stays the source of truth for every existing
-	// D-069 code path; Flow=FlowLight always implies Light=true
-	// (api/missions.go's create normalizes this at write time).
+	// mutable. FlowLight (D-069, general kind only) skips discover/plan/
+	// prove entirely: born in phase=generate, one bare worker turn, the
+	// final worker message is the deliverable, then result/done. Flow is
+	// the single source of truth (issue #479 dropped the redundant light
+	// column); code that means "light mission" tests Flow == FlowLight.
+	// The API layer derives a "light" JSON field from this for the web
+	// client (api/missions.go's missionResponse).
 	Flow Flow `json:"flow"`
 	// FinalOutput is a light mission's verbatim final worker message,
 	// set on the done transition (driver.go's runExecute) — the
@@ -272,11 +272,24 @@ type MissionAttachment struct {
 	Markdown string `json:"markdown,omitempty"`
 }
 
+// WorktreePath derives the worktree directory (issue #479 dropped the
+// stored worktree column): worktree.go's Provision always lays a
+// needsWorktree mission's git checkout at workspace/wt, so this is
+// pure derivation, never a fresh lookup. "" when the mission's kind/
+// flow policy has no worktree, or Workspace itself is empty (not yet
+// provisioned).
+func (m Mission) WorktreePath() string {
+	if m.Workspace == "" || !missionPolicyFor(m).needsWorktree {
+		return ""
+	}
+	return filepath.Join(m.Workspace, "wt")
+}
+
 // WorkRoot is where mission workers/verify/review actually operate:
 // the worktree for coding missions, the plain workspace dir otherwise.
 func (m Mission) WorkRoot() string {
-	if m.Worktree != "" {
-		return m.Worktree
+	if wt := m.WorktreePath(); wt != "" {
+		return wt
 	}
 	return m.Workspace
 }

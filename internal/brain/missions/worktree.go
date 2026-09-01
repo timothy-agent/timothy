@@ -75,12 +75,12 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 // or the clone's default branch on fallback), so the caller can record
 // an accurate note.
 func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern, baseRef string) (workspace, worktree, branch, baseCommit, baseUsed string, err error) {
-	workspace = filepath.Join(w.root, missionID)
+	workspace = filepath.Join(w.root, kind, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
 	}
 
-	if !policyFor(kind, false, FlowFull).needsWorktree {
+	if !policyFor(kind, FlowFull).needsWorktree {
 		return workspace, "", "", "", "", nil
 	}
 
@@ -406,7 +406,7 @@ func CommitMessage(unitTitle, goal, body, style string) string {
 // Rollback discards uncommitted work: `git checkout -- .` + `git clean
 // -fd` for coding missions, no-op otherwise.
 func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
-	if !policyFor(kind, false, FlowFull).needsWorktree || worktree == "" {
+	if !policyFor(kind, FlowFull).needsWorktree || worktree == "" {
 		return nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, rollbackTimeout)

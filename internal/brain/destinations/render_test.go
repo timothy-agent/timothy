@@ -126,7 +126,7 @@ func TestRender(t *testing.T) {
 
 	t.Run("light mission body is the final output, not a completion line", func(t *testing.T) {
 		light := m
-		light.Light = true
+		light.Flow = missions.FlowLight
 		light.FinalOutput = "here is the complete deliverable"
 		p := Render(light, "", nil, time.UTC)
 		if p.Body != "here is the complete deliverable" {
@@ -136,7 +136,7 @@ func TestRender(t *testing.T) {
 
 	t.Run("light mission with no final output falls back to the completion line", func(t *testing.T) {
 		light := m
-		light.Light = true
+		light.Flow = missions.FlowLight
 		p := Render(light, "", nil, time.UTC)
 		if p.Body != "Mission complete: Ship it" {
 			t.Fatalf("Body = %q, want the completion-line fallback", p.Body)

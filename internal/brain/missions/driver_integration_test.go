@@ -36,7 +36,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	if err := store.SetProvisioned(ctx, id, ws, wt, branch, base); err != nil {
+	if err := store.SetProvisioned(ctx, id, ws, branch, base); err != nil {
 		t.Fatalf("SetProvisioned: %v", err)
 	}
 

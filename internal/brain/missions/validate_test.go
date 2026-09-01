@@ -34,12 +34,12 @@ func TestValidateCreate(t *testing.T) {
 			m.Kind = ""
 			return m
 		}, ValidateDeps{}, true},
-		{"light on coding", func(m Mission) Mission {
-			m.Kind, m.Light = "coding", true
+		{"flow light on coding", func(m Mission) Mission {
+			m.Kind, m.Flow = "coding", FlowLight
 			return m
 		}, ValidateDeps{}, true},
-		{"light on general", func(m Mission) Mission {
-			m.Light, m.Flow = true, FlowLight
+		{"flow light on general", func(m Mission) Mission {
+			m.Flow = FlowLight
 			return m
 		}, ValidateDeps{}, false},
 		{"harness on general", func(m Mission) Mission {
@@ -220,18 +220,6 @@ func TestValidateCreate(t *testing.T) {
 		}, ValidateDeps{}, true},
 		{"discover_generate on coding rejected", func(m Mission) Mission {
 			m.Kind, m.Flow = "coding", FlowDiscoverGenerate
-			return m
-		}, ValidateDeps{}, true},
-		{"flow light on coding rejected", func(m Mission) Mission {
-			m.Kind, m.Flow = "coding", FlowLight
-			return m
-		}, ValidateDeps{}, true},
-		{"light true with flow full is contradictory", func(m Mission) Mission {
-			m.Light = true
-			return m
-		}, ValidateDeps{}, true},
-		{"flow light without light true is contradictory", func(m Mission) Mission {
-			m.Flow = FlowLight
 			return m
 		}, ValidateDeps{}, true},
 	}

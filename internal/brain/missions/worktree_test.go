@@ -181,6 +181,73 @@ func newTestWorkspace(t *testing.T) *Workspace {
 	return NewWorkspace(root, nil, log)
 }
 
+// TestMissionWorktreePath covers Mission.WorktreePath's derivation
+// (issue #479 dropped the stored worktree column): workspace/wt for a
+// needsWorktree kind/flow with a provisioned workspace, "" otherwise.
+func TestMissionWorktreePath(t *testing.T) {
+	cases := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{
+			name: "coding mission with workspace gets workspace/wt",
+			m:    Mission{Kind: KindCoding, Flow: FlowFull, Workspace: "/ws/coding/m1"},
+			want: "/ws/coding/m1/wt",
+		},
+		{
+			name: "general mission never gets a worktree",
+			m:    Mission{Kind: KindGeneral, Flow: FlowFull, Workspace: "/ws/general/m1"},
+			want: "",
+		},
+		{
+			name: "light general mission never gets a worktree",
+			m:    Mission{Kind: KindGeneral, Flow: FlowLight, Workspace: "/ws/general/m1"},
+			want: "",
+		},
+		{
+			name: "coding mission not yet provisioned has no workspace to derive from",
+			m:    Mission{Kind: KindCoding, Flow: FlowFull},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.m.WorktreePath(); got != tc.want {
+				t.Fatalf("WorktreePath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestProvisionWorkspacePathIncludesKind confirms a new mission's
+// workspace lands at root/kind/id (issue #479), not root/id: kind
+// segments the flat workspace root so a listing separates coding from
+// general missions.
+func TestProvisionWorkspacePathIncludesKind(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	workspace, _, _, _, _, err := w.Provision(ctx, "mission-kind-1", "Fix the login bug", "coding", "", "", nil, "", "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	want := filepath.Join(w.root, "coding", "mission-kind-1")
+	if workspace != want {
+		t.Fatalf("workspace = %q, want %q", workspace, want)
+	}
+
+	workspace2, _, _, _, _, err := w.Provision(ctx, "mission-kind-2", "Summarize the doc", "general", "", "", nil, "", "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	want2 := filepath.Join(w.root, "general", "mission-kind-2")
+	if workspace2 != want2 {
+		t.Fatalf("workspace = %q, want %q", workspace2, want2)
+	}
+}
+
 // TestProvisionCodingMissionSelfInitsRepo covers the fix's core case:
 // a coding mission always self-initializes its own git repo inside
 // its workspace — no repo needs to pre-exist in the container.
