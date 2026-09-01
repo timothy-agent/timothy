@@ -451,12 +451,15 @@ func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
 	d.memory = fn
 }
 
-// SetNameMission installs the display-name generator used to backfill
-// missions that reached a terminal phase without a name (the create-time
-// fire-and-forget call failed). A setter for the same reason
-// SetMemoryExtract is. Optional — nil leaves unnamed missions unnamed.
+// SetNameMission installs the display-name generator: ensureProvisioned
+// names a mission before its branch is cut so the slug comes from the
+// title, not the goal (issue #494), and runResult backfills any mission
+// that still reached a terminal phase unnamed. A setter for the same
+// reason SetMemoryExtract is. Optional — nil leaves unnamed missions
+// unnamed and branches slugged from the goal, same as before.
 func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
 	d.nameMission = fn
+	d.provision.nameMission = fn
 }
 
 // DestinationDeliver delivers a mission's generated output to its

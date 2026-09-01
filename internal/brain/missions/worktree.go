@@ -73,8 +73,11 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 // default branch on any error (see cloneRepo) — baseUsed reports which
 // ref the new branch actually landed on ("" for a self-init'd mission,
 // or the clone's default branch on fallback), so the caller can record
-// an accurate note.
-func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern, baseRef string) (workspace, worktree, branch, baseCommit, baseUsed string, err error) {
+// an accurate note. name is the mission's display name when already
+// generated: the branch {slug} comes from it (issue #494), falling back
+// to the goal when empty; {type} always derives from the goal, whose
+// wording ("fix", "docs") carries the intent a six-word title drops.
+func (w *Workspace) Provision(ctx context.Context, missionID, goal, name, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern, baseRef string) (workspace, worktree, branch, baseCommit, baseUsed string, err error) {
 	workspace = filepath.Join(w.root, kind, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
@@ -91,7 +94,11 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, kind, repoUR
 	if connIdentity != nil {
 		login = connIdentity.Login
 	}
-	branch = ExpandBranchPattern(branchPattern, CommitType(goal), Slug(goal, missionID), login, branchDate())
+	slugSource := name
+	if slugSource == "" {
+		slugSource = goal
+	}
+	branch = ExpandBranchPattern(branchPattern, CommitType(goal), Slug(slugSource, missionID), login, branchDate())
 	worktree = filepath.Join(workspace, "wt")
 
 	if repoURL != "" {

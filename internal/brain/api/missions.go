@@ -815,7 +815,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		failMission(w, err)
 		return
 	}
-	h.generateName(id, req.Goal)
 	// Re-read rather than echo req/m back: Driver.Create's own
 	// provisioning (ensureProvisioned) can mutate the row before this
 	// handler ever sees it again — environment auto-detection in
@@ -830,8 +829,12 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	created, err := h.store.Get(r.Context(), id)
 	if err != nil {
 		h.log.Warn("mission: re-read after create failed", "mission_id", id, "error", err)
+		h.generateName(id, req.Goal)
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 		return
+	}
+	if created.Name == "" {
+		h.generateName(id, req.Goal)
 	}
 	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
 }
@@ -973,7 +976,10 @@ func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Conte
 
 // generateName fires the mission's one-shot naming call in the
 // background — never blocks or fails create, mirrors chat.autoTitle's
-// fire-and-forget shape exactly. Detached from the request context
+// fire-and-forget shape exactly. Since issue #494 the driver names a
+// mission synchronously before cutting its branch, so this only runs
+// when create returned a still-unnamed row (driver naming unwired or
+// failed). Detached from the request context
 // (context.Background()) so a client disconnect right after create
 // doesn't cancel it; nameMission carries its own short timeout
 // (chat.TitleOverGateway). SetNameIfEmpty's own guard is what makes

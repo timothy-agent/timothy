@@ -1959,6 +1959,63 @@ func TestDriverProvisionFallsBackToDefaultBranchPattern(t *testing.T) {
 	}
 }
 
+// TestDriverProvisionNamesMissionBeforeBranch confirms ensureProvisioned
+// generates and stores the display name first and slugs the branch
+// from it, not the goal (issue #494); {type} still derives from the goal.
+func TestDriverProvisionNamesMissionBeforeBranch(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "Absolutely. Below is a handoff-ready fix for the login bug", Kind: "coding",
+		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+	})
+	sessions := &fakeSessionCreator{}
+	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	calls := 0
+	d.SetNameMission(func(context.Context, string) string { calls++; return "Login Bug Fix" })
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Name != "Login Bug Fix" {
+		t.Fatalf("Name = %q, want the generated title stored before provisioning", m.Name)
+	}
+	if got, want := m.Branch, "fix/login-bug-fix"; got != want {
+		t.Fatalf("Branch = %q, want %q (slug from title, type from goal)", got, want)
+	}
+	if calls != 1 {
+		t.Fatalf("nameMission called %d times, want exactly once", calls)
+	}
+}
+
+// TestDriverProvisionFallsBackToGoalSlugWhenNamingFails confirms an empty
+// title leaves the branch slugged from the goal, as before #494.
+func TestDriverProvisionFallsBackToGoalSlugWhenNamingFails(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
+		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+	})
+	sessions := &fakeSessionCreator{}
+	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetNameMission(func(context.Context, string) string { return "" })
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Name != "" {
+		t.Fatalf("Name = %q, want empty when generation returns nothing", m.Name)
+	}
+	if got, want := m.Branch, "fix/fix-the-login-bug"; got != want {
+		t.Fatalf("Branch = %q, want %q (goal slug fallback)", got, want)
+	}
+}
+
 // TestDriverProvisionThreadsSigningKeyFromIdentityResolver proves a
 // CloneIdentityResolver returning a non-empty SigningKey reaches the
 // clone's LOCAL git config (user.signingkey/gpg.format/commit.gpgsign)

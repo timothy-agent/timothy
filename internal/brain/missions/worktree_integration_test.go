@@ -19,7 +19,7 @@ func TestProvisionNonCodingMission(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-2", "Do something", "general", "", "", nil, "", "")
+	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-2", "Do something", "", "general", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}

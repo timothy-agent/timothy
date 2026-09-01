@@ -62,6 +62,13 @@ type provisioner struct {
 	// resolve error) falls straight through to the parent-branch base,
 	// same as before this existed.
 	resolvePRState PRStateResolver
+
+	// nameMission generates the display name (Driver.SetNameMission).
+	// ensureProvisioned calls it before cutting the branch so the slug
+	// is the title's, not the goal's (issue #494). nil-safe: unset
+	// leaves the mission unnamed here and the branch slugged from the
+	// goal; runResult's backfill still names it later.
+	nameMission func(context.Context, string) string
 }
 
 // ensureProvisioned gives a mission everything Create used to set up
@@ -80,6 +87,29 @@ type provisioner struct {
 // provisioning halves below — same shape as Create always had, plus
 // the new ApprovalAllowlist grants (via resolveAgent) once a session
 // exists, whichever half of ensureProvisioned actually created it.
+// nameBeforeBranch generates and stores the mission's display name when
+// it has none yet, so Provision can slug the branch from it (issue
+// #494). Synchronous on purpose: the branch is cut once and never
+// renamed, so this is the only moment the title can still shape it.
+// nameMission carries its own short timeout; an empty result just
+// leaves the goal as the slug source, same as before.
+func (p *provisioner) nameBeforeBranch(ctx context.Context, m Mission) Mission {
+	if m.Name != "" || p.nameMission == nil {
+		return m
+	}
+	name := p.nameMission(ctx, m.Goal)
+	if name == "" {
+		p.log.Warn("driver: name generation returned empty before provisioning; branch slug falls back to the goal", "mission_id", m.ID)
+		return m
+	}
+	if err := p.store.SetNameIfEmpty(ctx, m.ID, name); err != nil {
+		p.log.Warn("driver: set name before provisioning failed", "mission_id", m.ID, "error", err)
+		return m
+	}
+	m.Name = name
+	return m
+}
+
 func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission, error) {
 	if m.SessionID == "" && p.sessions != nil {
 		sessionID, err := p.sessions.Create(ctx, "")
@@ -127,7 +157,8 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 			branchPattern = p.gitBranchPattern(ctx)
 		}
 		baseRef := p.followUpBaseRef(ctx, m)
-		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, repoURL, token, connIdentity, branchPattern, baseRef)
+		m = p.nameBeforeBranch(ctx, m)
+		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Name, m.Kind, repoURL, token, connIdentity, branchPattern, baseRef)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
