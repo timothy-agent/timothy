@@ -193,9 +193,9 @@ func TestSchedulerFireFiltersDestinationIDs(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	// destination_ids is a uuid[] column — the ids exercised here must
-	// parse as UUIDs even though no destinations row backs them (the
-	// fake destinationEnabled below stands in for the real lookup).
+	// The ids exercised here must parse as UUIDs even though no
+	// destinations row backs them (the fake destinationEnabled below
+	// stands in for the real lookup).
 	const (
 		kept            = "11111111-1111-1111-1111-111111111111"
 		droppedDisabled = "22222222-2222-2222-2222-222222222222"
@@ -232,12 +232,16 @@ func TestSchedulerFireFiltersDestinationIDs(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 
-	var got []string
-	if err := db.QueryRow(ctx, `SELECT destination_ids FROM missions WHERE schedule_id = $1`, scID).Scan(&got); err != nil {
-		t.Fatalf("query fired mission's destination_ids: %v", err)
+	var raw []byte
+	if err := db.QueryRow(ctx, `SELECT destinations FROM missions WHERE schedule_id = $1`, scID).Scan(&raw); err != nil {
+		t.Fatalf("query fired mission's destinations: %v", err)
 	}
-	if len(got) != 1 || got[0] != kept {
-		t.Fatalf("fired mission destination_ids = %v, want [%s]", got, kept)
+	var got []DestinationEntry
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal destinations: %v", err)
+	}
+	if len(got) != 1 || got[0].DestinationID != kept {
+		t.Fatalf("fired mission destinations = %+v, want one entry with destination_id %s", got, kept)
 	}
 }
 
