@@ -42,6 +42,7 @@ export function ProviderEdit() {
 
   const [provider, setProvider] = useState<AdminProvider | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [name, setName] = useState('')
 
   const refresh = useCallback(() => {
     listProviders()
@@ -49,6 +50,22 @@ export function ProviderEdit() {
       .catch((err: unknown) => toast.error('Could not load provider', { description: errText(err) }))
   }, [id])
   useEffect(refresh, [refresh])
+  useEffect(() => {
+    if (provider) setName(provider.name)
+  }, [provider])
+
+  const saveName = () => {
+    if (!provider) return
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === provider.name) {
+      setName(provider.name)
+      return
+    }
+    patchProvider(provider.id, { name: trimmed }).then(refresh, (err: unknown) => {
+      setName(provider.name)
+      toast.error('Could not rename provider', { description: errText(err) })
+    })
+  }
 
   const remove = async () => {
     if (!provider) return
@@ -78,7 +95,16 @@ export function ProviderEdit() {
       <div className="flex items-center gap-4 border-b border-border pb-6">
         <ProviderLogo preset={matchPreset(provider)} className="size-12" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{provider.name}</h1>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+            className="h-9 max-w-sm truncate border-transparent bg-transparent px-0 text-xl font-semibold tracking-tight shadow-none hover:border-border focus-visible:border-border focus-visible:bg-background focus-visible:px-3"
+            aria-label="Provider name"
+          />
           <p className="text-sm text-muted-foreground">driver: {provider.driver}</p>
         </div>
         <Button variant="destructive" onClick={() => setConfirmDelete(true)}>

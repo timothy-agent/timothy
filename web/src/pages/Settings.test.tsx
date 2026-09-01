@@ -388,6 +388,6 @@ describe('Provider manage page', () => {
   it('navigates to the manage page from the card', async () => {
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
-    expect(await screen.findByRole('heading', { name: 'OpenAI' })).toBeTruthy()
+    expect(await screen.findByDisplayValue('OpenAI')).toBeTruthy()
   })
 })

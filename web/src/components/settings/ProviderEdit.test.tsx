@@ -156,7 +156,7 @@ describe('ProviderEdit default model section', () => {
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     renderPage('p3')
 
-    await screen.findByText('Claude Code')
+    await screen.findByDisplayValue('Claude Code')
     expect(screen.getAllByPlaceholderText('sonnet')).toHaveLength(1)
     expect(screen.queryByPlaceholderText('model id')).not.toBeInTheDocument()
   })
@@ -220,7 +220,7 @@ describe('ProviderEdit cli (subscription) provider', () => {
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     renderPage('p3')
 
-    await screen.findByText('Claude Code')
+    await screen.findByDisplayValue('Claude Code')
     expect(screen.getByPlaceholderText('sonnet')).toHaveValue('sonnet')
     expect(screen.queryByPlaceholderText('model id')).not.toBeInTheDocument()
   })
@@ -244,7 +244,7 @@ describe('ProviderEdit cli (subscription) provider', () => {
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     renderPage('p3')
 
-    await screen.findByText('Claude Code')
+    await screen.findByDisplayValue('Claude Code')
     expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
   })
 })
@@ -286,7 +286,7 @@ describe('ProviderEdit reasoning section', () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
     renderPage('p1')
 
-    await screen.findByText('AWS Bedrock')
+    await screen.findByDisplayValue('AWS Bedrock')
     expect(screen.queryByRole('switch', { name: 'Disable reasoning' })).toBeNull()
   })
 
@@ -422,7 +422,7 @@ describe('ProviderEdit catalog provider section', () => {
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     renderPage('p3')
 
-    await screen.findByText('Claude Code')
+    await screen.findByDisplayValue('Claude Code')
     expect(screen.queryByPlaceholderText('e.g. xai, zai')).not.toBeInTheDocument()
   })
 })
@@ -432,7 +432,7 @@ describe('ProviderEdit region section', () => {
     vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
     renderPage('p2')
 
-    await screen.findByText('Ollama')
+    await screen.findByDisplayValue('Ollama')
     expect(screen.queryByText('Region')).toBeNull()
   })
 

@@ -207,6 +207,42 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 		t.Fatalf("patched provider = %+v, want enabled", got)
 	}
 
+	renamed := name + "-renamed"
+	if err := adm.Patch(ctx, id, ProviderPatch{Name: &renamed}); err != nil {
+		t.Fatalf("Patch rename: %v", err)
+	}
+	list, err = adm.List(ctx)
+	if err != nil {
+		t.Fatalf("List after rename: %v", err)
+	}
+	got = nil
+	for i := range list {
+		if list[i].ID == id {
+			got = &list[i]
+		}
+	}
+	if got == nil || got.Name != renamed {
+		t.Fatalf("patched provider = %+v, want name %q", got, renamed)
+	}
+	name = renamed
+
+	// A rename colliding with another provider's name is refused.
+	otherID, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "crud-other", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "m1",
+		CredentialRef: "SOME_ENV_NAME",
+	})
+	if err != nil {
+		t.Fatalf("Create other: %v", err)
+	}
+	otherName := adminMarker + "crud-other"
+	if err := adm.Patch(ctx, id, ProviderPatch{Name: &otherName}); err == nil {
+		t.Fatalf("Patch rename to duplicate name = nil, want error")
+	}
+	if err := adm.Delete(ctx, otherID); err != nil {
+		t.Fatalf("Delete other: %v", err)
+	}
+
 	// Route pointing at it blocks deletion while enabled.
 	if err := adm.PatchRoute(ctx, seedRoute(t, pool, adminMarker+"cat", id), RoutePatch{}); err != nil {
 		t.Fatalf("PatchRoute noop: %v", err)

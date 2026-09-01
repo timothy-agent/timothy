@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
@@ -754,6 +755,7 @@ func (a *Admin) bootstrapRoutes(ctx context.Context, p router.ProviderRow, candi
 // Patch applies a partial update. Only fields present in the request
 // change; before/after land in the audit row.
 type ProviderPatch struct {
+	Name                 *string            `json:"name"`
 	BaseURL              *string            `json:"base_url"`
 	DefaultModel         *string            `json:"default_model"`
 	CredentialRef        *string            `json:"credential_ref"`
@@ -763,7 +765,16 @@ type ProviderPatch struct {
 	Options              *map[string]string `json:"options"`
 }
 
+// isUniqueViolation reports whether err is a Postgres unique_violation (23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error {
+	if patch.Name != nil && *patch.Name == "" {
+		return fmt.Errorf("name is required")
+	}
 	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
 	}
@@ -800,6 +811,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 		return err
 	}
 	after := before
+	if patch.Name != nil {
+		after.Name = *patch.Name
+	}
 	if patch.BaseURL != nil {
 		after.BaseURL = *patch.BaseURL
 	}
@@ -822,12 +836,15 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 		after.Options = *patch.Options
 	}
 
-	tag, err := tx.Exec(ctx, `UPDATE providers SET base_url = $2, default_model = $3,
-			credential_ref = $4, headers = $5, enabled = $6, exclude_from_bootstrap = $7, options = $8, updated_at = now()
+	tag, err := tx.Exec(ctx, `UPDATE providers SET name = $2, base_url = $3, default_model = $4,
+			credential_ref = $5, headers = $6, enabled = $7, exclude_from_bootstrap = $8, options = $9, updated_at = now()
 		WHERE id = $1`,
-		id, after.BaseURL, after.DefaultModel,
+		id, after.Name, after.BaseURL, after.DefaultModel,
 		after.CredentialRef, jsonOr(after.Headers, "{}"), after.Enabled, after.ExcludeFromBootstrap, jsonOr(after.Options, "{}"))
 	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("provider name %q already in use", after.Name)
+		}
 		return fmt.Errorf("admin patch: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
