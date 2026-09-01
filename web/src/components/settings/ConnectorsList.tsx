@@ -5,7 +5,7 @@ import { listConnectors, patchConnector, testConnector } from '../../api/client'
 import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { ConnectorLogo } from './ConnectorLogo'
-import { connectorPresets, unknownPreset } from './connectorPresets'
+import { connectorPresets, presetFor } from './connectorPresets'
 import { Toggle } from './shared'
 import { connectedAs, errText, isTimothyAuthError } from './util'
 
@@ -112,7 +112,7 @@ function ConnectorCard({
   onChanged: () => void
   onManage: () => void
 }) {
-  const preset = connectorPresets.find((p) => matchesPreset(connector, p)) ?? unknownPreset
+  const preset = presetFor(connector)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
     null,
@@ -153,7 +153,7 @@ function ConnectorCard({
               </span>
             )}
           </div>
-          <div className="text-xs text-muted-foreground uppercase">{connector.kind}</div>
+          <div className="text-xs text-muted-foreground uppercase">{preset.name}</div>
         </div>
         <Toggle on={connector.enabled} onChange={toggle} label={`${connector.name} enabled`} />
       </div>
@@ -192,16 +192,3 @@ function ConnectorCard({
   )
 }
 
-function matchesPreset(
-  c: AdminConnector,
-  p: { kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav'; scopes?: string[]; endpoint?: string },
-) {
-  if (p.kind !== c.kind) return false
-  if (c.kind === 'google' || c.kind === 'microsoft') {
-    const scopes = JSON.stringify(c.config.scopes ?? '')
-    return p.scopes?.every((s) => scopes.includes(s)) ?? false
-  }
-  if (c.kind === 'github' || c.kind === 'imap' || c.kind === 'caldav') return true
-  const endpoint = String(c.config.endpoint ?? '')
-  return !!p.endpoint && endpoint.startsWith(p.endpoint)
-}

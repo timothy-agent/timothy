@@ -121,3 +121,26 @@ export const unknownPreset: ConnectorPreset = {
   description: '',
   brandColor: '#4B5563',
 }
+
+// matchesPreset distinguishes presets sharing a kind (e.g. Gmail vs
+// Google Calendar, both kind=google) by their OAuth scopes; kinds with
+// only one preset match on kind alone.
+function matchesPreset(
+  c: { kind: string; config: Record<string, unknown> },
+  p: ConnectorPreset,
+): boolean {
+  if (p.kind !== c.kind) return false
+  if (c.kind === 'google' || c.kind === 'microsoft') {
+    const scopes = JSON.stringify(c.config.scopes ?? '')
+    return p.scopes?.every((s) => scopes.includes(s)) ?? false
+  }
+  if (c.kind === 'github' || c.kind === 'imap' || c.kind === 'caldav') return true
+  const endpoint = String(c.config.endpoint ?? '')
+  return !!p.endpoint && endpoint.startsWith(p.endpoint)
+}
+
+// presetFor resolves a connector to its friendly preset (name, logo,
+// description) by kind + scopes, falling back to unknownPreset.
+export function presetFor(c: { kind: string; config: Record<string, unknown> }): ConnectorPreset {
+  return connectorPresets.find((p) => matchesPreset(c, p)) ?? unknownPreset
+}

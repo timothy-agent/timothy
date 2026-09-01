@@ -23,7 +23,7 @@ import {
 import { Input } from '../ui/input'
 import { slugify } from './AgentForm'
 import { ConnectorLogo } from './ConnectorLogo'
-import { connectorPresets, unknownPreset } from './connectorPresets'
+import { presetFor } from './connectorPresets'
 import { Field, Toggle } from './shared'
 import { connectedAs, errText, isTimothyAuthError } from './util'
 
@@ -170,7 +170,7 @@ export function ConnectorEdit() {
   if (connector === null) return <Navigate to="/settings/connectors" replace />
   if (connector === undefined) return null
 
-  const preset = connectorPresets.find((p) => p.kind === connector.kind) ?? unknownPreset
+  const preset = presetFor(connector)
   const isOAuth = connector.kind === 'google' || connector.kind === 'microsoft'
 
   return (
@@ -212,7 +212,7 @@ export function ConnectorEdit() {
               </button>
             </div>
           )}
-          <p className="text-sm text-muted-foreground uppercase">{connector.kind}</p>
+          <p className="text-sm text-muted-foreground uppercase">{preset.name}</p>
         </div>
         <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
           <HugeiconsIcon icon={Delete02Icon} />
