@@ -517,6 +517,24 @@ export function MissionForm({
       .catch(() => setGithubConnectors([]))
   }, [repoSource, githubDestinationAdded, githubConnectors])
 
+  // When the destination has no clone-source connector to fall back on
+  // (no repo picked in the Repository section) and exactly one github
+  // connector is configured, that connector is unambiguous: select it
+  // for the destination automatically rather than forcing a manual
+  // pick of the only option, e.g. after "Use this" on a detected
+  // destination for a scratch mission (issue #483).
+  useEffect(() => {
+    if (
+      !githubDestinationAdded ||
+      connectorID ||
+      destinationConnectorID ||
+      githubConnectors?.length !== 1
+    ) {
+      return
+    }
+    setDestinationConnectorID(githubConnectors[0].id)
+  }, [githubDestinationAdded, connectorID, destinationConnectorID, githubConnectors])
+
   // Fetch the connector's repo list whenever it changes: best-effort,
   // an error surfaces inline rather than blocking the form.
   useEffect(() => {

@@ -1181,6 +1181,7 @@ describe('MissionForm: destinations (github, issue #483)', () => {
   })
 
   it('hides the Destinations section for a general mission', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([])
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     await screen.findByText('General · scratch workspace')
@@ -1258,6 +1259,9 @@ describe('MissionForm: destinations (github, issue #483)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use this' }))
 
     expect((screen.getByLabelText(/^GitHub/) as HTMLInputElement).checked).toBe(true)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Create mission' })).toBeEnabled(),
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(
