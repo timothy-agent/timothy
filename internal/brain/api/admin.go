@@ -194,14 +194,12 @@ type secretsAPI struct {
 }
 
 // connectorRefs maps every stored secret ref name to the connector
-// names referencing it: each row's credential_ref, plus — for a github
-// connector with commit signing enabled — the derived
-// connectors.SigningKeyRefSuffix ref its private signing key lives
-// under, so the signing key never looks orphaned in the panel or
-// becomes deletable while the connector still signs with it. A google
-// connector's config.client_secret_ref counts the same way: it is
-// resolved on every OAuth token refresh, so deleting it would break
-// the connector at the next refresh.
+// names referencing it, via each row's connectors.Connector.SecretRefs
+// — the kind-specific list of every secret it resolves (base
+// credential, OAuth client secret, derived signing key, ...), so a
+// secret backing an active connector never looks orphaned or becomes
+// deletable out from under it. A kind missing from that registry is a
+// connectors-package bug, guarded by its own test, not this caller's.
 func connectorRefs(ctx context.Context, store connectorLister) (map[string][]referenceInfo, error) {
 	if store == nil {
 		return map[string][]referenceInfo{}, nil
@@ -212,28 +210,11 @@ func connectorRefs(ctx context.Context, store connectorLister) (map[string][]ref
 	}
 	out := map[string][]referenceInfo{}
 	for _, c := range rows {
-		if c.CredentialRef == "" {
-			continue
-		}
-		// A google connector's credential_ref is the machine-written
-		// OAuth token bundle, never a valid manual pick.
-		credRole := "credential"
-		if c.Kind == "google" {
-			credRole = "oauth_tokens" //nolint:gosec // G101: role label, not a credential value.
-		}
-		out[c.CredentialRef] = append(out[c.CredentialRef], referenceInfo{Kind: "connector", Name: c.Name, Role: credRole})
-		if c.Kind == "github" {
-			var cfg connectors.GitHubConfig
-			if json.Unmarshal(c.Config, &cfg) == nil && (cfg.SignCommits || cfg.SigningPublicKey != "") {
-				ref := connectors.SigningKeyRefSuffix(c.CredentialRef)
-				out[ref] = append(out[ref], referenceInfo{Kind: "connector", Name: c.Name, Role: "signing_key"})
+		for _, ref := range c.SecretRefs() {
+			if ref.RefName == "" {
+				continue
 			}
-		}
-		if c.Kind == "google" {
-			var cfg connectors.GoogleConfig
-			if json.Unmarshal(c.Config, &cfg) == nil && cfg.ClientSecretRef != "" {
-				out[cfg.ClientSecretRef] = append(out[cfg.ClientSecretRef], referenceInfo{Kind: "connector", Name: c.Name, Role: "client_secret"})
-			}
+			out[ref.RefName] = append(out[ref.RefName], referenceInfo{Kind: "connector", Name: c.Name, Role: ref.Role})
 		}
 	}
 	return out, nil

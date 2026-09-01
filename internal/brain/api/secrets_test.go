@@ -210,6 +210,74 @@ func TestDeleteSecretRefusesGoogleClientSecretRef(t *testing.T) {
 	}
 }
 
+func TestListSecretsCountsMicrosoftClientSecretRef(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "OUTLOOK_MICROSOFT_OAUTH"},
+		{RefName: "OUTLOOK_MICROSOFT_CLIENT_SECRET"},
+	}}
+	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		//nolint:gosec // G101: fixture ref names, not credential values.
+		{Name: "outlook", Kind: "microsoft", CredentialRef: "OUTLOOK_MICROSOFT_OAUTH",
+			Config: json.RawMessage(`{"client_id":"x","client_secret_ref":"OUTLOOK_MICROSOFT_CLIENT_SECRET"}`)},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Secrets []secretRefEntry `json:"secrets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byName := map[string]secretRefEntry{}
+	for _, s := range body.Secrets {
+		byName[s.RefName] = s
+	}
+	got := byName["OUTLOOK_MICROSOFT_CLIENT_SECRET"].ReferencedBy
+	if len(got) != 1 || got[0] != (referenceInfo{Kind: "connector", Name: "outlook", Role: "client_secret"}) {
+		t.Fatalf("OUTLOOK_MICROSOFT_CLIENT_SECRET referenced_by = %+v, want the microsoft connector with role client_secret (client secret is resolved on every token refresh, must never look orphaned)", got)
+	}
+	oauth := byName["OUTLOOK_MICROSOFT_OAUTH"].ReferencedBy
+	if len(oauth) != 1 || oauth[0] != (referenceInfo{Kind: "connector", Name: "outlook", Role: "oauth_tokens"}) {
+		t.Fatalf("OUTLOOK_MICROSOFT_OAUTH referenced_by = %+v, want the microsoft connector with role oauth_tokens (machine-managed token bundle, never a manual pick)", oauth)
+	}
+}
+
+func TestDeleteSecretRefusesMicrosoftClientSecretRef(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	conns := &fakeConnectorLister{rows: []connectors.Connector{
+		//nolint:gosec // G101: fixture ref names, not credential values.
+		{Name: "outlook", Kind: "microsoft", CredentialRef: "OUTLOOK_MICROSOFT_OAUTH",
+			Config: json.RawMessage(`{"client_secret_ref":"OUTLOOK_MICROSOFT_CLIENT_SECRET"}`)},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, conns, nil)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/OUTLOOK_MICROSOFT_CLIENT_SECRET", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
+	}
+}
+
 func TestDeleteSecretRefusesWhenConnectorReferencesIt(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
