@@ -62,7 +62,8 @@ function rowPhases(rows: MissionEvent[]): Map<number, string> {
   const chips = new Map<number, string>()
   let current = ''
   for (const e of rows) {
-    const own = String((e.payload as { phase?: string }).phase ?? '')
+    // payload can be null (e.g. mission.resumed), never assume an object
+    const own = String(((e.payload ?? {}) as { phase?: string }).phase ?? '')
     if (own !== '') {
       current = own
     }

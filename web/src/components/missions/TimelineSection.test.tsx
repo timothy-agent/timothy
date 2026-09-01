@@ -328,6 +328,29 @@ describe('TimelineSection phase chips', () => {
     expect(screen.getAllByText('plan')).toHaveLength(1)
   })
 
+  it('survives events with a null payload (mission.resumed)', () => {
+    const withNull: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.turn',
+        payload: { phase: 'generate', duration_ms: 10, ok: true, input: 'worker_done' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.resumed',
+        payload: null as unknown as Record<string, unknown>,
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:01Z',
+      },
+    ]
+    render(<TimelineSection events={withNull} />)
+    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
+  })
+
   it('renders no chip when no event carries a phase at all', () => {
     const bare: MissionEvent[] = [
       {
