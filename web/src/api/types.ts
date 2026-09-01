@@ -802,10 +802,8 @@ export interface Mission {
   top_model_provider?: string
   schedule_id?: string
   // parent_mission_id names the terminal mission this one follows up
-  // on: absent for an ordinary mission. parent_context is that
-  // parent's outcome digest, snapshotted at follow-up create time.
+  // on: absent for an ordinary mission.
   parent_mission_id?: string
-  parent_context?: string
   // attachments are PDF documents attached at create time: markdown is
   // never sent over the wire (see api/missions.go's sanitizeMission).
   attachments?: { id: string; mime: string; name?: string }[]

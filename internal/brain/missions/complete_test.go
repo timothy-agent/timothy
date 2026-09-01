@@ -149,7 +149,10 @@ func pushableMission(t *testing.T) Mission {
 	if err := os.MkdirAll(dir+"/wt", 0o750); err != nil {
 		t.Fatal(err)
 	}
-	return Mission{ID: "m1", Kind: "coding", Workspace: dir, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}
+	return Mission{
+		ID: "m1", Kind: "coding", Workspace: dir, Branch: "mission/x",
+		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
+	}
 }
 
 // TestCompleterRunOnCompletePush proves on_complete="push" pushes the

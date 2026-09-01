@@ -55,8 +55,8 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		EscalationRoute: "route-d", MaxIterations: 12, BudgetCurrency: "USD",
 		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
 		AutoApproveSafe: true, PromptOverlay: "be terse", Knowledge: []string{"kb1"},
-		Harness: "claude-cli", Environment: "node", RepoURL: "https://github.com/o/r.git",
-		ConnectorID: "conn1",
+		Harness: "claude-cli", Environment: "node",
+		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{
 			{Destination: DestinationKindGitHub, Mode: "push_pr", BranchPattern: "custom/{slug}", CommitStyle: "conventional"},
 			{DestinationID: "dest-1"},
@@ -78,8 +78,8 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	if child.Kind != "coding" || child.AgentID != "agent-1" || child.Route != "route-a" ||
 		child.ReviewRoute != "route-b" || child.PlanRoute != "route-c" || child.EscalationRoute != "route-d" ||
 		child.MaxIterations != 12 || child.AutoApproveSafe != true || child.PromptOverlay != "be terse" ||
-		child.Harness != "claude-cli" || child.Environment != "node" || child.RepoURL != "https://github.com/o/r.git" ||
-		child.ConnectorID != "conn1" ||
+		child.Harness != "claude-cli" || child.Environment != "node" || child.RepoURL() != "https://github.com/o/r.git" ||
+		child.ConnectorID() != "conn1" ||
 		child.RouteModel != "P/m-a" || child.PlanRouteModel != "P/m-c" || child.ReviewRouteModel != "P/m-b" {
 		t.Fatalf("child did not inherit parent settings: %+v", child)
 	}
@@ -89,11 +89,11 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	if child.ParentMissionID != "parent" {
 		t.Fatalf("child.ParentMissionID = %q, want %q", child.ParentMissionID, "parent")
 	}
-	if child.ParentContext == "" {
-		t.Fatal("child.ParentContext should carry the parent's outcome digest")
+	if child.ParentContext() == "" {
+		t.Fatal("child.ParentContext() should carry the parent's outcome digest")
 	}
-	if !strings.Contains(child.ParentContext, "fix the login bug") {
-		t.Fatalf("child.ParentContext = %q, want it to mention the parent's goal", child.ParentContext)
+	if !strings.Contains(child.ParentContext(), "fix the login bug") {
+		t.Fatalf("child.ParentContext() = %q, want it to mention the parent's goal", child.ParentContext())
 	}
 	if len(child.Destinations) != 0 {
 		t.Fatalf("child.Destinations = %+v, want empty, destinations are a per-mission choice", child.Destinations)

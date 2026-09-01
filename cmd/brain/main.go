@@ -1215,7 +1215,7 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 	return builtin.MissionRecord{
 		ID: m.ID, Name: m.Name, Goal: m.Goal, Kind: m.Kind,
 		Phase: string(m.Phase), Status: string(m.Status), Iteration: m.Iteration,
-		Harness: m.Harness, RepoURL: m.RepoURL, Branch: m.Branch, ConnectorID: m.ConnectorID,
+		Harness: m.Harness, RepoURL: m.RepoURL(), Branch: m.Branch, ConnectorID: m.ConnectorID(),
 		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
 		UnitsPassed: passed, UnitsTotal: len(m.Spec.Units),
 		PauseReason: string(m.PauseReason), PauseMessage: m.PauseMessage,

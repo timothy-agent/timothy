@@ -225,10 +225,13 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 	if step.OnComplete != "" {
 		destinations = append(destinations, missions.DestinationEntry{Destination: missions.DestinationKindGitHub, Mode: step.OnComplete})
 	}
+	// outcome becomes this step's mission's parent-lineage Sources entry
+	// (issue #481), same shape as followup.go's own CreateFollowUp.
+	sources := []missions.SourceEntry{{Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parentMissionID, Digest: outcome}}
 	return e.spawner.Create(ctx, missions.Mission{
 		Goal: goal, Kind: step.Kind, Flow: flow, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
 		Destinations:    destinations,
-		ParentMissionID: parentMissionID, ParentContext: outcome,
+		ParentMissionID: parentMissionID, Sources: sources,
 		WorkflowRunID: runID, WorkflowStep: stepName,
 		// Forced true (D-087, issue #456): a workflow-spawned mission
 		// runs unattended, so nobody is watching to approve its plan.

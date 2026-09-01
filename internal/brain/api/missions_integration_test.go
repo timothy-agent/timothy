@@ -792,19 +792,19 @@ func TestMissionsCreateFollowUp(t *testing.T) {
 	if created.ParentMissionID != parentID {
 		t.Fatalf("create response parent_mission_id = %q, want %q", created.ParentMissionID, parentID)
 	}
-	if !strings.Contains(created.ParentContext, "itest-api-mission follow-up parent (live)") {
-		t.Fatalf("create response parent_context = %q, want it to contain the parent's goal", created.ParentContext)
+	if !strings.Contains(created.ParentContext(), "itest-api-mission follow-up parent (live)") {
+		t.Fatalf("create response parent_context = %q, want it to contain the parent's goal", created.ParentContext())
 	}
-	if !strings.Contains(created.ParentContext, "terminal state: done") {
-		t.Fatalf("create response parent_context = %q, want it to name the parent's terminal state", created.ParentContext)
+	if !strings.Contains(created.ParentContext(), "terminal state: done") {
+		t.Fatalf("create response parent_context = %q, want it to name the parent's terminal state", created.ParentContext())
 	}
 
 	got, err := store.Get(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.ParentMissionID != parentID || got.ParentContext != created.ParentContext {
-		t.Fatalf("stored parent lineage = (%q, %q), want it to match the create response", got.ParentMissionID, got.ParentContext)
+	if got.ParentMissionID != parentID || got.ParentContext() != created.ParentContext() {
+		t.Fatalf("stored parent lineage = (%q, %q), want it to match the create response", got.ParentMissionID, got.ParentContext())
 	}
 }
 
@@ -883,19 +883,19 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 		if err := json.Unmarshal(body, &created); err != nil {
 			t.Fatalf("decode create response: %v", err)
 		}
-		if len(created.Attachments) != 1 || created.Attachments[0].Markdown != "" {
-			t.Fatalf("create response attachments = %+v, want one entry with markdown stripped", created.Attachments)
+		if atts := created.Attachments(); len(atts) != 1 || atts[0].Markdown != "" {
+			t.Fatalf("create response attachments = %+v, want one entry with markdown stripped", atts)
 		}
 
 		stored, err := store.Get(context.Background(), created.ID)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if len(stored.Attachments) != 1 || stored.Attachments[0].Markdown != "# converted spec\ndo the thing" {
-			t.Fatalf("stored attachments = %+v, want the converted markdown snapshotted", stored.Attachments)
+		if atts := stored.Attachments(); len(atts) != 1 || atts[0].Markdown != "# converted spec\ndo the thing" {
+			t.Fatalf("stored attachments = %+v, want the converted markdown snapshotted", atts)
 		}
-		if stored.Attachments[0].Name != "spec.pdf" || stored.Attachments[0].Mime != "application/pdf" {
-			t.Fatalf("stored attachment = %+v, want name/mime carried through", stored.Attachments[0])
+		if atts := stored.Attachments(); atts[0].Name != "spec.pdf" || atts[0].Mime != "application/pdf" {
+			t.Fatalf("stored attachment = %+v, want name/mime carried through", atts[0])
 		}
 
 		getReq := httptest.NewRequest("GET", "/v1/missions/"+created.ID, nil)
@@ -906,8 +906,8 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode get response: %v", err)
 		}
-		if got.Attachments[0].Markdown != "" {
-			t.Fatalf("get response markdown = %q, want stripped", got.Attachments[0].Markdown)
+		if got.Attachments()[0].Markdown != "" {
+			t.Fatalf("get response markdown = %q, want stripped", got.Attachments()[0].Markdown)
 		}
 
 		listReq := httptest.NewRequest("GET", "/v1/missions", nil)
@@ -921,7 +921,7 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 			t.Fatalf("decode list response: %v", err)
 		}
 		for _, lm := range list.Missions {
-			for _, la := range lm.Attachments {
+			for _, la := range lm.Attachments() {
 				if la.Markdown != "" {
 					t.Fatalf("list response markdown = %q, want stripped for mission %s", la.Markdown, lm.ID)
 				}
@@ -952,11 +952,12 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if len(stored.Attachments[0].Markdown) >= len(huge) {
-			t.Fatalf("stored markdown len = %d, want truncated below %d", len(stored.Attachments[0].Markdown), len(huge))
+		atts := stored.Attachments()
+		if len(atts[0].Markdown) >= len(huge) {
+			t.Fatalf("stored markdown len = %d, want truncated below %d", len(atts[0].Markdown), len(huge))
 		}
-		if !strings.Contains(stored.Attachments[0].Markdown, "truncated") {
-			t.Fatalf("stored markdown = %q, want a truncation marker", stored.Attachments[0].Markdown)
+		if !strings.Contains(atts[0].Markdown, "truncated") {
+			t.Fatalf("stored markdown = %q, want a truncation marker", atts[0].Markdown)
 		}
 	})
 
@@ -1266,7 +1267,8 @@ func createGitHubConnectorRow(t *testing.T, mgr *connectors.Manager) string {
 func createGitHubConnectionMission(t *testing.T, store *missions.Store, connectorID, repoURL, worktree, branch string) string {
 	t.Helper()
 	id, err := store.Create(t.Context(), missions.Mission{
-		Goal: "itest-api-mission pr flow", Kind: "coding", RepoURL: repoURL, ConnectorID: connectorID,
+		Goal: "itest-api-mission pr flow", Kind: "coding",
+		Sources: []missions.SourceEntry{{Source: missions.SourceKindGitHub, RepoURL: repoURL, ConnectorID: connectorID}},
 	})
 	if err != nil {
 		t.Fatalf("create mission: %v", err)

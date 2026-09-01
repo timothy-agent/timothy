@@ -95,11 +95,13 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 	if p.workspace != nil && m.Workspace == "" {
 		var token string
 		var connIdentity *GitIdentity
-		if m.RepoURL != "" {
+		repoURL := m.RepoURL()
+		if repoURL != "" {
+			connectorID := m.ConnectorID()
 			if p.resolveCloneToken == nil {
 				return m, fmt.Errorf("provision: mission has repo_url but no clone token resolver is configured")
 			}
-			t, err := p.resolveCloneToken(ctx, m.ConnectorID)
+			t, err := p.resolveCloneToken(ctx, connectorID)
 			if err != nil {
 				return m, fmt.Errorf("provision: resolve clone token: %w", err)
 			}
@@ -109,7 +111,7 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 			// back to the fixed commitName/commitEmail (worktree.go's
 			// CommitUnit).
 			if p.resolveCloneIdentity != nil {
-				identity, err := p.resolveCloneIdentity(ctx, m.ConnectorID)
+				identity, err := p.resolveCloneIdentity(ctx, connectorID)
 				if err != nil {
 					p.log.Warn("driver: resolve clone identity failed; commits fall back to fixed identity", "mission_id", m.ID, "error", err)
 				} else {
@@ -125,7 +127,7 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 			branchPattern = p.gitBranchPattern(ctx)
 		}
 		baseRef := p.followUpBaseRef(ctx, m)
-		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, m.RepoURL, token, connIdentity, branchPattern, baseRef)
+		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Kind, repoURL, token, connIdentity, branchPattern, baseRef)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
@@ -179,7 +181,7 @@ func (p *provisioner) followUpBaseRef(ctx context.Context, m Mission) string {
 		p.log.Debug("driver: follow-up base ref: parent lookup failed", "mission_id", m.ID, "parent_id", m.ParentMissionID, "error", err)
 		return ""
 	}
-	if parent.Branch == "" || parent.RepoURL != m.RepoURL {
+	if parent.Branch == "" || parent.RepoURL() != m.RepoURL() {
 		return ""
 	}
 	if p.resolvePRState != nil {
@@ -225,11 +227,11 @@ func (p *provisioner) parentPRMerged(ctx context.Context, m, parent Mission) boo
 	if !found || number == 0 {
 		return false
 	}
-	owner, repo, ok := ParseGitHubRepoURL(parent.RepoURL)
+	owner, repo, ok := ParseGitHubRepoURL(parent.RepoURL())
 	if !ok {
 		return false
 	}
-	merged, err := p.resolvePRState(ctx, parent.ConnectorID, owner, repo, number)
+	merged, err := p.resolvePRState(ctx, parent.ConnectorID(), owner, repo, number)
 	if err != nil {
 		p.log.Debug("driver: follow-up base ref: pr state resolve failed", "mission_id", m.ID, "parent_id", parent.ID, "error", err)
 		return false

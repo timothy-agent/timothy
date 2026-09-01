@@ -14,6 +14,14 @@ func baseValidMission() Mission {
 	return Mission{Kind: "general", Route: "default", Flow: FlowFull}
 }
 
+// withGitHubSource returns m with its "github" Sources entry set to
+// repoURL/connectorID -- the validate_test.go table's replacement for
+// directly setting the pre-#481 RepoURL/ConnectorID fields.
+func withGitHubSource(m Mission, repoURL, connectorID string) Mission {
+	m.Sources = append(m.Sources, SourceEntry{Source: SourceKindGitHub, RepoURL: repoURL, ConnectorID: connectorID})
+	return m
+}
+
 func TestValidateCreate(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -63,16 +71,16 @@ func TestValidateCreate(t *testing.T) {
 			return m
 		}, ValidateDeps{}, false},
 		{"repo_url on general", func(m Mission) Mission {
-			m.Kind, m.RepoURL = "general", "https://github.com/o/r"
-			return m
+			m.Kind = "general"
+			return withGitHubSource(m, "https://github.com/o/r", "")
 		}, ValidateDeps{}, true},
 		{"repo_url without connector_id", func(m Mission) Mission {
-			m.Kind, m.RepoURL = "coding", "https://github.com/o/r"
-			return m
+			m.Kind = "coding"
+			return withGitHubSource(m, "https://github.com/o/r", "")
 		}, ValidateDeps{}, true},
 		{"connector_id without repo_url", func(m Mission) Mission {
-			m.Kind, m.ConnectorID = "coding", "conn-1"
-			return m
+			m.Kind = "coding"
+			return withGitHubSource(m, "", "conn-1")
 		}, ValidateDeps{}, true},
 		{"branch_pattern on general", func(m Mission) Mission {
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, BranchPattern: "{type}/{slug}"}}
@@ -89,26 +97,22 @@ func TestValidateCreate(t *testing.T) {
 		{"invalid branch_pattern on coding", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", BranchPattern: "{oops}/{slug}"}}
-			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
-			return m
+			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
 		}, ValidateDeps{}, true},
 		{"valid branch_pattern on coding", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", BranchPattern: "{type}/{slug}"}}
-			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
-			return m
+			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
 		}, ValidateDeps{}, false},
 		{"invalid commit_style on coding", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CommitStyle: "loud"}}
-			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
-			return m
+			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
 		}, ValidateDeps{}, true},
 		{"valid commit_style on coding", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", CommitStyle: CommitStylePlain}}
-			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
-			return m
+			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
 		}, ValidateDeps{}, false},
 		{"on_complete unknown value", func(m Mission) Mission {
 			m.Kind = "coding"
@@ -123,8 +127,7 @@ func TestValidateCreate(t *testing.T) {
 		{"on_complete push with repo/connector", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}}
-			m.RepoURL, m.ConnectorID = "https://github.com/o/r", "conn-1"
-			return m
+			return withGitHubSource(m, "https://github.com/o/r", "conn-1")
 		}, ValidateDeps{}, false},
 		{"empty route", func(m Mission) Mission {
 			m.Route = ""

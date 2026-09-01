@@ -166,9 +166,10 @@ func PRTitle(m Mission) string {
 // OpenPR pushes the branch (idempotent re-push, same code path
 // PushBranch above uses) then opens (or fetches the existing) pull
 // request via pr, recording mission.pr_opened. github-connection
-// missions only — callers check m.ConnectorID/m.RepoURL first.
+// missions only -- callers check m.ConnectorID()/m.RepoURL() first.
 func (c *Completer) OpenPR(ctx context.Context, m Mission, token string) (url string, number int, err error) {
-	owner, repo, ok := ParseGitHubRepoURL(m.RepoURL)
+	connectorID := m.ConnectorID()
+	owner, repo, ok := ParseGitHubRepoURL(m.RepoURL())
 	if !ok {
 		return "", 0, fmt.Errorf("pr: mission repo_url is not a recognizable github https clone URL")
 	}
@@ -178,14 +179,14 @@ func (c *Completer) OpenPR(ctx context.Context, m Mission, token string) (url st
 	if _, err := c.PushBranch(ctx, m, token); err != nil {
 		return "", 0, err
 	}
-	base, err := c.pr.DefaultBranch(ctx, m.ConnectorID, owner, repo)
+	base, err := c.pr.DefaultBranch(ctx, connectorID, owner, repo)
 	if err != nil {
 		return "", 0, fmt.Errorf("pr: look up repo default branch: %w", err)
 	}
 	if base == "" {
 		return "", 0, fmt.Errorf("pr: repo has no default branch")
 	}
-	url, number, err = c.pr.CreatePR(ctx, m.ConnectorID, owner, repo, PRTitle(m), m.Branch, base, PRBody(m))
+	url, number, err = c.pr.CreatePR(ctx, connectorID, owner, repo, PRTitle(m), m.Branch, base, PRBody(m))
 	if err != nil {
 		return "", 0, fmt.Errorf("pr: %w", err)
 	}
@@ -214,7 +215,7 @@ func (c *Completer) RunOnComplete(ctx context.Context, m Mission) error {
 	if c.resolveToken == nil {
 		return fmt.Errorf("on_complete: connectors are not enabled")
 	}
-	token, err := c.resolveToken(ctx, m.ConnectorID)
+	token, err := c.resolveToken(ctx, m.ConnectorID())
 	if err != nil {
 		return fmt.Errorf("on_complete: resolve token: %w", err)
 	}

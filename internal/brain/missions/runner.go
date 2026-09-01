@@ -1140,16 +1140,16 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
 	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the generate phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
-	if m.ParentContext != "" {
-		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
+	if pc := m.ParentContext(); pc != "" {
+		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
 	}
-	if m.ReferencedContext != "" {
-		user += "\n\nReferenced context:\n" + NeutralizeSlot(m.ReferencedContext)
+	if rc := m.ReferencedContext(); rc != "" {
+		user += "\n\nReferenced context:\n" + NeutralizeSlot(rc)
 	}
 	if notes := recentProgressNotes(m.Progress, progressRenderCap); notes != "" {
 		user += "\n\nProgress so far (includes any operator answers to prior questions):\n" + notes
 	}
-	user += renderAttachments(m.Attachments)
+	user += renderAttachments(m.Attachments())
 
 	extra := []*tools.Tool{DiscoverNotesTool()}
 	if shell := r.missionShell(m); shell != nil {
@@ -1397,13 +1397,13 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
 	}
-	if m.ParentContext != "" {
-		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(m.ParentContext)
+	if pc := m.ParentContext(); pc != "" {
+		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
 	}
-	if m.ReferencedContext != "" {
-		user += "\n\nReferenced context:\n" + NeutralizeSlot(m.ReferencedContext)
+	if rc := m.ReferencedContext(); rc != "" {
+		user += "\n\nReferenced context:\n" + NeutralizeSlot(rc)
 	}
-	user += renderAttachments(m.Attachments)
+	user += renderAttachments(m.Attachments())
 	extra := []*tools.Tool{PlanTool()}
 	if t := r.kbSearchTool(m, nil); t != nil {
 		extra = append(extra, t)

@@ -180,3 +180,64 @@ ALTER TABLE missions DROP COLUMN IF EXISTS branch_pattern;
 ALTER TABLE missions DROP COLUMN IF EXISTS commit_style;
 ALTER TABLE missions DROP COLUMN IF EXISTS promote_kb_collection_id;
 ```
+
+## Schema restructure slice 3 (issue #481)
+
+Required on live DBs before/with the next deploy. sources (the new
+jsonb column) is added additive first; the data migration below folds
+repo_url/connector_id/attachments/parent_context/referenced_context
+into it (guarded so a re-run is a no-op: it only touches rows still at
+sources = '[]' and only runs while the old columns still exist); the
+five old columns are then dropped. Run all four steps together: the
+data migration reads columns the last step removes.
+
+referenced_context was a single concatenated string (issue #481
+switched #-mention picks to one Sources entry per pick); a legacy row
+folds its whole referenced_context blob into one "kb" entry rather
+than trying to re-split it back into individual picks -- the harness
+only ever reads the rendered concatenation (Mission.ReferencedContext),
+never an individual entry's origin, so this preserves prompt content
+exactly while dropping per-pick provenance for pre-migration rows only.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS sources jsonb NOT NULL DEFAULT '[]';
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'missions' AND column_name = 'repo_url'
+    ) THEN
+        UPDATE missions m SET sources = (
+            CASE WHEN m.repo_url <> ''
+                THEN jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+                    'source', 'github', 'repo_url', m.repo_url, 'connector_id', NULLIF(m.connector_id, '')
+                )))
+                ELSE '[]'::jsonb END
+            || CASE WHEN m.parent_context <> ''
+                THEN jsonb_build_array(jsonb_build_object(
+                    'source', 'mission', 'id', 'parent', 'mission_id', m.parent_mission_id::text, 'digest', m.parent_context
+                ))
+                ELSE '[]'::jsonb END
+            || CASE WHEN m.referenced_context <> ''
+                THEN jsonb_build_array(jsonb_build_object('source', 'kb', 'digest', m.referenced_context))
+                ELSE '[]'::jsonb END
+            || COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                    'source', 'pdf', 'id', a->>'id', 'mime', a->>'mime', 'name', a->>'name', 'markdown', a->>'markdown'
+                ))
+                FROM jsonb_array_elements(m.attachments) AS a
+            ), '[]'::jsonb)
+        )
+        WHERE m.sources = '[]'::jsonb
+          AND (m.repo_url <> '' OR m.parent_context <> '' OR m.referenced_context <> ''
+               OR jsonb_array_length(m.attachments) > 0);
+    END IF;
+END $$;
+
+ALTER TABLE missions DROP COLUMN IF EXISTS repo_url;
+ALTER TABLE missions DROP COLUMN IF EXISTS connector_id;
+ALTER TABLE missions DROP COLUMN IF EXISTS parent_context;
+ALTER TABLE missions DROP COLUMN IF EXISTS referenced_context;
+ALTER TABLE missions DROP COLUMN IF EXISTS attachments;
+```

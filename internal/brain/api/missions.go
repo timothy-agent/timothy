@@ -302,31 +302,50 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"missions": h.decorateTopModels(r.Context(), rows)})
 }
 
-// sanitizeMission clears each attachment's Markdown before a mission
-// row goes out over the API: the json tags exist for jsonb persistence,
-// but a response carrying up to maxMissionAttachments*128KB of markdown
-// on every list/get call would be wasteful and the client never reads it.
+// responseAttachment is the wire shape of one "pdf" Sources entry:
+// id/mime/name only, mirroring the pre-#481 attachments column's own
+// response shape (markdown is never sent -- sanitizeMission's original
+// rationale, a response carrying up to maxMissionAttachments*128KB of
+// markdown on every list/get call would be wasteful and the client
+// never reads it).
+type responseAttachment struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
+	Name string `json:"name,omitempty"`
+}
+
+// sanitizeMission clears each "pdf" Sources entry's Markdown before a
+// mission row goes out over the API: the json tags exist for jsonb
+// persistence, but a response carrying up to maxMissionAttachments*
+// 128KB of markdown on every list/get call would be wasteful and the
+// client never reads it. Digest (parent/referenced-pick entries) is
+// left alone -- those were plain text columns pre-#481, always sent.
 func sanitizeMission(m missions.Mission) missions.Mission {
-	if len(m.Attachments) == 0 {
+	if len(m.Sources) == 0 {
 		return m
 	}
-	atts := make([]missions.MissionAttachment, len(m.Attachments))
-	for i, a := range m.Attachments {
-		a.Markdown = ""
-		atts[i] = a
+	sources := make([]missions.SourceEntry, len(m.Sources))
+	for i, e := range m.Sources {
+		if e.Source == missions.SourceKindPDF {
+			e.Markdown = ""
+		}
+		sources[i] = e
 	}
-	m.Attachments = atts
+	m.Sources = sources
 	return m
 }
 
 // missionResponse is missions.Mission plus fields the store itself
 // has no business computing: top_model/top_model_provider come from
 // the cost ledger (a different service's data), decorated on here at
-// serve time. Light/Worktree (issue #479) are likewise computed here
-// rather than stored: dropping their columns means Mission itself no
-// longer carries them, but the web client still reads mission.light
-// and mission.worktree unchanged, so the API response derives both
-// from Flow/WorktreePath() on the way out.
+// serve time. Light/Worktree (issue #479) and RepoURL/ConnectorID/
+// Attachments (issue #481) are likewise computed here rather than
+// stored: dropping their columns means Mission itself no longer
+// carries them, but the web client still reads mission.light,
+// mission.worktree, mission.repo_url, mission.connector_id, and
+// mission.attachments unchanged, so the API response derives all of
+// them from Flow/WorktreePath()/GitHubSource()/Attachments() on the
+// way out.
 type missionResponse struct {
 	missions.Mission
 	// Light is derived from Flow == FlowLight (issue #479): the web
@@ -338,9 +357,18 @@ type missionResponse struct {
 	// (issue #480 dropped the on_complete column): the web client's own
 	// auto-push/auto-PR badge (MissionDetail.tsx) reads this exactly as
 	// before.
-	OnComplete       string `json:"on_complete,omitempty"`
-	TopModel         string `json:"top_model,omitempty"`
-	TopModelProvider string `json:"top_model_provider,omitempty"`
+	OnComplete string `json:"on_complete,omitempty"`
+	// RepoURL/ConnectorID are derived from the mission's "github" Sources
+	// entry (issue #481 dropped the repo_url/connector_id columns): the
+	// web client's own github-connection checks (MissionDetail.tsx,
+	// MissionForm.tsx) read these exactly as before.
+	RepoURL     string `json:"repo_url,omitempty"`
+	ConnectorID string `json:"connector_id,omitempty"`
+	// Attachments are the mission's "pdf" Sources entries in the
+	// pre-#481 wire shape (id/mime/name, never markdown).
+	Attachments      []responseAttachment `json:"attachments,omitempty"`
+	TopModel         string                `json:"top_model,omitempty"`
+	TopModelProvider string                `json:"top_model_provider,omitempty"`
 }
 
 // decorateTopModels adds top_model/top_model_provider to a page of
@@ -350,7 +378,15 @@ type missionResponse struct {
 func (h *missionAPI) decorateTopModels(ctx context.Context, rows []missions.Mission) []missionResponse {
 	out := make([]missionResponse, len(rows))
 	for i, m := range rows {
-		out[i] = missionResponse{Mission: m, Light: m.Flow == missions.FlowLight, Worktree: m.WorktreePath(), OnComplete: m.OnComplete()}
+		github, _ := m.GitHubSource()
+		var atts []responseAttachment
+		for _, a := range m.Attachments() {
+			atts = append(atts, responseAttachment{ID: a.ID, Mime: a.Mime, Name: a.Name})
+		}
+		out[i] = missionResponse{
+			Mission: m, Light: m.Flow == missions.FlowLight, Worktree: m.WorktreePath(), OnComplete: m.OnComplete(),
+			RepoURL: github.RepoURL, ConnectorID: github.ConnectorID, Attachments: atts,
+		}
 	}
 	if h.topModels == nil || len(rows) == 0 {
 		return out
@@ -604,7 +640,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var parentMissionID, parentContext string
+	var parentMissionID string
+	var parentSource *missions.SourceEntry
 	if req.ParentMissionID != "" {
 		parent, err := h.store.Get(r.Context(), req.ParentMissionID)
 		if err != nil {
@@ -625,13 +662,16 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		parentMissionID = parent.ID
-		parentContext = missions.OutcomeDigest(parent, events, parent.Phase, parent.FailureReason)
+		parentSource = &missions.SourceEntry{
+			Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parent.ID,
+			Digest: missions.OutcomeDigest(parent, events, parent.Phase, parent.FailureReason),
+		}
 	}
-	missionAtts, ok := h.resolveAttachments(w, r.Context(), req.Attachments)
+	pdfSources, ok := h.resolveAttachments(w, r.Context(), req.Attachments)
 	if !ok {
 		return
 	}
-	referencedContext, err := h.resolveReferenceContext(r.Context(), req.References)
+	refSources, err := h.resolveReferenceSources(r.Context(), req.References)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
@@ -716,16 +756,28 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			flow = string(missions.FlowFull)
 		}
 	}
+	// Sources order matches packet.go's renderSources exactly (issue
+	// #481): parent-mission digest, then referenced picks, then
+	// attached PDFs, then the github clone source (order-independent,
+	// rendered nowhere).
+	var sources []missions.SourceEntry
+	if parentSource != nil {
+		sources = append(sources, *parentSource)
+	}
+	sources = append(sources, refSources...)
+	sources = append(sources, pdfSources...)
+	if req.RepoURL != "" {
+		sources = append(sources, missions.SourceEntry{Source: missions.SourceKindGitHub, ConnectorID: req.ConnectorID, RepoURL: req.RepoURL})
+	}
 	m := missions.Mission{
 		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
 		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveSafe: autoApproveSafe, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
-		RepoURL: req.RepoURL, ConnectorID: req.ConnectorID,
-		ParentMissionID: parentMissionID, ParentContext: parentContext, ReferencedContext: referencedContext,
-		Attachments:  missionAtts,
-		Destinations: req.destinationEntries(),
+		ParentMissionID: parentMissionID,
+		Sources:         sources,
+		Destinations:    req.destinationEntries(),
 		Flow:                     missions.Flow(flow),
 		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
 	}
@@ -755,45 +807,75 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
 }
 
-// resolveReferenceContext resolves a create request's picked
-// #-mention references into one ReferencedContext digest, reusing
-// chat.Service's own resolver (h.resolveReferences) so a mission
-// reference can never resolve differently than the identical chat
-// reference kind. Empty input returns "", nil without calling the
-// resolver, same zero-refs fast path as resolveAttachments. The
-// resolver itself already caps the count and skips unresolvable
-// picks (missing id, unknown kind) rather than failing; the only
-// error surfaced here is the over-cap rejection.
-func (h *missionAPI) resolveReferenceContext(ctx context.Context, refs []chat.Reference) (string, error) {
+// referenceSourceKind maps a composer #-mention Reference.Kind to its
+// SourceEntry.Source value: "session" -> "chat" (Sources' kind name
+// for a referenced chat transcript, distinguishing it from a mission's
+// own hidden session), "mission"/"kb_doc" carry straight through.
+func referenceSourceKind(refKind string) string {
+	switch refKind {
+	case chat.ReferenceKindSession:
+		return missions.SourceKindChat
+	case chat.ReferenceKindMission:
+		return missions.SourceKindMission
+	case chat.ReferenceKindKBDoc:
+		return missions.SourceKindKB
+	default:
+		return ""
+	}
+}
+
+// resolveReferenceSources resolves a create request's picked
+// #-mention references into one SourceEntry per pick (issue #481,
+// replacing the single concatenated ReferencedContext string) --
+// resolved one at a time (not the batch h.resolveReferences call
+// pre-#481 used) so each entry can carry the reference's own Kind,
+// reusing chat.Service's own resolver so a mission reference can never
+// resolve differently than the identical chat reference kind. Empty
+// input returns nil, nil without calling the resolver, same zero-refs
+// fast path as resolveAttachments. The resolver itself already skips
+// unresolvable picks (missing id, unknown kind) rather than failing;
+// the only error surfaced here is the shared over-cap rejection,
+// still checked against the full batch up front.
+func (h *missionAPI) resolveReferenceSources(ctx context.Context, refs []chat.Reference) ([]missions.SourceEntry, error) {
 	if len(refs) == 0 {
-		return "", nil
+		return nil, nil
 	}
-	docs, err := h.resolveReferences(ctx, refs)
-	if err != nil {
-		return "", err
+	if _, err := h.resolveReferences(ctx, refs); err != nil {
+		return nil, err // surfaces only the over-cap rejection
 	}
-	var b strings.Builder
-	for _, d := range docs {
-		if d.Markdown == "" {
+	var out []missions.SourceEntry
+	for _, ref := range refs {
+		kind := referenceSourceKind(ref.Kind)
+		if kind == "" {
 			continue
 		}
-		name := d.Name
-		if name == "" {
-			name = d.ID
+		docs, err := h.resolveReferences(ctx, []chat.Reference{ref})
+		if err != nil || len(docs) == 0 || docs[0].Markdown == "" {
+			continue
 		}
-		fmt.Fprintf(&b, "%s:\n%s\n\n", name, d.Markdown)
+		d := docs[0]
+		e := missions.SourceEntry{Source: kind, Name: d.Name, Digest: d.Markdown}
+		switch kind {
+		case missions.SourceKindChat:
+			e.SessionID = ref.ID
+		case missions.SourceKindMission:
+			e.MissionID = ref.ID
+		case missions.SourceKindKB:
+			e.DocID = ref.ID
+		}
+		out = append(out, e)
 	}
-	return strings.TrimRight(b.String(), "\n"), nil
+	return out, nil
 }
 
 // resolveAttachments validates and converts a create request's PDF and
-// text refs into MissionAttachments — writes any error response itself and
-// returns ok=false, mirroring chat.validateAttachments' shape but as a
-// method so it can write directly (create()'s other validation blocks
-// use jsonError+return rather than a returned error). Empty input
-// returns nil, true without touching the store, same as chat's own
-// zero-ids fast path.
-func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Context, in []missionAttachmentInput) ([]missions.MissionAttachment, bool) {
+// text refs into "pdf" SourceEntry values -- writes any error response
+// itself and returns ok=false, mirroring chat.validateAttachments'
+// shape but as a method so it can write directly (create()'s other
+// validation blocks use jsonError+return rather than a returned
+// error). Empty input returns nil, true without touching the store,
+// same as chat's own zero-ids fast path.
+func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Context, in []missionAttachmentInput) ([]missions.SourceEntry, bool) {
 	if len(in) == 0 {
 		return nil, true
 	}
@@ -829,7 +911,7 @@ func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Conte
 		jsonError(w, http.StatusBadRequest, "bad_request", "pdf attachments require the markitdown sidecar (MARKITDOWN_URL)")
 		return nil, false
 	}
-	out := make([]missions.MissionAttachment, 0, len(in))
+	out := make([]missions.SourceEntry, 0, len(in))
 	for i, input := range in {
 		att := atts[i]
 		r, _, err := h.attachments.Open(ctx, att.ID)
@@ -853,8 +935,8 @@ func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Conte
 		} else {
 			md = string(raw)
 		}
-		out = append(out, missions.MissionAttachment{
-			ID: att.ID, Mime: att.Mime, Name: input.Name, Markdown: markitdown.TruncateMarkdown(md),
+		out = append(out, missions.SourceEntry{
+			Source: missions.SourceKindPDF, ID: att.ID, Mime: att.Mime, Name: input.Name, Markdown: markitdown.TruncateMarkdown(md),
 		})
 	}
 	return out, true
@@ -2009,13 +2091,14 @@ func (h *missionAPI) resolvePushToken(ctx context.Context, m missions.Mission, c
 		}
 		return token, nil
 	}
-	if m.ConnectorID == "" {
+	connectorID := m.ConnectorID()
+	if connectorID == "" {
 		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "credential_ref is required and must match ^[A-Za-z0-9_./-]{1,128}$"}
 	}
 	if h.conns == nil {
 		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "connectors are not enabled"}
 	}
-	c, err := h.conns.Store().Get(ctx, m.ConnectorID)
+	c, err := h.conns.Store().Get(ctx, connectorID)
 	if err != nil {
 		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "unknown connector_id"}
 	}
@@ -2162,7 +2245,8 @@ func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 		failMission(w, err)
 		return
 	}
-	if m.ConnectorID == "" || m.RepoURL == "" {
+	repoURL := m.RepoURL()
+	if m.ConnectorID() == "" || repoURL == "" {
 		jsonError(w, http.StatusBadRequest, "not_pr_able", "only github-connection missions can open a pull request")
 		return
 	}
@@ -2174,7 +2258,7 @@ func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "connectors are not enabled")
 		return
 	}
-	if _, _, ok := missions.ParseGitHubRepoURL(m.RepoURL); !ok {
+	if _, _, ok := missions.ParseGitHubRepoURL(repoURL); !ok {
 		jsonError(w, http.StatusBadRequest, "bad_request", "mission repo_url is not a recognizable github https clone URL")
 		return
 	}

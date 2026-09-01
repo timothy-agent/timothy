@@ -29,9 +29,9 @@ func TestFollowUpBaseRefNoParent(t *testing.T) {
 // is wired.
 func TestFollowUpBaseRefUsesParentBranch(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", RepoURL: "https://github.com/o/r.git"})
+	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}})
 	p := newTestProvisioner(store)
-	m := Mission{ID: "m1", ParentMissionID: "parent", RepoURL: "https://github.com/o/r.git"}
+	m := Mission{ID: "m1", ParentMissionID: "parent", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}}
 	if got, want := p.followUpBaseRef(context.Background(), m), "mission/fix-bug"; got != want {
 		t.Fatalf("base = %q, want %q", got, want)
 	}
@@ -41,9 +41,9 @@ func TestFollowUpBaseRefUsesParentBranch(t *testing.T) {
 // cloning a different repo than its parent gets no base ref.
 func TestFollowUpBaseRefDifferentRepoDegradesToEmpty(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", RepoURL: "https://github.com/o/r.git"})
+	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}})
 	p := newTestProvisioner(store)
-	m := Mission{ID: "m1", ParentMissionID: "parent", RepoURL: "https://github.com/o/other.git"}
+	m := Mission{ID: "m1", ParentMissionID: "parent", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/other.git"}}}
 	if got := p.followUpBaseRef(context.Background(), m); got != "" {
 		t.Fatalf("base = %q, want empty for a different repo", got)
 	}
@@ -54,7 +54,7 @@ func TestFollowUpBaseRefDifferentRepoDegradesToEmpty(t *testing.T) {
 // instead of the parent's own (possibly deleted) branch.
 func TestFollowUpBaseRefMergedPRDegradesToEmpty(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"})
+	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}}})
 	if err := store.AppendEvent(context.Background(), "parent", "mission.pr_opened", map[string]any{"url": "https://github.com/o/r/pull/9", "number": 9}); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestFollowUpBaseRefMergedPRDegradesToEmpty(t *testing.T) {
 		}
 		return true, nil
 	}
-	m := Mission{ID: "m1", ParentMissionID: "parent", RepoURL: "https://github.com/o/r.git"}
+	m := Mission{ID: "m1", ParentMissionID: "parent", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}}
 	if got := p.followUpBaseRef(context.Background(), m); got != "" {
 		t.Fatalf("base = %q, want empty when the parent's PR is merged", got)
 	}
@@ -76,7 +76,7 @@ func TestFollowUpBaseRefMergedPRDegradesToEmpty(t *testing.T) {
 // branch.
 func TestFollowUpBaseRefUnmergedPRUsesParentBranch(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"})
+	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}}})
 	if err := store.AppendEvent(context.Background(), "parent", "mission.pr_opened", map[string]any{"url": "https://github.com/o/r/pull/9", "number": 9}); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestFollowUpBaseRefUnmergedPRUsesParentBranch(t *testing.T) {
 	p.resolvePRState = func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
 		return false, nil
 	}
-	m := Mission{ID: "m1", ParentMissionID: "parent", RepoURL: "https://github.com/o/r.git"}
+	m := Mission{ID: "m1", ParentMissionID: "parent", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}}
 	if got, want := p.followUpBaseRef(context.Background(), m), "mission/fix-bug"; got != want {
 		t.Fatalf("base = %q, want %q for an unmerged PR", got, want)
 	}
@@ -95,7 +95,7 @@ func TestFollowUpBaseRefUnmergedPRUsesParentBranch(t *testing.T) {
 // provisioning.
 func TestFollowUpBaseRefResolverErrorFallsBackToParentBranch(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"})
+	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}}})
 	if err := store.AppendEvent(context.Background(), "parent", "mission.pr_opened", map[string]any{"url": "https://github.com/o/r/pull/9", "number": 9}); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestFollowUpBaseRefResolverErrorFallsBackToParentBranch(t *testing.T) {
 	p.resolvePRState = func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
 		return false, errors.New("github unreachable")
 	}
-	m := Mission{ID: "m1", ParentMissionID: "parent", RepoURL: "https://github.com/o/r.git"}
+	m := Mission{ID: "m1", ParentMissionID: "parent", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}}
 	if got, want := p.followUpBaseRef(context.Background(), m), "mission/fix-bug"; got != want {
 		t.Fatalf("base = %q, want %q when the resolver errors", got, want)
 	}
@@ -114,14 +114,14 @@ func TestFollowUpBaseRefResolverErrorFallsBackToParentBranch(t *testing.T) {
 // branch when a resolver is wired — there's simply nothing to check.
 func TestFollowUpBaseRefNoPROpenedEventUsesParentBranch(t *testing.T) {
 	store := newFakeStore()
-	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"})
+	store.put("parent", Mission{ID: "parent", Branch: "mission/fix-bug", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}}})
 	p := newTestProvisioner(store)
 	calls := 0
 	p.resolvePRState = func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
 		calls++
 		return true, nil
 	}
-	m := Mission{ID: "m1", ParentMissionID: "parent", RepoURL: "https://github.com/o/r.git"}
+	m := Mission{ID: "m1", ParentMissionID: "parent", Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git"}}}
 	if got, want := p.followUpBaseRef(context.Background(), m), "mission/fix-bug"; got != want {
 		t.Fatalf("base = %q, want %q with no pr_opened event", got, want)
 	}

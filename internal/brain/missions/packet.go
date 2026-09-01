@@ -40,18 +40,19 @@ type WorkPacket struct {
 	// verify_cmd will fail for want of a runtime that was never there.
 	ExecEnvironmentNote string
 	// ParentContext is the parent mission's outcome digest, set only
-	// for a follow-up mission (missions.Mission.ParentContext) — gives
-	// the worker the prior mission's result without reopening it.
+	// for a follow-up mission (Mission.ParentContext()) -- gives the
+	// worker the prior mission's result without reopening it.
 	ParentContext string
 	// ReferencedContext is the picked composer #-mention references
-	// (missions.Mission.ReferencedContext), additive to ParentContext:
-	// gives the worker the content of what the user explicitly pinned
-	// at create time.
+	// (Mission.ReferencedContext()), additive to ParentContext: gives
+	// the worker the content of what the user explicitly pinned at
+	// create time.
 	ReferencedContext string
-	// Attachments are the mission's create-time PDF documents — reach
-	// every worker turn via Render, including a delegated executor's
-	// turn (executor packets also go through Render).
-	Attachments []MissionAttachment
+	// Attachments are the mission's create-time PDF documents ("pdf"
+	// Sources entries) -- reach every worker turn via Render, including
+	// a delegated executor's turn (executor packets also go through
+	// Render).
+	Attachments []SourceEntry
 	// SkillsIndex is the rendered skill index for the mission's agent
 	// (skills.Index over the agent's allowlist), resolved at packet
 	// build time like the scheduler's other agent defaults — an agent
@@ -211,7 +212,7 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 // discover/plan runner sessions (runner.go) so the three near-identical
 // loops stay in sync. An attachment with no markdown (a conversion
 // that somehow never ran) renders nothing.
-func renderAttachments(atts []MissionAttachment) string {
+func renderAttachments(atts []SourceEntry) string {
 	var b strings.Builder
 	for _, a := range atts {
 		if a.Markdown == "" {

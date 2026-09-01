@@ -10,7 +10,9 @@ package missions
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -46,14 +48,7 @@ type Mission struct {
 	Workspace     string      `json:"workspace,omitempty"`
 	Branch        string      `json:"branch,omitempty"`
 	BaseCommit    string      `json:"base_commit,omitempty"`
-	// RepoURL is the GitHub repo this coding mission was cloned from
-	// (https clone URL) — empty means the self-init'd empty repo
-	// Workspace.Provision otherwise creates. ConnectorID names the
-	// github-kind connectors row whose PAT authenticated the clone; the
-	// token itself is never stored, only resolved fresh at provisioning.
-	RepoURL     string `json:"repo_url,omitempty"`
-	ConnectorID string `json:"connector_id,omitempty"`
-	Spec        Spec   `json:"spec"`
+	Spec          Spec        `json:"spec"`
 	Progress   []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's
 	// evidence text — carried from execute into review so a
@@ -183,21 +178,17 @@ type Mission struct {
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
 	ParentMissionID string `json:"parent_mission_id,omitempty"`
-	// ParentContext is the parent mission's outcome digest
-	// (OutcomeDigest), snapshotted at follow-up create time — rendered
-	// into this mission's discover/plan/work prompts.
-	ParentContext string `json:"parent_context,omitempty"`
-	// ReferencedContext is the picked composer #-mention references
-	// (missions/sessions/kb docs), resolved and snapshotted at create
-	// time, rendered into this mission's discover/plan/work prompts,
-	// additive to ParentContext (a follow-up mission can also carry its
-	// own picked references).
-	ReferencedContext string `json:"referenced_context,omitempty"`
-	// Attachments are PDF documents attached at create time, each
-	// markitdown-converted ONCE (same rationale as chat's
-	// validateAttachments) and snapshotted onto the row — rendered into
-	// this mission's discover/plan/work prompts every turn.
-	Attachments []MissionAttachment `json:"attachments,omitempty"`
+	// Sources is the union of what were five separate mission columns
+	// (issue #481: repo_url, connector_id, attachments, parent_context,
+	// referenced_context): a jsonb array of entries, one per clone
+	// source (kind "github"), attached PDF (kind "pdf"), parent-mission
+	// outcome digest (kind "mission", set at follow-up create), or
+	// picked #-mention reference (kind "chat"/"mission"/"kb", one entry
+	// per resolved pick instead of one concatenated string). Rendered
+	// into this mission's discover/plan/work prompts by packet.go's
+	// renderSources, preserving the pre-#481 render order exactly:
+	// parent-mission digest, then referenced picks, then attached PDFs.
+	Sources []SourceEntry `json:"sources,omitempty"`
 	// SessionID is a hidden, non-chat-facing session row this mission's
 	// worker/reviewer/planner turns run under — loop.Agent's tool-call
 	// bookkeeping (session_events, audit) hard-requires a real session
@@ -233,7 +224,7 @@ type Mission struct {
 
 // ArtifactRef is one mission artifact file copied into the attachment
 // store at terminal done — id names an attachments-store row, mirrors
-// MissionAttachment's shape (id/mime/name, never bytes — D-045).
+// a "pdf" SourceEntry's shape (id/mime/name, never bytes -- D-045).
 type ArtifactRef struct {
 	ID   string `json:"id"`
 	Mime string `json:"mime"`
@@ -337,17 +328,140 @@ func (m Mission) DestinationIDs() []string {
 	return ids
 }
 
-// MissionAttachment is one PDF document attached at mission create
-// time. ID names an attachments-store row. Markdown is that PDF's
-// markitdown conversion, snapshotted ONCE at create time — the same
-// rationale as chat's validateAttachments: re-converting on every turn
-// would re-call the markitdown sidecar every turn, and any output
-// drift would rewrite an earlier rendered prompt.
-type MissionAttachment struct {
-	ID       string `json:"id"`
-	Mime     string `json:"mime"`
-	Name     string `json:"name,omitempty"`
-	Markdown string `json:"markdown,omitempty"`
+// sourceKind names SourceEntry.Source's known values.
+const (
+	SourceKindGitHub  = "github"
+	SourceKindPDF     = "pdf"
+	SourceKindMission = "mission"
+	SourceKindChat    = "chat"
+	SourceKindKB      = "kb"
+)
+
+// SourceEntry is one input a mission's discover/plan/work prompts draw
+// on (issue #481, replacing the five separate repo_url/connector_id/
+// attachments/parent_context/referenced_context columns): Source names
+// the kind, the rest of the fields are populated per kind.
+//
+//   - "github": ConnectorID/RepoURL -- the repo this coding mission
+//     clones from instead of self-initializing an empty one.
+//   - "pdf": Name/Markdown -- an attached document, ID names an
+//     attachments-store row. Markdown is that PDF's markitdown
+//     conversion, snapshotted ONCE at create time -- the same rationale
+//     as chat's validateAttachments: re-converting on every turn would
+//     re-call the markitdown sidecar every turn, and any output drift
+//     would rewrite an earlier rendered prompt.
+//   - "mission" (as a parent lineage snapshot): MissionID/Digest -- the
+//     parent mission's outcome digest (OutcomeDigest), snapshotted at
+//     follow-up create time.
+//   - "chat"/"mission"/"kb" (as a picked #-mention reference):
+//     SessionID/MissionID/DocID plus Digest -- one entry per resolved
+//     composer pick, additive to the parent-lineage "mission" entry (a
+//     follow-up mission can also carry its own picked references).
+type SourceEntry struct {
+	Source      string `json:"source"`
+	ConnectorID string `json:"connector_id,omitempty"`
+	RepoURL     string `json:"repo_url,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Mime        string `json:"mime,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Markdown    string `json:"markdown,omitempty"`
+	MissionID   string `json:"mission_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+	DocID       string `json:"doc_id,omitempty"`
+	Digest      string `json:"digest,omitempty"`
+}
+
+// GitHubSource returns this mission's "github" source entry, if any:
+// there is at most one per mission (api/missions.go's create only ever
+// builds one from repo_url/connector_id). ok is false when the mission
+// has none -- the self-init'd empty repo case.
+func (m Mission) GitHubSource() (SourceEntry, bool) {
+	for _, e := range m.Sources {
+		if e.Source == SourceKindGitHub {
+			return e, true
+		}
+	}
+	return SourceEntry{}, false
+}
+
+// RepoURL is the effective repo_url the pre-#481 Mission column used
+// to carry: "" when the mission has no "github" source entry.
+func (m Mission) RepoURL() string {
+	e, _ := m.GitHubSource()
+	return e.RepoURL
+}
+
+// ConnectorID is the effective connector_id the pre-#481 Mission
+// column used to carry: "" when the mission has no "github" source
+// entry.
+func (m Mission) ConnectorID() string {
+	e, _ := m.GitHubSource()
+	return e.ConnectorID
+}
+
+// Attachments returns every "pdf" source entry, in order -- the
+// pre-#481 Mission.Attachments column's replacement.
+func (m Mission) Attachments() []SourceEntry {
+	var out []SourceEntry
+	for _, e := range m.Sources {
+		if e.Source == SourceKindPDF {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ParentLineageID marks the one "mission" source entry that is the
+// parent-lineage snapshot (SourceEntry.ID), distinguishing it from a
+// referenced #-mention pick of kind "mission" -- a plain MissionID ==
+// ParentMissionID match would break once the row's parent_mission_id
+// FK is cleared (ON DELETE SET NULL, the parent got deleted), but the
+// digest snapshot must survive independent of that FK. Set by every
+// caller building a follow-up mission's lineage entry
+// (followup.go, api/missions.go's create).
+const ParentLineageID = "parent"
+
+// ParentContext returns the parent-lineage "mission" source entry's
+// digest -- the pre-#481 Mission.ParentContext column's replacement.
+// "" when there is no lineage snapshot (an ordinary, non-follow-up
+// mission).
+func (m Mission) ParentContext() string {
+	for _, e := range m.Sources {
+		if e.Source == SourceKindMission && e.ID == ParentLineageID {
+			return e.Digest
+		}
+	}
+	return ""
+}
+
+// ReferencedContext renders every picked #-mention reference entry
+// (kinds "chat"/"kb", plus any "mission" entry that is NOT the parent
+// lineage snapshot ParentContext already covers) into one digest, the
+// same "name:\ndigest\n\n" shape api/missions.go's pre-#481
+// resolveReferenceContext produced -- the pre-#481
+// Mission.ReferencedContext column's replacement.
+func (m Mission) ReferencedContext() string {
+	var b strings.Builder
+	for _, e := range m.Sources {
+		switch e.Source {
+		case SourceKindChat, SourceKindKB:
+		case SourceKindMission:
+			if e.ID == ParentLineageID {
+				continue // the lineage snapshot, not a referenced pick
+			}
+		default:
+			continue
+		}
+		if e.Digest == "" {
+			continue
+		}
+		name := e.Name
+		if name == "" {
+			name = e.MissionID + e.SessionID + e.DocID
+		}
+		fmt.Fprintf(&b, "%s:\n%s\n\n", name, e.Digest)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // WorktreePath derives the worktree directory (issue #479 dropped the

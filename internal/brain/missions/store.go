@@ -49,8 +49,8 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
 	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, schedule_id, session_id, harness, environment, repo_url, connector_id,
-	parent_mission_id, parent_context, referenced_context, attachments, destinations, final_output, created_at, updated_at,
+	discover_notes, replan_used, schedule_id, session_id, harness, environment,
+	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
@@ -106,16 +106,16 @@ func scanPendingInput(m *Mission, raw []byte) {
 // web UI's mission list/detail views read.
 func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	var (
-		m                                                                              Mission
-		agentID, scheduleID, sessionID, parentMission                                  *string
-		phase, status                                                                  string
-		pendingPermissionRaw                                                           []byte
-		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
-		failureReason                                                                  *string
-		workflowRunID                                                                  *string
-		permissionTimeoutSeconds                                                       *int
-		pendingInputRaw                                                                []byte
-		flow                                                                           string
+		m                                                                         Mission
+		agentID, scheduleID, sessionID, parentMission                             *string
+		phase, status                                                             string
+		pendingPermissionRaw                                                      []byte
+		spec, progress, sourcesRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
+		failureReason                                                             *string
+		workflowRunID                                                             *string
+		permissionTimeoutSeconds                                                  *int
+		pendingInputRaw                                                           []byte
+		flow                                                                      string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -123,8 +123,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
-		&destinationsRaw, &m.FinalOutput,
+		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow,
@@ -176,7 +175,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
 	}
-	_ = json.Unmarshal(attachmentsRaw, &m.Attachments)
+	_ = json.Unmarshal(sourcesRaw, &m.Sources)
 	return m, nil
 }
 
@@ -194,15 +193,15 @@ const failureReasonJoin = `
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
-		m                                                                              Mission
-		agentID, scheduleID, sessionID, parentMission                                  *string
-		phase, status                                                                  string
-		pendingPermissionRaw                                                           []byte
-		spec, progress, attachmentsRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
-		workflowRunID                                                                  *string
-		permissionTimeoutSeconds                                                       *int
-		pendingInputRaw                                                                []byte
-		flow                                                                           string
+		m                                                                         Mission
+		agentID, scheduleID, sessionID, parentMission                             *string
+		phase, status                                                             string
+		pendingPermissionRaw                                                      []byte
+		spec, progress, sourcesRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
+		workflowRunID                                                             *string
+		permissionTimeoutSeconds                                                  *int
+		pendingInputRaw                                                           []byte
+		flow                                                                      string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
@@ -210,8 +209,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
 		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
-		&m.RepoURL, &m.ConnectorID, &parentMission, &m.ParentContext, &m.ReferencedContext, &attachmentsRaw,
-		&destinationsRaw, &m.FinalOutput,
+		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow); err != nil {
@@ -262,7 +260,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
 	}
-	_ = json.Unmarshal(attachmentsRaw, &m.Attachments)
+	_ = json.Unmarshal(sourcesRaw, &m.Sources)
 	return m, nil
 }
 
@@ -276,15 +274,15 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("missions create spec: %w", err)
 	}
-	// attachments is NOT NULL; a nil slice marshals to "null", which
-	// would violate that, so a never-attached mission gets "[]" instead.
-	attachments := m.Attachments
-	if attachments == nil {
-		attachments = []MissionAttachment{}
+	// sources is NOT NULL; a nil slice marshals to "null", which would
+	// violate that, so a mission with no sources gets "[]" instead.
+	sources := m.Sources
+	if sources == nil {
+		sources = []SourceEntry{}
 	}
-	attachmentsJSON, err := json.Marshal(attachments)
+	sourcesJSON, err := json.Marshal(sources)
 	if err != nil {
-		return "", fmt.Errorf("missions create attachments: %w", err)
+		return "", fmt.Errorf("missions create sources: %w", err)
 	}
 	// knowledge is NOT NULL; a nil slice marshals to "null", so a
 	// mission with no knowledge collections gets "[]" instead.
@@ -321,9 +319,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, repo_url, connector_id, parent_mission_id, parent_context, referenced_context, attachments, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, $23, $24, NULLIF($25, '')::uuid, $26, $27, $28, $29, $30, NULLIF($31, '')::uuid, $32, $33, $34) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.RepoURL, m.ConnectorID, m.ParentMissionID, m.ParentContext, m.ReferencedContext, attachmentsJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, NULLIF($23, '')::uuid, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

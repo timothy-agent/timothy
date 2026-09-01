@@ -178,17 +178,24 @@ func TestListFilterQueryMatchesNameOrGoal(t *testing.T) {
 	}
 }
 
-// TestMissionReferencedContextRoundTrips covers the referenced_context
-// column (composer #-mention references resolved at create time):
-// round-trips through Create/Get unchanged, additive to (never
-// replacing) parent_context.
+// TestMissionReferencedContextRoundTrips covers the sources column's
+// referenced-pick entries (composer #-mention references resolved at
+// create time): round-trips through Create/Get unchanged, additive to
+// (never replacing) the parent-lineage digest.
 func TestMissionReferencedContextRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
+	parentID, err := s.Create(ctx, Mission{Goal: marker + "referenced-context-parent", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
 	id, err := s.Create(ctx, Mission{
-		Goal: marker + "referenced-context", Kind: "general",
-		ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: runbook contents",
+		Goal: marker + "referenced-context", Kind: "general", ParentMissionID: parentID,
+		Sources: []SourceEntry{
+			{Source: SourceKindMission, ID: ParentLineageID, MissionID: parentID, Digest: "prior mission fixed the signup bug"},
+			{Source: SourceKindKB, DocID: "doc1", Name: "runbook", Digest: "kb doc: runbook contents"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -197,11 +204,11 @@ func TestMissionReferencedContextRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.ReferencedContext != "kb doc: runbook contents" {
-		t.Fatalf("ReferencedContext = %q, want it to round-trip unchanged", m.ReferencedContext)
+	if m.ReferencedContext() != "runbook:\nkb doc: runbook contents" {
+		t.Fatalf("ReferencedContext() = %q, want it to round-trip unchanged", m.ReferencedContext())
 	}
-	if m.ParentContext != "prior mission fixed the signup bug" {
-		t.Fatalf("ParentContext = %q, want ReferencedContext to be additive, not a replacement", m.ParentContext)
+	if m.ParentContext() != "prior mission fixed the signup bug" {
+		t.Fatalf("ParentContext() = %q, want ReferencedContext() to be additive, not a replacement", m.ParentContext())
 	}
 }
 
@@ -276,7 +283,8 @@ func TestMissionParentLineageRoundTrips(t *testing.T) {
 
 	childID, err := s.Create(ctx, Mission{
 		Goal: marker + "child", Kind: "general",
-		ParentMissionID: parentID, ParentContext: "mission goal: parent\nterminal state: done\n",
+		ParentMissionID: parentID,
+		Sources:         []SourceEntry{{Source: SourceKindMission, ID: ParentLineageID, MissionID: parentID, Digest: "mission goal: parent\nterminal state: done\n"}},
 	})
 	if err != nil {
 		t.Fatalf("Create child: %v", err)
@@ -288,8 +296,8 @@ func TestMissionParentLineageRoundTrips(t *testing.T) {
 	if child.ParentMissionID != parentID {
 		t.Fatalf("ParentMissionID = %q, want %q", child.ParentMissionID, parentID)
 	}
-	if child.ParentContext != "mission goal: parent\nterminal state: done\n" {
-		t.Fatalf("ParentContext = %q, want it to round-trip unchanged", child.ParentContext)
+	if child.ParentContext() != "mission goal: parent\nterminal state: done\n" {
+		t.Fatalf("ParentContext() = %q, want it to round-trip unchanged", child.ParentContext())
 	}
 
 	if _, err := s.Delete(ctx, parentID); err != nil {
@@ -302,23 +310,23 @@ func TestMissionParentLineageRoundTrips(t *testing.T) {
 	if child.ParentMissionID != "" {
 		t.Fatalf("ParentMissionID after parent delete = %q, want empty (ON DELETE SET NULL)", child.ParentMissionID)
 	}
-	if child.ParentContext == "" {
-		t.Fatal("ParentContext after parent delete = empty, want the snapshot to survive (it's independent of the FK)")
+	if child.ParentContext() == "" {
+		t.Fatal("ParentContext() after parent delete = empty, want the snapshot to survive (it's independent of the FK)")
 	}
 }
 
-// TestMissionAttachmentsRoundTrip covers the attachments column: a
-// mission created with attachments round-trips them (including
-// markdown) through Create/Get, and a mission created with a nil
-// Attachments slice still succeeds against the NOT NULL column.
+// TestMissionAttachmentsRoundTrip covers the sources column's "pdf"
+// entries: a mission created with attachments round-trips them
+// (including markdown) through Create/Get, and a mission created with
+// a nil Sources slice still succeeds against the NOT NULL column.
 func TestMissionAttachmentsRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
 	id, err := s.Create(ctx, Mission{
 		Goal: marker + "with attachments", Kind: "general",
-		Attachments: []MissionAttachment{
-			{ID: "att1", Mime: "application/pdf", Name: "spec.pdf", Markdown: "# Spec\ndo the thing"},
+		Sources: []SourceEntry{
+			{Source: SourceKindPDF, ID: "att1", Mime: "application/pdf", Name: "spec.pdf", Markdown: "# Spec\ndo the thing"},
 		},
 	})
 	if err != nil {
@@ -328,24 +336,24 @@ func TestMissionAttachmentsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(m.Attachments) != 1 {
-		t.Fatalf("Attachments = %+v, want one", m.Attachments)
+	if len(m.Attachments()) != 1 {
+		t.Fatalf("Attachments() = %+v, want one", m.Attachments())
 	}
-	want := MissionAttachment{ID: "att1", Mime: "application/pdf", Name: "spec.pdf", Markdown: "# Spec\ndo the thing"}
-	if m.Attachments[0] != want {
-		t.Fatalf("Attachments[0] = %+v, want %+v", m.Attachments[0], want)
+	want := SourceEntry{Source: SourceKindPDF, ID: "att1", Mime: "application/pdf", Name: "spec.pdf", Markdown: "# Spec\ndo the thing"}
+	if m.Attachments()[0] != want {
+		t.Fatalf("Attachments()[0] = %+v, want %+v", m.Attachments()[0], want)
 	}
 
 	nilID, err := s.Create(ctx, Mission{Goal: marker + "no attachments", Kind: "general"})
 	if err != nil {
-		t.Fatalf("Create with nil Attachments: %v", err)
+		t.Fatalf("Create with nil Sources: %v", err)
 	}
 	nilM, err := s.Get(ctx, nilID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(nilM.Attachments) != 0 {
-		t.Fatalf("Attachments = %+v, want empty", nilM.Attachments)
+	if len(nilM.Attachments()) != 0 {
+		t.Fatalf("Attachments() = %+v, want empty", nilM.Attachments())
 	}
 }
 
@@ -559,7 +567,7 @@ func TestMissionOnCompleteRoundTrips(t *testing.T) {
 
 	id, err := s.Create(ctx, Mission{
 		Goal: marker + "on-complete", Kind: "coding", Route: "default",
-		RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}},
 	})
 	if err != nil {

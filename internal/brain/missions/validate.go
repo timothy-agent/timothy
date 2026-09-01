@@ -85,13 +85,14 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		return fmt.Errorf("%w: flow=%q is only valid for kind=general missions", ErrInvalidMission, FlowLight)
 	}
 	githubEntry, hasGitHub := m.GitHubEntry()
+	repoURL, connectorID := m.RepoURL(), m.ConnectorID()
 	if !missionPolicyFor(m).canDelegate {
 		switch {
 		case m.Harness != "":
 			return fmt.Errorf("%w: harness is only valid for kind=coding missions", ErrInvalidMission)
 		case m.Environment != "":
 			return fmt.Errorf("%w: environment is only valid for kind=coding missions", ErrInvalidMission)
-		case m.RepoURL != "":
+		case repoURL != "":
 			return fmt.Errorf("%w: repo_url is only valid for kind=coding missions", ErrInvalidMission)
 		case hasGitHub:
 			return fmt.Errorf("%w: a github destination is only valid for kind=coding missions", ErrInvalidMission)
@@ -106,9 +107,9 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		return fmt.Errorf("%w: unknown environment %q", ErrInvalidMission, m.Environment)
 	}
 	switch {
-	case m.RepoURL != "" && m.ConnectorID == "":
+	case repoURL != "" && connectorID == "":
 		return fmt.Errorf("%w: connector_id is required with repo_url", ErrInvalidMission)
-	case m.RepoURL == "" && m.ConnectorID != "":
+	case repoURL == "" && connectorID != "":
 		return fmt.Errorf("%w: connector_id is only valid alongside repo_url", ErrInvalidMission)
 	}
 	if hasGitHub {
@@ -118,7 +119,7 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			// no on_complete choice: the operator overriding the git
 			// strategy without opting into auto-push.
 		case "push", "push_pr":
-			if m.RepoURL == "" || m.ConnectorID == "" {
+			if repoURL == "" || connectorID == "" {
 				return fmt.Errorf("%w: on_complete requires repo_url and connector_id on a kind=coding mission", ErrInvalidMission)
 			}
 		default:

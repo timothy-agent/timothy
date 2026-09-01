@@ -609,22 +609,30 @@ CREATE TABLE IF NOT EXISTS missions (
     -- rows Delete can remove, so SET NULL keeps a follow-up mission
     -- valid rather than blocking its parent's deletion.
     parent_mission_id     uuid REFERENCES missions(id) ON DELETE SET NULL,
-    -- ParentContext is an immutable outcome-digest snapshot of the
-    -- parent mission taken at follow-up create time (missions.OutcomeDigest),
-    -- rendered into the follow-up's discover/plan/work prompts.
-    parent_context        text NOT NULL DEFAULT '',
-    -- ReferencedContext is an immutable digest of the composer #-mention
-    -- references (missions/sessions/kb docs) picked at create time,
-    -- resolved via chat.Service's reference resolver -- rendered into
-    -- discover/plan/work prompts additive to parent_context, not a
-    -- replacement for it (a mission can be both a follow-up AND carry
-    -- its own picked references).
-    referenced_context    text NOT NULL DEFAULT '',
-    -- Attachments is a jsonb array of {id, mime, name, markdown}: id
-    -- names an attachments-store row, markdown is the PDF's markitdown
-    -- conversion snapshotted ONCE at create time (re-conversion drift
-    -- would rewrite earlier prompts, api/missions.go's create).
-    attachments           jsonb NOT NULL DEFAULT '[]',
+    -- sources replaces the five separate columns issue #481 dropped
+    -- (repo_url, connector_id, parent_context, referenced_context,
+    -- attachments): a jsonb array of entries (missions.SourceEntry),
+    -- each {"source": <kind>, ...per-kind fields}. "github" carries
+    -- connector_id/repo_url -- the clone source for a coding mission
+    -- (empty means the self-init'd empty repo Workspace.Provision
+    -- otherwise creates; repo_url without connector_id is rejected at
+    -- create time, api/missions.go). "pdf" carries id/mime/name/
+    -- markdown -- an attached document, id naming an attachments-store
+    -- row, markdown the PDF's markitdown conversion snapshotted ONCE
+    -- at create time (re-conversion drift would rewrite earlier
+    -- prompts). "mission" with id="parent" is the immutable
+    -- outcome-digest snapshot of the parent mission taken at follow-up
+    -- create time (missions.OutcomeDigest) -- distinguished from a
+    -- referenced #-mention pick of kind "mission" by that sentinel id,
+    -- since parent_mission_id can go NULL (ON DELETE SET NULL) while
+    -- the snapshot itself must survive. "chat"/"kb", plus any "mission"
+    -- entry without that sentinel id, are picked composer #-mention
+    -- references (missions/sessions/kb docs) resolved via
+    -- chat.Service's reference resolver at create time -- rendered
+    -- into discover/plan/work prompts additive to the parent digest,
+    -- not a replacement for it (a mission can be both a follow-up AND
+    -- carry its own picked references).
+    sources               jsonb NOT NULL DEFAULT '[]',
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
     -- Opt-in escalation ladder: when set, worker turns switch to this
@@ -710,17 +718,6 @@ CREATE TABLE IF NOT EXISTS missions (
     -- landed yet (or a scheduler mission predates this column); the UI
     -- falls back to a truncated goal. Never re-summarized once set.
     name                  text NOT NULL DEFAULT '',
-    -- A coding mission can clone an existing GitHub repo instead of
-    -- self-initializing an empty one (Workspace.Provision): repo_url is
-    -- the repo's https clone URL, connector_id names the github-kind
-    -- connectors row whose PAT authenticates the clone. Both empty
-    -- (the default) is the existing self-init behavior; repo_url
-    -- without a connector_id is rejected at create time (api/missions.go)
-    -- -- v1 has no anonymous-clone path. The clone auth token itself is
-    -- never persisted here or anywhere else: it's resolved fresh from
-    -- connector_id's credential_ref at provisioning time only.
-    repo_url              text NOT NULL DEFAULT '',
-    connector_id          text NOT NULL DEFAULT '',
     -- destinations replaces the five separate columns issue #480
     -- dropped (destination_ids, on_complete, branch_pattern,
     -- commit_style, promote_kb_collection_id): a jsonb array of

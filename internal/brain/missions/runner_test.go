@@ -616,7 +616,10 @@ func TestPlanSessionIncludesParentContext(t *testing.T) {
 		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", ParentContext: "prior mission fixed the signup bug"}
+	m := Mission{
+		ID: "m1", Route: "default", Goal: "fix bug", ParentMissionID: "parent",
+		Sources: []SourceEntry{{Source: SourceKindMission, ID: ParentLineageID, MissionID: "parent", Digest: "prior mission fixed the signup bug"}},
+	}
 	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -635,7 +638,13 @@ func TestPlanSessionIncludesReferencedContext(t *testing.T) {
 		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: the login flow uses OAuth"}
+	m := Mission{
+		ID: "m1", Route: "default", Goal: "fix bug", ParentMissionID: "parent",
+		Sources: []SourceEntry{
+			{Source: SourceKindMission, ID: ParentLineageID, MissionID: "parent", Digest: "prior mission fixed the signup bug"},
+			{Source: SourceKindKB, DocID: "doc1", Name: "runbook", Digest: "kb doc: the login flow uses OAuth"},
+		},
+	}
 	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -656,8 +665,8 @@ func TestPlanSessionIncludesAttachments(t *testing.T) {
 		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", Attachments: []MissionAttachment{
-		{ID: "att1", Name: "spec.pdf", Markdown: "the spec says fix it this way"},
+	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", Sources: []SourceEntry{
+		{Source: SourceKindPDF, ID: "att1", Name: "spec.pdf", Markdown: "the spec says fix it this way"},
 	}}
 	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -1720,7 +1729,10 @@ func TestDiscoverSessionIncludesParentContext(t *testing.T) {
 		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", Goal: "test", ParentContext: "prior mission fixed the signup bug"}
+	m := Mission{
+		ID: "m1", Route: "default", Goal: "test", ParentMissionID: "parent",
+		Sources: []SourceEntry{{Source: SourceKindMission, ID: ParentLineageID, MissionID: "parent", Digest: "prior mission fixed the signup bug"}},
+	}
 	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1739,7 +1751,13 @@ func TestDiscoverSessionIncludesReferencedContext(t *testing.T) {
 		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", Goal: "test", ParentContext: "prior mission fixed the signup bug", ReferencedContext: "kb doc: the login flow uses OAuth"}
+	m := Mission{
+		ID: "m1", Route: "default", Goal: "test", ParentMissionID: "parent",
+		Sources: []SourceEntry{
+			{Source: SourceKindMission, ID: ParentLineageID, MissionID: "parent", Digest: "prior mission fixed the signup bug"},
+			{Source: SourceKindKB, DocID: "doc1", Name: "runbook", Digest: "kb doc: the login flow uses OAuth"},
+		},
+	}
 	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1760,8 +1778,8 @@ func TestDiscoverSessionIncludesAttachments(t *testing.T) {
 		{toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation"}`)},
 	}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", Goal: "test", Attachments: []MissionAttachment{
-		{ID: "att1", Name: "spec.pdf", Markdown: "the spec says fix it this way"},
+	m := Mission{ID: "m1", Route: "default", Goal: "test", Sources: []SourceEntry{
+		{Source: SourceKindPDF, ID: "att1", Name: "spec.pdf", Markdown: "the spec says fix it this way"},
 	}}
 	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)

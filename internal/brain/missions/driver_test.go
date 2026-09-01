@@ -417,7 +417,8 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	dir, base := codingWorktree(t)
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		Workspace: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		Workspace: dir, BaseCommit: base, Branch: "mission/x",
+		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}},
 	})
 	runner := &scriptedRunner{
@@ -470,7 +471,8 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	dir, base := codingWorktree(t)
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		Workspace: dir, BaseCommit: base, Branch: "mission/x", RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1",
+		Workspace: dir, BaseCommit: base, Branch: "mission/x",
+		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}},
 	})
 	runner := &scriptedRunner{
@@ -1982,8 +1984,8 @@ func TestDriverProvisionThreadsSigningKeyFromIdentityResolver(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
-		RepoURL: bare, ConnectorID: "conn1",
-		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: bare, ConnectorID: "conn1"}},
+		Phase:   PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 	})
 	sessions := &fakeSessionCreator{}
 	wsRoot := t.TempDir()
