@@ -49,23 +49,30 @@ function turnToolCalls(events: MissionEvent[]): Map<number, MissionEvent[]> {
 }
 
 // rowPhases maps each rendered row's seq to the phase chip it should
-// show: the phase most recently started (mission.phase_started) before
-// that row, or the first phase_started's phase for rows that precede
-// it (nothing has started yet, so the mission's opening phase is the
-// closest honest label, see mission.phase_started's payload). A
-// mission with no phase_started event at all (shouldn't happen past
-// create, but a defensive default) leaves every row unchipped.
+// show. A mission never emits phase_started for its INITIAL phase
+// (only transitions), so anchoring on the first phase_started would
+// mislabel every earlier row with the first TRANSITION's phase. Most
+// events carry their own payload.phase (turn, tool_call, input and
+// permission events); that is authoritative for the row and advances
+// the running phase, with phase_started marking transitions for the
+// payload-less rows between them. Leading rows before any signal
+// (e.g. provisioned) backfill from the first known phase. A mission
+// with no phase signal at all leaves every row unchipped.
 function rowPhases(rows: MissionEvent[]): Map<number, string> {
-  const starts = rows.filter((e) => e.kind === 'mission.phase_started')
-  if (starts.length === 0) return new Map()
-  const firstPhase = String((starts[0].payload as { phase?: string }).phase ?? '')
   const chips = new Map<number, string>()
-  let current = firstPhase
+  let current = ''
   for (const e of rows) {
-    if (e.kind === 'mission.phase_started') {
-      current = String((e.payload as { phase?: string }).phase ?? current)
+    const own = String((e.payload as { phase?: string }).phase ?? '')
+    if (own !== '') {
+      current = own
     }
     chips.set(e.seq, current)
+  }
+  const first = rows.map((e) => chips.get(e.seq) ?? '').find((p) => p !== '')
+  if (first === undefined) return new Map()
+  for (const e of rows) {
+    if (chips.get(e.seq) === '') chips.set(e.seq, first)
+    else break
   }
   return chips
 }

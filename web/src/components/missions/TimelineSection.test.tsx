@@ -287,8 +287,59 @@ describe('TimelineSection phase chips', () => {
     expect(screen.getAllByText('plan')).toHaveLength(2) // phase_started row + plan_created row
   })
 
-  it('renders no chip when the mission has no phase_started event at all', () => {
-    render(<TimelineSection events={events} />)
+  it('chips rows from their own payload phase without any phase_started', () => {
+    render(<TimelineSection events={toolCallTraceEvents} />)
+    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
+  })
+
+  it('chips initial-phase rows before the first transition with their own phase', () => {
+    // A mission never emits phase_started for its initial phase, so
+    // discover rows must take their phase from their own payloads, not
+    // from the first transition (the pre-fix bug chipped them "plan").
+    const phaseEvents: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.provisioned',
+        payload: { workspace: '/w' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.turn',
+        payload: { phase: 'discover', duration_ms: 10, ok: true, input: 'phase_complete' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:01Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 3,
+        kind: 'mission.phase_started',
+        payload: { phase: 'plan' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:02Z',
+      },
+    ]
+    render(<TimelineSection events={phaseEvents} />)
+    // provisioned (backfilled) + the discover turn
+    expect(screen.getAllByText('discover')).toHaveLength(2)
+    expect(screen.getAllByText('plan')).toHaveLength(1)
+  })
+
+  it('renders no chip when no event carries a phase at all', () => {
+    const bare: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.provisioned',
+        payload: { workspace: '/w' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ]
+    render(<TimelineSection events={bare} />)
     expect(screen.queryByText('discover')).toBeNull()
   })
 })
