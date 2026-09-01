@@ -101,6 +101,7 @@ export function FeaturesTab() {
       {values && <TimezoneCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <ExecutorRunBudgetCard values={values} onError={setError} onSaved={refresh} />}
       {values && <GitBranchPatternCard values={values} onError={setError} onSaved={refresh} />}
       {values && <GitCommitStyleCard values={values} onError={setError} onSaved={refresh} />}
       <NotificationSoundCard />
@@ -249,6 +250,63 @@ function DefaultCodingExecutorCard({
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
         New coding missions delegate to this harness unless overridden at creation time.
+      </p>
+    </div>
+  )
+}
+
+// EXECUTOR_RUN_BUDGET_DEFAULT_MIN mirrors settings.DefaultExecutorRunBudget
+// (8h) for the placeholder; the server applies the real default.
+const EXECUTOR_RUN_BUDGET_DEFAULT_MIN = 480
+
+// ExecutorRunBudgetCard sets the wall-clock cap for one delegated
+// harness run (issue #498). A runaway backstop, not a watchdog: the
+// idle timeout and cost budget stop a broken run, so this only needs
+// to be larger than any healthy run.
+function ExecutorRunBudgetCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [minutes, setMinutes] = useState(values.executor_run_budget_minutes ?? '')
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ executor_run_budget_minutes: minutes.trim() })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Harness run budget</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <span>Minutes per run</span>
+          <Input
+            type="number"
+            min={1}
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+            placeholder={String(EXECUTOR_RUN_BUDGET_DEFAULT_MIN)}
+            className="h-10 w-40"
+            aria-label="Harness run budget minutes"
+          />
+        </div>
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Wall-clock cap for one delegated coding run. Empty uses the default (8 hours). A run that
+        stops producing output is killed by the 10-minute idle timeout regardless.
       </p>
     </div>
   )

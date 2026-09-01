@@ -1053,7 +1053,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// poll it to a verdict. Only wired when a sandbox manager is present
 	// (missions already require one for the native shell path); nativeRunner
 	// alone is otherwise the floor, same as before this feature existed.
-	runner := buildDelegatedRunner(nativeRunner, store, gwc, secrets, sandboxMgr, db, log)
+	runner := buildDelegatedRunner(nativeRunner, store, gwc, secrets, sandboxMgr, db, flags, log)
 	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
 	notifier := missions.NewNotifier(db, webhookURL, log)
 	notifier.SetHub(hub)
@@ -1346,7 +1346,7 @@ const credResolveTimeout = 3 * time.Second
 // resolves through it); api_key-mode executors simply have no
 // resolver, so resolveCredential's ErrExecutorAuth path is what a
 // mission sees instead of a working key.
-func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gwclient.Client, secrets *secretstore.Store, sandboxMgr *sandboxclient.Client, db *pgpool.Pool, log *slog.Logger) missions.Runner {
+func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gwclient.Client, secrets *secretstore.Store, sandboxMgr *sandboxclient.Client, db *pgpool.Pool, flags *settings.Store, log *slog.Logger) missions.Runner {
 	if sandboxMgr == nil {
 		return native
 	}
@@ -1359,7 +1359,7 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 		}
 	}
 	led := ledger.New(db, log, nil)
-	return missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, log)
+	return missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, flags.ExecutorRunBudget, log)
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd

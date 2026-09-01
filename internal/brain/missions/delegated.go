@@ -41,8 +41,16 @@ var ErrExecutorAuth = errors.New("executor: authentication failed")
 // resume polling the same directory after re-reading the manifest event
 // (see attemptResume).
 const (
-	runBudgetDefault  = 90 * time.Minute // spec.RunBudget: overall CLI wall-clock cap
+	// runBudgetDefault is the CLI wall-clock cap when no settings-backed
+	// budget is wired (tests); production reads
+	// settings.ValueExecutorRunBudgetMinutes per launch (issue #498) and
+	// settings.DefaultExecutorRunBudget carries the same 8h default. A
+	// runaway backstop only: idleTimeout is the watchdog that catches a
+	// hung CLI, so this must stay large enough never to kill a healthy
+	// multi-hour run.
+	runBudgetDefault  = 8 * time.Hour
 	launchTimeout     = 60 * time.Second
+	runBudgetExitCode = 124 // coreutils `timeout` exit status when it stopped the command
 	pollInterval      = 10 * time.Second
 	pollTimeout       = 60 * time.Second
 	idleTimeout       = 10 * time.Minute
@@ -140,6 +148,9 @@ type delegatedRunner struct {
 	pollInterval time.Duration
 	idleTimeout  time.Duration
 	runBudget    time.Duration
+	// runBudgetFn, when set, is read once per launch and wins over
+	// runBudget: the settings-backed cap (issue #498).
+	runBudgetFn func(context.Context) time.Duration
 
 	mu       sync.Mutex
 	cooldown map[cooldownKey]time.Time
@@ -149,14 +160,25 @@ type delegatedRunner struct {
 // path. sandboxExec must be non-nil (cmd/brain/main.go only constructs
 // this when a sandbox manager is present — missions already require
 // one); events/lastRun/led may be nil in tests that don't assert on
-// them, but production wiring always supplies all four.
-func NewDelegatedRunner(native Runner, resolveRoute routeResolver, resolveCred credResolver, sandboxExec sandboxExecEnv, events eventSink, lastRun lastRunStateFunc, led usageRecorder, log *slog.Logger) Runner {
+// them, but production wiring always supplies all four. runBudget
+// resolves the per-launch wall-clock cap; nil means runBudgetDefault.
+func NewDelegatedRunner(native Runner, resolveRoute routeResolver, resolveCred credResolver, sandboxExec sandboxExecEnv, events eventSink, lastRun lastRunStateFunc, led usageRecorder, runBudget func(context.Context) time.Duration, log *slog.Logger) Runner {
 	return &delegatedRunner{
 		native: native, resolveRoute: resolveRoute, resolveCred: resolveCred,
 		sandboxExec: sandboxExec, events: events, lastRun: lastRun, ledger: led, log: log,
-		pollInterval: pollInterval, idleTimeout: idleTimeout, runBudget: runBudgetDefault,
+		pollInterval: pollInterval, idleTimeout: idleTimeout, runBudget: runBudgetDefault, runBudgetFn: runBudget,
 		cooldown: map[cooldownKey]time.Time{},
 	}
+}
+
+// effectiveRunBudget is the wall-clock cap for a launch happening now.
+func (r *delegatedRunner) effectiveRunBudget(ctx context.Context) time.Duration {
+	if r.runBudgetFn != nil {
+		if d := r.runBudgetFn(ctx); d > 0 {
+			return d
+		}
+	}
+	return r.runBudget
 }
 
 func (r *delegatedRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
@@ -431,13 +453,14 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	system, user := packet.RenderForDelegated()
 	system += delegatedSystemAppend
 
+	runBudget := r.effectiveRunBudget(ctx)
 	spec := executor.InvocationSpec{
 		MissionID: m.ID, Workdir: workRoot,
 		PromptPath:   filepath.Join(rdir, "prompt.md"),
 		SystemAppend: system,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
-		ResultSchema: resultSchemaJSON, RunBudget: r.runBudget, Wire: entry.Wire,
+		ResultSchema: resultSchemaJSON, RunBudget: runBudget, Wire: entry.Wire,
 	}
 	inv, err := adapter.BuildInvocation(spec)
 	if err != nil {
@@ -462,7 +485,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 
 	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode)
 
-	if err := r.launch(ctx, m.ID, m.Environment, workRoot, rdir, inv); err != nil {
+	if err := r.launch(ctx, m.ID, m.Environment, workRoot, rdir, inv, runBudget); err != nil {
 		r.coolDown(m.Harness, entry)
 		r.recordDied(ctx, m.ID, "spawn_failed", nil, err.Error())
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: launch: %w", err)
@@ -510,8 +533,8 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 // enforces spec.RunBudget itself, independent of anything brain does
 // afterward — a crashed brain still lets the container kill a runaway
 // CLI.
-func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, workdir, rdir string, inv executor.Invocation) error {
-	launchCmd, err := buildLaunchCmd(workdir, rdir, inv, r.runBudget)
+func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, workdir, rdir string, inv executor.Invocation, runBudget time.Duration) error {
+	launchCmd, err := buildLaunchCmd(workdir, rdir, inv, runBudget)
 	if err != nil {
 		return err
 	}
@@ -836,6 +859,17 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, entry g
 	reason := fmt.Sprintf("executor exited (code %d) without a result event", exitCode)
 	if exitCode == -1 {
 		reason = "executor process was lost (no exit code, no result event)"
+	}
+
+	// 124 is `timeout`'s own exit status when it had to stop the CLI:
+	// the wall-clock run budget fired (issue #498). Recorded under its
+	// own reason so the UI and canary can tell it from a crash.
+	if exitCode == runBudgetExitCode {
+		reason = "executor exceeded the run budget and was killed"
+		r.recordDied(ctx, m.ID, "run_budget", &exitCode, stderrTail)
+		r.recordLedger(ctx, m, entry, authMode, nil, start, false, "", st.reportedModel)
+		r.coolDown(m.Harness, entry)
+		return forcedRetryVerdict(reason), st.textBuf.String(), nil
 	}
 
 	if exitCode != 0 && isAuthFailure(stderrTail) {

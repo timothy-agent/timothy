@@ -94,7 +94,18 @@ const (
 	// ask_user park waits forever unless the operator opts in, same
 	// 0-means-off convention as ValuePermissionTimeoutSeconds.
 	ValueAskTimeoutSeconds = "ask_timeout_seconds"
+	// ValueExecutorRunBudgetMinutes caps one delegated executor run's
+	// wall clock (missions/delegated.go, issue #498); "" (the default)
+	// defers to DefaultExecutorRunBudget. A runaway backstop only: the
+	// idle timeout, cost budget and max_iterations are what actually
+	// stop a broken run, so this stays large enough that a healthy
+	// multi-hour coding mission never hits it.
+	ValueExecutorRunBudgetMinutes = "executor_run_budget_minutes"
 )
+
+// DefaultExecutorRunBudget is the wall-clock cap a delegated executor
+// run gets when ValueExecutorRunBudgetMinutes is unset.
+const DefaultExecutorRunBudget = 8 * time.Hour
 
 var knownValueKeys = map[string]bool{
 	ValueTokenBudget: true, ValueSkillsAllowlist: true,
@@ -104,6 +115,7 @@ var knownValueKeys = map[string]bool{
 	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
 	ValueWebBaseURL: true, ValueTimezone: true,
 	ValuePermissionTimeoutSeconds: true, ValueAskTimeoutSeconds: true,
+	ValueExecutorRunBudgetMinutes: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -206,6 +218,17 @@ func (s *Store) AskTimeoutSeconds(ctx context.Context) int {
 		}
 	}
 	return 0
+}
+
+// ExecutorRunBudget parses the delegated executor wall-clock cap,
+// falling back to DefaultExecutorRunBudget when unset or unparsable.
+func (s *Store) ExecutorRunBudget(ctx context.Context) time.Duration {
+	if v := s.Value(ctx, ValueExecutorRunBudgetMinutes); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Minute
+		}
+	}
+	return DefaultExecutorRunBudget
 }
 
 // DefaultCurrency returns the configured default currency, falling
@@ -349,7 +372,7 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 		return fmt.Errorf("unknown setting %q", key)
 	}
 	value = strings.TrimSpace(value)
-	if key == ValueTokenBudget && value != "" {
+	if (key == ValueTokenBudget || key == ValueExecutorRunBudgetMinutes) && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n <= 0 {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
