@@ -163,7 +163,7 @@ func (r *delegatedRunner) DiscoverSession(ctx context.Context, m Mission) (strin
 	return r.native.DiscoverSession(ctx, m)
 }
 
-func (r *delegatedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
+func (r *delegatedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	return r.native.PlanSession(ctx, m, discoverNotes)
 }
 

@@ -24,7 +24,7 @@ func TestOutcomeDigest(t *testing.T) {
 			mission: Mission{
 				Goal: "add a widget", Name: "Widget mission", Kind: "coding",
 				DiscoverNotes: "found the widget package",
-				Spec:          Spec{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
+				Plan:          Plan{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
 			},
 			events: []Event{
 				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"generate","duration_ms":500}`)},
@@ -44,7 +44,7 @@ func TestOutcomeDigest(t *testing.T) {
 			name: "review skipped",
 			mission: Mission{
 				Goal: "general task", Kind: "general",
-				Spec: Spec{Units: []PlanUnit{{Title: "only unit", Passes: true}}},
+				Plan: Plan{Units: []PlanUnit{{Title: "only unit", Passes: true}}},
 			},
 			events: []Event{
 				{Kind: "mission.review_skipped", Payload: json.RawMessage(`{"unit":0,"reason":"artifacts and verify_cmd passed harness checks"}`)},
@@ -57,7 +57,7 @@ func TestOutcomeDigest(t *testing.T) {
 			name: "failed with reason",
 			mission: Mission{
 				Goal: "risky task", Kind: "coding",
-				Spec: Spec{Units: []PlanUnit{{Title: "unit one", Passes: false}}},
+				Plan: Plan{Units: []PlanUnit{{Title: "unit one", Passes: false}}},
 			},
 			terminal:      PhaseFailed,
 			failureReason: "max_iterations",
@@ -169,7 +169,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -212,7 +212,7 @@ func TestDriverDoesNotExtractOnNonTerminalTransitions(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -263,7 +263,7 @@ func TestDriverMemoryExtractionErrorDoesNotBlockTransition(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -290,7 +290,7 @@ func TestDriverSkipsExtractionWhenNilClient(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}

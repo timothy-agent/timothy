@@ -10,7 +10,7 @@ import (
 )
 
 func TestArtifactPathsDedupesAcrossUnits(t *testing.T) {
-	m := missions.Mission{Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"a.md", "b.md"}},
 		{Artifacts: []string{"b.md", "c.md", ""}},
 	}}}
@@ -31,7 +31,7 @@ func TestResolveArtifactFilesReadsUnderWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "out.md"), []byte("report body"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{Workspace: root, Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"out.md"}},
 	}}}
 
@@ -56,7 +56,7 @@ func TestResolveArtifactFilesUsesWorktreeOverWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "out.md"), []byte("from worktree"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	m := missions.Mission{Kind: "coding", Flow: "full", Workspace: workspace, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{Kind: "coding", Flow: "full", Workspace: workspace, Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"out.md"}},
 	}}}
 
@@ -83,7 +83,7 @@ func TestResolveArtifactFilesRejectsPathTraversal(t *testing.T) {
 		"..",
 	}
 	for _, artifact := range tests {
-		m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
+		m := missions.Mission{Workspace: root, Plan: missions.Plan{Units: []missions.PlanUnit{
 			{Artifacts: []string{artifact}},
 		}}}
 		files, _, _ := resolveArtifactFiles(m)
@@ -95,7 +95,7 @@ func TestResolveArtifactFilesRejectsPathTraversal(t *testing.T) {
 
 func TestResolveArtifactFilesSkipsMissingFile(t *testing.T) {
 	root := t.TempDir()
-	m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{Workspace: root, Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"never-written.md"}},
 	}}}
 	files, _, oversize := resolveArtifactFiles(m)
@@ -110,7 +110,7 @@ func TestResolveArtifactFilesOversizeListedByName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "huge.bin"), big, 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	m := missions.Mission{Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{Workspace: root, Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"huge.bin"}},
 	}}}
 	files, _, oversize := resolveArtifactFiles(m)
@@ -123,7 +123,7 @@ func TestResolveArtifactFilesOversizeListedByName(t *testing.T) {
 }
 
 func TestResolveArtifactFilesNoWorkspace(t *testing.T) {
-	m := missions.Mission{Spec: missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"a.md"}}}}}
+	m := missions.Mission{Plan: missions.Plan{Units: []missions.PlanUnit{{Artifacts: []string{"a.md"}}}}}
 	files, _, oversize := resolveArtifactFiles(m)
 	if len(files) != 0 || len(oversize) != 0 {
 		t.Fatalf("expected nothing resolved with no workspace, got files=%v oversize=%v", files, oversize)

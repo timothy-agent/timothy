@@ -936,7 +936,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 			Name:  a.Name,
 			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
 			ApprovalAllowlist: a.ApprovalAllowlist,
-			Knowledge:         a.Knowledge, Harness: a.Harness,
+			Harness:           a.Harness,
 		}, true
 	}
 }
@@ -1023,9 +1023,9 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// through sandboxd, into a per-mission Docker container.
 	// search_kb: nil-safe (mc is never nil, MEMORYD_URL always resolves
 	// to a default), same shape as chat's own SetKBSearch wiring:
-	// searches the whole KB; the mission's OWN Knowledge snapshot (never
-	// a live agent lookup) only rides along as a ranking boost per turn
-	// (missions.nativeRunner.kbSearchTool, D-078, issue #368).
+	// searches the whole KB, unboosted -- issue #482 dropped the
+	// mission's own Knowledge snapshot, which only ever reordered
+	// results, never gated them (D-078, issue #368).
 	kbSearch := func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {
@@ -1207,7 +1207,7 @@ func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 // missions package.
 func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 	passed := 0
-	for _, u := range m.Spec.Units {
+	for _, u := range m.Plan.Units {
 		if u.Passes {
 			passed++
 		}
@@ -1217,7 +1217,7 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 		Phase: string(m.Phase), Status: string(m.Status), Iteration: m.Iteration,
 		Harness: m.Harness, RepoURL: m.RepoURL(), Branch: m.Branch, ConnectorID: m.ConnectorID(),
 		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
-		UnitsPassed: passed, UnitsTotal: len(m.Spec.Units),
+		UnitsPassed: passed, UnitsTotal: len(m.Plan.Units),
 		PauseReason: string(m.PauseReason), PauseMessage: m.PauseMessage,
 		OnComplete:        m.OnComplete(),
 		NotPushableReason: missions.NotPushable(m),
@@ -1270,7 +1270,7 @@ func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]built
 // push/PR calls go through the exact same Completer the button/
 // auto-fire paths use. It re-Gets the mission by id from the real
 // store before calling Completer, so Completer always acts on the
-// authoritative missions.Mission (worktree, full spec for PRBody,
+// authoritative missions.Mission (worktree, full plan for PRBody,
 // ...) rather than a partial copy shuttled through builtin.MissionRecord.
 type missionCompleterAdapter struct {
 	store     *missions.Store

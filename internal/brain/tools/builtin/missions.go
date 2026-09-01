@@ -305,7 +305,7 @@ a disambiguation list if more than one mission matches.`,
 // chat-triggered push can never diverge in behavior. Takes the
 // mission id rather than a MissionRecord: the adapter (main.go) re-Gets
 // the mission from the real store itself, so Completer always acts on
-// the authoritative missions.Mission (worktree, spec, etc.) rather
+// the authoritative missions.Mission (worktree, plan, etc.) rather
 // than a partial copy shuttled through this package's own struct.
 type missionCompleter interface {
 	PushMissionBranch(ctx context.Context, id, token string) (host string, err error)

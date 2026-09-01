@@ -21,7 +21,7 @@ const schedule: Schedule = {
   id: 's1',
   name: 'weekly-digest',
   cron: '0 8 * * 1-5',
-  mission_template: { goal: 'Summarize the week', kind: 'general', auto_approve_safe: true },
+  mission_template: { goal: 'Summarize the week', kind: 'general', auto_approve_tools: true },
   enabled: true,
   next_run: '2026-07-27T08:00:00Z',
   created_at: '2026-07-01T00:00:00Z',

@@ -144,7 +144,7 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 				p.log.Warn("driver: record follow-up base note failed", "mission_id", m.ID, "error", err)
 			}
 		}
-		if m.AutoApproveSafe && p.perms != nil && m.SessionID != "" {
+		if m.AutoApproveTools && p.perms != nil && m.SessionID != "" {
 			// Register the mission's own directory as the session's
 			// sandbox: destructive-classified commands provably confined
 			// to it (writing the mission's own artifacts, cleaning its
@@ -249,7 +249,7 @@ func (p *provisioner) parentPRMerged(ctx context.Context, m, parent Mission) boo
 // mission asks on its first call instead of running unattended —
 // degraded autonomy, never a broken mission.
 //
-// AutoApproveSafe is deliberately shell-scoped only ("shell" + sandbox
+// AutoApproveTools is deliberately shell-scoped only ("shell" + sandbox
 // root) — it does not widen to connector tools, which default
 // danger=safe unclassified; doing so would silently unlock every
 // connector write (send an email, delete a calendar event) for an
@@ -261,7 +261,7 @@ func (p *provisioner) grantSessionDefaults(ctx context.Context, m Mission) {
 	if p.perms == nil {
 		return
 	}
-	if m.AutoApproveSafe {
+	if m.AutoApproveTools {
 		if err := p.perms.Grant(ctx, m.SessionID, "shell", "*", missionGrantTTL); err != nil {
 			p.log.Warn("driver: auto-approve grant failed", "mission_id", m.ID, "error", err)
 		}

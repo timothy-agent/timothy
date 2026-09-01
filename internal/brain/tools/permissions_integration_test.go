@@ -169,7 +169,7 @@ func TestResolveProjectAllowlistAllows(t *testing.T) {
 
 // TestResolveSandboxOpaqueWithGrantAllows is D-050's core case: a
 // session with a registered sandbox (a mission's per-mission Docker
-// container) AND a standing "shell" grant (AutoApproveSafe) runs an
+// container) AND a standing "shell" grant (AutoApproveTools) runs an
 // opaque command — interpreter -c inline code — without a human
 // prompt. The reviewer-parks-on-python3--c friction this decision
 // exists to remove. This is also the D-039 unattended-mission case
@@ -203,7 +203,7 @@ func TestResolveSandboxOpaqueWithGrantAllows(t *testing.T) {
 // TestResolveSandboxOpaqueWithoutGrantAsks is requirement 3: the
 // relaxation reclassifies the command to safe, but safe still needs a
 // standing grant to skip the prompt — a mission created with
-// auto_approve_safe=false (no "shell" grant registered) still asks on
+// auto_approve_tools=false (no "shell" grant registered) still asks on
 // an opaque command even though its session has a registered sandbox.
 func TestResolveSandboxOpaqueWithoutGrantAsks(t *testing.T) {
 	p, sid := integrationPermissions(t)

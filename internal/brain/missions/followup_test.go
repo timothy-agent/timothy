@@ -54,7 +54,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		AgentID: "agent-1", Route: "route-a", ReviewRoute: "route-b", PlanRoute: "route-c",
 		EscalationRoute: "route-d", MaxIterations: 12, BudgetCurrency: "USD",
 		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
-		AutoApproveSafe: true, PromptOverlay: "be terse", Knowledge: []string{"kb1"},
+		AutoApproveTools: true, PromptOverlay: "be terse",
 		Harness: "claude-cli", Environment: "node",
 		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{
@@ -77,14 +77,11 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	}
 	if child.Kind != "coding" || child.AgentID != "agent-1" || child.Route != "route-a" ||
 		child.ReviewRoute != "route-b" || child.PlanRoute != "route-c" || child.EscalationRoute != "route-d" ||
-		child.MaxIterations != 12 || child.AutoApproveSafe != true || child.PromptOverlay != "be terse" ||
+		child.MaxIterations != 12 || child.AutoApproveTools != true || child.PromptOverlay != "be terse" ||
 		child.Harness != "claude-cli" || child.Environment != "node" || child.RepoURL() != "https://github.com/o/r.git" ||
 		child.ConnectorID() != "conn1" ||
 		child.RouteModel != "P/m-a" || child.PlanRouteModel != "P/m-c" || child.ReviewRouteModel != "P/m-b" {
 		t.Fatalf("child did not inherit parent settings: %+v", child)
-	}
-	if len(child.Knowledge) != 1 || child.Knowledge[0] != "kb1" {
-		t.Fatalf("child.Knowledge = %v, want inherited from parent", child.Knowledge)
 	}
 	if child.ParentMissionID != "parent" {
 		t.Fatalf("child.ParentMissionID = %q, want %q", child.ParentMissionID, "parent")

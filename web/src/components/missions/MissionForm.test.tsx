@@ -67,7 +67,7 @@ const schedule: Schedule = {
   mission_template: {
     goal: 'Summarize the week',
     kind: 'general',
-    auto_approve_safe: true,
+    auto_approve_tools: true,
     review_route: 'default',
   },
   enabled: true,
@@ -160,7 +160,7 @@ describe('MissionForm: create mode, one-off mission', () => {
         expect.objectContaining({
           goal: 'Research something new',
           kind: 'general',
-          auto_approve_safe: true,
+          auto_approve_tools: true,
         }),
       ),
     )
@@ -180,7 +180,7 @@ describe('MissionForm: create mode, one-off mission', () => {
     )
   })
 
-  it('sends auto_approve_safe: false when the toggle is unchecked', async () => {
+  it('sends auto_approve_tools: false when the toggle is unchecked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -190,7 +190,7 @@ describe('MissionForm: create mode, one-off mission', () => {
 
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(
-        expect.objectContaining({ auto_approve_safe: false }),
+        expect.objectContaining({ auto_approve_tools: false }),
       ),
     )
   })
@@ -1238,7 +1238,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
           mission_template: expect.objectContaining({
             goal: 'Check the news every morning',
             kind: 'general',
-            auto_approve_safe: true,
+            auto_approve_tools: true,
           }),
         }),
       ),

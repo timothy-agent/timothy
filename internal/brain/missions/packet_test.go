@@ -11,7 +11,7 @@ func TestWorkPacketRender(t *testing.T) {
 	p := WorkPacket{
 		Goal: "Fix the login bug",
 		Kind: "coding",
-		Spec: Spec{Units: []PlanUnit{
+		Plan: Plan{Units: []PlanUnit{
 			{Title: "Add validation", Passes: true},
 			{Title: "Add test", Passes: false},
 		}},
@@ -47,7 +47,7 @@ func TestWorkPacketRender(t *testing.T) {
 func TestWorkPacketRenderForDelegatedOmitsNativePreamble(t *testing.T) {
 	p := WorkPacket{
 		Goal: "Merge dependabot PRs",
-		Spec: Spec{Units: []PlanUnit{{Title: "Assess PRs"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "Assess PRs"}}},
 	}
 	system, user := p.RenderForDelegated()
 	if strings.Contains(system, "mission_status") || strings.Contains(system, "write_file") {

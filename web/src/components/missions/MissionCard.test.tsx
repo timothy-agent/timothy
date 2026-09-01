@@ -12,7 +12,7 @@ const baseMission: Mission = {
   kind: 'general',
   phase: 'generate',
   status: 'working',
-  spec: { units: [] },
+  plan: { units: [] },
   progress: [],
   iteration: 0,
   max_iterations: 8,
@@ -20,7 +20,7 @@ const baseMission: Mission = {
   stall_count: 0,
   route: 'default',
   review_route: 'default',
-  auto_approve_safe: true,
+  auto_approve_tools: true,
   auto_approve_plan: true,
   asks_used: 0,
   created_at: '2026-01-01T00:00:00Z',
@@ -136,7 +136,7 @@ describe('MissionCard removed fields', () => {
       ...baseMission,
       phase: 'generate',
       iteration: 3,
-      spec: { units: [{ title: 'a', verify_cmd: '', passes: true }, { title: 'b', verify_cmd: '', passes: false }] },
+      plan: { units: [{ title: 'a', verify_cmd: '', passes: true }, { title: 'b', verify_cmd: '', passes: false }] },
     })
     expect(screen.queryByText(/Retries/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+\/\d+ units/)).not.toBeInTheDocument()

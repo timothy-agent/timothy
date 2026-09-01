@@ -20,13 +20,13 @@ func newFakeVerifier() *verifier {
 func TestVerifierVerifyCurrentUnitNoVerifyCmdPasses(t *testing.T) {
 	v := newFakeVerifier()
 	store := v.store.(*fakeStore)
-	m := Mission{ID: "m1", Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}}}
+	m := Mission{ID: "m1", Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}}}
 	store.put(m.ID, m)
 
 	if err := v.verifyCurrentUnit(context.Background(), m, nil); err != nil {
 		t.Fatalf("verifyCurrentUnit: %v", err)
 	}
-	if !store.missions[m.ID].Spec.Units[0].Passes {
+	if !store.missions[m.ID].Plan.Units[0].Passes {
 		t.Fatal("verifyCurrentUnit did not mark the unit passed in the store")
 	}
 }
@@ -42,7 +42,7 @@ func TestVerifierVerifyCurrentUnitMissingArtifactFails(t *testing.T) {
 	workRoot := t.TempDir()
 	m := Mission{
 		ID: "m1", Workspace: workRoot,
-		Spec: Spec{Units: []PlanUnit{{Title: "writes a file", Artifacts: []string{"out.txt"}}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "writes a file", Artifacts: []string{"out.txt"}}}},
 	}
 	store.put(m.ID, m)
 
@@ -54,7 +54,7 @@ func TestVerifierVerifyCurrentUnitMissingArtifactFails(t *testing.T) {
 	if vf.unit != 0 {
 		t.Fatalf("verifyFailure.unit = %d, want 0", vf.unit)
 	}
-	if store.missions[m.ID].Spec.Units[0].Passes {
+	if store.missions[m.ID].Plan.Units[0].Passes {
 		t.Fatal("verifyCurrentUnit must not mark a unit passed when its artifact is missing")
 	}
 }
@@ -72,7 +72,7 @@ func TestVerifierVerifyCurrentUnitVerifyCmdGatesPass(t *testing.T) {
 	}
 	m := Mission{
 		ID: "m1", Workspace: workRoot,
-		Spec: Spec{Units: []PlanUnit{{Title: "writes and checks", Artifacts: []string{"out.txt"}, VerifyCmd: "exit 1"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "writes and checks", Artifacts: []string{"out.txt"}, VerifyCmd: "exit 1"}}},
 	}
 	store.put(m.ID, m)
 
@@ -81,18 +81,18 @@ func TestVerifierVerifyCurrentUnitVerifyCmdGatesPass(t *testing.T) {
 	if !errors.As(err, &vf) {
 		t.Fatalf("verifyCurrentUnit error = %v, want a *verifyFailure for a failing verify_cmd", err)
 	}
-	if store.missions[m.ID].Spec.Units[0].Passes {
+	if store.missions[m.ID].Plan.Units[0].Passes {
 		t.Fatal("verifyCurrentUnit must not mark a unit passed when verify_cmd fails")
 	}
 
 	// Same unit, verify_cmd now passes: the unit flips to passed.
 	m2 := store.missions[m.ID]
-	m2.Spec.Units[0].VerifyCmd = "exit 0"
+	m2.Plan.Units[0].VerifyCmd = "exit 0"
 	store.put(m.ID, m2)
 	if err := v.verifyCurrentUnit(context.Background(), m2, nil); err != nil {
 		t.Fatalf("verifyCurrentUnit: %v", err)
 	}
-	if !store.missions[m.ID].Spec.Units[0].Passes {
+	if !store.missions[m.ID].Plan.Units[0].Passes {
 		t.Fatal("verifyCurrentUnit did not mark the unit passed once verify_cmd exited 0")
 	}
 }
@@ -108,7 +108,7 @@ func TestVerifierCheckRegressionsDetectsBrokenArtifact(t *testing.T) {
 	workRoot := t.TempDir()
 	m := Mission{
 		ID: "m1", Workspace: workRoot,
-		Spec: Spec{Units: []PlanUnit{{Title: "earlier unit", Artifacts: []string{"out.txt"}, Passes: true}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "earlier unit", Artifacts: []string{"out.txt"}, Passes: true}}},
 	}
 	store.put(m.ID, m)
 	// out.txt was never (re)written in workRoot: CheckArtifacts must
@@ -121,7 +121,7 @@ func TestVerifierCheckRegressionsDetectsBrokenArtifact(t *testing.T) {
 	if in.Input != InputWorkerRetry {
 		t.Fatalf("checkRegressions StepInput.Input = %q, want %q", in.Input, InputWorkerRetry)
 	}
-	if store.missions[m.ID].Spec.Units[0].Passes {
+	if store.missions[m.ID].Plan.Units[0].Passes {
 		t.Fatal("checkRegressions must flip the regressed unit's Passes back to false")
 	}
 }
@@ -137,14 +137,14 @@ func TestVerifierCheckRegressionsNoRegressionLeavesPassesAlone(t *testing.T) {
 	}
 	m := Mission{
 		ID: "m1", Workspace: workRoot,
-		Spec: Spec{Units: []PlanUnit{{Title: "earlier unit", Artifacts: []string{"out.txt"}, Passes: true}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "earlier unit", Artifacts: []string{"out.txt"}, Passes: true}}},
 	}
 	store.put(m.ID, m)
 
 	if _, regressed := v.checkRegressions(context.Background(), m); regressed {
 		t.Fatal("checkRegressions = true, want false when the artifact is still intact")
 	}
-	if !store.missions[m.ID].Spec.Units[0].Passes {
+	if !store.missions[m.ID].Plan.Units[0].Passes {
 		t.Fatal("checkRegressions must not touch a unit that did not regress")
 	}
 }

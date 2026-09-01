@@ -550,26 +550,47 @@ CREATE TABLE IF NOT EXISTS workflow_run_events (
 -- safety over strictness at the schema layer.
 CREATE TABLE IF NOT EXISTS missions (
     id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- The mission's objective, given at create time, never model-mutable.
     goal                  text NOT NULL,
     kind                  text NOT NULL CHECK (kind IN ('coding', 'general')),
+    -- The creating agent, if any -- resolved to defaults (route,
+    -- prompt_overlay, ...) at create time, never re-read live afterward.
     agent_id              uuid REFERENCES agents(id),
     phase                 text NOT NULL DEFAULT 'discover',
     status                text NOT NULL DEFAULT 'idle',
+    -- Why status='paused': "approval", "infra", etc (statemachine.go).
     pause_reason          text NOT NULL DEFAULT '',
+    -- Human-readable detail alongside pause_reason, shown in the UI.
     pause_message         text NOT NULL DEFAULT '',
+    -- Filesystem path of this mission's workspace directory.
     workspace             text NOT NULL DEFAULT '',
+    -- Git branch a coding mission's worktree checks out.
     branch                text NOT NULL DEFAULT '',
+    -- Git commit the worktree was based on, the baseline diff's start point.
     base_commit           text NOT NULL DEFAULT '',
-    spec                  jsonb NOT NULL DEFAULT '{}',
+    -- plan is the mission's submitted plan (missions.Plan): an ordered
+    -- list of units, each verified independently before the mission can
+    -- advance past it.
+    plan                  jsonb NOT NULL DEFAULT '{}',
+    -- Append-only log of ProgressNote entries, the durable record a
+    -- fresh stateless worker turn reads instead of prior transcript.
     progress              jsonb NOT NULL DEFAULT '[]',
+    -- Worker turns spent so far, capped at max_iterations.
     iteration             integer NOT NULL DEFAULT 0,
     max_iterations        integer NOT NULL DEFAULT 8,
+    -- Consecutive worker/review failures, the stall-detection input.
     consecutive_failures  integer NOT NULL DEFAULT 0,
+    -- Fingerprint of the last stall's cause, deduping repeat replans.
     last_gap_fingerprint  text NOT NULL DEFAULT '',
     stall_count           integer NOT NULL DEFAULT 0,
+    -- Spend ceiling; NULL means unlimited.
     budget_amount         numeric(12,2),
+    -- Currency budget_amount is denominated in.
     budget_currency       char(3) NOT NULL DEFAULT 'USD',
+    -- Model route worker/generate turns run on.
     route                 text NOT NULL DEFAULT '',
+    -- Model route the prove phase's reviewer runs on; '' falls back
+    -- through plan_route to route (runner.go's reviewRoute).
     review_route          text NOT NULL DEFAULT '',
     -- PlanRoute, when set, is the route oversight phases (discover, plan,
     -- replan) run on instead of route -- "GLM plans, local generates":
@@ -603,6 +624,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- into one jsonb column rather than five text columns since the
     -- fields are always read/written/cleared together.
     pending_permission    jsonb,
+    -- Schedule that fired this mission, if any.
     schedule_id           uuid REFERENCES schedules(id),
     -- ParentMissionID names the terminal mission this one follows up
     -- on (api/missions.go's create); parents are terminal, exactly the
@@ -633,6 +655,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- not a replacement for it (a mission can be both a follow-up AND
     -- carry its own picked references).
     sources               jsonb NOT NULL DEFAULT '[]',
+    -- Row creation/last-update timestamps.
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
     -- Opt-in escalation ladder: when set, worker turns switch to this
@@ -647,13 +670,6 @@ CREATE TABLE IF NOT EXISTS missions (
     -- agent lookup later without risking a surprise prompt change
     -- mid-mission if the agent row is edited while the mission runs.
     prompt_overlay        text NOT NULL DEFAULT '',
-    -- Knowledge snapshots the creating agent's kb_collections allowlist
-    -- at create time, same reasoning as prompt_overlay above: a
-    -- mission outlives the request that made it, so search_kb's
-    -- collection scoping can't re-resolve a live agent lookup later.
-    -- Empty array means search_kb is never offered on this mission's
-    -- turns, regardless of what the agent row says today.
-    knowledge             jsonb NOT NULL DEFAULT '[]',
     -- Harness snapshots the operator's execution-strategy choice for a
     -- coding mission's worker turns at create time, never re-read from
     -- settings at dispatch. "" is native; "claude-cli" (etc) names a
@@ -674,7 +690,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- session grant set at creation (Driver.Create) -- destructive-
     -- classified commands still always ask, unaffected by this column
     -- or any grant.
-    auto_approve_safe     boolean NOT NULL DEFAULT true,
+    auto_approve_tools    boolean NOT NULL DEFAULT true,
     -- D-087 (issue #456): true (default) advances plan -> generate the
     -- moment a plan lands, byte-identical to every mission before this
     -- column existed. false parks the mission on pause_reason='approval'
@@ -741,6 +757,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- NULL/'' for an ordinary mission. The workflow engine reads these
     -- via mission terminal events; it never writes mission state.
     workflow_run_id        uuid REFERENCES workflow_runs(id),
+    -- Step name within that workflow run.
     workflow_step          text NOT NULL DEFAULT '',
     -- ArtifactRefs: this mission's declared artifact files, best-effort
     -- copied into the attachment store in the result phase's step

@@ -39,7 +39,7 @@ const (
 type ReviewPacket struct {
 	Goal      string
 	UnitTitle string
-	Plan      Spec
+	Plan      Plan
 	Diff      string
 	// Artifacts maps workspace-relative path -> file contents, read by
 	// the harness (ReadArtifacts), capped at reviewArtifactsCap total.

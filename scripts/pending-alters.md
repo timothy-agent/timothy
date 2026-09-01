@@ -241,3 +241,60 @@ ALTER TABLE missions DROP COLUMN IF EXISTS parent_context;
 ALTER TABLE missions DROP COLUMN IF EXISTS referenced_context;
 ALTER TABLE missions DROP COLUMN IF EXISTS attachments;
 ```
+
+## Schema restructure slice 4 (issue #482)
+
+Required on live DBs before/with the next deploy. knowledge is a plain
+drop: search_kb has been whole-KB for every mission since D-078 (issue
+#368), the column only ever reordered results and was never a gate, so
+there is no data to preserve. spec/auto_approve_safe are renamed, no
+data migration needed. The two RENAMEs have no IF EXISTS, so each is
+guarded with an information_schema check instead (same pattern as the
+explore_notes -> discover_notes rename above). Column comments are
+always safe to re-run.
+
+```sql
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'missions' AND column_name = 'spec'
+    ) THEN
+        ALTER TABLE missions RENAME COLUMN spec TO plan;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'missions' AND column_name = 'auto_approve_safe'
+    ) THEN
+        ALTER TABLE missions RENAME COLUMN auto_approve_safe TO auto_approve_tools;
+    END IF;
+END $$;
+
+ALTER TABLE missions DROP COLUMN IF EXISTS knowledge;
+
+COMMENT ON COLUMN missions.goal IS 'The mission''s objective, given at create time, never model-mutable.';
+COMMENT ON COLUMN missions.agent_id IS 'The creating agent, if any -- resolved to defaults (route, prompt_overlay, ...) at create time, never re-read live afterward.';
+COMMENT ON COLUMN missions.pause_reason IS 'Why status=''paused'': "approval", "infra", etc (statemachine.go).';
+COMMENT ON COLUMN missions.pause_message IS 'Human-readable detail alongside pause_reason, shown in the UI.';
+COMMENT ON COLUMN missions.workspace IS 'Filesystem path of this mission''s workspace directory.';
+COMMENT ON COLUMN missions.branch IS 'Git branch a coding mission''s worktree checks out.';
+COMMENT ON COLUMN missions.base_commit IS 'Git commit the worktree was based on, the baseline diff''s start point.';
+COMMENT ON COLUMN missions.plan IS 'The mission''s submitted plan (missions.Plan): an ordered list of units, each verified independently before the mission can advance past it.';
+COMMENT ON COLUMN missions.progress IS 'Append-only log of ProgressNote entries, the durable record a fresh stateless worker turn reads instead of prior transcript.';
+COMMENT ON COLUMN missions.iteration IS 'Worker turns spent so far, capped at max_iterations.';
+COMMENT ON COLUMN missions.consecutive_failures IS 'Consecutive worker/review failures, the stall-detection input.';
+COMMENT ON COLUMN missions.last_gap_fingerprint IS 'Fingerprint of the last stall''s cause, deduping repeat replans.';
+COMMENT ON COLUMN missions.budget_amount IS 'Spend ceiling; NULL means unlimited.';
+COMMENT ON COLUMN missions.budget_currency IS 'Currency budget_amount is denominated in.';
+COMMENT ON COLUMN missions.route IS 'Model route worker/generate turns run on.';
+COMMENT ON COLUMN missions.review_route IS 'Model route the prove phase''s reviewer runs on; '''' falls back through plan_route to route (runner.go''s reviewRoute).';
+COMMENT ON COLUMN missions.schedule_id IS 'Schedule that fired this mission, if any.';
+COMMENT ON COLUMN missions.created_at IS 'Row creation timestamp.';
+COMMENT ON COLUMN missions.updated_at IS 'Row last-update timestamp.';
+COMMENT ON COLUMN missions.auto_approve_tools IS 'Missions run for hours unattended; per-command-shape approval (built for a human watching a chat session) would otherwise park a mission on every novel-but-harmless shell call. Default true: new missions auto-approve DangerSafe shell calls via a standing session grant set at creation (Driver.Create) -- destructive-classified commands still always ask, unaffected by this column or any grant.';
+COMMENT ON COLUMN missions.workflow_step IS 'Step name within that workflow run.';
+```

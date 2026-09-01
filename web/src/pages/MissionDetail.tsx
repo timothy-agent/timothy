@@ -591,8 +591,8 @@ export function MissionDetail() {
 
       {pendingPlanApproval && (
         <PlanApprovalBanner
-          units={mission.spec?.units ?? []}
-          assumptions={mission.spec?.assumptions}
+          units={mission.plan?.units ?? []}
+          assumptions={mission.plan?.assumptions}
           answeredDecision={answeredPlanDecision ?? undefined}
           onApprove={() => void approvePlan()}
           onReplan={(feedback) => void requestReplan(feedback)}
@@ -976,10 +976,10 @@ export function MissionDetail() {
         </section>
       )}
 
-      {(mission.spec?.units?.length ?? 0) > 0 && (
+      {(mission.plan?.units?.length ?? 0) > 0 && (
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
-          <PlanSection units={mission.spec?.units ?? []} assumptions={mission.spec?.assumptions} />
+          <PlanSection units={mission.plan?.units ?? []} assumptions={mission.plan?.assumptions} />
         </section>
       )}
 

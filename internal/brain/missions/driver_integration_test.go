@@ -41,7 +41,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	}
 
 	runner := &scriptedRunner{
-		plans: []Spec{{Units: []PlanUnit{{Title: "add a file", VerifyCmd: "test -f new-file.txt"}}}},
+		plans: []Plan{{Units: []PlanUnit{{Title: "add a file", VerifyCmd: "test -f new-file.txt"}}}},
 		workerVerdicts: []WorkerVerdict{
 			{Outcome: "done", Evidence: "created new-file.txt"},
 		},
@@ -89,8 +89,8 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	if m.Phase != PhaseDone || m.Status != StatusDone {
 		t.Fatalf("mission after full drive = %+v, want done/done", m)
 	}
-	if len(m.Spec.Units) != 1 || !m.Spec.Units[0].Passes {
-		t.Fatalf("mission spec after drive = %+v, want the unit verified", m.Spec)
+	if len(m.Plan.Units) != 1 || !m.Plan.Units[0].Passes {
+		t.Fatalf("mission spec after drive = %+v, want the unit verified", m.Plan)
 	}
 
 	events, err := store.Events(ctx, id)
@@ -125,7 +125,7 @@ func TestDriverLazilyProvisionsBareSchedulerStyleMission(t *testing.T) {
 
 	id, err := store.Create(ctx, Mission{
 		Goal: marker + "lazy provisioning", Kind: "general", Route: "default", ReviewRoute: "default",
-		AutoApproveSafe: true,
+		AutoApproveTools: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

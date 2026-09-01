@@ -41,7 +41,7 @@ func TestCopyArtifactsHappyPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "data.csv"), []byte("a,b\n1,2\n"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	m := missions.Mission{ID: "m1", Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{ID: "m1", Workspace: root, Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"out.md", "data.csv"}},
 	}}}
 
@@ -70,7 +70,7 @@ func TestCopyArtifactsSkipsSaveFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bad.html"), []byte("<html>rejected</html>"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	m := missions.Mission{ID: "m1", Workspace: root, Spec: missions.Spec{Units: []missions.PlanUnit{
+	m := missions.Mission{ID: "m1", Workspace: root, Plan: missions.Plan{Units: []missions.PlanUnit{
 		{Artifacts: []string{"ok.md", "bad.html"}},
 	}}}
 

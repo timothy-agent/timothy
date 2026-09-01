@@ -57,7 +57,7 @@ func TestDriverDeliversToDestinationsOnDone(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -107,7 +107,7 @@ func TestDriverSkipsDeliveryWhenNoDestinations(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -131,7 +131,7 @@ func TestDriverBackfillsNameBeforeDestinationDelivery(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -155,7 +155,7 @@ func TestDriverSkipsDeliveryWhenNilHook(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -179,7 +179,7 @@ func TestDriverParksInResultOnDeliveryFailure(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}}})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -207,7 +207,7 @@ func TestDriverResultRetryOnlyRedeliversFailedDestination(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, Destinations: []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}

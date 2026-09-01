@@ -27,7 +27,7 @@ func TestIsLastUnit(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := isLastUnit(Spec{Units: c.units})
+			got := isLastUnit(Plan{Units: c.units})
 			if got != c.want {
 				t.Fatalf("isLastUnit(%+v) = %v, want %v", c.units, got, c.want)
 			}
@@ -36,8 +36,8 @@ func TestIsLastUnit(t *testing.T) {
 }
 
 // TestMarkUnitPassedDoesNotAliasCaller guards the actual production
-// bug: markUnitPassed must not mutate the caller's Spec.Units backing
-// array. If it did, a caller that inspects m.Spec after calling it
+// bug: markUnitPassed must not mutate the caller's Plan.Units backing
+// array. If it did, a caller that inspects m.Plan after calling it
 // (e.g. Advance's toStepState(m)) would observe a unit as passed one
 // full round before the harness ever verified it.
 func TestMarkUnitPassedDoesNotAliasCaller(t *testing.T) {
@@ -45,22 +45,22 @@ func TestMarkUnitPassedDoesNotAliasCaller(t *testing.T) {
 	d := NewDriver(store, nil, nil, nil, nil, nil, nil, nil, slog.Default())
 
 	units := []PlanUnit{{Title: "a", Passes: true}, {Title: "b", Passes: false}, {Title: "c", Passes: false}}
-	m := Mission{ID: "m1", Spec: Spec{Units: units}}
+	m := Mission{ID: "m1", Plan: Plan{Units: units}}
 	store.put(m.ID, m)
 
 	if err := d.markUnitPassed(context.Background(), m, 1); err != nil {
 		t.Fatalf("markUnitPassed: %v", err)
 	}
 
-	if m.Spec.Units[1].Passes {
+	if m.Plan.Units[1].Passes {
 		t.Fatal("markUnitPassed mutated the caller's Mission value through a shared slice backing array")
 	}
 
 	persisted := store.missions[m.ID]
-	if !persisted.Spec.Units[1].Passes {
+	if !persisted.Plan.Units[1].Passes {
 		t.Fatal("markUnitPassed did not persist the update to the store")
 	}
-	if persisted.Spec.Units[2].Passes {
+	if persisted.Plan.Units[2].Passes {
 		t.Fatal("markUnitPassed must not affect unrelated units")
 	}
 }

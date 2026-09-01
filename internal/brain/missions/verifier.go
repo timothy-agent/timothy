@@ -54,7 +54,7 @@ func (e *verifyFailure) Error() string {
 // only reaches this path for coding missions (out of scope) or the
 // rare infra-failure fallback.
 func (v *verifier) verifyCurrentUnit(ctx context.Context, m Mission, seenURLs []string) error {
-	for i, u := range m.Spec.Units {
+	for i, u := range m.Plan.Units {
 		if u.Passes {
 			continue
 		}
@@ -109,15 +109,15 @@ func (v *verifier) verifyCurrentUnit(ctx context.Context, m Mission, seenURLs []
 }
 
 // markUnitPassed persists unit as passed. It copies Units before
-// mutating — m.Spec.Units is a slice header, so writing through it
+// mutating -- m.Plan.Units is a slice header, so writing through it
 // in place would silently mutate the caller's own Mission value too
 // (same backing array), corrupting whatever that caller does with it
 // afterward in the same round (e.g. Advance's toStepState call).
 func (v *verifier) markUnitPassed(ctx context.Context, m Mission, unit int) error {
-	units := make([]PlanUnit, len(m.Spec.Units))
-	copy(units, m.Spec.Units)
+	units := make([]PlanUnit, len(m.Plan.Units))
+	copy(units, m.Plan.Units)
 	units[unit].Passes = true
-	return v.store.SetSpec(ctx, m.ID, Spec{Units: units})
+	return v.store.SetPlan(ctx, m.ID, Plan{Units: units})
 }
 
 // checkRegressions re-verifies every unit that had ALREADY passed
@@ -126,8 +126,8 @@ func (v *verifier) markUnitPassed(ctx context.Context, m Mission, unit int) erro
 // can silently break an earlier unit's artifacts, and passes today
 // only ever moves forward, never re-checked. Cheap and deterministic
 // (harness-side shell, same as verifyCurrentUnit), capped at the
-// spec's own unit count. Re-fetches the mission first: verifyCurrentUnit's
-// SetSpec write is not reflected in the caller's in-memory m.
+// plan's own unit count. Re-fetches the mission first: verifyCurrentUnit's
+// SetPlan write is not reflected in the caller's in-memory m.
 func (v *verifier) checkRegressions(ctx context.Context, m Mission) (StepInput, bool) {
 	fresh, err := v.store.Get(ctx, m.ID)
 	if err != nil {
@@ -142,7 +142,7 @@ func (v *verifier) checkRegressions(ctx context.Context, m Mission) (StepInput, 
 	// worked — so seenURLs would be empty here and CheckCitations would
 	// false-fail every already-passed unit on every regression pass.
 	workRoot := fresh.WorkRoot()
-	for i, u := range fresh.Spec.Units {
+	for i, u := range fresh.Plan.Units {
 		if !u.Passes {
 			continue
 		}
@@ -169,12 +169,12 @@ func (v *verifier) checkRegressions(ctx context.Context, m Mission) (StepInput, 
 // current-unit verify produces — the existing worker-retry/stall
 // machinery drives the fix with zero statemachine changes.
 func (v *verifier) regressed(ctx context.Context, m Mission, unit int, check, excerpt string) (StepInput, bool) {
-	units := make([]PlanUnit, len(m.Spec.Units))
-	copy(units, m.Spec.Units)
+	units := make([]PlanUnit, len(m.Plan.Units))
+	copy(units, m.Plan.Units)
 	title := units[unit].Title
 	units[unit].Passes = false
-	if err := v.store.SetSpec(ctx, m.ID, Spec{Units: units}); err != nil {
-		v.log.Warn("driver: record regression spec write failed", "mission_id", m.ID, "error", err)
+	if err := v.store.SetPlan(ctx, m.ID, Plan{Units: units}); err != nil {
+		v.log.Warn("driver: record regression plan write failed", "mission_id", m.ID, "error", err)
 	}
 	if err := v.store.AppendEvent(ctx, m.ID, "mission.regression", map[string]any{"unit": title, "check": check}); err != nil {
 		v.log.Warn("driver: record regression event failed", "mission_id", m.ID, "error", err)

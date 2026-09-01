@@ -68,7 +68,7 @@ type driverStore interface {
 	ApplyTransition(ctx context.Context, id string, t Transition) error
 	AppendEvent(ctx context.Context, id, kind string, payload map[string]any) error
 	Events(ctx context.Context, id string) ([]Event, error)
-	SetSpec(ctx context.Context, id string, spec Spec) error
+	SetPlan(ctx context.Context, id string, plan Plan) error
 	SetSession(ctx context.Context, id, sessionID string) error
 	SetProvisioned(ctx context.Context, id, workspace, branch, baseCommit string) error
 	SetLastEvidence(ctx context.Context, id, evidence string) error
@@ -957,7 +957,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		d.log.Warn("driver: record turn failed", "mission_id", id, "error", evErr)
 	}
 
-	// runPhase may have written spec changes of its own (e.g. review's
+	// runPhase may have written plan changes of its own (e.g. review's
 	// verifyCurrentUnit -> markUnitPassed flipping a unit to passed) —
 	// re-fetch so the completion check below sees that write rather
 	// than the pre-round snapshot loaded at the top of this call.
@@ -1178,7 +1178,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
-		LastUnit: isLastUnit(m.Spec), ReplanUsed: m.ReplanUsed,
+		LastUnit: isLastUnit(m.Plan), ReplanUsed: m.ReplanUsed,
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 	}
 }
@@ -1188,8 +1188,8 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 // when the first still-unverified unit happens to sit at the last
 // index (that check alone is one unit short: it's true the moment the
 // second-to-last unit passes, before the actual last unit ever runs).
-func isLastUnit(spec Spec) bool {
-	for _, u := range spec.Units {
+func isLastUnit(plan Plan) bool {
+	for _, u := range plan.Units {
 		if !u.Passes {
 			return false
 		}
@@ -1251,23 +1251,23 @@ func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) 
 }
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
-	priorSpec := m.Spec
-	spec, err := d.runner.PlanSession(ctx, m, replanNotes(m))
+	priorPlan := m.Plan
+	plan, err := d.runner.PlanSession(ctx, m, replanNotes(m))
 	if err != nil {
 		return StepInput{}, err
 	}
 	// D-077: the planner refused to write a plan because the goal cannot
-	// be achieved as stated: fail the mission instead of storing a spec
+	// be achieved as stated: fail the mission instead of storing a plan
 	// and advancing to execute.
-	if spec.Infeasible {
-		if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_infeasible", map[string]any{"reason": spec.InfeasibleReason}); err != nil {
+	if plan.Infeasible {
+		if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_infeasible", map[string]any{"reason": plan.InfeasibleReason}); err != nil {
 			return StepInput{}, fmt.Errorf("driver: record plan infeasible: %w", err)
 		}
-		return StepInput{Input: InputPlanInfeasible, Reason: spec.InfeasibleReason}, nil
+		return StepInput{Input: InputPlanInfeasible, Reason: plan.InfeasibleReason}, nil
 	}
-	planCreatedPayload := map[string]any{"units": len(spec.Units)}
-	if len(spec.Assumptions) > 0 {
-		planCreatedPayload["assumptions"] = spec.Assumptions
+	planCreatedPayload := map[string]any{"units": len(plan.Units)}
+	if len(plan.Assumptions) > 0 {
+		planCreatedPayload["assumptions"] = plan.Assumptions
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_created", planCreatedPayload); err != nil {
 		return StepInput{}, fmt.Errorf("driver: record plan: %w", err)
@@ -1275,11 +1275,11 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	if m.ReplanUsed {
 		// Carry forward prior harness evidence: a unit the new plan kept
 		// unchanged (same title, same verify_cmd) and that had already
-		// passed stays passed — the planner's own parseSpec forces every
+		// passed stays passed -- the planner's own parsePlan forces every
 		// unit to passes=false, since it can't itself claim pre-verified.
-		restorePassedUnits(&spec, priorSpec)
+		restorePassedUnits(&plan, priorPlan)
 	}
-	if err := d.store.SetSpec(ctx, m.ID, spec); err != nil {
+	if err := d.store.SetPlan(ctx, m.ID, plan); err != nil {
 		return StepInput{}, err
 	}
 	return StepInput{Input: InputPhaseComplete}, nil
@@ -1291,7 +1291,7 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 // argument (rather than a new Runner parameter) so PlanSession's
 // interface never has to change for this feature.
 //
-// Gated on len(m.Spec.Units) > 0 rather than m.ReplanUsed alone: an
+// Gated on len(m.Plan.Units) > 0 rather than m.ReplanUsed alone: an
 // operator-requested replan (D-087, issue #456) re-enters PhasePlan
 // without setting ReplanUsed (that flag is reserved for the automatic
 // stall-replan budget, never spent by a free operator iteration (see
@@ -1300,7 +1300,7 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 // channel as a steering note) must reach the prompt through this same
 // "a plan already exists" check instead.
 func replanNotes(m Mission) string {
-	if len(m.Spec.Units) == 0 {
+	if len(m.Plan.Units) == 0 {
 		notes := m.DiscoverNotes
 		// D-088: an ask_user answer during a first-time plan turn (no
 		// plan landed yet, so the "being replanned" branch below never
@@ -1315,7 +1315,7 @@ func replanNotes(m Mission) string {
 	var b strings.Builder
 	b.WriteString(m.DiscoverNotes)
 	b.WriteString("\n\nThe previous plan is being replanned. Current plan:\n")
-	for _, u := range m.Spec.Units {
+	for _, u := range m.Plan.Units {
 		status := "pending"
 		if u.Passes {
 			status = "verified"
@@ -1342,19 +1342,19 @@ func recentProgressNotes(notes []ProgressNote, n int) string {
 	return b.String()
 }
 
-// restorePassedUnits re-marks spec's units passed when a prior unit
+// restorePassedUnits re-marks plan's units passed when a prior unit
 // with the exact same title and verify_cmd had already passed — harness
 // evidence a replan must not silently erase for work it didn't touch.
-func restorePassedUnits(spec *Spec, prior Spec) {
+func restorePassedUnits(plan *Plan, prior Plan) {
 	passed := make(map[string]bool, len(prior.Units))
 	for _, u := range prior.Units {
 		if u.Passes {
 			passed[u.Title+"\x00"+u.VerifyCmd] = true
 		}
 	}
-	for i := range spec.Units {
-		if passed[spec.Units[i].Title+"\x00"+spec.Units[i].VerifyCmd] {
-			spec.Units[i].Passes = true
+	for i := range plan.Units {
+		if passed[plan.Units[i].Title+"\x00"+plan.Units[i].VerifyCmd] {
+			plan.Units[i].Passes = true
 		}
 	}
 }
@@ -1395,7 +1395,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	case "done":
 		if wt := m.WorktreePath(); wt != "" {
 			var unitTitle string
-			if unit, _ := currentUnit(m.Spec); unit != nil {
+			if unit, _ := currentUnit(m.Plan); unit != nil {
 				unitTitle = unit.Title
 			}
 			body := "mission " + m.ID + " iteration " + fmt.Sprint(m.Iteration)
@@ -1486,7 +1486,7 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string
 	if missionPolicyFor(m).alwaysReview {
 		return StepInput{}, false
 	}
-	unit, idx := currentUnit(m.Spec)
+	unit, idx := currentUnit(m.Plan)
 	if unit == nil || len(unit.Artifacts) == 0 {
 		return StepInput{}, false
 	}
@@ -1516,10 +1516,10 @@ func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string
 
 // currentUnit returns the plan's first unverified unit and its index,
 // or nil when every unit already passed.
-func currentUnit(spec Spec) (*PlanUnit, int) {
-	for i := range spec.Units {
-		if !spec.Units[i].Passes {
-			return &spec.Units[i], i
+func currentUnit(plan Plan) (*PlanUnit, int) {
+	for i := range plan.Units {
+		if !plan.Units[i].Passes {
+			return &plan.Units[i], i
 		}
 	}
 	return nil, -1
@@ -1536,10 +1536,10 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	}
 	workRoot := m.WorkRoot()
 	packet := ReviewPacket{
-		Goal: m.Goal, Plan: m.Spec, Diff: diff, Evidence: m.LastEvidence,
+		Goal: m.Goal, Plan: m.Plan, Diff: diff, Evidence: m.LastEvidence,
 		Listing: ListWorkspace(workRoot), Progress: m.Progress,
 	}
-	if unit, _ := currentUnit(m.Spec); unit != nil {
+	if unit, _ := currentUnit(m.Plan); unit != nil {
 		packet.UnitTitle = unit.Title
 		packet.Artifacts = ReadArtifacts(workRoot, unit.Artifacts)
 	}
@@ -1637,7 +1637,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		loc = d.location(ctx)
 	}
 	p := WorkPacket{
-		Goal: m.Goal, Kind: m.Kind, Spec: m.Spec, Progress: m.Progress,
+		Goal: m.Goal, Kind: m.Kind, Plan: m.Plan, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), Attachments: m.Attachments(),
 		Light: m.RunsPlanless(), Location: loc,

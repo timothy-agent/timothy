@@ -391,8 +391,8 @@ func (f *fakeNative) RunWorker(ctx context.Context, m Mission, packet WorkPacket
 func (f *fakeNative) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
 	return ReviewVerdict{}, nil, nil
 }
-func (f *fakeNative) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
-	return Spec{}, nil
+func (f *fakeNative) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
+	return Plan{}, nil
 }
 func (f *fakeNative) DiscoverSession(ctx context.Context, m Mission) (string, error) { return "", nil }
 

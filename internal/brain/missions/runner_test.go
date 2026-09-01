@@ -521,16 +521,16 @@ func TestPlanSessionParsesAssumptions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spec, err := parseSpec(tt.json)
+			plan, err := parsePlan(tt.json)
 			if err != nil {
-				t.Fatalf("parseSpec: %v", err)
+				t.Fatalf("parsePlan: %v", err)
 			}
-			if len(spec.Assumptions) != len(tt.want) {
-				t.Fatalf("Assumptions = %+v, want %+v", spec.Assumptions, tt.want)
+			if len(plan.Assumptions) != len(tt.want) {
+				t.Fatalf("Assumptions = %+v, want %+v", plan.Assumptions, tt.want)
 			}
 			for i := range tt.want {
-				if spec.Assumptions[i] != tt.want[i] {
-					t.Fatalf("Assumptions[%d] = %+v, want %+v", i, spec.Assumptions[i], tt.want[i])
+				if plan.Assumptions[i] != tt.want[i] {
+					t.Fatalf("Assumptions[%d] = %+v, want %+v", i, plan.Assumptions[i], tt.want[i])
 				}
 			}
 		})
@@ -584,7 +584,7 @@ func TestPlanSessionNoForceToolWithKB(t *testing.T) {
 	r.kbSearch = func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		return nil, nil
 	}
-	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", Knowledge: []string{"docs"}}
+	m := Mission{ID: "m1", Route: "default", Goal: "fix bug"}
 	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestPlanSessionRejectsEmptyPlan(t *testing.T) {
 }
 
 // TestPlanSessionParsesInfeasible pins D-077: infeasible=true with a
-// reason parses to Spec.Infeasible, no units needed.
+// reason parses to Plan.Infeasible, no units needed.
 func TestPlanSessionParsesInfeasible(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"infeasible":true,"reason":"goal forbids the only possible action"}`)},
@@ -725,7 +725,7 @@ func TestPlanSessionRejectsInfeasibleWithoutReason(t *testing.T) {
 	}
 }
 
-// TestPlanSessionRejectsCommandSubstitution guards parseSpec's
+// TestPlanSessionRejectsCommandSubstitution guards parsePlan's
 // determinism rule: verify_cmd runs harness-side via RunVerify,
 // outside the permission chain (D-050's sandbox relaxation for a
 // worker/reviewer shell CALL does not apply here): a planner-authored
@@ -851,7 +851,7 @@ func TestPlanSessionRejectsUnitWithNoArtifacts(t *testing.T) {
 // required for actual execution'`, always passing, proving nothing).
 // A command that merely CONTAINS one of those words: as an argument,
 // or after &&: must still be accepted; the deny-set only looks at
-// the first token, by design (see the scoping comment in parseSpec).
+// the first token, by design (see the scoping comment in parsePlan).
 func TestPlanSessionRejectsNoOpVerifyCmd(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1899,9 +1899,8 @@ func TestDiscoverSessionGetsShellButNotWriteFile(t *testing.T) {
 
 // TestDiscoverSessionKBNudge pins issue #367: the discoverer's system
 // prompt nudges it to search_kb before declaring a goal self-contained,
-// exactly when search_kb is offered (kbSearch wired); attached
-// Knowledge collections are named as operator-prioritized; no backend
-// means no mention of a tool the model doesn't have.
+// exactly when search_kb is offered (kbSearch wired); no backend means
+// no mention of a tool the model doesn't have.
 func TestDiscoverSessionKBNudge(t *testing.T) {
 	notesBatch := [][]stream.StreamEvent{
 		{toolEndEvent(discoverNotesToolName, `{"findings":"nothing notable"}`)},
@@ -1918,7 +1917,7 @@ func TestDiscoverSessionKBNudge(t *testing.T) {
 		}
 	})
 
-	t.Run("backend wired, no mission knowledge", func(t *testing.T) {
+	t.Run("backend wired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: notesBatch}
 		r := newTestRunner(agent)
 		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
@@ -1930,28 +1929,6 @@ func TestDiscoverSessionKBNudge(t *testing.T) {
 		system := agent.requests[0].System
 		if !strings.Contains(system, "search_kb") {
 			t.Fatalf("discover system prompt missing search_kb nudge with backend wired: %s", system)
-		}
-		if strings.Contains(system, "operator attached") {
-			t.Fatalf("discover system prompt names attached collections with none set: %s", system)
-		}
-	})
-
-	t.Run("backend wired and knowledge set", func(t *testing.T) {
-		agent := &scriptedAgent{batches: notesBatch}
-		r := newTestRunner(agent)
-		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
-			return nil, nil
-		}
-		m := Mission{ID: "m1", Route: "default", Goal: "test", Knowledge: []string{"System Design"}}
-		if _, err := r.DiscoverSession(context.Background(), m); err != nil {
-			t.Fatalf("DiscoverSession: %v", err)
-		}
-		system := agent.requests[0].System
-		if !strings.Contains(system, "search_kb") {
-			t.Fatalf("discover system prompt missing search_kb nudge: %s", system)
-		}
-		if !strings.Contains(system, "operator attached") || !strings.Contains(system, "System Design") {
-			t.Fatalf("discover system prompt doesn't name attached collection: %s", system)
 		}
 	})
 }
@@ -2389,12 +2366,12 @@ func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
 			{DocumentID: "bbbbbbbb-0000-0000-0000-000000000002", DocumentTitle: "Guide", Content: "more"},
 		}, nil
 	}}
-	m := Mission{ID: "m1", Knowledge: []string{"docs"}}
+	m := Mission{ID: "m1"}
 
 	sink := &kbRefSink{}
 	tool := r.kbSearchTool(m, sink)
 	if tool == nil {
-		t.Fatal("kbSearchTool = nil with backend and knowledge present")
+		t.Fatal("kbSearchTool = nil with backend present")
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"deploy runbook"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -2410,21 +2387,18 @@ func TestKBSearchToolRecordsRefsInSink(t *testing.T) {
 }
 
 // kbReadTool is gated only on a backend being wired (D-078, issue
-// #368): a mission's own Knowledge no longer scopes or gates read_kb,
-// so an empty snapshot still gets the tool once a backend exists.
+// #368): read_kb is never scoped by anything mission-specific, so it's
+// offered on every mission once a backend exists.
 func TestKBReadToolGating(t *testing.T) {
 	read := func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return builtin.KBDocument{Title: "Runbook", Markdown: "content"}, nil
 	}
-	if tool := (&nativeRunner{log: slog.Default()}).kbReadTool(Mission{Knowledge: []string{"docs"}}); tool != nil {
+	if tool := (&nativeRunner{log: slog.Default()}).kbReadTool(Mission{}); tool != nil {
 		t.Fatal("kbReadTool offered without a backend")
 	}
-	if tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{}); tool == nil {
-		t.Fatal("kbReadTool = nil with backend wired and empty knowledge")
-	}
-	tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{Knowledge: []string{"docs"}})
+	tool := (&nativeRunner{log: slog.Default(), kbRead: read}).kbReadTool(Mission{})
 	if tool == nil {
-		t.Fatal("kbReadTool = nil with backend and knowledge present")
+		t.Fatal("kbReadTool = nil with backend wired")
 	}
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"ref":"kb://doc-1"}`))
 	if err != nil || !strings.Contains(out, "Runbook") {
@@ -2443,7 +2417,7 @@ func TestRunWorkerSurfacesKBSinkRefsOnVerdict(t *testing.T) {
 	r.kbSearch = func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		return []builtin.KBSearchHit{{DocumentID: "aaaaaaaa-0000-0000-0000-000000000001", DocumentTitle: "Runbook", Content: "content"}}, nil
 	}
-	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"})
+	v, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"})
 	if err != nil {
 		t.Fatalf("RunWorker: %v", err)
 	}
@@ -2472,11 +2446,9 @@ func (a *kbExecutingAgent) Start(ctx context.Context, req loop.Request) (<-chan 
 	return a.scriptedAgent.Start(ctx, req)
 }
 
-// TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge covers
-// kbSearchTool's gate after issue #368: only a wired backend controls
-// whether search_kb is offered. A mission's own Knowledge (empty or
-// not) never withholds the tool, it only boosts ranking.
-func TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge(t *testing.T) {
+// TestRunWorkerOffersKBSearch covers kbSearchTool's gate after issue
+// #368: only a wired backend controls whether search_kb is offered.
+func TestRunWorkerOffersKBSearch(t *testing.T) {
 	hasKBSearch := func(req loop.Request) bool {
 		for _, tool := range req.ExtraTools {
 			if tool.Name == "search_kb" {
@@ -2490,7 +2462,7 @@ func TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge(t *testing.T) {
 	t.Run("no backend wired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: doneBatch}
 		r := newTestRunner(agent)
-		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"}); err != nil {
+		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
 			t.Fatalf("RunWorker: %v", err)
 		}
 		if hasKBSearch(agent.requests[0]) {
@@ -2498,7 +2470,7 @@ func TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge(t *testing.T) {
 		}
 	})
 
-	t.Run("backend wired, no mission knowledge", func(t *testing.T) {
+	t.Run("backend wired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: doneBatch}
 		r := newTestRunner(agent)
 		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
@@ -2509,20 +2481,6 @@ func TestRunWorkerOffersKBSearchRegardlessOfMissionKnowledge(t *testing.T) {
 		}
 		if !hasKBSearch(agent.requests[0]) {
 			t.Fatal("search_kb not offered despite backend wired, whole-KB default (issue #368)")
-		}
-	})
-
-	t.Run("backend wired and knowledge set", func(t *testing.T) {
-		agent := &scriptedAgent{batches: doneBatch}
-		r := newTestRunner(agent)
-		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
-			return nil, nil
-		}
-		if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default", Knowledge: []string{"docs"}}, WorkPacket{Goal: "test"}); err != nil {
-			t.Fatalf("RunWorker: %v", err)
-		}
-		if !hasKBSearch(agent.requests[0]) {
-			t.Fatal("search_kb not offered despite backend wired and non-empty Knowledge")
 		}
 	})
 }

@@ -97,7 +97,7 @@ func TestRender(t *testing.T) {
 		}
 		withArtifact := m
 		withArtifact.Workspace = root
-		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"report.md"}}}}
+		withArtifact.Plan = missions.Plan{Units: []missions.PlanUnit{{Artifacts: []string{"report.md"}}}}
 		p := Render(withArtifact, "", nil, time.UTC)
 		if len(p.Files) != 0 {
 			t.Fatalf("expected report.md NOT attached as a file, got %+v", p.Files)
@@ -114,7 +114,7 @@ func TestRender(t *testing.T) {
 		}
 		withArtifact := m
 		withArtifact.Workspace = root
-		withArtifact.Spec = missions.Spec{Units: []missions.PlanUnit{{Artifacts: []string{"data.csv"}}}}
+		withArtifact.Plan = missions.Plan{Units: []missions.PlanUnit{{Artifacts: []string{"data.csv"}}}}
 		p := Render(withArtifact, "", nil, time.UTC)
 		if len(p.TextArtifacts) != 0 {
 			t.Fatalf("expected data.csv NOT rendered inline, got %+v", p.TextArtifacts)

@@ -19,12 +19,12 @@ const progressRenderCap = 10
 
 // WorkPacket is everything a FRESH worker session is seeded with —
 // workers never inherit prior transcripts (statelessness between
-// turns); durability lives here (spec, progress log, git log), not in
+// turns); durability lives here (plan, progress log, git log), not in
 // conversation history.
 type WorkPacket struct {
 	Goal      string
 	Kind      string
-	Spec      Spec
+	Plan      Plan
 	Progress  []ProgressNote
 	GitLog    string
 	Iteration int
@@ -64,7 +64,7 @@ type WorkPacket struct {
 	// Light marks a mission that runs generate planless (D-069's
 	// original light behavior, plus flow=discover_generate, D-090,
 	// issue #459): Render uses lightSystemPreamble instead of
-	// nativeSystemPreamble, and Spec is always empty so the Plan block
+	// nativeSystemPreamble, and Plan is always empty so the Plan block
 	// never renders.
 	Light bool
 	// DiscoverNotes carries the discover phase's findings into a planless
@@ -145,9 +145,9 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 		b.WriteString("\n\n")
 	}
 
-	if len(p.Spec.Units) > 0 {
+	if len(p.Plan.Units) > 0 {
 		b.WriteString("Plan:\n")
-		for _, u := range p.Spec.Units {
+		for _, u := range p.Plan.Units {
 			status := "pending"
 			if u.Passes {
 				status = "verified"

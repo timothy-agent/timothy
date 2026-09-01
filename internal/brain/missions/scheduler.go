@@ -86,11 +86,11 @@ type MissionTemplate struct {
 	// resolveTemplateDefaults (goal keyword only — no worktree exists
 	// yet), same precedence as create()'s own handling.
 	Environment string `json:"environment,omitempty"`
-	// AutoApproveSafe defaults true for a scheduled mission, same as
+	// AutoApproveTools defaults true for a scheduled mission, same as
 	// api/missions.go's create handler — a mission fired unattended
 	// needs the same standing shell approval a UI-created one gets by
 	// default, or its very first shell call parks with nobody watching.
-	AutoApproveSafe bool `json:"auto_approve_safe"`
+	AutoApproveTools bool `json:"auto_approve_tools"`
 	// DestinationIDs names operator-created destinations (D-061) this
 	// template's fired missions deliver their outcome digest to.
 	// Validated at schedule create/patch time (same rule as mission
@@ -115,10 +115,6 @@ type AgentDefaults struct {
 	ReviewRoute       string
 	PromptOverlay     string
 	ApprovalAllowlist []string
-	// Knowledge is the agent's kb_collections allowlist, snapshotted
-	// onto the mission the same way PromptOverlay is (see
-	// missions.Mission.Knowledge).
-	Knowledge []string
 	// Harness is the agent's own harness field, consulted by
 	// resolveTemplateDefaults/ResolveHarness ahead of
 	// settings.coding_executor (mission.harness -> agent.harness ->
@@ -462,7 +458,7 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // create/patch validation (schedules.go) covers the rest at schedule
 // creation time.
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	t, promptOverlay, knowledge := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
+	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
 	// destinations is NOT NULL; entries built from the (fire-time
 	// re-checked) template destination ids. Destination (kind) is left
 	// empty here: the deliverer resolves the live kind by id at
@@ -477,17 +473,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	if err != nil {
 		return fmt.Errorf("marshal destinations: %w", err)
 	}
-	spec, _ := json.Marshal(Spec{})
+	plan, _ := json.Marshal(Plan{})
 	budgetCurrency := t.BudgetCurrency
 	if budgetCurrency == "" {
 		budgetCurrency = "USD"
-	}
-	if knowledge == nil {
-		knowledge = []string{}
-	}
-	knowledgeJSON, err := json.Marshal(knowledge)
-	if err != nil {
-		return fmt.Errorf("marshal knowledge: %w", err)
 	}
 	name := t.Name
 	if name == "" {
@@ -508,10 +497,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	// template (D-087, issue #456): a scheduler-fired mission runs
 	// unattended, so nobody is watching to approve its plan.
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, knowledge, auto_approve_safe, auto_approve_plan, spec, schedule_id, harness, environment, destinations, phase, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, destinations, phase, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, knowledgeJSON, t.AutoApproveSafe, true, spec, sc.ID, t.Harness, t.Environment, destinationsJSON, phase, flow)
+		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, destinationsJSON, phase, flow)
 	return err
 }
 
@@ -559,9 +548,8 @@ func (s *Scheduler) filterDestinationIDs(ctx context.Context, ids []string) []st
 // settings.coding_executor -> native) - mirrors api/missions.go
 // create()'s own precedence so a scheduler-fired mission inherits it
 // too.
-func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string, []string) {
+func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string) {
 	promptOverlay := ""
-	var knowledge []string
 	var agentHarness string
 	if resolve != nil {
 		if defaults, ok := resolve(ctx, t.AgentID); ok {
@@ -572,7 +560,6 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 				t.ReviewRoute = defaults.ReviewRoute
 			}
 			promptOverlay = defaults.PromptOverlay
-			knowledge = defaults.Knowledge
 			agentHarness = defaults.Harness
 		}
 	}
@@ -607,5 +594,5 @@ func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve Age
 	if policy.needsWorktree && t.Environment == "" {
 		t.Environment, _ = DetectEnvironment("", t.Goal)
 	}
-	return t, promptOverlay, knowledge
+	return t, promptOverlay
 }

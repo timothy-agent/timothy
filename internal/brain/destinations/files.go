@@ -49,7 +49,7 @@ const MaxAttachBytes = 25 << 20 // 25MB
 func artifactPaths(m missions.Mission) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, u := range m.Spec.Units {
+	for _, u := range m.Plan.Units {
 		for _, a := range u.Artifacts {
 			rel := strings.TrimSpace(a)
 			if rel == "" || seen[rel] {

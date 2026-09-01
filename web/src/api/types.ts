@@ -728,7 +728,7 @@ export interface Mission {
   // before the discover phase existed, or one that hasn't reached it
   // yet.
   discover_notes?: string
-  spec: { units: PlanUnit[]; assumptions?: PlanAssumption[] }
+  plan: { units: PlanUnit[]; assumptions?: PlanAssumption[] }
   progress: ProgressNote[]
   iteration: number
   max_iterations: number
@@ -777,7 +777,7 @@ export interface Mission {
   // asks_used counts ask_user calls this mission has spent so far.
   asks_used: number
   last_evidence?: string
-  auto_approve_safe: boolean
+  auto_approve_tools: boolean
   // auto_approve_plan: true (default) advances straight from plan to
   // generate; false parks the mission (status: "paused", pause_reason:
   // "approval") once the plan phase produces a plan, until an operator
@@ -1083,7 +1083,7 @@ export interface MissionTemplate {
   max_iterations?: number
   budget_amount?: number
   budget_currency?: string
-  auto_approve_safe?: boolean
+  auto_approve_tools?: boolean
   harness?: string
   environment?: string
   branch_pattern?: string

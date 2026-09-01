@@ -367,8 +367,8 @@ type missionResponse struct {
 	// Attachments are the mission's "pdf" Sources entries in the
 	// pre-#481 wire shape (id/mime/name, never markdown).
 	Attachments      []responseAttachment `json:"attachments,omitempty"`
-	TopModel         string                `json:"top_model,omitempty"`
-	TopModelProvider string                `json:"top_model_provider,omitempty"`
+	TopModel         string               `json:"top_model,omitempty"`
+	TopModelProvider string               `json:"top_model_provider,omitempty"`
 }
 
 // decorateTopModels adds top_model/top_model_provider to a page of
@@ -461,13 +461,13 @@ type createMissionRequest struct {
 	// image. Unlike Harness there is no settings default. Rejected
 	// outright on kind=general.
 	Environment string `json:"environment"`
-	// AutoApproveSafe defaults true (a pointer so an omitted field is
+	// AutoApproveTools defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
 	// sensible default; destructive commands always ask regardless.
-	AutoApproveSafe *bool `json:"auto_approve_safe"`
+	AutoApproveTools *bool `json:"auto_approve_tools"`
 	// AutoApprovePlan defaults true (pointer, same "omitted vs explicit
-	// false" reasoning as AutoApproveSafe above): false parks the
+	// false" reasoning as AutoApproveTools above): false parks the
 	// mission for operator approve/replan/rediscover once the plan
 	// phase lands (D-087, issue #456). Ignored (forced true) for
 	// scheduler-fired and workflow-spawned missions.
@@ -683,7 +683,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	// name: req.AgentID is the mission row's agent_id FK value (the
 	// picker sends a.id), unlike chat's session.agent which is a name.
 	var promptOverlay string
-	var knowledge []string
 	if h.agentReg != nil {
 		if a, ok := h.agentReg.ResolveByID(r.Context(), req.AgentID); ok {
 			if req.Route == "" {
@@ -693,7 +692,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 				req.ReviewRoute = a.ReviewRoute
 			}
 			promptOverlay = a.PromptOverlay
-			knowledge = a.Knowledge
 		}
 	}
 	// An agent's route (and this handler's own fallback) can still be
@@ -725,9 +723,9 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	autoApproveSafe := true
-	if req.AutoApproveSafe != nil {
-		autoApproveSafe = *req.AutoApproveSafe
+	autoApproveTools := true
+	if req.AutoApproveTools != nil {
+		autoApproveTools = *req.AutoApproveTools
 	}
 	autoApprovePlan := true
 	if req.AutoApprovePlan != nil {
@@ -774,10 +772,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
-		AutoApproveSafe: autoApproveSafe, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Knowledge: knowledge, Harness: req.Harness, Environment: req.Environment,
-		ParentMissionID: parentMissionID,
-		Sources:         sources,
-		Destinations:    req.destinationEntries(),
+		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
+		ParentMissionID:          parentMissionID,
+		Sources:                  sources,
+		Destinations:             req.destinationEntries(),
 		Flow:                     missions.Flow(flow),
 		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
 	}
@@ -1700,10 +1698,10 @@ func (h *missionAPI) answer(w http.ResponseWriter, r *http.Request) {
 
 // declaredArtifacts builds the workspace-relative, filepath.Clean'ed
 // set of paths the mission's plan units declare — files.go itself
-// never imports or knows about Spec, keeping the two decoupled.
-func declaredArtifacts(spec missions.Spec) map[string]bool {
+// never imports or knows about Plan, keeping the two decoupled.
+func declaredArtifacts(plan missions.Plan) map[string]bool {
 	declared := map[string]bool{}
-	for _, u := range spec.Units {
+	for _, u := range plan.Units {
 		for _, a := range u.Artifacts {
 			declared[filepath.Clean(a)] = true
 		}
@@ -1721,7 +1719,7 @@ func (h *missionAPI) files(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "no_workspace", "this mission has no workspace")
 		return
 	}
-	entries, truncated, err := missions.ListFiles(m.WorkRoot(), declaredArtifacts(m.Spec))
+	entries, truncated, err := missions.ListFiles(m.WorkRoot(), declaredArtifacts(m.Plan))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "files_failed", err.Error())
 		return

@@ -132,9 +132,9 @@ func (c *Completer) PushBranch(ctx context.Context, m Mission, token string) (ho
 // with pass state, and a short harness-verification line.
 func PRBody(m Mission) string {
 	body := m.Goal + "\n\n"
-	if len(m.Spec.Units) > 0 {
+	if len(m.Plan.Units) > 0 {
 		body += "## Units\n\n"
-		for _, u := range m.Spec.Units {
+		for _, u := range m.Plan.Units {
 			mark := "[ ]"
 			if u.Passes {
 				mark = "[x]"

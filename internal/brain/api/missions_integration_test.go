@@ -46,8 +46,8 @@ func (errRunner) RunReview(context.Context, missions.Mission, missions.ReviewPac
 	return missions.ReviewVerdict{}, nil, errors.New("errRunner: not implemented")
 }
 
-func (errRunner) PlanSession(context.Context, missions.Mission, string) (missions.Spec, error) {
-	return missions.Spec{}, errors.New("errRunner: not implemented")
+func (errRunner) PlanSession(context.Context, missions.Mission, string) (missions.Plan, error) {
+	return missions.Plan{}, errors.New("errRunner: not implemented")
 }
 
 func (errRunner) DiscoverSession(context.Context, missions.Mission) (string, error) {
@@ -422,7 +422,7 @@ func TestMissionsNoteTerminalMissionRejected(t *testing.T) {
 
 // TestMissionsCreateDefaultsAutoApprovePlanTrue confirms an omitted
 // auto_approve_plan defaults true (D-087, issue #456), the same
-// "pointer field, omitted vs explicit false" shape as auto_approve_safe.
+// "pointer field, omitted vs explicit false" shape as auto_approve_tools.
 func TestMissionsCreateDefaultsAutoApprovePlanTrue(t *testing.T) {
 	store := testMissionStore(t)
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
@@ -529,7 +529,7 @@ func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
 	ctx := context.Background()
 	id, err := store.Create(ctx, missions.Mission{
 		Goal: "itest-api-mission approve-plan happy path", Kind: "general",
-		Spec: missions.Spec{Units: []missions.PlanUnit{{Title: "only unit"}}},
+		Plan: missions.Plan{Units: []missions.PlanUnit{{Title: "only unit"}}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

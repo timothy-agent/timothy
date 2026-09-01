@@ -135,9 +135,9 @@ func OutcomeDigest(m Mission, events []Event, terminal Phase, failureReason stri
 		b.WriteString(m.DiscoverNotes)
 		b.WriteString("\n")
 	}
-	if len(m.Spec.Units) > 0 {
+	if len(m.Plan.Units) > 0 {
 		b.WriteString("\nunits:\n")
-		for _, u := range m.Spec.Units {
+		for _, u := range m.Plan.Units {
 			status := "not verified"
 			if u.Passes {
 				status = "passed"

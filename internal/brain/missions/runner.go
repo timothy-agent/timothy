@@ -65,9 +65,9 @@ type Runner interface {
 	// contents, diff, evidence: and returns the verdict.
 	RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error)
 
-	// PlanSession runs the planning turn that produces a Spec (the list
+	// PlanSession runs the planning turn that produces a Plan (the list
 	// of PlanUnits) from the mission's goal and discover-phase findings.
-	PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error)
+	PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error)
 
 	// DiscoverSession runs the discover turn: a tool-using session that
 	// explores the workspace and (via base tools) the web, ending with a
@@ -190,10 +190,9 @@ type nativeRunner struct {
 	// Docker container instead of brain's own process.
 	sandbox sandboxExec
 	// kbSearch backs the per-turn search_kb ExtraTool (see kbSearchTool)
-	//: nil means search_kb is never offered on any mission turn,
-	// regardless of a mission's own Knowledge snapshot (same "the
-	// dependency's absence turns the feature off entirely" contract as
-	// chat.go's SetKBSearch).
+	//: nil means search_kb is never offered on any mission turn (same
+	// "the dependency's absence turns the feature off entirely" contract
+	// as chat.go's SetKBSearch).
 	kbSearch KBSearchFunc
 
 	// kbRead backs the per-turn read_kb ExtraTool: same nil contract
@@ -359,11 +358,13 @@ func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 	r.connectorReads = resolve
 }
 
-// KBSearchFunc runs one search_kb call over the whole KB, boosted
-// toward boostCollections: main curries memclient.Client.KBSearch in,
-// same shape as chat.go's KBSearch type. boostCollections travels on
-// every call (the mission's own Knowledge snapshot), never bound once,
-// since the same func serves every mission (D-078, issue #368).
+// KBSearchFunc runs one search_kb call over the whole KB: main curries
+// memclient.Client.KBSearch in, same shape as chat.go's KBSearch type.
+// boostCollections is always nil for a mission turn (issue #482 dropped
+// the mission's own Knowledge snapshot, and search_kb was never scoped
+// by it to begin with, D-078/issue #368) -- kept as a parameter only
+// because memclient.Client.KBSearch's signature is shared with chat's
+// live-agent-boosted calls.
 type KBSearchFunc func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
 // KBReadFunc loads one kb document by id, unscoped by collection
@@ -393,23 +394,21 @@ func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny 
 	return &nativeRunner{agent: agent, parker: parker, modelFloorDeny: floorDeny, sandbox: sandbox, kbSearch: kbSearch, kbRead: kbRead, log: log}
 }
 
-// kbSearchTool builds this turn's search_kb ExtraTool, boosted toward
-// m's own Knowledge snapshot, or nil when no backend is wired (KB
-// feature off entirely). m.Knowledge is never a gate: every mission
-// gets whole-KB search_kb once a backend exists, empty Knowledge or not
-// (D-078, issue #368): Knowledge only reorders results toward those
-// collections. A non-nil sink records every returned document at
-// execution time: the harness's citation evidence must come from here,
-// not from the rendered tool result: digests cap at digestCeiling and
-// offload past 8KiB, so a full search_kb result never survives into the
-// digest text.
+// kbSearchTool builds this turn's search_kb ExtraTool, or nil when no
+// backend is wired (KB feature off entirely) -- every mission gets
+// whole-KB search_kb once a backend exists (D-078, issue #368; issue
+// #482 dropped the mission's own Knowledge snapshot, which only ever
+// reordered results, never gated them). A non-nil sink records every
+// returned document at execution time: the harness's citation evidence
+// must come from here, not from the rendered tool result: digests cap
+// at digestCeiling and offload past 8KiB, so a full search_kb result
+// never survives into the digest text.
 func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
 	if r.kbSearch == nil {
 		return nil
 	}
-	boost := slices.Clone(m.Knowledge)
 	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
-		hits, err := r.kbSearch(ctx, query, boost, mode, k)
+		hits, err := r.kbSearch(ctx, query, nil, mode, k)
 		if err == nil && sink != nil {
 			sink.record(hits)
 		}
@@ -433,18 +432,12 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 // (issue #367): discover turns were finishing in seconds with zero
 // search_kb calls, silently skipping directly relevant curated
 // articles. Empty when no KB backend is wired, so the tool-absent case
-// never mentions a tool the model doesn't have. When the mission has
-// its own Knowledge collections, they are named as operator-attached
-// and prioritized (they already boost search_kb ranking, D-078).
+// never mentions a tool the model doesn't have.
 func (r *nativeRunner) kbDiscoverNudge(m Mission) string {
 	if r.kbSearch == nil {
 		return ""
 	}
-	nudge := " A curated knowledge base is available via search_kb: search it for anything relevant to the goal before concluding no research is needed."
-	if len(m.Knowledge) > 0 {
-		nudge += " The operator attached these collections, prioritized in results: " + strings.Join(m.Knowledge, ", ") + "."
-	}
-	return nudge
+	return " A curated knowledge base is available via search_kb: search it for anything relevant to the goal before concluding no research is needed."
 }
 
 // connectorReadTools resolves m's read-only connector tools (nil
@@ -1384,14 +1377,14 @@ func renderReviewContent(p ReviewPacket) string {
 	return b.String()
 }
 
-// PlanSession runs the planning turn that produces a Spec from the
+// PlanSession runs the planning turn that produces a Plan from the
 // mission's goal and discover-phase findings. The plan is forced
 // through the submit_plan tool call (mirroring RunWorker/RunReview's
 // sentinel ladder) rather than asked for as bare JSON prose: a model
 // free to preface its reply with prose was the root cause of a real
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
-func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
+func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable — this applies regardless of the goal's subject matter. Every unit must list at least one artifact — the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
@@ -1444,27 +1437,27 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	res, err := r.runTurn(ctx, req, planToolName, PhasePlan)
 	text, args := res.text, res.sentinelArgs
 	if err != nil {
-		return Spec{}, err
+		return Plan{}, err
 	}
 	if res.askedUser {
-		return Spec{}, ErrAskedUser
+		return Plan{}, ErrAskedUser
 	}
 	if len(args) > 0 {
-		if spec, specErr := parseSpec(string(args)); specErr == nil {
-			return spec, nil
+		if plan, planErr := parsePlan(string(args)); planErr == nil {
+			return plan, nil
 		}
 	}
 
 	// Recovery re-run: either the tool call was missing entirely, or its
-	// arguments didn't decode as a valid Spec: either way, tell the
+	// arguments didn't decode as a valid Plan: either way, tell the
 	// model exactly what was wrong instead of silently repeating the
 	// identical prompt (which previously produced the identical failure
 	// on every retry).
 	var recoverReason string
 	if len(args) == 0 {
 		recoverReason = "you did not call submit_plan"
-	} else if _, specErr := parseSpec(string(args)); specErr != nil {
-		recoverReason = specErr.Error()
+	} else if _, planErr := parsePlan(string(args)); planErr != nil {
+		recoverReason = planErr.Error()
 	}
 	recoverReq := req
 	recoverReq.Messages = append(append([]provider.Message{}, req.Messages...),
@@ -1474,18 +1467,18 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	recoverRes, err := r.runTurn(ctx, recoverReq, planToolName, PhasePlan)
 	recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 	if err != nil {
-		return Spec{}, err
+		return Plan{}, err
 	}
 	if len(recoverArgs) == 0 {
 		r.log.Warn("mission planner ended without a submit_plan call", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText)
-		return Spec{}, fmt.Errorf("mission runner: planner ended without a submit_plan call")
+		return Plan{}, fmt.Errorf("mission runner: planner ended without a submit_plan call")
 	}
-	spec, err := parseSpec(string(recoverArgs))
+	plan, err := parsePlan(string(recoverArgs))
 	if err != nil {
 		r.log.Warn("mission planner submitted an invalid plan twice", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText, "error", err)
-		return Spec{}, err
+		return Plan{}, err
 	}
-	return spec, nil
+	return plan, nil
 }
 
 // execEnvironmentNote tells the planner what execution environment
@@ -1521,10 +1514,10 @@ func execEnvironmentNote(loc *time.Location) string {
 	return " Commands run inside an isolated Linux container with python3, node, git, and standard POSIX/coreutils tools available; each mission gets its own container, state persists across your commands within the mission. Today is " + time.Now().In(loc).Format("Monday, 2006-01-02 (MST).") + " Present all dates and times in this timezone unless the goal asks otherwise."
 }
 
-// parseSpec decodes the planner's reply strictly: fences stripped,
+// parsePlan decodes the planner's reply strictly: fences stripped,
 // unknown fields rejected: same discipline as loop/turnmemory.go's
 // distillation parsing.
-func parseSpec(raw string) (Spec, error) {
+func parsePlan(raw string) (Plan, error) {
 	text := strings.TrimSpace(raw)
 	text = strings.TrimPrefix(text, "```json")
 	text = strings.TrimPrefix(text, "```")
@@ -1533,20 +1526,20 @@ func parseSpec(raw string) (Spec, error) {
 
 	dec := json.NewDecoder(strings.NewReader(text))
 	dec.DisallowUnknownFields()
-	var spec Spec
-	if err := dec.Decode(&spec); err != nil {
-		return Spec{}, fmt.Errorf("mission runner: invalid plan JSON: %w", err)
+	var plan Plan
+	if err := dec.Decode(&plan); err != nil {
+		return Plan{}, fmt.Errorf("mission runner: invalid plan JSON: %w", err)
 	}
 	// D-077: the schema itself no longer requires units (infeasible=true
 	// needs none), so the units-empty/infeasible split is validated here.
-	if spec.Infeasible {
-		if spec.InfeasibleReason == "" {
-			return Spec{}, fmt.Errorf("mission runner: infeasible plan must include a reason")
+	if plan.Infeasible {
+		if plan.InfeasibleReason == "" {
+			return Plan{}, fmt.Errorf("mission runner: infeasible plan must include a reason")
 		}
-		return Spec{Infeasible: true, InfeasibleReason: spec.InfeasibleReason}, nil
+		return Plan{Infeasible: true, InfeasibleReason: plan.InfeasibleReason}, nil
 	}
-	if len(spec.Units) == 0 {
-		return Spec{}, fmt.Errorf("mission runner: plan has no units")
+	if len(plan.Units) == 0 {
+		return Plan{}, fmt.Errorf("mission runner: plan has no units")
 	}
 	// verify_cmd runs through RunVerify (a plain /bin/sh -c): harness-
 	// side, outside the permission chain entirely, so D-050's sandbox
@@ -1559,25 +1552,25 @@ func parseSpec(raw string) (Spec, error) {
 	// that undermines that. Reject it here, at the same point the
 	// empty-plan check already rejects a bad plan, so the planner's
 	// retry loop sees the real problem immediately.
-	for _, u := range spec.Units {
+	for _, u := range plan.Units {
 		if strings.Contains(u.VerifyCmd, "$(") || strings.Contains(u.VerifyCmd, "`") {
-			return Spec{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks) — write the direct command instead")
+			return Plan{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks), write the direct command instead")
 		}
 	}
 	// D-068: every unit must declare at least one artifact so the
 	// harness's CheckArtifacts has something to verify.
-	for _, u := range spec.Units {
+	for _, u := range plan.Units {
 		if len(u.Artifacts) == 0 {
-			return Spec{}, fmt.Errorf("mission runner: unit %q must list at least one workspace-relative artifact file the harness can check (for a report-style goal, the report file itself is the artifact)", u.Title)
+			return Plan{}, fmt.Errorf("mission runner: unit %q must list at least one workspace-relative artifact file the harness can check (for a report-style goal, the report file itself is the artifact)", u.Title)
 		}
 	}
 	// D-068: reject verify_cmds that succeed regardless of outcome.
 	// Deny-set on the first shell word only, deliberately not a shell
 	// parser; a no-op buried after && is out of scope.
-	for _, u := range spec.Units {
+	for _, u := range plan.Units {
 		cmd := strings.TrimSpace(u.VerifyCmd)
 		if cmd == "" {
-			return Spec{}, fmt.Errorf("mission runner: unit %q must have a verify_cmd that checks the CONTENT of its artifacts (e.g. grep) — a bare echo, true, :, or printf proves nothing", u.Title)
+			return Plan{}, fmt.Errorf("mission runner: unit %q must have a verify_cmd that checks the CONTENT of its artifacts (e.g. grep), a bare echo, true, :, or printf proves nothing", u.Title)
 		}
 		firstWord := cmd
 		if i := strings.IndexAny(cmd, " \t"); i >= 0 {
@@ -1585,13 +1578,13 @@ func parseSpec(raw string) (Spec, error) {
 		}
 		switch firstWord {
 		case "echo", "true", ":", "printf":
-			return Spec{}, fmt.Errorf("mission runner: unit %q verify_cmd must check the CONTENT of its artifacts (e.g. grep) — a bare echo, true, :, or printf proves nothing", u.Title)
+			return Plan{}, fmt.Errorf("mission runner: unit %q verify_cmd must check the CONTENT of its artifacts (e.g. grep), a bare echo, true, :, or printf proves nothing", u.Title)
 		}
 	}
 	// D-068: verify_cmd must parse as POSIX shell (-n never executes).
 	// Skip silently if /bin/sh is missing so tests stay hermetic.
 	if shPath, err := exec.LookPath("/bin/sh"); err == nil {
-		for _, u := range spec.Units {
+		for _, u := range plan.Units {
 			shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			out, err := exec.CommandContext(shCtx, shPath, "-n", "-c", u.VerifyCmd).CombinedOutput() //nolint:gosec // G204: shPath is LookPath("/bin/sh"); -n parses only, never executes
 			cancel()
@@ -1600,14 +1593,14 @@ func parseSpec(raw string) (Spec, error) {
 				if len(stderr) > 200 {
 					stderr = stderr[:200]
 				}
-				return Spec{}, fmt.Errorf("mission runner: unit %q verify_cmd does not parse as POSIX shell: %s", u.Title, stderr)
+				return Plan{}, fmt.Errorf("mission runner: unit %q verify_cmd does not parse as POSIX shell: %s", u.Title, stderr)
 			}
 		}
 	}
 	// Passes is harness-only evidence (RunVerify); a plan is never born
 	// pre-verified regardless of what the planner's JSON claims.
-	for i := range spec.Units {
-		spec.Units[i].Passes = false
+	for i := range plan.Units {
+		plan.Units[i].Passes = false
 	}
-	return spec, nil
+	return plan, nil
 }

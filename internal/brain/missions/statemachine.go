@@ -425,7 +425,7 @@ func stepResume(s StepState) Transition {
 // The plan phase's own completion forks on AutoApprovePlan (D-087,
 // issue #456): true is the byte-identical default, straight through to
 // nextPhase like every other phase. false parks the mission instead:
-// the plan already landed (runPlan's own SetSpec ran before this
+// the plan already landed (runPlan's own SetPlan ran before this
 // input arrives), so the park shows the real plan, not a stale one.
 // FlowDiscoverGenerate never visits PhasePlan, so this check never
 // applies to it: discover's own completion routes straight to
@@ -657,7 +657,7 @@ func stepResultComplete(s StepState) Transition {
 	s.Status = StatusDone
 	// verified: false for a planless mission (flow=light, or
 	// flow=discover_generate, D-090), both of which reach done with zero
-	// harness verification (no spec units, no CheckArtifacts/RunVerify);
+	// harness verification (no plan units, no CheckArtifacts/RunVerify);
 	// distinguishes that in the event log from a harness-verified done.
 	verified := s.Flow != FlowLight && s.Flow != FlowDiscoverGenerate
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": verified}}}}

@@ -32,24 +32,20 @@ type Mission struct {
 	// at create time, see migrations/0001_init.sql for why this isn't a live
 	// agent lookup.
 	PromptOverlay string `json:"prompt_overlay,omitempty"`
-	// Knowledge is a snapshot of the creating agent's kb_collections
-	// allowlist at create time, same reasoning as PromptOverlay above.
-	// Empty means search_kb is never offered on this mission's turns.
-	Knowledge []string `json:"knowledge,omitempty"`
-	Phase     Phase    `json:"phase"`
-	Status    Status   `json:"status"`
+	Phase         Phase  `json:"phase"`
+	Status        Status `json:"status"`
 	// FailureReason is derived (no column) from this mission's latest
 	// mission.failed event's payload.reason — "cancelled" or
 	// "max_iterations" (statemachine.go) — set only by Store.List/Get for
 	// a phase=failed mission. Empty for every other mission.
-	FailureReason string      `json:"failure_reason,omitempty"`
-	PauseReason   PauseReason `json:"pause_reason,omitempty"`
-	PauseMessage  string      `json:"pause_message,omitempty"`
-	Workspace     string      `json:"workspace,omitempty"`
-	Branch        string      `json:"branch,omitempty"`
-	BaseCommit    string      `json:"base_commit,omitempty"`
-	Spec          Spec        `json:"spec"`
-	Progress   []ProgressNote `json:"progress"`
+	FailureReason string         `json:"failure_reason,omitempty"`
+	PauseReason   PauseReason    `json:"pause_reason,omitempty"`
+	PauseMessage  string         `json:"pause_message,omitempty"`
+	Workspace     string         `json:"workspace,omitempty"`
+	Branch        string         `json:"branch,omitempty"`
+	BaseCommit    string         `json:"base_commit,omitempty"`
+	Plan          Plan           `json:"plan"`
+	Progress      []ProgressNote `json:"progress"`
 	// LastEvidence is the most recent worker mission_status call's
 	// evidence text — carried from execute into review so a
 	// general mission (whose baseline diff is always empty,
@@ -131,7 +127,7 @@ type Mission struct {
 	// worker/reviewer/planner turn parks on stream.EventPermissionRequest,
 	// cleared together once the broker resolves it. Bypasses the state
 	// machine entirely (SetPendingPermission/ClearPendingPermission),
-	// same as SetSpec/SetProvisioned: parking happens mid-turn, not at
+	// same as SetPlan/SetProvisioned: parking happens mid-turn, not at
 	// an Advance boundary.
 	PendingPermissionTool      string `json:"pending_permission_tool,omitempty"`
 	PendingPermissionArgs      string `json:"pending_permission_args,omitempty"`
@@ -156,7 +152,7 @@ type Mission struct {
 	// AsksUsed counts ask_user calls this mission has spent (D-088);
 	// enforced against askBudget in asktool.go.
 	AsksUsed int `json:"asks_used"`
-	// AutoApproveSafe, when true (the default for new missions), grants
+	// AutoApproveTools, when true (the default for new missions), grants
 	// the hidden session standing approval for any shell call the
 	// danger classifier rates safe — a mission runs for hours
 	// unattended, and per-command-shape approval built for a human
@@ -164,13 +160,13 @@ type Mission struct {
 	// (but harmless) shell invocation. Destructive-classified commands
 	// still always ask: tools.Permissions.Resolve forces that
 	// regardless of any grant, so this cannot weaken that guarantee.
-	AutoApproveSafe bool `json:"auto_approve_safe"`
+	AutoApproveTools bool `json:"auto_approve_tools"`
 	// AutoApprovePlan, when true (the default), advances straight from
 	// plan to generate the moment a plan lands, exactly as every
 	// mission has always worked. false parks the mission on
 	// PauseApproval instead (D-087, issue #456), waiting for an
 	// operator to approve/replan/rediscover. Snapshotted at create
-	// time, same as AutoApproveSafe; scheduler.go and the workflow
+	// time, same as AutoApproveTools; scheduler.go and the workflow
 	// engine both force this true regardless of template/step input:
 	// an unattended mission has nobody to approve its plan.
 	AutoApprovePlan bool   `json:"auto_approve_plan"`
@@ -486,9 +482,10 @@ func (m Mission) WorkRoot() string {
 	return m.Workspace
 }
 
-// Spec is the mission's plan: an ordered list of units, each verified
-// independently by RunVerify before the mission can advance past it.
-type Spec struct {
+// Plan is the mission's submitted plan: an ordered list of units, each
+// verified independently by RunVerify before the mission can advance
+// past it.
+type Plan struct {
 	Units []PlanUnit `json:"units"`
 	// Infeasible marks a plan the planner refused to write because the
 	// goal cannot be achieved as stated (D-077); Units is empty when

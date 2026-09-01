@@ -137,11 +137,11 @@ func (f *fakeStore) Events(ctx context.Context, id string) ([]Event, error) {
 	return out, nil
 }
 
-func (f *fakeStore) SetSpec(ctx context.Context, id string, spec Spec) error {
+func (f *fakeStore) SetPlan(ctx context.Context, id string, plan Plan) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.missions[id]
-	m.Spec = spec
+	m.Plan = plan
 	f.missions[id] = m
 	return nil
 }
@@ -253,7 +253,7 @@ type scriptedRunner struct {
 	workerPackets  []WorkPacket
 	reviewVerdicts []ReviewVerdict
 	reviewIdx      int
-	plans          []Spec
+	plans          []Plan
 	planIdx        int
 	// planDiscoverNotes records the discoverNotes argument PlanSession
 	// was called with, one entry per call — lets a test assert the plan
@@ -290,7 +290,7 @@ func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet Review
 	return v, &GatekeeperState{}, nil
 }
 
-func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
+func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	r.planDiscoverNotes = append(r.planDiscoverNotes, discoverNotes)
 	s := r.plans[r.planIdx]
 	if r.planIdx < len(r.plans)-1 {
@@ -368,7 +368,7 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -422,7 +422,7 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}},
 	})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -476,7 +476,7 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}},
 	})
 	runner := &scriptedRunner{
-		plans:          []Spec{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -519,7 +519,7 @@ func TestDriverDiscoverStoresNotesAndAdvances(t *testing.T) {
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
 		discoverNotes: []string{"no prior implementation exists; goal is self-contained"},
-		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:         []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -554,7 +554,7 @@ func TestDriverDiscoverTruncatesLongNotes(t *testing.T) {
 	long := strings.Repeat("x", discoverNotesCap+500)
 	runner := &scriptedRunner{
 		discoverNotes: []string{long},
-		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:         []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -599,7 +599,7 @@ func TestDriverPlanReceivesStoredDiscoverNotes(t *testing.T) {
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
 		discoverNotes: []string{"found a reusable config loader in internal/platform/config"},
-		plans:        []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans:         []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -627,7 +627,7 @@ func TestDriverPlanCreatedEventCarriesAssumptions(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
-		plans: []Spec{{
+		plans: []Plan{{
 			Units:       []PlanUnit{{Title: "only unit"}},
 			Assumptions: []PlanAssumption{{Assumption: "no language version was specified", Default: "Python 3.12"}},
 		}},
@@ -665,7 +665,7 @@ func TestDriverPlanCreatedEventOmitsEmptyAssumptions(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
-		plans: []Spec{{Units: []PlanUnit{{Title: "only unit"}}}},
+		plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -701,7 +701,7 @@ func TestDriverPlanCreatedEventOmitsEmptyAssumptions(t *testing.T) {
 func TestDriverPlanApprovalGateParks(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: false})
-	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "only unit"}}}}}
+	runner := &scriptedRunner{plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}}}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -711,8 +711,8 @@ func TestDriverPlanApprovalGateParks(t *testing.T) {
 	if got.Phase != PhasePlan || got.Status != StatusPaused || got.PauseReason != PauseApproval {
 		t.Fatalf("mission after plan with auto_approve_plan=false = %s/%s/%s, want plan/paused/approval", got.Phase, got.Status, got.PauseReason)
 	}
-	if len(got.Spec.Units) != 1 {
-		t.Fatalf("Spec.Units = %+v, want the plan stored even though the mission parked", got.Spec.Units)
+	if len(got.Plan.Units) != 1 {
+		t.Fatalf("Plan.Units = %+v, want the plan stored even though the mission parked", got.Plan.Units)
 	}
 }
 
@@ -726,7 +726,7 @@ func TestDriverDecidePlanApprove(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval,
-		MaxIterations: 8, Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
+		MaxIterations: 8, Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
 	d := testDriver(store, runner)
@@ -779,9 +779,9 @@ func TestDriverReplanFeedsFollowingPlanTurn(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval,
 		MaxIterations: 8, DiscoverNotes: "original findings",
-		Spec: Spec{Units: []PlanUnit{{Title: "unit0"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "unit0"}}},
 	})
-	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0 revised"}}}}}
+	runner := &scriptedRunner{plans: []Plan{{Units: []PlanUnit{{Title: "unit0 revised"}}}}}
 	d := testDriver(store, runner)
 
 	// AppendProgress mirrors what the API's replan handler does before
@@ -824,7 +824,7 @@ func TestDriverPlanInfeasibleFailsMission(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{
-		plans: []Spec{{Infeasible: true, InfeasibleReason: "goal forbids the only possible action"}},
+		plans: []Plan{{Infeasible: true, InfeasibleReason: "goal forbids the only possible action"}},
 	}
 	d := testDriver(store, runner)
 
@@ -835,8 +835,8 @@ func TestDriverPlanInfeasibleFailsMission(t *testing.T) {
 	if got.Phase != PhaseFailed {
 		t.Fatalf("Phase = %q, want failed", got.Phase)
 	}
-	if len(got.Spec.Units) != 0 {
-		t.Fatalf("Spec.Units = %+v, want no units stored for an infeasible plan", got.Spec.Units)
+	if len(got.Plan.Units) != 0 {
+		t.Fatalf("Plan.Units = %+v, want no units stored for an infeasible plan", got.Plan.Units)
 	}
 	var sawFailed, sawInfeasible bool
 	for _, ev := range store.events["m1"] {
@@ -913,7 +913,7 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 // TestRunWorkerFinalMessageExcludesPriorToolRoundNarration for the
 // runner-level guarantee this relies on), records a mission.review_skipped
 // event with reason "light", and reaches PhaseResult in the same
-// Advance call without ever routing through prove: Spec is empty, so
+// Advance call without ever routing through prove: Plan is empty, so
 // LastUnit is trivially true. Result itself (zero LLM turns) is one
 // more Advance call away from done.
 func TestDriverLightDoneSetsFinalOutputAndSkipsToResult(t *testing.T) {
@@ -990,7 +990,7 @@ func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T)
 		ID: "m1", Kind: "general", Flow: FlowDiscoverGenerate, Phase: PhaseDiscover, Status: StatusIdle, MaxIterations: 8,
 	})
 	runner := &scriptedRunner{
-		discoverNotes:   []string{"found three relevant sources"},
+		discoverNotes:  []string{"found three relevant sources"},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing", FinalMessage: "the deliverable"}},
 	}
 	d := testDriver(store, runner)
@@ -1093,7 +1093,7 @@ func TestDriverPacketOmitsDiscoverNotesForNonPlanlessFlow(t *testing.T) {
 	m := Mission{
 		ID: "m1", Kind: "general", Flow: FlowFull, Phase: PhaseGenerate, Status: StatusWorking,
 		DiscoverNotes: "found three relevant sources",
-		Spec:         Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
+		Plan:          Plan{Units: []PlanUnit{{Title: "write summary.md"}}},
 	}
 	store.put("m1", m)
 	d := testDriver(store, &scriptedRunner{})
@@ -1119,7 +1119,7 @@ func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary.md"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing"}}}
 	d := testDriver(store, runner)
@@ -1147,7 +1147,7 @@ func TestDriverNoProveStillReviewsWithoutArtifacts(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Flow: FlowNoProve, Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary.md"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did the thing"}}}
 	d := testDriver(store, runner)
@@ -1172,7 +1172,7 @@ func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Flow: FlowNoProve, Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(),
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it (no it didn't)"}}}
 	d := testDriver(store, runner)
@@ -1182,8 +1182,8 @@ func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
 	}
 
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseGenerate || m.Spec.Units[0].Passes {
-		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Spec.Units[0].Passes)
+	if m.Phase != PhaseGenerate || m.Plan.Units[0].Passes {
+		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
 	if m.Iteration == 0 {
 		t.Fatal("a failed artifact check must cost an iteration under no_prove too")
@@ -1232,7 +1232,7 @@ func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
 	// covered separately by TestDriverReplanOnFirstStall.
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReplanUsed: true,
-		Spec: Spec{Units: []PlanUnit{{Title: "u1"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
 	})
 	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
 	runner := &scriptedRunner{
@@ -1272,12 +1272,12 @@ func TestDriverReplanOnFirstStall(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
-		Spec: Spec{Units: []PlanUnit{{Title: "u1"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
 	})
 	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
 	runner := &scriptedRunner{
 		reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: sameFindings}},
-		plans:          []Spec{{Units: []PlanUnit{{Title: "u1 replanned"}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "u1 replanned"}}}},
 	}
 	d := testDriver(store, runner)
 
@@ -1437,7 +1437,7 @@ func TestDriverGatekeeperCleanupOnTerminal(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
-		Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
 	})
 	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
 	d.gatekeepers["m1"] = &GatekeeperState{Messages: nil}
@@ -1462,7 +1462,7 @@ type blockingRunner struct {
 	starts   int32
 	verdict  WorkerVerdict
 	reviewV  ReviewVerdict
-	planSpec Spec
+	planSpec Plan
 }
 
 func (r *blockingRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
@@ -1479,7 +1479,7 @@ func (r *blockingRunner) RunReview(ctx context.Context, m Mission, packet Review
 	return r.reviewV, &GatekeeperState{}, nil
 }
 
-func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Spec, error) {
+func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	return r.planSpec, nil
 }
 
@@ -1499,7 +1499,7 @@ func TestDriverDriveIsSerializedPerMission(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
-		Spec: Spec{Units: []PlanUnit{{Title: "only unit"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
 	})
 	runner := &blockingRunner{
 		release: make(chan struct{}),
@@ -1545,7 +1545,7 @@ func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary.md", VerifyCmd: "test -f /nonexistent-verify-target"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary.md", VerifyCmd: "test -f /nonexistent-verify-target"}}},
 	})
 	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
 
@@ -1626,7 +1626,7 @@ func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true})
+	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1648,11 +1648,11 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	granter := &fakeGranter{}
 	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
-	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false}); err != nil {
+	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: false}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if len(granter.calls) != 0 {
-		t.Fatalf("Grant calls = %d, want 0 when AutoApproveSafe is false", len(granter.calls))
+		t.Fatalf("Grant calls = %d, want 0 when AutoApproveTools is false", len(granter.calls))
 	}
 }
 
@@ -1673,7 +1673,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 
 	id, err := d.Create(context.Background(), Mission{
 		Goal: "test", Kind: "general", Route: "route-x", AgentID: "briefing-agent",
-		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: false,
+		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: false,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1696,7 +1696,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 
 // TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved: an
 // AgentID that doesn't resolve (deleted agent, or none set) grants
-// nothing beyond whatever AutoApproveSafe itself produces — no
+// nothing beyond whatever AutoApproveTools itself produces -- no
 // allowlist to apply.
 func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	store := newFakeStore()
@@ -1707,7 +1707,7 @@ func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	})
 
 	if _, err := d.Create(context.Background(), Mission{
-		Goal: "test", Kind: "general", Route: "route-x", AutoApproveSafe: false,
+		Goal: "test", Kind: "general", Route: "route-x", AutoApproveTools: false,
 		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1771,7 +1771,7 @@ func TestDriverSignalResumeRegrantsSession(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Goal: "test", Kind: "general", AgentID: "briefing-agent",
 		Phase: PhaseGenerate, Status: StatusWaitingForInput, MaxIterations: 8,
-		AutoApproveSafe: true, SessionID: "session-1", Workspace: "/workspace/missions/m1",
+		AutoApproveTools: true, SessionID: "session-1", Workspace: "/workspace/missions/m1",
 	})
 	granter := &fakeGranter{}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
@@ -1802,7 +1802,7 @@ func TestDriverSignalResumeRegrantsSession(t *testing.T) {
 		gotTools[call.tool] = true
 	}
 	if !gotTools["shell"] {
-		t.Fatalf("Grant calls = %+v, want a re-granted shell allowance (AutoApproveSafe)", calls)
+		t.Fatalf("Grant calls = %+v, want a re-granted shell allowance (AutoApproveTools)", calls)
 	}
 	if !gotTools["gmail_search"] {
 		t.Fatalf("Grant calls = %+v, want a re-granted gmail_search allowance (ApprovalAllowlist)", calls)
@@ -1812,14 +1812,14 @@ func TestDriverSignalResumeRegrantsSession(t *testing.T) {
 // TestDriverSignalResumeGuardsMissingSessionID confirms Signal's new
 // re-grant-on-resume call is gated on m.SessionID != "" — without this
 // guard, grantSessionDefaults itself has no such check and would happily
-// call Grant with a blank session id for an AutoApproveSafe mission that
+// call Grant with a blank session id for an AutoApproveTools mission that
 // somehow resumes before ever being provisioned.
 func TestDriverSignalResumeGuardsMissingSessionID(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Goal: "test", Kind: "general",
 		Phase: PhaseGenerate, Status: StatusWaitingForInput, MaxIterations: 8,
-		AutoApproveSafe: true, SessionID: "",
+		AutoApproveTools: true, SessionID: "",
 	})
 	granter := &fakeGranter{}
 	m, err := store.Get(context.Background(), "m1")
@@ -1853,7 +1853,7 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	// SessionID, no Workspace/Worktree.
 	store.put("m1", Mission{
 		ID: "m1", Goal: "scheduled run", Kind: "general",
-		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveSafe: true,
+		Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: true,
 	})
 	granter := &fakeGranter{}
 	sessions := &fakeSessionCreator{}
@@ -2127,7 +2127,7 @@ func TestDriverSkipsReviewWhenHarnessChecksPass(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}}}
 	d := testDriver(store, runner)
@@ -2148,7 +2148,7 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(),
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it (no it didn't)"}}}
 	d := testDriver(store, runner)
@@ -2158,8 +2158,8 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 	}
 
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseGenerate || m.Spec.Units[0].Passes {
-		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Spec.Units[0].Passes)
+	if m.Phase != PhaseGenerate || m.Plan.Units[0].Passes {
+		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
 	if m.Iteration == 0 {
 		t.Fatal("a failed artifact check must cost an iteration")
@@ -2180,7 +2180,7 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
-		Spec: Spec{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it", SeenURLs: []string{"https://example.com/other"}}}}
 	d := testDriver(store, runner)
@@ -2190,8 +2190,8 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 	}
 
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseGenerate || m.Spec.Units[0].Passes {
-		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Spec.Units[0].Passes)
+	if m.Phase != PhaseGenerate || m.Plan.Units[0].Passes {
+		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
 	if len(m.Progress) == 0 || !strings.Contains(m.Progress[len(m.Progress)-1].Note, "citation check failed") {
 		t.Fatalf("progress = %+v, want a note explaining the citation failure", m.Progress)
@@ -2212,7 +2212,7 @@ func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root, BaseCommit: base,
-		Spec: Spec{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
@@ -2252,7 +2252,7 @@ func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
-		Spec: Spec{Units: []PlanUnit{
+		Plan: Plan{Units: []PlanUnit{
 			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true},
 			{Title: "unit1", Artifacts: []string{"b.md"}},
 		}},
@@ -2273,7 +2273,7 @@ func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 	if m.Phase != PhaseGenerate {
 		t.Fatalf("mission phase = %q, want execute (regression routes back to work, not forward)", m.Phase)
 	}
-	if m.Spec.Units[0].Passes {
+	if m.Plan.Units[0].Passes {
 		t.Fatal("unit 0's Passes was not flipped back to false after its artifact regressed")
 	}
 	found := false
@@ -2308,7 +2308,7 @@ func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
-		Spec: Spec{Units: []PlanUnit{
+		Plan: Plan{Units: []PlanUnit{
 			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true},
 			{Title: "unit1", Artifacts: []string{"b.md"}},
 		}},
@@ -2320,10 +2320,10 @@ func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if !m.Spec.Units[1].Passes {
+	if !m.Plan.Units[1].Passes {
 		t.Fatal("unit 1 should have passed with no regression detected")
 	}
-	if !m.Spec.Units[0].Passes {
+	if !m.Plan.Units[0].Passes {
 		t.Fatal("unit 0 must remain passed when its artifact still holds up")
 	}
 	for _, ev := range store.events["m1"] {
@@ -2338,18 +2338,18 @@ func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
 // verify_cmd are unchanged from a previously-passed unit is re-marked
 // passed (harness evidence carried forward); a unit the new plan
 // changed (or that is genuinely new) stays unverified, since
-// parseSpec's own zeroing is correct for anything actually different.
+// parsePlan's own zeroing is correct for anything actually different.
 func TestDriverReplanPreservesMatchingPassedUnitsResetsOthers(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
 		MaxIterations: 8, ReplanUsed: true,
-		Spec: Spec{Units: []PlanUnit{
+		Plan: Plan{Units: []PlanUnit{
 			{Title: "unit0", VerifyCmd: "test -f a.md", Passes: true},
 			{Title: "unit1", VerifyCmd: "test -f b.md", Passes: false},
 		}},
 	})
-	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{
+	runner := &scriptedRunner{plans: []Plan{{Units: []PlanUnit{
 		{Title: "unit0", VerifyCmd: "test -f a.md"}, // unchanged: must be restored to passed
 		{Title: "unit1", VerifyCmd: "test -f c.md"}, // verify_cmd changed: must stay unverified
 	}}}}
@@ -2359,10 +2359,10 @@ func TestDriverReplanPreservesMatchingPassedUnitsResetsOthers(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if !m.Spec.Units[0].Passes {
+	if !m.Plan.Units[0].Passes {
 		t.Fatal("unit0 (title+verify_cmd unchanged) should have been restored to passed")
 	}
-	if m.Spec.Units[1].Passes {
+	if m.Plan.Units[1].Passes {
 		t.Fatal("unit1 (verify_cmd changed) must stay unverified")
 	}
 }
@@ -2377,9 +2377,9 @@ func TestDriverReplanPromptCarriesStallContext(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
 		MaxIterations: 8, ReplanUsed: true, DiscoverNotes: "original findings",
 		Progress: []ProgressNote{{Note: "tried approach A, failed"}},
-		Spec:     Spec{Units: []PlanUnit{{Title: "unit0", Passes: true}}},
+		Plan:     Plan{Units: []PlanUnit{{Title: "unit0", Passes: true}}},
 	})
-	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0"}}}}}
+	runner := &scriptedRunner{plans: []Plan{{Units: []PlanUnit{{Title: "unit0"}}}}}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -2405,7 +2405,7 @@ func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
 		MaxIterations: 8, DiscoverNotes: "original findings",
 	})
-	runner := &scriptedRunner{plans: []Spec{{Units: []PlanUnit{{Title: "unit0"}}}}}
+	runner := &scriptedRunner{plans: []Plan{{Units: []PlanUnit{{Title: "unit0"}}}}}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -2428,7 +2428,7 @@ func TestDriverCodingMissionsAlwaysReview(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root, BaseCommit: base,
-		Spec: Spec{Units: []PlanUnit{{Title: "write code", Artifacts: []string{"main.go"}}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write code", Artifacts: []string{"main.go"}}}},
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
@@ -2483,7 +2483,7 @@ func TestDriverEscalatesRepeatedRework(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(), LastGapFingerprint: fp, StallCount: 1,
-		Spec: Spec{Units: []PlanUnit{{Title: "write summary"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary"}}},
 	})
 	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: findings}}}
 	d := testDriver(store, runner)

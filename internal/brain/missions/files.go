@@ -31,7 +31,7 @@ type FileEntry struct {
 // excluded — they're the exfiltration vector this whole surface has to
 // guard against), skipping .git entirely. declared keys are
 // filepath.Clean'ed workspace-relative paths (the caller derives them
-// from the mission's Spec); ListFiles itself stays decoupled from Spec
+// from the mission's Plan); ListFiles itself stays decoupled from Plan
 // and just looks each entry up. Stops at maxFileEntries and reports
 // truncated=true rather than silently dropping the rest.
 func ListFiles(workRoot string, declared map[string]bool) ([]FileEntry, bool, error) {

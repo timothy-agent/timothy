@@ -1243,7 +1243,7 @@ export interface CreateMissionInput {
   max_iterations?: number
   budget_amount?: number
   budget_currency?: string
-  auto_approve_safe?: boolean
+  auto_approve_tools?: boolean
   // auto_approve_plan: omit (or true) advances straight from plan to
   // generate; false parks the mission awaiting operator approval once
   // the plan phase produces a plan.

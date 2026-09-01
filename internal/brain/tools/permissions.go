@@ -144,7 +144,7 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 		// this classifier's ability to read the command — so opacity
 		// alone no longer forces a human prompt for that session, and
 		// the command reclassifies to safe and falls through to the
-		// mission's own standing grant (AutoApproveSafe's "shell" grant)
+		// mission's own standing grant (AutoApproveTools' "shell" grant)
 		// exactly like any other safe command. Chat sessions never
 		// register a sandbox, so this never changes chat's behavior.
 		// Explicit destructive patterns (rm -rf, git push, chmod -R,

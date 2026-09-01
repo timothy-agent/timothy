@@ -405,7 +405,7 @@ export function MissionForm({
   const [reviewRouteModel, setReviewRouteModel] = useState(initial?.review_route_model ?? '')
   const [budget, setBudget] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('USD')
-  const [autoApproveSafe, setAutoApproveSafe] = useState(true)
+  const [autoApproveTools, setAutoApproveTools] = useState(true)
   const [autoApprovePlan, setAutoApprovePlan] = useState(true)
   const [harness, setHarness] = useState(initial?.harness ?? '')
   const [environment, setEnvironment] = useState(initial?.environment ?? '')
@@ -613,7 +613,7 @@ export function MissionForm({
     setAgentID(schedule.mission_template.agent_id ?? '')
     setLight(schedule.mission_template.light ?? false)
     setLightTouched(true)
-    setAutoApproveSafe(schedule.mission_template.auto_approve_safe ?? true)
+    setAutoApproveTools(schedule.mission_template.auto_approve_tools ?? true)
     setShowAdvanced(hasNonDefaults(schedule.mission_template))
     setRoute(schedule.mission_template.route ?? '')
     setReviewRoute(schedule.mission_template.review_route ?? '')
@@ -772,7 +772,7 @@ export function MissionForm({
       review_route_model: reviewRouteModel || undefined,
       budget_amount: budget ? Number(budget) : undefined,
       budget_currency: budget ? budgetCurrency : undefined,
-      auto_approve_safe: autoApproveSafe,
+      auto_approve_tools: autoApproveTools,
       auto_approve_plan: autoApprovePlan,
       harness: kind === 'coding' ? harness || undefined : undefined,
       environment: kind === 'coding' ? environment || undefined : undefined,
@@ -809,7 +809,7 @@ export function MissionForm({
         max_iterations: maxIterations ? Number(maxIterations) : undefined,
         budget_amount: budget ? Number(budget) : undefined,
         budget_currency: budget ? budgetCurrency : undefined,
-        auto_approve_safe: autoApproveSafe,
+        auto_approve_tools: autoApproveTools,
         harness: kind === 'coding' ? harness || undefined : undefined,
         environment: kind === 'coding' ? environment || undefined : undefined,
         branch_pattern: kind === 'coding' ? branchPattern.trim() || undefined : undefined,
@@ -838,7 +838,7 @@ export function MissionForm({
         max_iterations: maxIterations ? Number(maxIterations) : undefined,
         budget_amount: budget ? Number(budget) : undefined,
         budget_currency: budget ? budgetCurrency : undefined,
-        auto_approve_safe: autoApproveSafe,
+        auto_approve_tools: autoApproveTools,
         harness: schedule.mission_template.kind === 'coding' ? harness || undefined : undefined,
         environment:
           schedule.mission_template.kind === 'coding' ? environment || undefined : undefined,
@@ -1391,8 +1391,8 @@ export function MissionForm({
           <input
             id="mission-auto-approve"
             type="checkbox"
-            checked={autoApproveSafe}
-            onChange={(e) => setAutoApproveSafe(e.target.checked)}
+            checked={autoApproveTools}
+            onChange={(e) => setAutoApproveTools(e.target.checked)}
             className="mt-0.5"
           />
           <span>

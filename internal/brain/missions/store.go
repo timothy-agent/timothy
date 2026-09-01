@@ -45,10 +45,10 @@ func (s *Store) SetHub(hub *Hub) {
 }
 
 const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_reason, pause_message,
-	workspace, branch, base_commit, spec, progress, iteration, max_iterations,
+	workspace, branch, base_commit, plan, progress, iteration, max_iterations,
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
-	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge,
-	pending_permission, auto_approve_safe, auto_approve_plan, last_evidence,
+	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay,
+	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
 	discover_notes, replan_used, schedule_id, session_id, harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow`
@@ -106,22 +106,22 @@ func scanPendingInput(m *Mission, raw []byte) {
 // web UI's mission list/detail views read.
 func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	var (
-		m                                                                         Mission
-		agentID, scheduleID, sessionID, parentMission                             *string
-		phase, status                                                             string
-		pendingPermissionRaw                                                      []byte
-		spec, progress, sourcesRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
-		failureReason                                                             *string
-		workflowRunID                                                             *string
-		permissionTimeoutSeconds                                                  *int
-		pendingInputRaw                                                           []byte
-		flow                                                                      string
+		m                                                            Mission
+		agentID, scheduleID, sessionID, parentMission                *string
+		phase, status                                                string
+		pendingPermissionRaw                                         []byte
+		plan, progress, sourcesRaw, artifactRefsRaw, destinationsRaw []byte
+		failureReason                                                *string
+		workflowRunID                                                *string
+		permissionTimeoutSeconds                                     *int
+		pendingInputRaw                                              []byte
+		flow                                                         string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
-		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
+		&m.Workspace, &m.Branch, &m.BaseCommit, &plan, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
-		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
-		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
+		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
+		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
@@ -131,7 +131,6 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		return Mission{}, err
 	}
 	m.Flow = Flow(flow)
-	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
@@ -170,7 +169,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 			m.PauseMessage = fmt.Sprintf("unrecognized status %q degraded to paused", status)
 		}
 	}
-	_ = json.Unmarshal(spec, &m.Spec)
+	_ = json.Unmarshal(plan, &m.Plan)
 	_ = json.Unmarshal(progress, &m.Progress)
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
@@ -193,21 +192,21 @@ const failureReasonJoin = `
 
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
-		m                                                                         Mission
-		agentID, scheduleID, sessionID, parentMission                             *string
-		phase, status                                                             string
-		pendingPermissionRaw                                                      []byte
-		spec, progress, sourcesRaw, knowledgeRaw, artifactRefsRaw, destinationsRaw []byte
-		workflowRunID                                                             *string
-		permissionTimeoutSeconds                                                  *int
-		pendingInputRaw                                                           []byte
-		flow                                                                      string
+		m                                                            Mission
+		agentID, scheduleID, sessionID, parentMission                *string
+		phase, status                                                string
+		pendingPermissionRaw                                         []byte
+		plan, progress, sourcesRaw, artifactRefsRaw, destinationsRaw []byte
+		workflowRunID                                                *string
+		permissionTimeoutSeconds                                     *int
+		pendingInputRaw                                              []byte
+		flow                                                         string
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
-		&m.Workspace, &m.Branch, &m.BaseCommit, &spec, &progress, &m.Iteration, &m.MaxIterations,
+		&m.Workspace, &m.Branch, &m.BaseCommit, &plan, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
-		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay, &knowledgeRaw,
-		&pendingPermissionRaw, &m.AutoApproveSafe, &m.AutoApprovePlan, &m.LastEvidence,
+		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
+		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
 		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
@@ -216,7 +215,6 @@ func scanMission(row pgx.Row) (Mission, error) {
 		return Mission{}, err
 	}
 	m.Flow = Flow(flow)
-	_ = json.Unmarshal(knowledgeRaw, &m.Knowledge)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
@@ -255,7 +253,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 			m.PauseMessage = fmt.Sprintf("unrecognized status %q degraded to paused", status)
 		}
 	}
-	_ = json.Unmarshal(spec, &m.Spec)
+	_ = json.Unmarshal(plan, &m.Plan)
 	_ = json.Unmarshal(progress, &m.Progress)
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
@@ -270,9 +268,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
 	}
-	spec, err := json.Marshal(m.Spec)
+	plan, err := json.Marshal(m.Plan)
 	if err != nil {
-		return "", fmt.Errorf("missions create spec: %w", err)
+		return "", fmt.Errorf("missions create plan: %w", err)
 	}
 	// sources is NOT NULL; a nil slice marshals to "null", which would
 	// violate that, so a mission with no sources gets "[]" instead.
@@ -284,16 +282,6 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("missions create sources: %w", err)
 	}
-	// knowledge is NOT NULL; a nil slice marshals to "null", so a
-	// mission with no knowledge collections gets "[]" instead.
-	knowledge := m.Knowledge
-	if knowledge == nil {
-		knowledge = []string{}
-	}
-	knowledgeJSON, err := json.Marshal(knowledge)
-	if err != nil {
-		return "", fmt.Errorf("missions create knowledge: %w", err)
-	}
 	var id string
 	budgetCurrency := m.BudgetCurrency
 	if budgetCurrency == "" {
@@ -301,7 +289,7 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	// destinations is NOT NULL; a nil slice marshals to "null", which
 	// would violate that, so a mission with no destinations gets "[]"
-	// instead (same fix as attachments/knowledge above).
+	// instead (same fix as attachments/sources above).
 	destinations := m.Destinations
 	if destinations == nil {
 		destinations = []DestinationEntry{}
@@ -319,9 +307,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, knowledge, spec, session_id, auto_approve_safe, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid, $19, $20, $21, $22, NULLIF($23, '')::uuid, $24, $25, $26, NULLIF($27, '')::uuid, $28, $29, $30) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, knowledgeJSON, spec, m.SessionID, m.AutoApproveSafe, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -454,28 +442,28 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 	return out, rows.Err()
 }
 
-// SetSpec persists the mission's plan — written by the plan phase
-// (initial spec) and by unit verification (flipping a unit's Passes),
-// independent of ApplyTransition since a spec update doesn't always
+// SetPlan persists the mission's plan -- written by the plan phase
+// (initial plan) and by unit verification (flipping a unit's Passes),
+// independent of ApplyTransition since a plan update doesn't always
 // coincide with a phase/status change.
-func (s *Store) SetSpec(ctx context.Context, id string, spec Spec) error {
+func (s *Store) SetPlan(ctx context.Context, id string, plan Plan) error {
 	db, err := s.db.Get()
 	if err != nil {
-		return fmt.Errorf("missions set spec: %w", err)
+		return fmt.Errorf("missions set plan: %w", err)
 	}
-	data, err := json.Marshal(spec)
+	data, err := json.Marshal(plan)
 	if err != nil {
-		return fmt.Errorf("missions set spec: %w", err)
+		return fmt.Errorf("missions set plan: %w", err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE missions SET spec = $2, updated_at = now() WHERE id = $1`, id, data); err != nil {
-		return fmt.Errorf("missions set spec: %w", err)
+	if _, err := db.Exec(ctx, `UPDATE missions SET plan = $2, updated_at = now() WHERE id = $1`, id, data); err != nil {
+		return fmt.Errorf("missions set plan: %w", err)
 	}
 	return nil
 }
 
 // SetArtifactRefs persists the mission's artifact-store refs (see
 // driver.go's copyArtifacts) — bypasses the state machine, same as
-// SetSpec, since it runs from a terminal-transition hook rather than
+// SetPlan, since it runs from a terminal-transition hook rather than
 // an Advance step.
 func (s *Store) SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error {
 	db, err := s.db.Get()
@@ -498,7 +486,7 @@ func (s *Store) SetArtifactRefs(ctx context.Context, id string, refs []ArtifactR
 // SetDestinations persists the mission's destinations entries whole,
 // written by the result phase's step (runResult) after each delivery
 // attempt records its own delivered_at/error onto its entry. Bypasses
-// the state machine, same as SetSpec/SetArtifactRefs: a delivery-state
+// the state machine, same as SetPlan/SetArtifactRefs: a delivery-state
 // update doesn't coincide with a phase/status change.
 func (s *Store) SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error {
 	db, err := s.db.Get()
