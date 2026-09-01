@@ -1561,6 +1561,12 @@ describe('MissionForm: edit mode', () => {
   })
 
   it('picks a new expiry date from the calendar and submits it', async () => {
+    // The calendar defaults its open month to the real current date, not
+    // the fixture's expires_at — fake only Date so "August 15th, 2026"
+    // stays clickable regardless of when the suite actually runs, while
+    // findByRole/waitFor's polling keeps using real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-01T00:00:00Z'))
     vi.mocked(patchSchedule).mockResolvedValue(schedule)
     renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)
 
