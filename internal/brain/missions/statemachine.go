@@ -253,6 +253,11 @@ type StepInput struct {
 	// transition's event payloads so a mission's failure cause is
 	// readable from its event log alone, never only from process logs.
 	Reason string
+	// Provider/Model (issue #507) are who actually served the phase's
+	// turn, read back from the runner's verdict/plan; empty when the
+	// turn failed before any provider answered.
+	Provider string
+	Model    string
 }
 
 // EventDraft is one event Step decided must be appended; the Store

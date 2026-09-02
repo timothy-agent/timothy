@@ -988,6 +988,15 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if agent := d.agentName(ctx, m.AgentID); agent != "" {
 		payload["agent"] = agent
 	}
+	// Provider/model (issue #507): who actually served the turn, from
+	// the runner's own verdict/plan; empty (never guessed) when the
+	// turn failed before any provider answered.
+	if in.Provider != "" {
+		payload["provider"] = in.Provider
+	}
+	if in.Model != "" {
+		payload["model"] = in.Model
+	}
 	if evErr := d.store.AppendEvent(ctx, id, "mission.turn", payload); evErr != nil {
 		d.log.Warn("driver: record turn failed", "mission_id", id, "error", evErr)
 	}
@@ -1271,7 +1280,7 @@ const discoverNotesCap = 8000
 // are stored on the mission (SetDiscoverNotes) so the next phase's own
 // (separate) Advance call reads them back via a fresh Get.
 func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) {
-	notes, err := d.runner.DiscoverSession(ctx, m)
+	notes, provider, model, err := d.runner.DiscoverSession(ctx, m)
 	if err != nil {
 		return StepInput{}, err
 	}
@@ -1283,7 +1292,7 @@ func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) 
 		d.log.Warn("driver: record discover complete failed", "mission_id", m.ID, "error", err)
 	}
 	d.recreateSandboxIfEnvironmentChanged(ctx, m)
-	return StepInput{Input: InputPhaseComplete}, nil
+	return StepInput{Input: InputPhaseComplete, Provider: provider, Model: model}, nil
 }
 
 // recreateSandboxIfEnvironmentChanged removes the mission's sandbox
@@ -1324,7 +1333,7 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 		if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_infeasible", map[string]any{"reason": plan.InfeasibleReason}); err != nil {
 			return StepInput{}, fmt.Errorf("driver: record plan infeasible: %w", err)
 		}
-		return StepInput{Input: InputPlanInfeasible, Reason: plan.InfeasibleReason}, nil
+		return StepInput{Input: InputPlanInfeasible, Reason: plan.InfeasibleReason, Provider: plan.Provider, Model: plan.Model}, nil
 	}
 	planCreatedPayload := map[string]any{"units": len(plan.Units)}
 	if len(plan.Assumptions) > 0 {
@@ -1343,7 +1352,7 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	if err := d.store.SetPlan(ctx, m.ID, plan); err != nil {
 		return StepInput{}, err
 	}
-	return StepInput{Input: InputPhaseComplete}, nil
+	return StepInput{Input: InputPhaseComplete, Provider: plan.Provider, Model: plan.Model}, nil
 }
 
 // replanNotes extends the planner's discoverNotes input with what
@@ -1499,21 +1508,22 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": reason, "verified": false}); err != nil {
 				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 			}
-			return StepInput{Input: InputReviewApprove}, nil
+			return StepInput{Input: InputReviewApprove, Provider: verdict.Provider, Model: verdict.Model}, nil
 		}
 		if in, ok := d.trySkipReview(ctx, m, verdict.SeenURLs); ok {
+			in.Provider, in.Model = verdict.Provider, verdict.Model
 			return in, nil
 		}
-		return StepInput{Input: InputPhaseComplete}, nil
+		return StepInput{Input: InputPhaseComplete, Provider: verdict.Provider, Model: verdict.Model}, nil
 	case "blocked":
-		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question}, nil
+		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question, Provider: verdict.Provider, Model: verdict.Model}, nil
 	default: // "retry" or anything unrecognized
 		if wt := m.WorktreePath(); wt != "" {
 			if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
 				d.log.Warn("driver: rollback failed", "mission_id", m.ID, "error", err)
 			}
 		}
-		in := StepInput{Input: InputWorkerRetry, Reason: truncate(verdict.Analysis, 500)}
+		in := StepInput{Input: InputWorkerRetry, Reason: truncate(verdict.Analysis, 500), Provider: verdict.Provider, Model: verdict.Model}
 		if verdict.Forced {
 			// Neither a tool call nor a text-form sentinel (runner.go's
 			// extractTextSentinel) could be read from this turn — a
@@ -1710,14 +1720,15 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 					d.log.Warn("driver: record verify-failure note failed", "mission_id", m.ID, "error", err)
 				}
 				fp := fmt.Sprintf("verify_failed:unit_%d", vf.unit)
-				return StepInput{Input: InputReviewRework, GapFingerprint: fp}, nil
+				return StepInput{Input: InputReviewRework, GapFingerprint: fp, Provider: verdict.Provider, Model: verdict.Model}, nil
 			}
 			return StepInput{Input: InputReviewInfraFailure}, err
 		}
 		if in, regressed := d.verify.checkRegressions(ctx, m); regressed {
+			in.Provider, in.Model = verdict.Provider, verdict.Model
 			return in, nil
 		}
-		return StepInput{Input: InputReviewApprove}, nil
+		return StepInput{Input: InputReviewApprove, Provider: verdict.Provider, Model: verdict.Model}, nil
 	}
 	fp := GapFingerprint(verdict.Findings)
 	if fp != "" && fp == m.LastGapFingerprint {
@@ -1727,7 +1738,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		// with fresh eyes instead of re-asserting its previous verdict.
 		delete(d.gatekeepers, m.ID)
 	}
-	return StepInput{Input: InputReviewRework, GapFingerprint: fp, Reason: truncate(reviewReason(verdict.Findings), 500)}, nil
+	return StepInput{Input: InputReviewRework, GapFingerprint: fp, Reason: truncate(reviewReason(verdict.Findings), 500), Provider: verdict.Provider, Model: verdict.Model}, nil
 }
 
 // reviewReason flattens findings into one line for event payloads.

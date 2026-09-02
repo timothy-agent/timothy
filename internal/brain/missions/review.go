@@ -189,6 +189,10 @@ type Finding struct {
 type ReviewVerdict struct {
 	Approved bool
 	Findings []Finding
+	// Provider/Model (issue #507) are who served the review turn; set by
+	// RunReview after parsing.
+	Provider string
+	Model    string
 }
 
 // parseReviewVerdict decodes a review_verdict tool call's arguments.

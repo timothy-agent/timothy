@@ -403,7 +403,9 @@ func (f *fakeNative) RunReview(ctx context.Context, m Mission, packet ReviewPack
 func (f *fakeNative) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	return Plan{}, nil
 }
-func (f *fakeNative) DiscoverSession(ctx context.Context, m Mission) (string, error) { return "", nil }
+func (f *fakeNative) DiscoverSession(ctx context.Context, m Mission) (string, string, string, error) {
+	return "", "", "", nil
+}
 
 func (f *fakeNative) callCount() int {
 	f.mu.Lock()
@@ -488,6 +490,35 @@ func TestDelegatedRunWorker_HappyPath(t *testing.T) {
 	}
 	if led.entries[0].Purpose != "executor" || led.entries[0].Agent != "mission-worker" {
 		t.Fatalf("ledger entry purpose/agent = %q/%q, want executor/mission-worker", led.entries[0].Purpose, led.entries[0].Agent)
+	}
+}
+
+// TestDelegatedRunWorker_HappyPath_VerdictCarriesServedProviderAndModel
+// covers issue #507: a delegated turn's verdict reports the executor's
+// own chain entry as who served it (the same values executor.spawned
+// already carries).
+func TestDelegatedRunWorker_HappyPath_VerdictCarriesServedProviderAndModel(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedChunk = 40
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	led := &fakeLedger{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, led)
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Provider != entry.ProviderName {
+		t.Fatalf("verdict.Provider = %q, want %q", verdict.Provider, entry.ProviderName)
+	}
+	if verdict.Model != entry.Model {
+		t.Fatalf("verdict.Model = %q, want %q", verdict.Model, entry.Model)
 	}
 }
 
@@ -1525,7 +1556,7 @@ func TestDelegatedRunner_PassesThroughNonWorkerSessions(t *testing.T) {
 	r := newTestDelegatedRunner(native, scriptedResolver(nil, nil), scriptedCred("", nil), newFakeSandbox(), nil, nil, nil)
 	m := testMission("m1", t.TempDir())
 
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {

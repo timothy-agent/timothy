@@ -181,7 +181,7 @@ func (r *delegatedRunner) effectiveRunBudget(ctx context.Context) time.Duration 
 	return r.runBudget
 }
 
-func (r *delegatedRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
+func (r *delegatedRunner) DiscoverSession(ctx context.Context, m Mission) (string, string, string, error) {
 	return r.native.DiscoverSession(ctx, m)
 }
 
@@ -881,6 +881,15 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 			parseKind = "none"
 			verdict = forcedRetryVerdict("executor finished without a status report")
 		}
+	}
+	// issue #507: the executor did produce a result (or a text-form
+	// sentinel), so the entry that ran it is who served the turn.
+	// reportedModel (the harness's own claimed model) takes precedence
+	// over entry.Model, same precedence recordLedger already uses.
+	verdict.Provider = entry.ProviderName
+	verdict.Model = entry.Model
+	if st.reportedModel != "" {
+		verdict.Model = st.reportedModel
 	}
 
 	authFailed := st.resultEvent.Err != "" && isAuthFailure(st.resultEvent.Err)

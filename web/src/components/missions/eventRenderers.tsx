@@ -58,10 +58,18 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return <span className={approved ? 'text-green-400' : 'text-amber-400'}>Review verdict: {String(decision ?? '?')}</span>
   },
   'mission.turn': (p) => {
-    const { phase, duration_ms, ok, reason, route, agent } = p as MissionTurnPayload
+    const { phase, duration_ms, ok, reason, route, agent, provider, model } = p as MissionTurnPayload
     const base = `Turn (${phase}): ${ok ? 'ok' : 'failed'} · ${formatDuration(duration_ms)}`
-    const context = [agent, route].filter(Boolean).join(' · ')
-    const contextEl = context && <span className="ml-1 text-zinc-500">{context}</span>
+    // Served model in place of route when known (provider/route stay
+    // reachable via title); falls back to the agent · route form for
+    // older events with no model recorded.
+    const context = model ? [agent, model].filter(Boolean).join(' · ') : [agent, route].filter(Boolean).join(' · ')
+    const contextTitle = model ? [provider, route].filter(Boolean).join(' / ') : undefined
+    const contextEl = context && (
+      <span className="ml-1 text-zinc-500" title={contextTitle || undefined}>
+        {context}
+      </span>
+    )
     if (ok || !reason) {
       return (
         <span className={ok ? undefined : 'text-red-400'}>
