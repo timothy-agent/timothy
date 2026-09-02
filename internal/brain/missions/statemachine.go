@@ -158,8 +158,12 @@ const (
 	InputReviewApprove      Input = "review_approve"
 	InputReviewRework       Input = "review_rework"
 	InputReviewInfraFailure Input = "review_infra_failure"
-	InputResume             Input = "resume"
-	InputCancel             Input = "cancel"
+	// InputReviewBudget parks a mission whose review turns' input tokens
+	// reached the operator's review token ceiling (D-097, issue #527),
+	// before the round's model call.
+	InputReviewBudget Input = "review_budget"
+	InputResume       Input = "resume"
+	InputCancel       Input = "cancel"
 	// InputPlanInfeasible fires when the planner reports the goal cannot
 	// be achieved as stated (D-077); valid only in PhasePlan, fails the
 	// mission instead of letting a rewritten goal reach generate.
@@ -423,6 +427,13 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 		return Transition{
 			Next:   withPause(s, PauseInfra),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+		}
+	case InputReviewBudget:
+		return Transition{
+			Next: withPause(s, PauseBudget),
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
+				"reason": string(PauseBudget), "detail": "review_tokens", "message": in.Reason,
+			}}},
 		}
 	case InputResultComplete:
 		return stepResultComplete(s)

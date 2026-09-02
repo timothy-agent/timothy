@@ -900,6 +900,19 @@ export function MissionDetail() {
               {usage.cache_read_tokens ? ` · ${compact(usage.cache_read_tokens)} cached` : ''}
             </Badge>
           )}
+          {usage && usage.review_input_tokens ? (
+            <Badge
+              variant="secondary"
+              title={
+                usage.review_token_ceiling
+                  ? 'Input tokens spent on review turns against the per-mission review token ceiling'
+                  : 'Input tokens spent on review turns (no ceiling set)'
+              }
+            >
+              review {compact(usage.review_input_tokens)}
+              {usage.review_token_ceiling ? ` / ${compact(usage.review_token_ceiling)}` : ''} tok
+            </Badge>
+          ) : null}
           <Badge variant="secondary" title="Time spent actively processing">
             proc {formatDuration(processingMs)}
           </Badge>

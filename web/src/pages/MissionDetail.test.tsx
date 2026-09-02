@@ -192,6 +192,38 @@ describe('MissionDetail spend', () => {
     expect(await screen.findByText('120.0k→8.0k tok · 90.0k cached')).toBeTruthy()
   })
 
+  it('shows review input tokens against the ceiling', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      review_input_tokens: 40_000,
+      review_token_ceiling: 1_500_000,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    expect(await screen.findByText('review 40.0k / 1.5M tok')).toBeTruthy()
+  })
+
+  it('shows review input tokens alone when the ceiling is disabled', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      review_input_tokens: 40_000,
+      review_token_ceiling: 0,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    expect(await screen.findByText('review 40.0k tok')).toBeTruthy()
+  })
+
   it('uses the converted figure for budget percent when spend is in another currency', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 2, budget_currency: 'BDT' })
     vi.mocked(missionUsage).mockResolvedValue({

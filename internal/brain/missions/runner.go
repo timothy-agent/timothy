@@ -46,12 +46,19 @@ var ErrPromptTooLong = errors.New("mission turn rejected: prompt exceeds the mod
 // mistaking the missing sentinel for a forced failure.
 var ErrAskedUser = errors.New("mission turn parked on ask_user")
 
-// Reviewer tool-loop caps (D-093): step ceiling and per-result bytes
-// for RunReview's loop.Request. Go constants, never prompt text.
+// Reviewer tool-loop caps (D-093, D-097): step ceiling, per-result
+// bytes and executed tool calls for RunReview's loop.Request. Go
+// constants, never prompt text.
 const (
 	reviewMaxSteps      = 4
 	reviewToolResultCap = 4096
+	reviewMaxToolCalls  = 2
 )
+
+// reviewerAgent tags every reviewer turn's ledger row (loop.Request
+// Agent), which is how Store.ReviewInputTokens tells review turns from
+// worker turns (D-097).
+const reviewerAgent = "mission-reviewer"
 
 // Runner executes ONE session (worker turn, reviewer turn, or planner
 // turn) and owns NO state-transition logic: it reports what happened,
@@ -1320,7 +1327,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		SessionID:    m.SessionID,
 		Route:        reviewRoute(m),
 		ModelHint:    reviewModel(m),
-		Agent:        "mission-reviewer",
+		Agent:        reviewerAgent,
 		MissionID:    m.ID,
 		System:       system,
 		Messages:     messages,
@@ -1335,6 +1342,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		// agent defaults.
 		MaxSteps:      reviewMaxSteps,
 		ToolResultCap: reviewToolResultCap,
+		MaxToolCalls:  reviewMaxToolCalls,
 	}
 	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseProve)
 	text, args := res.text, res.sentinelArgs

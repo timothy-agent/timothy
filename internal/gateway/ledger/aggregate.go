@@ -289,10 +289,14 @@ type MissionUsage struct {
 	// CacheReadTokens is the input read from the provider's prompt
 	// cache (D-093): shown next to input_tokens so the caching
 	// breakpoints' effect is visible per mission.
-	CacheReadTokens  int64       `json:"cache_read_tokens"`
-	Requests         int64       `json:"requests"`
-	UnpricedRequests int64       `json:"unpriced_requests"`
-	Models           []ModelUsed `json:"models"`
+	CacheReadTokens int64 `json:"cache_read_tokens"`
+	// ReviewInputTokens is the input of the mission's reviewer turns
+	// (rows tagged agent=reviewerAgent), shown against the review token
+	// ceiling (D-097).
+	ReviewInputTokens int64       `json:"review_input_tokens"`
+	Requests          int64       `json:"requests"`
+	UnpricedRequests  int64       `json:"unpriced_requests"`
+	Models            []ModelUsed `json:"models"`
 }
 
 // ModelUsed is one provider/model/harness-ness triple actually invoked
@@ -311,6 +315,10 @@ type ModelUsed struct {
 	LastUsed time.Time `json:"last_used"`
 }
 
+// reviewerAgent is the agent tag brain's mission reviewer turns carry
+// (internal/brain/missions/runner.go).
+const reviewerAgent = "mission-reviewer"
+
 func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsage, error) {
 	db, err := a.db.Get()
 	if err != nil {
@@ -325,10 +333,11 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	}
 	err = db.QueryRow(ctx, `SELECT
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(input_tokens) FILTER (WHERE agent = $2), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE cost IS NULL)
 		FROM cost_ledger
-		WHERE mission_id = $1 AND `+notTest, missionID).
-		Scan(&m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.Requests, &m.UnpricedRequests)
+		WHERE mission_id = $1 AND `+notTest, missionID, reviewerAgent).
+		Scan(&m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.ReviewInputTokens, &m.Requests, &m.UnpricedRequests)
 	if err != nil {
 		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
 	}

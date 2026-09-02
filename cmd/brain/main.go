@@ -1069,6 +1069,8 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetGitBranchPattern(flags.GitBranchPattern)
 	driver.SetGitCommitStyle(flags.GitCommitStyle)
 	driver.SetLocation(flags.Location)
+	driver.SetReviewWindow(missions.GatewayReviewWindow(gwc.ResolveRoute, gwc.ModelWindows))
+	driver.SetReviewTokenCeiling(flags.ReviewTokenCeiling)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 	driver.SetNameMission(chat.TitleOverGateway(gwc, log))

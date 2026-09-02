@@ -2478,3 +2478,65 @@ func TestAgentEndTurnToolsErrorContinues(t *testing.T) {
 		t.Fatalf("done events = %d, want exactly 1", len(got))
 	}
 }
+
+// TestAgentRequestMaxToolCallsRefusesPastCap pins D-097: with
+// MaxToolCalls 2, the third tool call of a turn is not executed and
+// comes back as an error result carrying toolCallCapMessage, while an
+// end-turn (sentinel) call past the cap still runs and ends the turn.
+// 0 leaves the count unbounded.
+func TestAgentRequestMaxToolCallsRefusesPastCap(t *testing.T) {
+	t.Parallel()
+	sentinel := &tools.Tool{
+		Name:        "review_verdict",
+		Description: "records the verdict",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Execute:     func(context.Context, json.RawMessage) (string, error) { return "recorded", nil },
+	}
+	cases := []struct {
+		name          string
+		maxCalls      int
+		wantExecuted  int
+		wantThirdText string
+	}{
+		{"cap of 2 refuses the third", 2, 3, toolCallCapMessage}, // 2 echo + sentinel
+		{"zero runs every call", 0, 4, "echo: call 3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+				toolCallStep([2]string{"echo", `{"text":"call 1"}`}),
+				toolCallStep([2]string{"echo", `{"text":"call 2"}`}),
+				toolCallStep([2]string{"echo", `{"text":"call 3"}`}),
+				toolCallStep([2]string{"review_verdict", `{}`}),
+			}}
+			a, _, events, _ := testAgent(t, gw, sentinel)
+			ch, err := a.Start(t.Context(), Request{
+				SessionID: "s1", Route: "coding",
+				Messages:     []provider.Message{{Role: "user", Content: "go"}},
+				EndTurnTools: []string{"review_verdict"},
+				MaxToolCalls: tc.maxCalls,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs := collect(t, ch)
+			if len(ofType(evs, stream.EventDone)) != 1 {
+				t.Fatal("no clean terminal event")
+			}
+			if len(gw.requests) != 4 {
+				t.Fatalf("gateway calls = %d, want 4", len(gw.requests))
+			}
+			if len(events.kinds) != tc.wantExecuted {
+				t.Fatalf("tool executions persisted = %d, want %d", len(events.kinds), tc.wantExecuted)
+			}
+			msgs := gw.requests[3].Messages
+			third := msgs[len(msgs)-1].ToolResult
+			if third == nil || third.Content != tc.wantThirdText {
+				t.Fatalf("third call's result = %+v, want content %q", third, tc.wantThirdText)
+			}
+			if tc.maxCalls > 0 && !third.IsError {
+				t.Fatal("refused call's result must be an error so the model keeps full effort")
+			}
+		})
+	}
+}

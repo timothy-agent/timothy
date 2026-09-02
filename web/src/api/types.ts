@@ -391,6 +391,11 @@ export interface MissionUsage {
   // cache_read_tokens is input served from the provider's prompt cache
   // (D-093), shown next to input_tokens on the cost card.
   cache_read_tokens?: number
+  // review_input_tokens is the input spent on reviewer turns, shown
+  // against review_token_ceiling (the mission_review_token_ceiling
+  // setting, 0 = no ceiling) on the cost card (D-097).
+  review_input_tokens?: number
+  review_token_ceiling?: number
   requests: number
   unpriced_requests: number
   models: ModelUsed[]

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 )
 
 // fakeStore is an in-memory driverStore for scripting Driver scenarios
@@ -30,6 +31,8 @@ type fakeStore struct {
 	// zero spend in every currency, matching a mission with no ledger
 	// rows yet.
 	spend map[string]MissionSpend
+	// reviewTokens scripts ReviewInputTokens' return per mission id.
+	reviewTokens map[string]int64
 	// applyTransitionErr, when set, makes ApplyTransition return this
 	// error instead of writing — scripts the real Store's terminal-row
 	// guard (ErrTerminal) without a Postgres pool.
@@ -37,12 +40,18 @@ type fakeStore struct {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{missions: map[string]Mission{}, events: map[string][]Event{}, seq: map[string]int64{}, spend: map[string]MissionSpend{}}
+	return &fakeStore{missions: map[string]Mission{}, events: map[string][]Event{}, seq: map[string]int64{}, spend: map[string]MissionSpend{}, reviewTokens: map[string]int64{}}
 }
 
 // Spend returns the scripted MissionSpend for id, or a zero-value
 // (empty ByCurrency) if the test never set one — mirrors a real
 // mission with no cost_ledger rows.
+func (f *fakeStore) ReviewInputTokens(ctx context.Context, missionID string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reviewTokens[missionID], nil
+}
+
 func (f *fakeStore) Spend(ctx context.Context, missionID string) (MissionSpend, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -3755,5 +3764,106 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 	}
 	if n := countEvents(store, "m1", "mission.review_verdict"); n != 1 {
 		t.Fatalf("review_verdict events = %d, want exactly 1", n)
+	}
+}
+
+// TestDriverReviewTokenCeiling pins D-097: before a review round the
+// driver sums the mission's reviewer-turn input tokens from the ledger
+// and parks on budget with detail review_tokens at or above the
+// ceiling, without calling the reviewer; below it, or with the ceiling
+// disabled (0) or unwired, the round runs.
+func TestDriverReviewTokenCeiling(t *testing.T) {
+	tests := []struct {
+		name     string
+		used     int64
+		ceiling  int64
+		wired    bool
+		wantPark bool
+	}{
+		{"below the ceiling reviews", 1_499_999, 1_500_000, true, false},
+		{"at the ceiling parks", 1_500_000, 1_500_000, true, true},
+		{"above the ceiling parks", 2_000_000, 1_500_000, true, true},
+		{"zero disables the ceiling", 5_000_000, 0, true, false},
+		{"unwired ceiling reviews", 5_000_000, 0, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.put("m1", Mission{
+				ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
+				Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
+			})
+			store.reviewTokens["m1"] = tc.used
+			runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}}
+			d := testDriver(store, runner)
+			if tc.wired {
+				d.SetReviewTokenCeiling(func(context.Context) int64 { return tc.ceiling })
+			}
+			if _, err := d.Advance(context.Background(), "m1"); err != nil {
+				t.Fatalf("Advance: %v", err)
+			}
+			m, _ := store.Get(context.Background(), "m1")
+			if tc.wantPark {
+				if len(runner.reviewCalls) != 0 {
+					t.Fatalf("RunReview called %d times, want none past the ceiling", len(runner.reviewCalls))
+				}
+				if m.Status != StatusPaused || m.PauseReason != PauseBudget {
+					t.Fatalf("mission = status %q pause_reason %q, want paused/budget", m.Status, m.PauseReason)
+				}
+				if got := pausedDetail(t, store, "m1"); got != "review_tokens" {
+					t.Fatalf("paused detail = %q, want review_tokens", got)
+				}
+				return
+			}
+			if len(runner.reviewCalls) != 1 {
+				t.Fatalf("RunReview called %d times, want 1", len(runner.reviewCalls))
+			}
+			if m.Status == StatusPaused {
+				t.Fatalf("mission paused (%s) below the ceiling", m.PauseReason)
+			}
+		})
+	}
+}
+
+// TestGatewayReviewWindow pins the D-097 window lookup: a pinned
+// "provider/model" hint resolves by its model id, an unpinned route by
+// its first usable chain entry, and a catalog miss or gateway error is
+// 0 (unknown), never a guess.
+func TestGatewayReviewWindow(t *testing.T) {
+	windows := func(context.Context) (map[string]int, error) {
+		return map[string]int{"big": 1_000_000, "mid": 200_000}, nil
+	}
+	resolve := func(_ context.Context, route, _ string) (*gwclient.ResolvedRoute, error) {
+		switch route {
+		case "review":
+			return &gwclient.ResolvedRoute{Entries: []gwclient.ResolvedRouteEntry{
+				{Model: "dead", Usable: false}, {Model: "mid", Usable: true}, {Model: "big", Usable: true},
+			}}, nil
+		case "unknown-model":
+			return &gwclient.ResolvedRoute{Entries: []gwclient.ResolvedRouteEntry{{Model: "nope", Usable: true}}}, nil
+		}
+		return nil, errors.New("no such route")
+	}
+	fn := GatewayReviewWindow(resolve, windows)
+	tests := []struct {
+		name, route, model string
+		want               int
+	}{
+		{"pinned model wins", "review", "Anthropic/big", 1_000_000},
+		{"bare model hint", "review", "mid", 200_000},
+		{"first usable chain entry", "review", "", 200_000},
+		{"catalog miss is unknown", "unknown-model", "", 0},
+		{"resolve error is unknown", "missing", "", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fn(context.Background(), tc.route, tc.model); got != tc.want {
+				t.Fatalf("window(%q, %q) = %d, want %d", tc.route, tc.model, got, tc.want)
+			}
+		})
+	}
+	failing := GatewayReviewWindow(resolve, func(context.Context) (map[string]int, error) { return nil, errors.New("down") })
+	if got := failing(context.Background(), "review", "big"); got != 0 {
+		t.Fatalf("window with the catalog down = %d, want 0", got)
 	}
 }

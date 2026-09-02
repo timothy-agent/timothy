@@ -1483,6 +1483,22 @@ func (s *Store) Spend(ctx context.Context, missionID string) (MissionSpend, erro
 	return out, rows.Err()
 }
 
+// ReviewInputTokens sums the input tokens of a mission's reviewer turns
+// (ledger rows tagged agent=mission-reviewer by runner.go's RunReview),
+// the figure the review token ceiling is checked against (D-097).
+func (s *Store) ReviewInputTokens(ctx context.Context, missionID string) (int64, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("missions review input tokens: %w", err)
+	}
+	var total int64
+	if err := db.QueryRow(ctx, `SELECT COALESCE(SUM(input_tokens), 0) FROM cost_ledger
+		WHERE mission_id = $1 AND agent = $2`, missionID, reviewerAgent).Scan(&total); err != nil {
+		return 0, fmt.Errorf("missions review input tokens: %w", err)
+	}
+	return total, nil
+}
+
 // BackoffPausedMission is PausedByReason's row: just enough to drive
 // the auto-resume ladders (sweep.go's autoResumeBackoff and
 // autoResumeInfra) without the cost of a full Mission scan.

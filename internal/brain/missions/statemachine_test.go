@@ -273,6 +273,13 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseInfra},
 		},
 		{
+			name:  "review_budget pauses with budget reason (D-097)",
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, Iteration: 2},
+			input: StepInput{Input: InputReviewBudget, Reason: "review input tokens 1500100 reached the ceiling 1500000"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseBudget, Iteration: 2},
+		},
+		{
 			name:  "resume from paused clears the pause reason and goes idle",
 			state: StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseBackoff, Iteration: 3, ConsecutiveFailures: 2},
 			input: StepInput{Input: InputResume},

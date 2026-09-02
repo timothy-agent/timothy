@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +30,85 @@ const (
 	reviewArtifactFileCap = 8 << 10
 	// reviewListingCap bounds the workspace file listing.
 	reviewListingCap = 2 << 10
+
+	// Review packet byte budget (D-097, issue #527): the resolved
+	// model's catalog window (reviewFallbackWindow when unknown) times
+	// reviewBytesPerToken, minus reviewByteMargin for the system
+	// prompt, tool definitions and the reviewer's own tool loop.
+	reviewFallbackWindow = 128_000
+	reviewBytesPerToken  = 3.5
+	reviewByteMargin     = 128 << 10
+	// reviewDiffFloor is the smallest diff fitReviewPacket cuts to
+	// before it starts on the artifacts.
+	reviewDiffFloor = baselineDiffCap / 4
 )
+
+// reviewByteBudget derives the packet byte budget from a model's
+// context window in tokens; window <= 0 means unknown.
+func reviewByteBudget(window int) int {
+	if window <= 0 {
+		window = reviewFallbackWindow
+	}
+	return int(float64(window)*reviewBytesPerToken) - reviewByteMargin
+}
+
+// reviewShrink records what fitReviewPacket did.
+type reviewShrink struct {
+	Budget       int
+	Rendered     int
+	DiffCut      int
+	ArtifactsCut int
+}
+
+// cut reports whether anything was removed.
+func (r reviewShrink) cut() bool { return r.DiffCut > 0 || r.ArtifactsCut > 0 }
+
+// fitReviewPacket shrinks p's rendered form to budget bytes: the diff
+// first (file boundary cut, never below reviewDiffFloor), then the
+// artifact and finding-file contents, then the diff again down to
+// nothing. Criteria, findings and every other section stay untouched.
+// The rendered size is re-measured after every cut so the truncation
+// markers themselves are accounted for.
+func fitReviewPacket(p ReviewPacket, budget int) (ReviewPacket, reviewShrink) {
+	r := reviewShrink{Budget: budget, Rendered: len(renderReviewContent(p))}
+	if r.Rendered <= budget {
+		return p, r
+	}
+	excess := func() int { return len(renderReviewContent(p)) - budget }
+	cutDiff := func(floor int) {
+		for over := excess(); over > 0 && len(p.Diff) > floor; over = excess() {
+			before := len(p.Diff)
+			p.Diff = truncateDiff(p.Diff, max(before-over, floor))
+			if len(p.Diff) >= before {
+				return
+			}
+			r.DiffCut += before - len(p.Diff)
+		}
+	}
+	cutFiles := func(files *map[string]string) {
+		if excess() <= 0 || len(*files) == 0 {
+			return
+		}
+		out := maps.Clone(*files)
+		*files = out
+		for _, path := range slices.Sorted(maps.Keys(out)) {
+			over := excess()
+			if over <= 0 {
+				return
+			}
+			content := out[path]
+			marker := fmt.Sprintf("\n[truncated: file is %d bytes, review byte budget reached]", len(content))
+			keep := lastNewlineBefore([]byte(content), max(len(content)-over-len(marker), 0))
+			out[path] = content[:keep] + marker
+			r.ArtifactsCut += len(content) - keep
+		}
+	}
+	cutDiff(min(len(p.Diff), reviewDiffFloor))
+	cutFiles(&p.Artifacts)
+	cutFiles(&p.Files)
+	cutDiff(0)
+	return p, r
+}
 
 // ReviewPacket is everything a reviewer turn judges: the units under
 // review with their acceptance criteria and harness evidence (D-095),

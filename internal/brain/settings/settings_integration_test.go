@@ -163,6 +163,33 @@ func TestRuntimeValueSettings(t *testing.T) {
 		t.Fatalf("clear run budget: %v", err)
 	}
 
+	// D-097: review token ceiling defaults to 1.5M, accepts 0 (disabled),
+	// rejects negatives and non-numbers.
+	if got := s.ReviewTokenCeiling(ctx); got != DefaultReviewTokenCeiling {
+		t.Fatalf("ReviewTokenCeiling default = %d, want %d", got, DefaultReviewTokenCeiling)
+	}
+	if err := s.SetValue(ctx, ValueReviewTokenCeiling, "-1"); err == nil {
+		t.Fatal("negative review token ceiling accepted")
+	}
+	if err := s.SetValue(ctx, ValueReviewTokenCeiling, "lots"); err == nil {
+		t.Fatal("non-numeric review token ceiling accepted")
+	}
+	if err := s.SetValue(ctx, ValueReviewTokenCeiling, "0"); err != nil {
+		t.Fatalf("SetValue review token ceiling 0: %v", err)
+	}
+	if got := s.ReviewTokenCeiling(ctx); got != 0 {
+		t.Fatalf("ReviewTokenCeiling = %d, want 0 (disabled)", got)
+	}
+	if err := s.SetValue(ctx, ValueReviewTokenCeiling, "250000"); err != nil {
+		t.Fatalf("SetValue review token ceiling: %v", err)
+	}
+	if got := s.ReviewTokenCeiling(ctx); got != 250_000 {
+		t.Fatalf("ReviewTokenCeiling = %d, want 250000", got)
+	}
+	if err := s.SetValue(ctx, ValueReviewTokenCeiling, ""); err != nil {
+		t.Fatalf("clear review token ceiling: %v", err)
+	}
+
 	if err := s.SetValue(ctx, ValueTokenBudget, "120000"); err != nil {
 		t.Fatalf("SetValue budget: %v", err)
 	}

@@ -101,7 +101,16 @@ const (
 	// stop a broken run, so this stays large enough that a healthy
 	// multi-hour coding mission never hits it.
 	ValueExecutorRunBudgetMinutes = "executor_run_budget_minutes"
+	// ValueReviewTokenCeiling caps the input tokens one mission may spend
+	// on review turns (missions/driver.go, D-097, issue #527), summed
+	// from the cost ledger before every review round; "" (the default)
+	// defers to DefaultReviewTokenCeiling, "0" disables the ceiling.
+	ValueReviewTokenCeiling = "mission_review_token_ceiling"
 )
+
+// DefaultReviewTokenCeiling is the per-mission review input token cap
+// when ValueReviewTokenCeiling is unset.
+const DefaultReviewTokenCeiling int64 = 1_500_000
 
 // DefaultExecutorRunBudget is the wall-clock cap a delegated executor
 // run gets when ValueExecutorRunBudgetMinutes is unset.
@@ -115,7 +124,7 @@ var knownValueKeys = map[string]bool{
 	ValueGitBranchPattern: true, ValueGitCommitStyle: true,
 	ValueWebBaseURL: true, ValueTimezone: true,
 	ValuePermissionTimeoutSeconds: true, ValueAskTimeoutSeconds: true,
-	ValueExecutorRunBudgetMinutes: true,
+	ValueExecutorRunBudgetMinutes: true, ValueReviewTokenCeiling: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -229,6 +238,18 @@ func (s *Store) ExecutorRunBudget(ctx context.Context) time.Duration {
 		}
 	}
 	return DefaultExecutorRunBudget
+}
+
+// ReviewTokenCeiling parses the per-mission review input token cap:
+// unset or unparsable falls back to DefaultReviewTokenCeiling, 0
+// disables the ceiling.
+func (s *Store) ReviewTokenCeiling(ctx context.Context) int64 {
+	if v := s.Value(ctx, ValueReviewTokenCeiling); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return DefaultReviewTokenCeiling
 }
 
 // DefaultCurrency returns the configured default currency, falling
@@ -377,7 +398,7 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
 	}
-	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds) && value != "" {
+	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds || key == ValueReviewTokenCeiling) && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer or empty", key)
 		}

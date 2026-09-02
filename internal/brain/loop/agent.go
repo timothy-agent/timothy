@@ -341,7 +341,16 @@ type Request struct {
 	// the model sees it. The audit trail and offload store keep the
 	// full result; only the transcript is capped.
 	ToolResultCap int
+
+	// MaxToolCalls, when > 0, caps how many tool calls this turn executes
+	// (D-097): every call past the cap gets toolCallCapMessage as an
+	// error result instead of running. EndTurnTools never count.
+	MaxToolCalls int
 }
+
+// toolCallCapMessage is the result a call past Request.MaxToolCalls
+// receives.
+const toolCallCapMessage = "tool call limit for this turn reached: conclude now with what you already have"
 
 // Start launches the loop and returns its event stream. The channel
 // follows the stream package's terminal contract: exactly one done,
@@ -444,6 +453,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	var providerState json.RawMessage
 	effort := ""
 	toolCallCount := 0
+	executedCalls := 0
 	coerced := false
 	var repeats tools.RepeatGuard
 	stuck := false
@@ -670,7 +680,33 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 				}
 			}
 		}
-		results := a.executeAll(ctx, exec, req.SessionID, calls, toolNames, req.Unattended, emit)
+		// D-097: calls past MaxToolCalls are refused without running;
+		// an end-turn (sentinel) call always runs.
+		var run []provider.ToolCall
+		refused := make([]bool, len(calls))
+		for i, c := range calls {
+			if req.MaxToolCalls > 0 && !endTurnTools[c.Name] {
+				if executedCalls >= req.MaxToolCalls {
+					refused[i] = true
+					emit(stream.StreamEvent{Type: stream.EventToolResult, ToolResult: &stream.ToolResultEvent{
+						ID: c.ID, Name: c.Name, Status: "error", Digest: toolCallCapMessage, Args: c.Input,
+					}})
+					continue
+				}
+				executedCalls++
+			}
+			run = append(run, c)
+		}
+		executed := a.executeAll(ctx, exec, req.SessionID, run, toolNames, req.Unattended, emit)
+		results := make([]provider.ToolResult, 0, len(calls))
+		for i, c := range calls {
+			if refused[i] {
+				results = append(results, provider.ToolResult{ID: c.ID, Content: toolCallCapMessage, IsError: true})
+				continue
+			}
+			results = append(results, executed[0])
+			executed = executed[1:]
+		}
 
 		msgs = append(msgs, provider.Message{
 			Role: "assistant", Content: text.String(), ToolCalls: calls,

@@ -237,3 +237,23 @@ func TestDecorateUsageResponseMissionUsageUnconvertibleCurrencyOmitted(t *testin
 		t.Fatalf("decoded = %+v, want no converted_cost_by_currency when nothing converts", decoded)
 	}
 }
+
+// TestWithReviewTokenCeiling pins D-097: a mission usage body gains
+// review_token_ceiling next to its review_input_tokens; every other
+// body passes through byte for byte.
+func TestWithReviewTokenCeiling(t *testing.T) {
+	t.Parallel()
+	out := WithReviewTokenCeiling([]byte(`{"mission_id":"m1","review_input_tokens":42}`), 1_500_000)
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded["review_token_ceiling"] != float64(1_500_000) || decoded["review_input_tokens"] != float64(42) {
+		t.Fatalf("decoded = %+v, want review_token_ceiling 1500000 beside review_input_tokens 42", decoded)
+	}
+	for _, body := range []string{`{"summaries":[{"currency":"USD","cost":1}]}`, `not json`, `[1,2]`} {
+		if got := WithReviewTokenCeiling([]byte(body), 5); string(got) != body {
+			t.Fatalf("WithReviewTokenCeiling(%q) = %q, want unchanged", body, got)
+		}
+	}
+}

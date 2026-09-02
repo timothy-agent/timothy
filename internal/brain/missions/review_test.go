@@ -383,3 +383,116 @@ func TestParseReviewVerdictEvidence(t *testing.T) {
 		t.Fatalf("Evidence = %q", v.Findings[0].Evidence)
 	}
 }
+
+// TestReviewByteBudget pins D-097's derivation: window x 3.5 bytes per
+// token minus the fixed margin, with 128k tokens standing in for an
+// unknown window.
+func TestReviewByteBudget(t *testing.T) {
+	tests := []struct {
+		name   string
+		window int
+		want   int
+	}{
+		{"known 200k window", 200_000, 700_000 - reviewByteMargin},
+		{"unknown window falls back to 128k", 0, 448_000 - reviewByteMargin},
+		{"negative window is unknown too", -1, 448_000 - reviewByteMargin},
+		{"small window keeps the same margin", 32_000, 112_000 - reviewByteMargin},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reviewByteBudget(tc.window); got != tc.want {
+				t.Fatalf("reviewByteBudget(%d) = %d, want %d", tc.window, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFitReviewPacketShrinkOrder pins D-097's shrink order: the diff
+// gives first (down to the floor), then the artifacts, then the diff
+// again; criteria and findings are never touched; a packet within
+// budget is returned as is.
+func TestFitReviewPacketShrinkOrder(t *testing.T) {
+	criteria := []string{"the report names every retry header", "the summary is under 200 words"}
+	findings := []Finding{{ID: "F1", Title: "missing retry-after", File: "report.md", Status: FindingOpen, Detail: strings.Repeat("d", 300)}}
+	// Two 40 KB files: 80 KB total, above the 64 KB floor, so the first
+	// pass can drop the second file and no more.
+	fileA := "diff --git a/a b/a\n" + strings.Repeat("+aaaa\n", 40<<10/6)
+	fileB := "diff --git a/b b/b\n" + strings.Repeat("+bbbb\n", 40<<10/6)
+	diff := fileA + fileB
+	artifacts := map[string]string{"report.md": strings.Repeat("report line\n", 200), "notes.md": strings.Repeat("note line\n", 100)}
+	base := ReviewPacket{
+		Units:        []PlanUnit{{Title: "u1", Criteria: criteria, Artifacts: []string{"report.md"}}},
+		Diff:         diff,
+		Artifacts:    artifacts,
+		OpenFindings: findings,
+	}
+	full := len(renderReviewContent(base))
+
+	t.Run("within budget is untouched", func(t *testing.T) {
+		got, r := fitReviewPacket(base, full)
+		if r.cut() || got.Diff != diff || len(got.Artifacts["report.md"]) != len(artifacts["report.md"]) {
+			t.Fatalf("packet within budget was altered: %+v", r)
+		}
+	})
+	t.Run("diff shrinks first, artifacts untouched", func(t *testing.T) {
+		budget := full - 1000
+		got, r := fitReviewPacket(base, budget)
+		if r.DiffCut == 0 || r.ArtifactsCut != 0 {
+			t.Fatalf("shrink = %+v, want only the diff cut", r)
+		}
+		if got.Artifacts["report.md"] != artifacts["report.md"] {
+			t.Fatal("artifacts were cut while the diff still had room")
+		}
+		if !strings.Contains(got.Diff, "[diff truncated: 1 files omitted]") || strings.Contains(got.Diff, "+bbbb") {
+			t.Fatalf("diff was not cut on the file boundary:\n%s", got.Diff[len(got.Diff)-120:])
+		}
+		if rendered := len(renderReviewContent(got)); rendered > budget {
+			t.Fatalf("rendered %d bytes, want <= %d", rendered, budget)
+		}
+	})
+	t.Run("artifacts shrink once the diff is at the floor", func(t *testing.T) {
+		// More than the diff can give at the floor: the second file goes,
+		// the first stays whole, and the rest comes out of the artifacts.
+		budget := full - len(fileB) - 1000
+		got, r := fitReviewPacket(base, budget)
+		if r.DiffCut == 0 || r.ArtifactsCut == 0 {
+			t.Fatalf("shrink = %+v, want both diff and artifacts cut", r)
+		}
+		if !strings.HasPrefix(got.Diff, fileA) {
+			t.Fatal("first diff file was cut before the artifacts gave")
+		}
+		if !strings.Contains(got.Artifacts["notes.md"], "review byte budget reached") {
+			t.Fatalf("cut artifact lacks its marker:\n%s", got.Artifacts["notes.md"])
+		}
+		if base.Artifacts["notes.md"] != artifacts["notes.md"] {
+			t.Fatal("caller's artifact map was mutated")
+		}
+		if rendered := len(renderReviewContent(got)); rendered > budget {
+			t.Fatalf("rendered %d bytes, want <= %d", rendered, budget)
+		}
+	})
+	t.Run("diff goes below the floor only after the artifacts are gone", func(t *testing.T) {
+		got, r := fitReviewPacket(base, 3000)
+		if r.DiffCut == 0 || r.ArtifactsCut == 0 {
+			t.Fatalf("shrink = %+v, want both cut", r)
+		}
+		if len(got.Diff) >= len(fileA) {
+			t.Fatalf("diff = %d bytes, want cut below the first file's %d", len(got.Diff), len(fileA))
+		}
+	})
+	t.Run("criteria and findings are never dropped", func(t *testing.T) {
+		got, _ := fitReviewPacket(base, 10)
+		if !reflect.DeepEqual(got.Units[0].Criteria, criteria) || !reflect.DeepEqual(got.OpenFindings, findings) {
+			t.Fatalf("criteria/findings changed: %+v / %+v", got.Units[0].Criteria, got.OpenFindings)
+		}
+		rendered := renderReviewContent(got)
+		for _, c := range criteria {
+			if !strings.Contains(rendered, c) {
+				t.Fatalf("criterion %q missing from the shrunk packet", c)
+			}
+		}
+		if !strings.Contains(rendered, "F1") {
+			t.Fatal("finding F1 missing from the shrunk packet")
+		}
+	})
+}

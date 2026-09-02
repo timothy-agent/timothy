@@ -423,9 +423,10 @@ func TestAggregateMissionUsage(t *testing.T) {
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100, CacheReadTokens: 10},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.20)},
-		// A fallback to a second model — the whole point of Models: a
-		// route is a chain, not one model, so both must show up.
-		{Provider: aggMarker + "a", Model: "m-local", Route: "coding", MissionID: mission,
+		// A fallback to a second model, the whole point of Models: a
+		// route is a chain, not one model, so both must show up. Tagged
+		// as the reviewer's turn so ReviewInputTokens has one row (D-097).
+		{Provider: aggMarker + "a", Model: "m-local", Route: "coding", Agent: reviewerAgent, MissionID: mission,
 			Usage:     &stream.Usage{InputTokens: 40, OutputTokens: 20},
 			LatencyMS: 100, Status: "ok"},
 		// Same provider/model as the harness's delegated CLI executor
@@ -458,6 +459,9 @@ func TestAggregateMissionUsage(t *testing.T) {
 	}
 	if got.CacheReadTokens != 40 {
 		t.Fatalf("CacheReadTokens = %d, want 40 (D-093: cached reads summed per mission)", got.CacheReadTokens)
+	}
+	if got.ReviewInputTokens != 40 {
+		t.Fatalf("ReviewInputTokens = %d, want 40 (D-097: only the reviewer-tagged row)", got.ReviewInputTokens)
 	}
 	// The executor-purpose row's $0.05 is the harness's; the rest is
 	// brain's.

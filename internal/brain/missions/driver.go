@@ -80,6 +80,7 @@ type driverStore interface {
 	SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error
 	AppendProgress(ctx context.Context, id, note string) error
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
+	ReviewInputTokens(ctx context.Context, missionID string) (int64, error)
 	AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error
 }
 
@@ -162,6 +163,16 @@ type Driver struct {
 	// > CommitStyleConventional). nil-safe: unset falls straight through
 	// to CommitMessage's own conventional-style default.
 	gitCommitStyle func(ctx context.Context) string
+
+	// reviewWindow resolves the context window (tokens) of the model a
+	// review route would serve, for the packet byte budget (D-097, see
+	// SetReviewWindow); nil or 0 means unknown, reviewByteBudget's
+	// fallback applies.
+	reviewWindow func(ctx context.Context, route, model string) int
+
+	// reviewTokenCeiling reads the per-mission review input token cap
+	// (D-097, see SetReviewTokenCeiling); nil or 0 disables the check.
+	reviewTokenCeiling func(ctx context.Context) int64
 
 	// location resolves the operator's configured timezone for the
 	// worker packet's exec-environment note and progress-note timestamps
@@ -418,6 +429,53 @@ func (d *Driver) SetGitCommitStyle(get func(ctx context.Context) string) {
 // SetGitCommitStyle is.
 func (d *Driver) SetLocation(loc func(ctx context.Context) *time.Location) {
 	d.location = loc
+}
+
+// SetReviewWindow wires the review model window lookup (D-097), a
+// setter for the same reason SetLocation is.
+func (d *Driver) SetReviewWindow(fn func(ctx context.Context, route, model string) int) {
+	d.reviewWindow = fn
+}
+
+// SetReviewTokenCeiling wires the settings-backed review token ceiling
+// (D-097).
+func (d *Driver) SetReviewTokenCeiling(fn func(ctx context.Context) int64) {
+	d.reviewTokenCeiling = fn
+}
+
+// GatewayReviewWindow builds a Driver.reviewWindow over the gateway
+// client: the model hint's own id when the catalog knows it, else the
+// route's first usable chain entry. 0 when neither has a window.
+func GatewayReviewWindow(resolve routeResolver, windows func(ctx context.Context) (map[string]int, error)) func(ctx context.Context, route, model string) int {
+	return func(ctx context.Context, route, model string) int {
+		ws, err := windows(ctx)
+		if err != nil {
+			return 0
+		}
+		// A D-078 pin is "provider name/model"; the catalog keys by model id.
+		if i := strings.LastIndex(model, "/"); i >= 0 {
+			model = model[i+1:]
+		}
+		if w := ws[model]; w > 0 {
+			return w
+		}
+		resolved, err := resolve(ctx, route, "")
+		if err != nil {
+			return 0
+		}
+		for _, e := range resolved.Entries {
+			if e.Usable {
+				return ws[e.Model]
+			}
+		}
+		return 0
+	}
+}
+
+// reviewTokensExceeded reports whether used review input tokens have
+// reached ceiling; a ceiling of 0 disables the check.
+func reviewTokensExceeded(used, ceiling int64) bool {
+	return ceiling > 0 && used >= ceiling
 }
 
 // SetCompleter wires the Completer the driver's auto-fire-on-done hook
@@ -1781,6 +1839,19 @@ func (d *Driver) findingsReviewPacket(ctx context.Context, m Mission, open []Fin
 }
 
 func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
+	// D-097: the review token ceiling is checked from the ledger before
+	// any model call; at or above it the mission parks on budget.
+	if d.reviewTokenCeiling != nil {
+		if ceiling := d.reviewTokenCeiling(ctx); ceiling > 0 {
+			used, err := d.store.ReviewInputTokens(ctx, m.ID)
+			if err != nil {
+				return StepInput{}, err
+			}
+			if reviewTokensExceeded(used, ceiling) {
+				return StepInput{Input: InputReviewBudget, Reason: fmt.Sprintf("review input tokens %d reached the ceiling %d", used, ceiling)}, nil
+			}
+		}
+	}
 	idx, units := reviewUnits(m.Plan)
 	unitIdx := -1
 	if len(idx) > 0 {
@@ -1801,6 +1872,21 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	}
 	if err != nil {
 		return StepInput{}, err
+	}
+	// D-097: size the packet to the resolved model's window before the
+	// first send; reviewWithShrink's context_length retry stays behind it.
+	window := 0
+	if d.reviewWindow != nil {
+		window = d.reviewWindow(ctx, reviewRoute(m), reviewModel(m))
+	}
+	var shrink reviewShrink
+	if packet, shrink = fitReviewPacket(packet, reviewByteBudget(window)); shrink.cut() {
+		if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
+			"action": "byte_budget", "window": window, "budget": shrink.Budget, "rendered": shrink.Rendered,
+			"diff_cut": shrink.DiffCut, "artifacts_cut": shrink.ArtifactsCut,
+		}); evErr != nil {
+			d.log.Warn("driver: record review prompt shrunk failed", "mission_id", m.ID, "error", evErr)
+		}
 	}
 	verdict, err := d.reviewWithShrink(ctx, m, packet)
 	if err != nil {

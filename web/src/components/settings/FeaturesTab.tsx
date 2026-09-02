@@ -102,6 +102,7 @@ export function FeaturesTab() {
       {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
       {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
       {values && <ExecutorRunBudgetCard values={values} onError={setError} onSaved={refresh} />}
+      {values && <ReviewTokenCeilingCard values={values} onError={setError} onSaved={refresh} />}
       {values && <GitBranchPatternCard values={values} onError={setError} onSaved={refresh} />}
       {values && <GitCommitStyleCard values={values} onError={setError} onSaved={refresh} />}
       <NotificationSoundCard />
@@ -307,6 +308,62 @@ function ExecutorRunBudgetCard({
       <p className="mt-2 text-xs text-muted-foreground">
         Wall-clock cap for one delegated coding run. Empty uses the default (8 hours). A run that
         stops producing output is killed by the 10-minute idle timeout regardless.
+      </p>
+    </div>
+  )
+}
+
+// REVIEW_TOKEN_CEILING_DEFAULT mirrors settings.DefaultReviewTokenCeiling
+// for the placeholder; the server applies the real default.
+const REVIEW_TOKEN_CEILING_DEFAULT = 1_500_000
+
+// ReviewTokenCeilingCard sets the input tokens one mission may spend on
+// review turns before it parks on budget (D-097). 0 disables the ceiling.
+function ReviewTokenCeilingCard({
+  values,
+  onError,
+  onSaved,
+}: {
+  values: Record<string, string>
+  onError: (msg: string) => void
+  onSaved: () => void
+}) {
+  const [tokens, setTokens] = useState(values.mission_review_token_ceiling ?? '')
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    setSaved(false)
+    patchSettingValues({ mission_review_token_ceiling: tokens.trim() })
+      .then(() => {
+        setSaved(true)
+        onSaved()
+      })
+      .catch((err: unknown) => onError(errText(err)))
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="text-sm font-medium">Review token ceiling</div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="grid gap-1 text-xs text-muted-foreground">
+          <span>Input tokens per mission</span>
+          <Input
+            type="number"
+            min={0}
+            value={tokens}
+            onChange={(e) => setTokens(e.target.value)}
+            placeholder={String(REVIEW_TOKEN_CEILING_DEFAULT)}
+            className="h-10 w-40"
+            aria-label="Review token ceiling"
+          />
+        </div>
+        <Button onClick={save}>Save</Button>
+        {saved && <span className="text-xs text-muted-foreground">Saved.</span>}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Input tokens a mission may spend on review turns, summed from the cost ledger before every
+        review round; at the ceiling the mission pauses on budget. Empty uses the default (1.5M),
+        0 disables the ceiling.
       </p>
     </div>
   )

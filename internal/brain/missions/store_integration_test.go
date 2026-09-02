@@ -1647,6 +1647,53 @@ func TestSpendExcludesUnbilledRows(t *testing.T) {
 	}
 }
 
+// TestReviewInputTokensSumsReviewerRowsOnly pins D-097's ledger read:
+// only rows tagged agent=mission-reviewer count, worker rows and other
+// missions' rows do not, and a mission with no reviewer rows sums to 0.
+func TestReviewInputTokensSumsReviewerRowsOnly(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: marker + "review-tokens", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	other, err := s.Create(ctx, Mission{Goal: marker + "review-tokens-other", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create other: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	for _, row := range []struct {
+		mission string
+		agent   string
+		tokens  int
+	}{{id, reviewerAgent, 30_000}, {id, reviewerAgent, 12_000}, {id, "mission-worker", 500_000}, {other, reviewerAgent, 7_000}} {
+		if _, err := db.Exec(ctx, `INSERT INTO cost_ledger
+			(provider, model, route, agent, latency_ms, status, input_tokens, mission_id)
+			VALUES ('itest-provider', 'itest-model', 'itest', $1, 1, 'ok', $2, $3)`,
+			row.agent, row.tokens, row.mission); err != nil {
+			t.Fatalf("insert ledger row: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM cost_ledger WHERE mission_id IN ($1, $2)`, id, other)
+	})
+
+	got, err := s.ReviewInputTokens(ctx, id)
+	if err != nil {
+		t.Fatalf("ReviewInputTokens: %v", err)
+	}
+	if got != 42_000 {
+		t.Fatalf("ReviewInputTokens = %d, want 42000 (reviewer rows of this mission only)", got)
+	}
+	none, err := s.ReviewInputTokens(ctx, marker+"never-reviewed")
+	if err != nil || none != 0 {
+		t.Fatalf("ReviewInputTokens(no rows) = %d, %v, want 0, nil", none, err)
+	}
+}
+
 // TestPendingPermissionsAndResolveTimeout covers issue #445's store
 // layer: PendingPermissions lists a mission's parked request with its
 // parked_at and per-mission override intact, and

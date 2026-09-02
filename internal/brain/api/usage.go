@@ -143,6 +143,26 @@ func decorateObject(obj map[string]any, target string, rates map[string]fxrates.
 	}
 }
 
+// WithReviewTokenCeiling adds review_token_ceiling next to a mission
+// usage object's review_input_tokens (D-097): the gateway aggregates
+// the tokens, the ceiling is a brain setting, so the join happens
+// here. Any other response passes through untouched.
+func WithReviewTokenCeiling(body []byte, ceiling int64) []byte {
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return body
+	}
+	if _, ok := obj["review_input_tokens"]; !ok {
+		return body
+	}
+	obj["review_token_ceiling"] = ceiling
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 // moneyField finds the row's monetary amount under whichever key this
 // response shape uses ("cost" for aggregator rows, "amount" for a
 // BudgetLimit) — both never coexist on the same object, so checking
@@ -193,6 +213,7 @@ func (d *UsageDecorator) Decorate(resp *http.Response) error {
 		rates = nil // degrade to "nothing converts," never guess
 	}
 	decorated := DecorateUsageResponse(body, target, rates)
+	decorated = WithReviewTokenCeiling(decorated, d.flags.ReviewTokenCeiling(ctx))
 
 	resp.Body = io.NopCloser(bytes.NewReader(decorated))
 	resp.ContentLength = int64(len(decorated))
