@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,6 +129,9 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	if t.Next.LastReviewCommit != "" {
 		m.Plan.LastReviewCommit = t.Next.LastReviewCommit
 	}
+	if !t.Next.LastReviewAt.IsZero() {
+		m.Plan.LastReviewAt = t.Next.LastReviewAt
+	}
 	f.missions[id] = m
 	for _, ev := range t.Events {
 		f.seq[id]++
@@ -235,7 +239,7 @@ func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.missions[id]
-	m.Progress = append(m.Progress, ProgressNote{Note: note})
+	m.Progress = append(m.Progress, ProgressNote{At: time.Now().UTC(), Note: note})
 	f.missions[id] = m
 	f.seq[id]++
 	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: "mission.progress"})
@@ -3579,9 +3583,10 @@ func countEvents(store *fakeStore, id, kind string) int {
 // finding's file and strays into a file outside every unit's scope; the
 // second round's packet is findings-only (the open finding, the delta
 // diff, the named file's contents, the scope-creep list, the affected
-// unit's harness state, and no goal, plan, stat, listing, artifacts,
-// progress or worker report) at a fraction of the first round's bytes;
-// the reviewer resolving F1 with no new finding counts as approval.
+// unit's harness state, the rework turn's progress note alone (D-098),
+// and no goal, plan, stat, listing, artifacts or worker report) at a
+// fraction of the first round's bytes; the reviewer resolving F1 with
+// no new finding counts as approval.
 func TestDriverFindingsOnlyReReview(t *testing.T) {
 	root, base := codingWorktree(t)
 	wt := filepath.Join(root, "wt")
@@ -3601,7 +3606,7 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 		}}},
 	})
 	runner := &scriptedRunner{
-		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "validated"}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "validated", Handoff: "F1 does not match the repository: main.go already validates"}},
 		reviewVerdicts: []ReviewVerdict{
 			{Findings: []Finding{{Title: "missing validation", File: "src/main.go", Detail: "no input check", Evidence: "+func main() {}"}}},
 			{Resolved: []string{"F1"}},
@@ -3616,12 +3621,15 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	head := strings.TrimSpace(gitRun(t, wt, "rev-parse", "HEAD"))
-	if m.Phase != PhaseGenerate || m.Plan.LastReviewCommit != head {
-		t.Fatalf("after round 1: phase %q last_review_commit %q, want generate with HEAD %s", m.Phase, m.Plan.LastReviewCommit, head)
+	if m.Phase != PhaseGenerate || m.Plan.LastReviewCommit != head || m.Plan.LastReviewAt.IsZero() {
+		t.Fatalf("after round 1: phase %q last_review_commit %q last_review_at %v, want generate with HEAD %s and a round time", m.Phase, m.Plan.LastReviewCommit, m.Plan.LastReviewAt, head)
 	}
 	full := runner.reviewCalls[0]
 	if full.FindingsOnly || full.Diff == "" || full.DiffStat == "" {
 		t.Fatalf("round 1 packet = %+v, want the full packet", full)
+	}
+	if len(full.UnitFiles) != 1 || !reflect.DeepEqual(full.UnitFiles[0], []string{"src/main.go", "src/other.go"}) {
+		t.Fatalf("round 1 unit files = %v, want the changed files inside the unit's scope", full.UnitFiles)
 	}
 
 	// The rework turn: the worker fixes main.go and also edits docs/.
@@ -3643,8 +3651,12 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 	}
 	delta := runner.reviewCalls[1]
 	if !delta.FindingsOnly || delta.Goal != "" || len(delta.Plan.Units) != 0 || delta.DiffStat != "" ||
-		delta.Listing != "" || delta.Evidence != "" || len(delta.Progress) != 0 || len(delta.Artifacts) != 0 {
+		delta.Listing != "" || delta.Evidence != "" || len(delta.Artifacts) != 0 || len(delta.UnitFiles) != 0 {
 		t.Fatalf("round 2 packet carries full-round material: %+v", delta)
+	}
+	// D-098: only the rework turn's note, not the pre-review operator note.
+	if len(delta.Progress) != 1 || !strings.Contains(delta.Progress[0].Note, "F1 does not match the repository") {
+		t.Fatalf("round 2 progress = %+v, want the rework turn's note alone", delta.Progress)
 	}
 	if len(delta.OpenFindings) != 1 || delta.OpenFindings[0].ID != "F1" {
 		t.Fatalf("round 2 open findings = %+v, want F1", delta.OpenFindings)
@@ -3722,8 +3734,8 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Workspace: root, BaseCommit: base,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "write a", Artifacts: []string{"a.md"}, Criteria: []string{"a.md exists", "a.md has content"}},
-			{Title: "write b", Artifacts: []string{"b.md"}, Criteria: []string{"b.md exists", "b.md has content"}},
+			{Title: "write a", Artifacts: []string{"a.md"}, Scope: []string{"a.md"}, Criteria: []string{"a.md exists", "no other root files modified"}},
+			{Title: "write b", Artifacts: []string{"b.md"}, Scope: []string{"b.md"}, Criteria: []string{"b.md exists", "no other root files modified"}},
 		}},
 	})
 	runner := &scriptedRunner{
@@ -3761,6 +3773,11 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 	}
 	if len(runner.reviewCalls) != 1 || len(runner.reviewCalls[0].Units) != 2 {
 		t.Fatalf("review calls = %d (units %d), want one round over both units", len(runner.reviewCalls), len(runner.reviewCalls[0].Units))
+	}
+	// D-098: each unit's block names only the changed files inside its
+	// own scope (defaulted to the root artifact itself at plan parse).
+	if got := runner.reviewCalls[0].UnitFiles; !reflect.DeepEqual(got, [][]string{{"a.md"}, {"b.md"}}) {
+		t.Fatalf("unit files = %v, want [[a.md] [b.md]]", got)
 	}
 	if n := countEvents(store, "m1", "mission.review_verdict"); n != 1 {
 		t.Fatalf("review_verdict events = %d, want exactly 1", n)

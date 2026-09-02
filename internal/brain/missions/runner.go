@@ -1316,7 +1316,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 // session (D-092): findings carry across rounds as mission state, so
 // no reviewer transcript is retained to anchor the next verdict.
 func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
-	system := "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. End your turn with exactly one review_verdict tool call."
+	system := "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. End your turn with exactly one review_verdict tool call."
 	messages := []provider.Message{{Role: "user", Content: renderReviewContent(packet)}}
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
@@ -1407,24 +1407,44 @@ func renderReviewContent(p ReviewPacket) string {
 	var b strings.Builder
 	if p.FindingsOnly {
 		// D-096: the whole change was reviewed in an earlier round; this
-		// round judges only whether the open findings are closed.
-		b.WriteString("Re-review of open findings only. An earlier round reviewed the whole change and the units below pass the harness checks; judge only whether each open finding is closed by the changes since that round, and name every closed id in resolved. Report a NEW finding only with evidence quoted from the diff or files below.\n")
+		// round judges only whether the open findings are closed. D-098:
+		// closed means the current file contents do not show the gap,
+		// whether or not the delta diff changed them, so a finding that
+		// described a state the files were never in can be resolved.
+		b.WriteString("Re-review of open findings only. An earlier round reviewed the whole change and the units below pass the harness checks; judge only whether each open finding still describes a real gap in the CURRENT contents of the files below. Mark a finding resolved when the current state does not show the described gap, whether or not the diff since the last review changed it (the finding may have been wrong when opened); name every closed id in resolved. Report a NEW finding only with evidence quoted from the diff or files below.\n")
 	}
 	if p.Goal != "" {
 		fmt.Fprintf(&b, "Mission goal: %s\n", NeutralizeSlot(p.Goal))
 	}
+	unitFiles := len(p.UnitFiles) == len(p.Units)
 	if len(p.Units) > 0 {
 		if p.FindingsOnly {
 			b.WriteString("\nAffected units (harness state):\n")
 		} else {
 			b.WriteString("Units under review (judge each against its acceptance criteria):\n")
+			if len(p.Units) > 1 {
+				// D-098: the stat below spans every unit; a criterion of
+				// the form "no other files modified" is judged against the
+				// unit's own files, listed in its block.
+				b.WriteString("The change set below spans all of these units. Judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone; a file another unit changed is never a gap for this one.\n")
+			}
 		}
-		for _, u := range p.Units {
+		for i, u := range p.Units {
 			fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
 			if len(u.Criteria) > 0 {
 				b.WriteString("Acceptance criteria:\n")
 				for _, c := range u.Criteria {
 					fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(c))
+				}
+			}
+			if unitFiles {
+				switch {
+				case len(p.UnitFiles[i]) == 0:
+					b.WriteString("Files this unit changed: none\n")
+				case len(u.Scope) == 0:
+					fmt.Fprintf(&b, "Files this unit changed (no scope declared, so every changed file): %s\n", NeutralizeSlot(strings.Join(p.UnitFiles[i], ", ")))
+				default:
+					fmt.Fprintf(&b, "Files this unit changed (changed files inside its scope): %s\n", NeutralizeSlot(strings.Join(p.UnitFiles[i], ", ")))
 				}
 			}
 			if u.VerifyCheck != "" {
@@ -1498,7 +1518,11 @@ func renderReviewContent(p ReviewPacket) string {
 		}
 	}
 	if p.DiffStat != "" {
-		b.WriteString("\nChanged files (whole change):\n")
+		if len(p.Units) > 1 {
+			b.WriteString("\nChanged files (whole change, spanning every unit above; each unit's own files are listed in its block):\n")
+		} else {
+			b.WriteString("\nChanged files (whole change):\n")
+		}
 		b.WriteString(p.DiffStat)
 		b.WriteString("\n")
 	}
@@ -1516,7 +1540,11 @@ func renderReviewContent(p ReviewPacket) string {
 		if len(notes) > progressRenderCap {
 			notes = notes[len(notes)-progressRenderCap:]
 		}
-		b.WriteString("\nRecent progress (includes any operator steering notes):\n")
+		if p.FindingsOnly {
+			b.WriteString("\nWorker notes since the last review round (its own account of the rework; verify against the files above):\n")
+		} else {
+			b.WriteString("\nRecent progress (includes any operator steering notes):\n")
+		}
 		for _, n := range notes {
 			fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(n.Note))
 		}

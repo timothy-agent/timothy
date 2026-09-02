@@ -518,6 +518,10 @@ type Plan struct {
 	// D-096), which means the next round gets the full packet. Written
 	// only through Store.ApplyTransition.
 	LastReviewCommit string `json:"last_review_commit,omitempty"`
+	// LastReviewAt (D-098, issue #529) is when that round closed: the
+	// findings-only packet renders only progress notes written after
+	// it, the rework turns' notes. Zero on plans written before D-098.
+	LastReviewAt time.Time `json:"last_review_at,omitzero"`
 	// Provider/Model (issue #507) are who served the plan turn; set by
 	// PlanSession after parsing, never persisted with the stored plan.
 	Provider string `json:"-"`

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -264,6 +265,9 @@ type StepState struct {
 	// LastReviewCommit is the worktree HEAD recorded by the last rework
 	// (D-096): the anchor for the next round's findings-only diff.
 	LastReviewCommit string
+	// LastReviewAt is when the last rework round closed (D-098): the
+	// findings-only packet renders only progress notes written after it.
+	LastReviewAt time.Time
 }
 
 // neverVisitsPlan reports whether s's mission can never be in
@@ -296,6 +300,9 @@ type StepInput struct {
 	// produced this input (D-096), set on InputReviewRework; empty when
 	// there is no worktree, leaving LastReviewCommit as it was.
 	ReviewCommit string
+	// ReviewAt is when the review round that produced this input closed
+	// (D-098), set on InputReviewRework; zero leaves LastReviewAt as it was.
+	ReviewAt time.Time
 	// TouchedFiles is every workspace-relative path the worker turn
 	// that just ended changed (git diff --name-only against the
 	// pre-turn HEAD), set on InputPhaseComplete from generate. nil means
@@ -851,12 +858,17 @@ func reviewSkippedOrProvePassTransition(s StepState) Transition {
 //     a failure: the work must survive for the operator.
 //
 // The round's worktree HEAD becomes LastReviewCommit (D-096): the next
-// round reviews only the open findings against the diff since it.
+// round reviews only the open findings against the diff since it; the
+// round's time becomes LastReviewAt (D-098) so that packet carries only
+// the rework turns' progress notes.
 func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 	s.ReworkRounds++
 	s.ReviewFindings = mergeFindings(s.ReviewFindings, in.Findings, in.Resolved, in.Unit, s.ReworkRounds)
 	if in.ReviewCommit != "" {
 		s.LastReviewCommit = in.ReviewCommit
+	}
+	if !in.ReviewAt.IsZero() {
+		s.LastReviewAt = in.ReviewAt
 	}
 	open := OpenFindings(s.ReviewFindings)
 	s.Phase = PhaseGenerate

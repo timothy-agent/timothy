@@ -363,8 +363,8 @@ func TestRunReviewPacketListsOpenFindings(t *testing.T) {
 // TestRenderReviewContentFindingsOnly pins the D-096 re-review packet
 // shape: the open findings with detail and evidence, the finding files,
 // the scope-creep list, the delta diff and the affected units' harness
-// state render; goal, plan, whole-change stat, listing, progress and the
-// worker's report never do.
+// state render; goal, plan, whole-change stat, listing and the worker's
+// report never do.
 func TestRenderReviewContentFindingsOnly(t *testing.T) {
 	content := renderReviewContent(ReviewPacket{
 		FindingsOnly: true,
@@ -376,7 +376,7 @@ func TestRenderReviewContentFindingsOnly(t *testing.T) {
 		// Fields a findings-only packet never carries; set here to prove
 		// the renderer does not leak them.
 		Goal: "the goal", Plan: Plan{Units: []PlanUnit{{Title: "write code"}}}, DiffStat: "1 file changed",
-		Listing: "src/main.go (13 bytes)", Evidence: "worker says done", Progress: []ProgressNote{{Note: "steer"}},
+		Listing: "src/main.go (13 bytes)", Evidence: "worker says done",
 	})
 	for _, want := range []string{
 		"Re-review of open findings only.",
@@ -397,6 +397,82 @@ func TestRenderReviewContentFindingsOnly(t *testing.T) {
 	}
 	if strings.Contains(content, "acceptance criteria") {
 		t.Fatalf("findings-only content must not ask for criteria judgement:\n%s", content)
+	}
+}
+
+// TestRenderReviewContentFindingsOnlyEmptyDelta pins D-098 (issue #529):
+// a re-review whose delta diff is empty still carries the finding
+// files' current contents, the affected units' harness state and the
+// worker's rework note, and its instruction tells the reviewer to
+// resolve a finding the current state does not show, whether or not the
+// delta changed it.
+func TestRenderReviewContentFindingsOnlyEmptyDelta(t *testing.T) {
+	content := renderReviewContent(ReviewPacket{
+		FindingsOnly: true,
+		Units:        []PlanUnit{{Title: "add changelog", HarnessPassed: true, VerifyCheck: "verify_cmd"}},
+		OpenFindings: []Finding{{ID: "F1", Unit: 0, Title: "other root files modified", File: "CHANGELOG.md", Evidence: " CONTRIBUTING.md | 3 +++", Severity: SeverityBlocking, Status: FindingOpen}},
+		Files:        map[string]string{"CHANGELOG.md": "# Changelog\n"},
+		Progress:     []ProgressNote{{Note: "F1 does not match the repository: this unit's commit touched CHANGELOG.md only"}},
+	})
+	for _, want := range []string{
+		"Mark a finding resolved when the current state does not show the described gap, whether or not the diff since the last review changed it",
+		"### add changelog [harness-verified]",
+		"Harness verify_cmd check: passed",
+		"Files named by the findings (read from disk by the harness):\n\n--- CHANGELOG.md ---\n# Changelog",
+		"Worker notes since the last review round (its own account of the rework; verify against the files above):\n- F1 does not match the repository",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("empty-delta content missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "Diff since the last review") {
+		t.Fatalf("empty delta must render no diff section:\n%s", content)
+	}
+}
+
+// TestRenderReviewContentMultiUnitFiles pins D-098's attribution in a
+// full round over several units: each unit block lists the changed
+// files inside its own scope, the whole-change stat is labelled as
+// spanning every unit, and the instruction says exclusivity criteria
+// are judged against the unit's own files. A single-unit round renders
+// the files line but neither the label nor the instruction.
+func TestRenderReviewContentMultiUnitFiles(t *testing.T) {
+	units := []PlanUnit{
+		{Title: "add changelog", Scope: []string{"CHANGELOG.md"}, Criteria: []string{"no other root files modified"}, HarnessPassed: true},
+		{Title: "add contributing", Scope: []string{"CONTRIBUTING.md"}, Criteria: []string{"no other root files modified"}, HarnessPassed: true},
+		{Title: "legacy unit", HarnessPassed: true},
+		{Title: "untouched unit", Scope: []string{"docs"}, HarnessPassed: true},
+	}
+	stat := " CHANGELOG.md | 3 +++\n CONTRIBUTING.md | 2 ++\n 2 files changed"
+	got := renderReviewContent(ReviewPacket{
+		Units:     units,
+		UnitFiles: [][]string{{"CHANGELOG.md"}, {"CONTRIBUTING.md"}, {"CHANGELOG.md", "CONTRIBUTING.md"}, {}},
+		DiffStat:  stat,
+	})
+	for _, want := range []string{
+		"The change set below spans all of these units. Judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone",
+		"### add changelog [harness-verified]\nAcceptance criteria:\n- no other root files modified\nFiles this unit changed (changed files inside its scope): CHANGELOG.md\n",
+		"### add contributing [harness-verified]\nAcceptance criteria:\n- no other root files modified\nFiles this unit changed (changed files inside its scope): CONTRIBUTING.md\n",
+		"### legacy unit [harness-verified]\nFiles this unit changed (no scope declared, so every changed file): CHANGELOG.md, CONTRIBUTING.md\n",
+		"### untouched unit [harness-verified]\nFiles this unit changed: none\n",
+		"Changed files (whole change, spanning every unit above; each unit's own files are listed in its block):\n" + stat,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("multi-unit content missing %q:\n%s", want, got)
+		}
+	}
+
+	single := renderReviewContent(ReviewPacket{Units: units[:1], UnitFiles: [][]string{{"CHANGELOG.md"}}, DiffStat: stat})
+	if !strings.Contains(single, "Files this unit changed (changed files inside its scope): CHANGELOG.md") || !strings.Contains(single, "Changed files (whole change):\n") {
+		t.Fatalf("single-unit content missing the files line or plain stat heading:\n%s", single)
+	}
+	if strings.Contains(single, "spans all of these units") || strings.Contains(single, "spanning every unit") {
+		t.Fatalf("single-unit content carries the multi-unit instruction:\n%s", single)
+	}
+
+	// No worktree: no UnitFiles, no files line.
+	if none := renderReviewContent(ReviewPacket{Units: units[:2]}); strings.Contains(none, "Files this unit changed") {
+		t.Fatalf("packet without unit files renders a files line:\n%s", none)
 	}
 }
 

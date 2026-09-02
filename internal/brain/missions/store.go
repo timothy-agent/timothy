@@ -1100,12 +1100,17 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	// Per-unit verify state (D-094) lives inside the plan jsonb; only the
 	// units key is rewritten, and only when the plan has units, so a
 	// planless mission's '{}' stays untouched. last_review_commit (D-096)
-	// sits next to it, written only when a rework recorded one.
+	// and last_review_at (D-098) sit next to it, written only when a
+	// rework recorded them.
 	var unitsJSON []byte
 	if len(t.Next.Units) > 0 {
 		if unitsJSON, err = json.Marshal(t.Next.Units); err != nil {
 			return fmt.Errorf("missions apply transition marshal units: %w", err)
 		}
+	}
+	lastReviewAt := ""
+	if !t.Next.LastReviewAt.IsZero() {
+		lastReviewAt = t.Next.LastReviewAt.UTC().Format(time.RFC3339Nano)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
@@ -1114,11 +1119,12 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 			review_findings = $12, rework_rounds = $13,
 			plan = (CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END)
 				|| CASE WHEN $15::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_commit', $15::text) END
+				|| CASE WHEN $16::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_at', $16::text) END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
-		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit,
+		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit, lastReviewAt,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

@@ -848,8 +848,9 @@ func TestApplyTransitionPersistsLastReviewCommit(t *testing.T) {
 		t.Fatalf("SetPlan: %v", err)
 	}
 	units := []PlanUnit{{Title: "write a.md", Artifacts: []string{"a.md"}, HarnessPassed: true}}
+	reviewAt := time.Date(2026, 9, 2, 10, 30, 0, 0, time.UTC)
 	if err := s.ApplyTransition(ctx, id, Transition{
-		Next: StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 3, Units: units, LastReviewCommit: "abc123", ReworkRounds: 1},
+		Next: StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 3, Units: units, LastReviewCommit: "abc123", LastReviewAt: reviewAt, ReworkRounds: 1},
 	}); err != nil {
 		t.Fatalf("ApplyTransition with review commit: %v", err)
 	}
@@ -859,6 +860,9 @@ func TestApplyTransitionPersistsLastReviewCommit(t *testing.T) {
 	}
 	if m.Plan.LastReviewCommit != "abc123" || len(m.Plan.Units) != 1 || !m.Plan.Units[0].HarnessPassed || len(m.Plan.Assumptions) != 1 {
 		t.Fatalf("plan after transition = %+v, want last_review_commit abc123 with units and assumptions intact", m.Plan)
+	}
+	if !m.Plan.LastReviewAt.Equal(reviewAt) {
+		t.Fatalf("last_review_at = %v, want %v", m.Plan.LastReviewAt, reviewAt)
 	}
 
 	if err := s.ApplyTransition(ctx, id, Transition{
@@ -870,8 +874,8 @@ func TestApplyTransitionPersistsLastReviewCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.Plan.LastReviewCommit != "abc123" || m.Phase != PhaseProve {
-		t.Fatalf("plan after second transition = %+v phase %q, want last_review_commit kept", m.Plan, m.Phase)
+	if m.Plan.LastReviewCommit != "abc123" || !m.Plan.LastReviewAt.Equal(reviewAt) || m.Phase != PhaseProve {
+		t.Fatalf("plan after second transition = %+v phase %q, want last_review_commit and last_review_at kept", m.Plan, m.Phase)
 	}
 }
 

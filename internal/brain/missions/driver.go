@@ -1273,7 +1273,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		Units: m.Plan.Units, ReplanUsed: m.ReplanUsed,
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 		ReviewFindings: m.ReviewFindings, ReworkRounds: m.ReworkRounds,
-		LastReviewCommit: m.Plan.LastReviewCommit,
+		LastReviewCommit: m.Plan.LastReviewCommit, LastReviewAt: m.Plan.LastReviewAt,
 	}
 }
 
@@ -1769,9 +1769,10 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 
 // fullReviewPacket builds the packet for a round over the whole change
 // set (D-095): the reviewed units' criteria in place of the goal
-// (legacy plans without criteria keep the goal), the whole-change stat
-// and the diff restricted to the units' scope. The returned files are
-// every path the change touches, for the evidence gate.
+// (legacy plans without criteria keep the goal), the whole-change stat,
+// the diff restricted to the units' scope and, per unit, the changed
+// files inside its own scope (D-098). The returned files are every path
+// the change touches, for the evidence gate.
 func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, units []PlanUnit) (ReviewPacket, []string, error) {
 	var changedFiles []string
 	packet := ReviewPacket{
@@ -1793,6 +1794,10 @@ func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, units []PlanUn
 		if changedFiles, err = ChangedFiles(ctx, wt, m.BaseCommit); err != nil {
 			return ReviewPacket{}, nil, err
 		}
+		packet.UnitFiles = make([][]string, len(units))
+		for i, u := range units {
+			packet.UnitFiles[i] = insideScope(changedFiles, u.Scope)
+		}
 	}
 	if artifacts := reviewArtifacts(units, packet.Diff != ""); len(artifacts) > 0 {
 		packet.Artifacts = ReadArtifacts(m.WorkRoot(), artifacts)
@@ -1804,9 +1809,10 @@ func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, units []PlanUn
 // findings, the diff since the last review commit restricted to the
 // finding files and the affected units' scope, the finding files'
 // contents, the affected units' harness state (criteria dropped, the
-// findings are the question), and the files changed outside every
-// unit's scope. The returned files are the delta's paths plus the
-// finding files, for the evidence gate.
+// findings are the question), the files changed outside every unit's
+// scope, and the progress notes written since the last round (D-098:
+// the rework turns' own account). The returned files are the delta's
+// paths plus the finding files, for the evidence gate.
 func (d *Driver) findingsReviewPacket(ctx context.Context, m Mission, open []Finding) (ReviewPacket, []string, error) {
 	files := findingFiles(open)
 	var affected []PlanUnit
@@ -1820,7 +1826,10 @@ func (d *Driver) findingsReviewPacket(ctx context.Context, m Mission, open []Fin
 		u.Criteria = nil
 		affected = append(affected, u)
 	}
-	packet := ReviewPacket{FindingsOnly: true, Units: affected, OpenFindings: open}
+	packet := ReviewPacket{
+		FindingsOnly: true, Units: affected, OpenFindings: open,
+		Progress: progressSince(m.Progress, m.Plan.LastReviewAt),
+	}
 	wt := m.WorktreePath()
 	paths := append(append([]string{}, files...), reviewScope(affected)...)
 	var err error
@@ -1913,7 +1922,9 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	}
 	// The reviewer's own worktree side effects (it may run tests) are
 	// rolled back unconditionally after every review round. The HEAD
-	// left behind anchors the next round's findings-only diff (D-096).
+	// left behind anchors the next round's findings-only diff (D-096);
+	// the round's time anchors that packet's progress notes (D-098).
+	reviewAt := time.Now().UTC()
 	reviewCommit := ""
 	if wt := m.WorktreePath(); wt != "" {
 		if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
@@ -1959,7 +1970,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 			}
 			return StepInput{
 				Input: InputReviewRework, Findings: findings, Unit: failing[0].Unit, Reason: reviewReason(findings),
-				Verified: verified, ReviewCommit: reviewCommit, Provider: verdict.Provider, Model: verdict.Model,
+				Verified: verified, ReviewCommit: reviewCommit, ReviewAt: reviewAt, Provider: verdict.Provider, Model: verdict.Model,
 			}, nil
 		}
 		return StepInput{Input: InputReviewApprove, Verified: verified, Provider: verdict.Provider, Model: verdict.Model}, nil
@@ -1967,7 +1978,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	return StepInput{
 		Input: InputReviewRework, Findings: verdict.Findings, Resolved: verdict.Resolved, Unit: unitIdx,
 		Reason:       truncate(reviewReason(verdict.Findings), 500),
-		ReviewCommit: reviewCommit, Provider: verdict.Provider, Model: verdict.Model,
+		ReviewCommit: reviewCommit, ReviewAt: reviewAt, Provider: verdict.Provider, Model: verdict.Model,
 	}, nil
 }
 

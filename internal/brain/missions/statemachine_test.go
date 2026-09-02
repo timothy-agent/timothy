@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStep(t *testing.T) {
@@ -1126,25 +1127,28 @@ func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
 }
 
 // TestStepReworkRecordsReviewCommit pins D-096's anchor: a rework
-// records the round's worktree HEAD as LastReviewCommit, an input
-// without one leaves the previous anchor alone, and approval keeps it
-// (harmless: findings-only needs an open finding too).
+// records the round's worktree HEAD as LastReviewCommit and its time as
+// LastReviewAt (D-098), an input without them leaves the previous
+// anchors alone, and approval keeps them (harmless: findings-only needs
+// an open finding too).
 func TestStepReworkRecordsReviewCommit(t *testing.T) {
+	t1 := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
 	first := Step(
 		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
-		StepInput{Input: InputReviewRework, ReviewCommit: "abc123", Findings: []Finding{{Title: "gap", File: "x.go"}}},
+		StepInput{Input: InputReviewRework, ReviewCommit: "abc123", ReviewAt: t1, Findings: []Finding{{Title: "gap", File: "x.go"}}},
 		DefaultConfig,
 	)
-	if first.Next.LastReviewCommit != "abc123" {
-		t.Fatalf("LastReviewCommit = %q, want abc123", first.Next.LastReviewCommit)
+	if first.Next.LastReviewCommit != "abc123" || !first.Next.LastReviewAt.Equal(t1) {
+		t.Fatalf("LastReviewCommit = %q LastReviewAt = %v, want abc123 at %v", first.Next.LastReviewCommit, first.Next.LastReviewAt, t1)
 	}
 	second := Step(withStatus(first.Next, StatusWorking), StepInput{Input: InputReviewRework}, DefaultConfig)
-	if second.Next.LastReviewCommit != "abc123" {
-		t.Fatalf("LastReviewCommit = %q after a rework without a commit, want abc123 kept", second.Next.LastReviewCommit)
+	if second.Next.LastReviewCommit != "abc123" || !second.Next.LastReviewAt.Equal(t1) {
+		t.Fatalf("anchors = %q %v after a rework without them, want abc123 at %v kept", second.Next.LastReviewCommit, second.Next.LastReviewAt, t1)
 	}
-	third := Step(withStatus(second.Next, StatusWorking), StepInput{Input: InputReviewRework, ReviewCommit: "def456"}, DefaultConfig)
-	if third.Next.LastReviewCommit != "def456" {
-		t.Fatalf("LastReviewCommit = %q, want def456", third.Next.LastReviewCommit)
+	third := Step(withStatus(second.Next, StatusWorking), StepInput{Input: InputReviewRework, ReviewCommit: "def456", ReviewAt: t2}, DefaultConfig)
+	if third.Next.LastReviewCommit != "def456" || !third.Next.LastReviewAt.Equal(t2) {
+		t.Fatalf("anchors = %q %v, want def456 at %v", third.Next.LastReviewCommit, third.Next.LastReviewAt, t2)
 	}
 }
 
