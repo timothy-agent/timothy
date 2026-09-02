@@ -1544,7 +1544,7 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 
 // TestDriverReplanOnFirstStall confirms a mission's FIRST stall (two
 // identical-fingerprint worker retries, ReplanUsed still false) goes
-// back to planning instead of pausing — the driver-level counterpart of
+// back to planning instead of pausing, the driver-level counterpart of
 // statemachine_test.go's pure Step assertion, exercised through real
 // Advance calls so the plan phase's own re-run (via runPlan) is covered
 // too. Review reworks no longer replan (D-092: they park on the
