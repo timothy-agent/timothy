@@ -328,6 +328,19 @@ type Request struct {
 	// a no-op. nil for every caller but mission worker turns: the loop
 	// itself knows nothing about missions.
 	Steering func(ctx context.Context) []string
+
+	// MaxSteps, when > 0, replaces the agent's default step ceiling
+	// (tools.DefaultMaxSteps) for this turn (D-093): a reviewer that
+	// already holds the harness's verify output needs a spot check, not
+	// sixteen iterations of re-sent packet.
+	MaxSteps int
+
+	// ToolResultCap, when > 0, bounds the bytes of every tool result
+	// that enters this turn's conversation (D-093): a longer result is
+	// cut on a line boundary with a "[truncated: N bytes]" marker before
+	// the model sees it. The audit trail and offload store keep the
+	// full result; only the transcript is capped.
+	ToolResultCap int
 }
 
 // Start launches the loop and returns its event stream. The channel
@@ -442,6 +455,10 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	// forced route's chain and bypass it entirely.
 	route := req.Route
 	hint := req.ModelHint
+	maxSteps := a.maxSteps
+	if req.MaxSteps > 0 {
+		maxSteps = req.MaxSteps
+	}
 
 	for step := 1; ; step++ {
 		if step > 1 && req.Steering != nil {
@@ -449,7 +466,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 				msgs = append(msgs, provider.Message{Role: "user", Content: note})
 			}
 		}
-		directive := tools.CeilingFor(step, a.maxSteps)
+		directive := tools.CeilingFor(step, maxSteps)
 		// A model retrying the same call over and over (e.g. hoping a
 		// search tool will "book" something on a later attempt) forces
 		// synthesis early rather than burning steps up to the ceiling.
@@ -659,6 +676,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			Role: "assistant", Content: text.String(), ToolCalls: calls,
 		})
 		for i := range results {
+			results[i].Content = capToolResult(results[i].Content, req.ToolResultCap)
 			msgs = append(msgs, provider.Message{Role: "tool", ToolResult: &results[i]})
 		}
 
@@ -685,6 +703,21 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 
 		effort = EffortFor(results)
 	}
+}
+
+// capToolResult truncates content to at most limit bytes on a line
+// boundary (falling back to a hard cut when no newline exists that
+// early) and appends a marker naming the full size (D-093). limit <= 0
+// or content within the limit returns content unchanged.
+func capToolResult(content string, limit int) string {
+	if limit <= 0 || len(content) <= limit {
+		return content
+	}
+	cut := limit
+	if i := strings.LastIndexByte(content[:limit+1], '\n'); i > 0 {
+		cut = i
+	}
+	return fmt.Sprintf("%s\n[truncated: %d bytes]", content[:cut], len(content))
 }
 
 // retryStep emits a stream.EventRetry for the upcoming attempt and

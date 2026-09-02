@@ -286,9 +286,13 @@ type MissionUsage struct {
 	UnbilledCostByCurrency  map[string]float64 `json:"unbilled_cost_by_currency"`
 	InputTokens             int64              `json:"input_tokens"`
 	OutputTokens            int64              `json:"output_tokens"`
-	Requests                int64              `json:"requests"`
-	UnpricedRequests        int64              `json:"unpriced_requests"`
-	Models                  []ModelUsed        `json:"models"`
+	// CacheReadTokens is the input read from the provider's prompt
+	// cache (D-093): shown next to input_tokens so the caching
+	// breakpoints' effect is visible per mission.
+	CacheReadTokens  int64       `json:"cache_read_tokens"`
+	Requests         int64       `json:"requests"`
+	UnpricedRequests int64       `json:"unpriced_requests"`
+	Models           []ModelUsed `json:"models"`
 }
 
 // ModelUsed is one provider/model/harness-ness triple actually invoked
@@ -320,11 +324,11 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 		UnbilledCostByCurrency:  map[string]float64{},
 	}
 	err = db.QueryRow(ctx, `SELECT
-			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE cost IS NULL)
 		FROM cost_ledger
 		WHERE mission_id = $1 AND `+notTest, missionID).
-		Scan(&m.InputTokens, &m.OutputTokens, &m.Requests, &m.UnpricedRequests)
+		Scan(&m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.Requests, &m.UnpricedRequests)
 	if err != nil {
 		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
 	}

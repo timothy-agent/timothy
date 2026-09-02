@@ -418,10 +418,10 @@ func TestAggregateMissionUsage(t *testing.T) {
 
 	rows := []Entry{
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
-			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50},
+			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 30},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.10)},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
-			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
+			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100, CacheReadTokens: 10},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.20)},
 		// A fallback to a second model — the whole point of Models: a
 		// route is a chain, not one model, so both must show up.
@@ -455,6 +455,9 @@ func TestAggregateMissionUsage(t *testing.T) {
 		got.OutputTokens != 175 || got.Requests != 4 || got.UnpricedRequests != 1 {
 		t.Fatalf("Mission = %+v, want mission_id=%s cost=0.35 in=350 out=175 requests=4 unpriced=1",
 			got, mission)
+	}
+	if got.CacheReadTokens != 40 {
+		t.Fatalf("CacheReadTokens = %d, want 40 (D-093: cached reads summed per mission)", got.CacheReadTokens)
 	}
 	// The executor-purpose row's $0.05 is the harness's; the rest is
 	// brain's.

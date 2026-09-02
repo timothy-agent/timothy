@@ -25,7 +25,7 @@ func TestAnthropicMessagesToolRoundTrip(t *testing.T) {
 	if len(msgs) != 3 {
 		t.Fatalf("got %d messages, want 3 (user, assistant, merged tool results)", len(msgs))
 	}
-	if msgs[0].Role != "user" || msgs[0].Content != "what time is it in Nairobi?" {
+	if first, ok := msgs[0].Content.([]anthropicContentBlock); msgs[0].Role != "user" || !ok || len(first) != 1 || first[0].Text != "what time is it in Nairobi?" {
 		t.Fatalf("plain message mangled: %+v", msgs[0])
 	}
 

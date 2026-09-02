@@ -44,6 +44,13 @@ var ErrPromptTooLong = errors.New("mission turn rejected: prompt exceeds the mod
 // mistaking the missing sentinel for a forced failure.
 var ErrAskedUser = errors.New("mission turn parked on ask_user")
 
+// Reviewer tool-loop caps (D-093): step ceiling and per-result bytes
+// for RunReview's loop.Request. Go constants, never prompt text.
+const (
+	reviewMaxSteps      = 4
+	reviewToolResultCap = 4096
+)
+
 // Runner executes ONE session (worker turn, reviewer turn, or planner
 // turn) and owns NO state-transition logic: it reports what happened,
 // Driver decides what it means. A future delegated CLI executor would
@@ -1309,6 +1316,12 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		Unattended:   m.ScheduleID != "",
 		// D-089: same mid-turn steering as discover/plan/worker (issue #458).
 		Steering: r.steeringFor(m.ID, m.Progress),
+		// D-093: the reviewer judges evidence the harness already
+		// produced; its tools are for a spot check, so the loop is
+		// short and every result small. Discover/plan/worker keep the
+		// agent defaults.
+		MaxSteps:      reviewMaxSteps,
+		ToolResultCap: reviewToolResultCap,
 	}
 	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseProve)
 	text, args := res.text, res.sentinelArgs

@@ -128,19 +128,20 @@ func TestAnthropicMessagesImageBlock(t *testing.T) {
 	}
 }
 
-// TestAnthropicMessagesTextOnlyUnchangedWireShape pins the existing
-// wire shape for a plain user/assistant message: content stays a bare
-// string, not a block array, when there is nothing but text.
-func TestAnthropicMessagesTextOnlyUnchangedWireShape(t *testing.T) {
+// TestAnthropicMessagesTextOnlyIsOneTextBlock pins the wire shape for
+// a plain user/assistant message since D-093: one unmarked text block,
+// never a bare string, so the message serialises identically whether or
+// not it is the step's last (marked) message.
+func TestAnthropicMessagesTextOnlyIsOneTextBlock(t *testing.T) {
 	t.Parallel()
 	msgs := anthropicMessages([]Message{{Role: "user", Content: "hello"}})
 
 	if len(msgs) != 1 {
 		t.Fatalf("messages = %+v, want 1", msgs)
 	}
-	content, ok := msgs[0].Content.(string)
-	if !ok || content != "hello" {
-		t.Fatalf("Content = %+v, want the bare string %q", msgs[0].Content, "hello")
+	blocks, ok := msgs[0].Content.([]anthropicContentBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Type != "text" || blocks[0].Text != "hello" || blocks[0].CacheControl != nil {
+		t.Fatalf("Content = %+v, want one unmarked text block %q", msgs[0].Content, "hello")
 	}
 }
 

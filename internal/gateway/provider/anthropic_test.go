@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,6 +69,94 @@ func TestAnthropicHappyPath(t *testing.T) {
 	}
 	if lastType(t, events) != stream.EventDone {
 		t.Fatalf("last event = %v, want done", lastType(t, events))
+	}
+}
+
+// TestAnthropicRequestCarriesTwoCacheBreakpoints pins D-093: the
+// serialised request marks exactly two blocks with cache_control, the
+// system block and the last content block of the last message, for
+// both a plain-string last message and a tool_result block list.
+func TestAnthropicRequestCarriesTwoCacheBreakpoints(t *testing.T) {
+	t.Parallel()
+	a := NewAnthropic(AnthropicConfig{Name: "a"})
+	cases := []struct {
+		name string
+		msgs []Message
+		want string // JSON fragment the marked last block must contain
+	}{
+		{"plain user message", []Message{{Role: "user", Content: "hi"}}, `{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}`},
+		{"tool result", []Message{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "echo", Input: json.RawMessage(`{}`)}}},
+			{Role: "tool", ToolResult: &ToolResult{ID: "c1", Content: "out"}},
+		}, `{"type":"tool_result","tool_use_id":"c1","content":"out","cache_control":{"type":"ephemeral"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(a.buildRequest(CompletionRequest{Model: "m", System: "sys", Messages: tc.msgs}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(body), `"cache_control"`); got != 2 {
+				t.Fatalf("cache_control markers = %d, want 2 (system + last block):\n%s", got, body)
+			}
+			if !strings.Contains(string(body), tc.want) {
+				t.Fatalf("last block not marked:\nwant %s\nin   %s", tc.want, body)
+			}
+			// Only the LAST message carries the marker: the first user
+			// message in the tool-result case is an unmarked text block.
+			if len(tc.msgs) > 1 && !strings.Contains(string(body), `{"role":"user","content":[{"type":"text","text":"hi"}]}`) {
+				t.Fatalf("earlier message was marked or reshaped:\n%s", body)
+			}
+		})
+	}
+	// No system, no messages: nothing to mark, nothing to crash on.
+	if _, err := json.Marshal(a.buildRequest(CompletionRequest{Model: "m"})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAnthropicRequestPrefixStableAcrossSteps pins the property the
+// breakpoints rely on: step N+1 of a tool loop re-sends step N's system,
+// tools and messages byte-for-byte (the breakpoint moving to the new
+// last block is the only difference), so the provider serves the whole
+// earlier prefix from cache.
+func TestAnthropicRequestPrefixStableAcrossSteps(t *testing.T) {
+	t.Parallel()
+	a := NewAnthropic(AnthropicConfig{Name: "a"})
+	tools := []ToolDef{{Name: "echo", Description: "echoes", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+	stepN := []Message{{Role: "user", Content: "packet"}}
+	stepN1 := append(append([]Message{}, stepN...),
+		Message{Role: "assistant", Content: "calling", ToolCalls: []ToolCall{{ID: "c1", Name: "echo", Input: json.RawMessage(`{"text":"x"}`)}}},
+		Message{Role: "tool", ToolResult: &ToolResult{ID: "c1", Content: "echo: x"}},
+	)
+	reqN := a.buildRequest(CompletionRequest{Model: "m", System: "sys", Tools: tools, Messages: stepN})
+	reqN1 := a.buildRequest(CompletionRequest{Model: "m", System: "sys", Tools: tools, Messages: stepN1})
+
+	marshal := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if marshal(reqN.System) != marshal(reqN1.System) || marshal(reqN.Tools) != marshal(reqN1.Tools) {
+		t.Fatal("system or tool definitions differ between steps; the cached prefix would miss")
+	}
+	strip := func(s string) string { return strings.ReplaceAll(s, `,"cache_control":{"type":"ephemeral"}`, "") }
+	for i := range reqN.Messages {
+		got, want := strip(marshal(reqN1.Messages[i])), strip(marshal(reqN.Messages[i]))
+		if got != want {
+			t.Fatalf("message %d differs between steps:\nstep N   %s\nstep N+1 %s", i, want, got)
+		}
+	}
+	// Step N's marked last block must be plain again in step N+1 (a
+	// stale marker there would be a third breakpoint).
+	if strings.Contains(marshal(reqN1.Messages[0]), "cache_control") {
+		t.Fatalf("step N+1 still marks step N's last block:\n%s", marshal(reqN1.Messages[0]))
+	}
+	if !strings.Contains(marshal(reqN1.Messages[len(reqN1.Messages)-1]), "cache_control") {
+		t.Fatal("step N+1's last block carries no breakpoint")
 	}
 }
 
