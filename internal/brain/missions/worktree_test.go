@@ -229,7 +229,7 @@ func TestProvisionWorkspacePathIncludesKind(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, _, _, _, _, err := w.Provision(ctx, "mission-kind-1", "Fix the login bug", "coding", "", "", nil, "", "")
+	workspace, _, _, _, _, err := w.Provision(ctx, "mission-kind-1", "Fix the login bug", "", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestProvisionWorkspacePathIncludesKind(t *testing.T) {
 		t.Fatalf("workspace = %q, want %q", workspace, want)
 	}
 
-	workspace2, _, _, _, _, err := w.Provision(ctx, "mission-kind-2", "Summarize the doc", "general", "", "", nil, "", "")
+	workspace2, _, _, _, _, err := w.Provision(ctx, "mission-kind-2", "Summarize the doc", "", "general", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestProvisionCodingMissionSelfInitsRepo(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-self", "Fix the login bug", "coding", "", "", nil, "", "")
+	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-self", "Fix the login bug", "", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestProvisionSelfInitRollbackAndCommitUnit(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	_, worktree, _, _, _, err := w.Provision(ctx, "mission-self-2", "Add a feature", "coding", "", "", nil, "", "")
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-self-2", "Add a feature", "", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestProvisionClonesRepo(t *testing.T) {
 	gitRun(t, seed, "remote", "add", "origin", bare)
 	gitRun(t, seed, "push", "-q", "origin", "main")
 
-	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-clone", "Fix the login bug", "coding", bare, "dummy-token", nil, "", "")
+	workspace, worktree, branch, baseCommit, _, err := w.Provision(ctx, "mission-clone", "Fix the login bug", "", "coding", bare, "dummy-token", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestProvisionClonesRepoWithBaseRef(t *testing.T) {
 		t.Fatal("test setup: parent branch commit must differ from main")
 	}
 
-	_, worktree, branch, baseCommit, baseUsed, err := w.Provision(ctx, "mission-followup", "Continue the work", "coding", bare, "dummy-token", nil, "", "feat/parent-work")
+	_, worktree, branch, baseCommit, baseUsed, err := w.Provision(ctx, "mission-followup", "Continue the work", "", "coding", bare, "dummy-token", nil, "", "feat/parent-work")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestProvisionClonesRepoWithUnreachableBaseRefFallsBack(t *testing.T) {
 	gitRun(t, seed, "push", "-q", "origin", "main")
 	mainCommit := strings.TrimSpace(gitRun(t, seed, "rev-parse", "main"))
 
-	_, worktree, branch, baseCommit, baseUsed, err := w.Provision(ctx, "mission-followup-missing", "Continue the work", "coding", bare, "dummy-token", nil, "", "does-not-exist")
+	_, worktree, branch, baseCommit, baseUsed, err := w.Provision(ctx, "mission-followup-missing", "Continue the work", "", "coding", bare, "dummy-token", nil, "", "does-not-exist")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestProvisionClonesRepoWithConnIdentity(t *testing.T) {
 	gitRun(t, seed, "push", "-q", "origin", "main")
 
 	identity := &GitIdentity{Name: "conn-bot", Email: "conn-bot@example.com"}
-	_, worktree, _, _, _, err := w.Provision(ctx, "mission-conn-identity", "Fix the login bug", "coding", bare, "dummy-token", identity, "", "")
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-conn-identity", "Fix the login bug", "", "coding", bare, "dummy-token", identity, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -591,7 +591,7 @@ func TestProvisionClonesRepoWithSigningKey(t *testing.T) {
 
 	privatePEM, publicLine := testSigningKeypair(t)
 	identity := &GitIdentity{Name: "conn-bot", Email: "conn-bot@example.com", SigningKey: privatePEM}
-	workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-signing", "Fix the login bug", "coding", bare, "dummy-token", identity, "", "")
+	workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-signing", "Fix the login bug", "", "coding", bare, "dummy-token", identity, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestTeardownRemovesSelfInitRepo(t *testing.T) {
 	w := newTestWorkspace(t)
 	ctx := context.Background()
 
-	workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-self-3", "Teardown test", "coding", "", "", nil, "", "")
+	workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-self-3", "Teardown test", "", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}

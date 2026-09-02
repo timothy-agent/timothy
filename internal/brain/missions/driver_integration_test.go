@@ -32,7 +32,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	ws, wt, branch, base, _, err := workspace.Provision(ctx, id, marker+"e2e coding", "coding", "", "", nil, "", "")
+	ws, wt, branch, base, _, err := workspace.Provision(ctx, id, marker+"e2e coding", "", "coding", "", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
