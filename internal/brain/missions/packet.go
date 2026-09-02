@@ -78,6 +78,12 @@ type WorkPacket struct {
 	// Location is the operator's configured timezone, used to render
 	// progress-note timestamps; nil renders in UTC.
 	Location *time.Location
+	// Findings is the mission's findings ledger (D-092): render lists
+	// the open ones as this turn's work, with ReworkRound of MaxRounds
+	// as the cycle position. Shared by the native and delegated paths.
+	Findings    []Finding
+	ReworkRound int
+	MaxRounds   int
 }
 
 // toolDisciplineNote is the tool-loop stop-rule contract shared by the
@@ -146,6 +152,9 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	}
 
 	if len(p.Plan.Units) > 0 {
+		if unit, _ := currentUnit(p.Plan); unit != nil {
+			fmt.Fprintf(&b, "Current unit: %s\n", NeutralizeSlot(unit.Title))
+		}
 		b.WriteString("Plan:\n")
 		for _, u := range p.Plan.Units {
 			status := "pending"
@@ -165,6 +174,8 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 		}
 		b.WriteString("\n")
 	}
+
+	b.WriteString(renderOpenFindings(p.Findings, p.ReworkRound, p.MaxRounds))
 
 	if len(p.Progress) > 0 {
 		loc := p.Location
@@ -204,6 +215,37 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	b.WriteString(renderAttachments(p.Attachments))
 
 	return system, b.String()
+}
+
+// renderOpenFindings is the rework turn's work order (D-092): the open
+// findings by id, with the cycle position, and the instruction to fix
+// rather than re-verify. Empty when nothing is open. Title, file and
+// detail are reviewer (model) output, so each passes NeutralizeSlot.
+func renderOpenFindings(findings []Finding, round, maxRounds int) string {
+	open := OpenFindings(findings)
+	if len(open) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Current work: close open review findings (round %d of %d)\n", round, maxRounds)
+	b.WriteString("Open review findings, all must be closed this turn:\n")
+	for _, f := range open {
+		severity := f.Severity
+		if severity == "" {
+			severity = SeverityBlocking
+		}
+		fmt.Fprintf(&b, "- %s [%s]", f.ID, severity)
+		if f.File != "" {
+			fmt.Fprintf(&b, " %s:", NeutralizeSlot(f.File))
+		}
+		fmt.Fprintf(&b, " %s.", NeutralizeSlot(strings.TrimSuffix(strings.TrimSpace(f.Title), ".")))
+		if f.Detail != "" {
+			fmt.Fprintf(&b, " %s", NeutralizeSlot(f.Detail))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Do not re-verify the whole project. Change code, run the affected unit's verify_cmd, commit, and report per finding what changed.\n\n")
+	return b.String()
 }
 
 // renderAttachments formats each attachment with markdown into a

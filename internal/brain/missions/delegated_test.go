@@ -397,8 +397,8 @@ func (f *fakeNative) RunWorker(ctx context.Context, m Mission, packet WorkPacket
 	f.mu.Unlock()
 	return f.verdict, f.text, f.err
 }
-func (f *fakeNative) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
-	return ReviewVerdict{}, nil, nil
+func (f *fakeNative) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
+	return ReviewVerdict{}, nil
 }
 func (f *fakeNative) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	return Plan{}, nil
@@ -1531,7 +1531,7 @@ func TestDelegatedRunner_PassesThroughNonWorkerSessions(t *testing.T) {
 	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	if _, _, err := r.RunReview(context.Background(), m, ReviewPacket{}, nil); err != nil {
+	if _, err := r.RunReview(context.Background(), m, ReviewPacket{}); err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
 }

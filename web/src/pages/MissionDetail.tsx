@@ -140,6 +140,18 @@ function turnStats(events: MissionEvent[]): { turns: number; processingMs: numbe
 const resumableStatuses = new Set(['paused', 'waiting_for_input'])
 const terminalPhases = new Set(['done', 'failed'])
 
+// pauseReasonLabels renders the harness's PauseReason values
+// (statemachine.go) readably; an unknown value falls back to itself.
+const pauseReasonLabels: Record<string, string> = {
+  backoff: 'repeated worker failures',
+  no_progress: 'no progress on open findings',
+  infra: 'infrastructure error',
+  budget: 'budget exhausted',
+  mixed_currency: 'spend in an unconvertible currency',
+  approval: 'plan awaiting approval',
+  review_exhausted: 'review rounds exhausted, findings still open',
+}
+
 // runsPlanless mirrors missions.Mission.RunsPlanless (D-090, issue
 // #459): light and flow=discover_generate both run generate with no
 // plan, no review; the worker's final message is the deliverable
@@ -719,6 +731,11 @@ export function MissionDetail() {
                   </span>
                 ))}
               </div>
+            )}
+            {mission.status === 'paused' && mission.pause_reason && (
+              <p className="mt-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+                Paused: {pauseReasonLabels[mission.pause_reason] ?? mission.pause_reason}
+              </p>
             )}
             {pauseDetail && (
               <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>

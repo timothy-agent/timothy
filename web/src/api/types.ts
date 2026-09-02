@@ -682,6 +682,21 @@ export interface ProgressNote {
   note: string
 }
 
+// ReviewFinding is one reviewer-reported gap tracked as mission state
+// (missions.Finding, D-092): the harness assigns id/status/rounds, the
+// reviewer supplies title/file/detail/severity.
+export interface ReviewFinding {
+  id: string
+  unit: number
+  title: string
+  file: string
+  detail: string
+  severity?: 'blocking' | 'minor'
+  status?: 'open' | 'resolved' | 'accepted'
+  round_opened?: number
+  untouched_rounds?: number
+}
+
 // Mission is one long-running, agent-driven unit of work
 // (internal/brain/missions): discover -> plan -> generate -> prove ->
 // result under a state machine.
@@ -705,8 +720,21 @@ export interface Mission {
   // mission's latest mission.failed event's payload.reason:
   // "cancelled" or "max_iterations": set only when phase is 'failed'.
   failure_reason?: string
-  pause_reason?: 'backoff' | 'no_progress' | 'infra' | 'budget' | 'mixed_currency' | 'approval' | ''
+  pause_reason?:
+    | 'backoff'
+    | 'no_progress'
+    | 'infra'
+    | 'budget'
+    | 'mixed_currency'
+    | 'approval'
+    | 'review_exhausted'
+    | ''
   pause_message?: string
+  // review_findings is the findings ledger (D-092): every reviewer
+  // finding ever opened, ids assigned by the harness; rework_rounds
+  // counts the current review cycle's rejections.
+  review_findings?: ReviewFinding[]
+  rework_rounds?: number
   workspace?: string
   worktree?: string
   branch?: string

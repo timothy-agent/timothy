@@ -44,14 +44,6 @@ var ErrPromptTooLong = errors.New("mission turn rejected: prompt exceeds the mod
 // mistaking the missing sentinel for a forced failure.
 var ErrAskedUser = errors.New("mission turn parked on ask_user")
 
-// GatekeeperState is whatever a reviewer session needs to resume
-// in-memory for a delta recheck on rework, instead of cold-reanalyzing
-// from scratch. Acceptable to lose on restart: a cold reviewer just
-// re-checks everything, which is safe, just slower.
-type GatekeeperState struct {
-	Messages []provider.Message
-}
-
 // Runner executes ONE session (worker turn, reviewer turn, or planner
 // turn) and owns NO state-transition logic: it reports what happened,
 // Driver decides what it means. A future delegated CLI executor would
@@ -66,10 +58,11 @@ type Runner interface {
 	// extraction and NeutralizeSlot'd storage).
 	RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error)
 
-	// RunReview resumes (or starts, on the first round) the gatekeeper
-	// session, judging the packet: goal, plan, harness-read artifact
-	// contents, diff, evidence: and returns the verdict.
-	RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error)
+	// RunReview runs one cold reviewer turn over the packet: goal, plan,
+	// harness-read artifact contents, diff, evidence, and the prior
+	// rounds' open findings (D-092, the durable replacement for the old
+	// resumed reviewer session): and returns the verdict.
+	RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error)
 
 	// PlanSession runs the planning turn that produces a Plan (the list
 	// of PlanUnits) from the mission's goal and discover-phase findings.
@@ -939,7 +932,7 @@ func kbSearchTitleFromHeader(line string) string {
 // route means the ladder is off and the mission's own route always
 // wins.
 func workerRoute(m Mission) string {
-	if m.EscalationRoute != "" && (m.ConsecutiveFailures > 0 || m.StallCount > 0) {
+	if m.EscalationRoute != "" && (m.ConsecutiveFailures > 0 || m.StallCount > 0 || m.ReworkRounds > 0) {
 		return m.EscalationRoute
 	}
 	return m.Route
@@ -991,7 +984,7 @@ func phaseRoute(m Mission) string {
 // carrying it over would pin escalation to a model that may not even be
 // in that chain.
 func workerModel(m Mission) string {
-	if m.EscalationRoute != "" && (m.ConsecutiveFailures > 0 || m.StallCount > 0) {
+	if m.EscalationRoute != "" && (m.ConsecutiveFailures > 0 || m.StallCount > 0 || m.ReworkRounds > 0) {
 		return ""
 	}
 	return m.RouteModel
@@ -1291,19 +1284,13 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 
 // RunReview judges the packet: the mission's goal and plan, the
 // harness-read artifact contents (never the worker's description of
-// them), the baseline diff when one exists, and the worker's evidence
-// last. gatekeeper carries prior messages to resume the same reviewer
-// session on rework (a "delta recheck" instead of cold-reanalyzing);
-// nil starts fresh.
-func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
-	system := "You are reviewing one unit of a mission's work. The mission goal, the plan, and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below — judge against THEM. Look for real reasons to reject before approving: the artifact not satisfying the goal, unsupported claims, missing substance. Reject when the work violates an explicit constraint stated in the goal, even if it faithfully follows the plan: the goal outranks the plan. Do NOT reject for material you were not given (the harness supplies everything there is). End your turn with exactly one review_verdict tool call."
-	content := renderReviewContent(packet)
-
-	var messages []provider.Message
-	if gatekeeper != nil {
-		messages = append(messages, gatekeeper.Messages...)
-	}
-	messages = append(messages, provider.Message{Role: "user", Content: content})
+// them), the baseline diff when one exists, the prior rounds' open
+// findings, and the worker's evidence last. Every round is a cold
+// session (D-092): findings carry across rounds as mission state, so
+// no reviewer transcript is retained to anchor the next verdict.
+func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
+	system := "You are reviewing one unit of a mission's work. The mission goal, the plan, and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below — judge against THEM. Look for real reasons to reject before approving: the artifact not satisfying the goal, unsupported claims, missing substance. Reject when the work violates an explicit constraint stated in the goal, even if it faithfully follows the plan: the goal outranks the plan. Do NOT reject for material you were not given (the harness supplies everything there is). Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. End your turn with exactly one review_verdict tool call."
+	messages := []provider.Message{{Role: "user", Content: renderReviewContent(packet)}}
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
 	if t := r.askUserTool(m, PhaseProve); t != nil {
@@ -1326,10 +1313,10 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	res, err := r.runTurn(ctx, req, reviewVerdictToolName, PhaseProve)
 	text, args := res.text, res.sentinelArgs
 	if err != nil {
-		return ReviewVerdict{}, nil, err
+		return ReviewVerdict{}, err
 	}
 	if res.askedUser {
-		return ReviewVerdict{}, nil, ErrAskedUser
+		return ReviewVerdict{}, ErrAskedUser
 	}
 	if len(args) == 0 {
 		// Recovery re-run: same one-shot ladder RunWorker uses: a
@@ -1344,7 +1331,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		recoverRes, err := r.runTurn(ctx, recoverReq, reviewVerdictToolName, PhaseProve)
 		recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
 		if err != nil {
-			return ReviewVerdict{}, nil, err
+			return ReviewVerdict{}, err
 		}
 		if len(recoverArgs) == 0 {
 			// Neither turn produced a review_verdict tool call: before
@@ -1354,100 +1341,31 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 			// RunWorker's identical fallback above): the harness's own
 			// artifact/diff evidence, not the reviewer's self-report,
 			// decides whether a unit actually holds up. A text-form rework
-			// with no parseable findings is acceptable: GapFingerprint of
-			// empty findings is empty, which the state machine already
-			// tolerates.
+			// with no parseable findings is acceptable: the state machine
+			// tolerates a rework that opens nothing new.
 			combined := text + "\n" + recoverText
 			if raw, ok := extractTextSentinel(combined, reviewVerdictToolName); ok {
 				r.log.Warn("mission reviewer expressed review_verdict as text, not a tool call", "mission_id", m.ID, "route", reviewRoute(m))
-				text, args = combined, raw
+				args = raw
 			} else {
-				return ReviewVerdict{}, nil, fmt.Errorf("mission runner: reviewer ended without a review_verdict call")
+				return ReviewVerdict{}, fmt.Errorf("mission runner: reviewer ended without a review_verdict call")
 			}
 		} else {
-			text, args = text+"\n"+recoverText, recoverArgs
+			args = recoverArgs
 		}
 	}
 	verdict, err := parseReviewVerdict(args)
 	if err != nil {
-		return ReviewVerdict{}, nil, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
 	}
-
-	// D-091/issue #505: the round's full packet (goal, plan, artifacts,
-	// diff) is never retained across rounds: reviewers reword findings,
-	// so a run of reworks would otherwise compound copies of it into one
-	// prompt until every provider rejects it. Only a compact summary of
-	// this round plus the assistant's verdict is kept.
-	round := append(append([]provider.Message{}, gatekeeperMessages(gatekeeper)...),
-		provider.Message{Role: "user", Content: reviewRoundSummary(packet, verdict)},
-		provider.Message{Role: "assistant", Content: NeutralizeSlot(text)},
-	)
-	nextState := &GatekeeperState{Messages: capGatekeeperRounds(round)}
-	return verdict, nextState, nil
-}
-
-// gatekeeperMessages returns gatekeeper's prior messages, or nil when
-// gatekeeper is nil (first round).
-func gatekeeperMessages(gatekeeper *GatekeeperState) []provider.Message {
-	if gatekeeper == nil {
-		return nil
-	}
-	return gatekeeper.Messages
-}
-
-// gatekeeperRoundsCap bounds how many prior review rounds' messages
-// (user summary + assistant verdict pairs) are retained across rework
-// rounds.
-const gatekeeperRoundsCap = 4
-
-// capGatekeeperRounds drops the oldest round (a user/assistant pair)
-// once messages holds more than gatekeeperRoundsCap rounds.
-func capGatekeeperRounds(messages []provider.Message) []provider.Message {
-	maxLen := gatekeeperRoundsCap * 2
-	if len(messages) <= maxLen {
-		return messages
-	}
-	return messages[len(messages)-maxLen:]
-}
-
-// reviewRoundSummary renders a compact record of one finished review
-// round for the resumed reviewer session: the full packet is never
-// retained (see RunReview), so this summary, plus the packet's next
-// round (which IS authoritative), is all the reviewer carries forward.
-func reviewRoundSummary(packet ReviewPacket, verdict ReviewVerdict) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Prior review round for unit %s. The full goal, plan, artifacts and diff were shown in that round and are omitted here; the current round's packet below is authoritative. Verdict: ", NeutralizeSlot(packet.UnitTitle))
-	if verdict.Approved {
-		b.WriteString("approve")
-	} else {
-		b.WriteString("rework")
-	}
-	b.WriteString(". Findings:")
-	if len(verdict.Findings) == 0 {
-		b.WriteString(" none")
-		return b.String()
-	}
-	for _, f := range verdict.Findings {
-		b.WriteString("\n- ")
-		b.WriteString(NeutralizeSlot(f.Title))
-		if f.File != "" {
-			b.WriteString(" (")
-			b.WriteString(NeutralizeSlot(f.File))
-			b.WriteString(")")
-		}
-		if f.Detail != "" {
-			b.WriteString(": ")
-			b.WriteString(NeutralizeSlot(f.Detail))
-		}
-	}
-	return b.String()
+	return verdict, nil
 }
 
 // renderReviewContent lays the packet out for the reviewer: goal and
-// plan first (context), harness-read artifacts and diff in the middle
-// (the evidence that counts), the worker's own account last (the
-// least trustworthy part). All model-produced text passes through
-// NeutralizeSlot.
+// plan first (context), the prior rounds' open findings, harness-read
+// artifacts and diff in the middle (the evidence that counts), the
+// worker's own account last (the least trustworthy part). All
+// model-produced text passes through NeutralizeSlot.
 func renderReviewContent(p ReviewPacket) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Mission goal: %s\n", NeutralizeSlot(p.Goal))
@@ -1462,6 +1380,20 @@ func renderReviewContent(p ReviewPacket) string {
 				status = "verified"
 			}
 			fmt.Fprintf(&b, "- [%s] %s\n", status, NeutralizeSlot(u.Title))
+		}
+	}
+	if open := OpenFindings(p.OpenFindings); len(open) > 0 {
+		b.WriteString("\nOpen findings from prior rounds (mark resolved ids in your verdict):\n")
+		for _, f := range open {
+			severity := f.Severity
+			if severity == "" {
+				severity = SeverityBlocking
+			}
+			fmt.Fprintf(&b, "- %s [%s]", f.ID, severity)
+			if f.File != "" {
+				fmt.Fprintf(&b, " %s:", NeutralizeSlot(f.File))
+			}
+			fmt.Fprintf(&b, " %s\n", NeutralizeSlot(f.Title))
 		}
 	}
 	if p.Listing != "" {

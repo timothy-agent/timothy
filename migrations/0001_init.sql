@@ -583,6 +583,13 @@ CREATE TABLE IF NOT EXISTS missions (
     -- Fingerprint of the last stall's cause, deduping repeat replans.
     last_gap_fingerprint  text NOT NULL DEFAULT '',
     stall_count           integer NOT NULL DEFAULT 0,
+    -- Findings ledger (D-092): every reviewer finding ever opened
+    -- (missions.Finding), harness-assigned id F<n>, status open/
+    -- resolved/accepted. Written only through ApplyTransition.
+    review_findings       jsonb NOT NULL DEFAULT '[]',
+    -- Review rejections in the current review cycle; reset on approve,
+    -- parks the mission (review_exhausted) at max_iterations.
+    rework_rounds         integer NOT NULL DEFAULT 0,
     -- Spend ceiling; NULL means unlimited.
     budget_amount         numeric(12,2),
     -- Currency budget_amount is denominated in.

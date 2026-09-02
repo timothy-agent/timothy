@@ -9,49 +9,6 @@ import (
 	"testing"
 )
 
-func TestGapFingerprintEmpty(t *testing.T) {
-	if got := GapFingerprint(nil); got != "" {
-		t.Fatalf("GapFingerprint(nil) = %q, want empty string", got)
-	}
-	if got := GapFingerprint([]Finding{}); got != "" {
-		t.Fatalf("GapFingerprint([]) = %q, want empty string", got)
-	}
-}
-
-func TestGapFingerprintOrderIndependent(t *testing.T) {
-	a := []Finding{
-		{Title: "missing nil check", File: "foo.go", Detail: "first phrasing"},
-		{Title: "unused import", File: "bar.go", Detail: "second phrasing"},
-	}
-	b := []Finding{
-		{Title: "unused import", File: "bar.go", Detail: "different detail entirely"},
-		{Title: "missing nil check", File: "foo.go", Detail: "yet another phrasing"},
-	}
-	fa, fb := GapFingerprint(a), GapFingerprint(b)
-	if fa == "" || fb == "" {
-		t.Fatal("non-empty findings produced an empty fingerprint")
-	}
-	if fa != fb {
-		t.Fatalf("fingerprints differ for the same (title,file) pairs in different order and different detail: %q vs %q", fa, fb)
-	}
-}
-
-func TestGapFingerprintDifferentFindingsDiffer(t *testing.T) {
-	a := []Finding{{Title: "missing nil check", File: "foo.go"}}
-	b := []Finding{{Title: "off by one", File: "foo.go"}}
-	if GapFingerprint(a) == GapFingerprint(b) {
-		t.Fatal("different findings produced the same fingerprint")
-	}
-}
-
-func TestGapFingerprintNormalizesCaseAndWhitespace(t *testing.T) {
-	a := []Finding{{Title: "  Missing Nil Check  ", File: "Foo.go"}}
-	b := []Finding{{Title: "missing nil check", File: "foo.go"}}
-	if GapFingerprint(a) != GapFingerprint(b) {
-		t.Fatal("case/whitespace normalization did not collapse equivalent findings")
-	}
-}
-
 func TestParseReviewVerdict(t *testing.T) {
 	v, err := parseReviewVerdict([]byte(`{"decision":"rework","findings":[{"title":"x","file":"y.go","detail":"z"}]}`))
 	if err != nil {
@@ -67,6 +24,29 @@ func TestParseReviewVerdict(t *testing.T) {
 	}
 	if !approved.Approved {
 		t.Fatal("decision=approve did not parse as Approved=true")
+	}
+}
+
+// TestParseReviewVerdictSeverityAndResolved pins the D-092 schema
+// additions: severity defaults to blocking when absent or unknown,
+// minor is kept, and resolved ids pass through in order.
+func TestParseReviewVerdictSeverityAndResolved(t *testing.T) {
+	v, err := parseReviewVerdict([]byte(`{"decision":"rework","resolved":["F2","F1"],"findings":[
+		{"title":"no severity"},
+		{"title":"minor one","severity":"minor"},
+		{"title":"unknown severity","severity":"critical"}
+	]}`))
+	if err != nil {
+		t.Fatalf("parseReviewVerdict: %v", err)
+	}
+	if got := []string{v.Findings[0].Severity, v.Findings[1].Severity, v.Findings[2].Severity}; got[0] != SeverityBlocking || got[1] != SeverityMinor || got[2] != SeverityBlocking {
+		t.Fatalf("severities = %v, want [blocking minor blocking]", got)
+	}
+	if len(v.Resolved) != 2 || v.Resolved[0] != "F2" || v.Resolved[1] != "F1" {
+		t.Fatalf("Resolved = %v, want [F2 F1]", v.Resolved)
+	}
+	if !v.Findings[0].Blocking() || v.Findings[1].Blocking() {
+		t.Fatal("Blocking() disagrees with the parsed severities")
 	}
 }
 
@@ -180,35 +160,6 @@ func TestBaselineDiffCappedParameter(t *testing.T) {
 	}
 	if len(diff) > 200+200 { // truncation marker + trailer add bounded overhead
 		t.Fatalf("diff length %d far exceeds the 200-byte cap", len(diff))
-	}
-}
-
-// TestReviewRoundSummary confirms the compact round summary carries
-// finding titles/files/details and the verdict, never diff/artifact text.
-func TestReviewRoundSummary(t *testing.T) {
-	packet := ReviewPacket{
-		UnitTitle: "Write the report",
-		Diff:      "+this line must never appear in the summary",
-		Artifacts: map[string]string{"report.md": "artifact body must never appear either"},
-	}
-	verdict := ReviewVerdict{
-		Approved: false,
-		Findings: []Finding{
-			{Title: "missing citation", File: "report.md", Detail: "claim on line 4 has no source"},
-		},
-	}
-	summary := reviewRoundSummary(packet, verdict)
-	if !strings.Contains(summary, "Write the report") {
-		t.Fatalf("summary missing unit title: %q", summary)
-	}
-	if !strings.Contains(summary, "rework") {
-		t.Fatalf("summary missing verdict: %q", summary)
-	}
-	if !strings.Contains(summary, "missing citation") || !strings.Contains(summary, "report.md") || !strings.Contains(summary, "claim on line 4 has no source") {
-		t.Fatalf("summary missing finding detail: %q", summary)
-	}
-	if strings.Contains(summary, "must never appear") {
-		t.Fatalf("summary leaked diff/artifact content: %q", summary)
 	}
 }
 

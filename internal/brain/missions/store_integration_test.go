@@ -787,6 +787,47 @@ func TestApplyTransitionAndEvents(t *testing.T) {
 	}
 }
 
+// TestReviewFindingsRoundTrip confirms the D-092 ledger is real DB
+// state: findings and the rework counter written by ApplyTransition
+// come back from Get with ids, statuses and counters intact, and a
+// fresh mission loads an empty (non-nil) ledger.
+func TestReviewFindingsRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "findings", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fresh, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if fresh.ReviewFindings == nil || len(fresh.ReviewFindings) != 0 || fresh.ReworkRounds != 0 {
+		t.Fatalf("fresh mission ledger = %+v rounds %d, want empty non-nil and 0", fresh.ReviewFindings, fresh.ReworkRounds)
+	}
+
+	findings := []Finding{
+		{ID: "F1", Unit: 0, Title: "missing validation", File: "x.go", Detail: "no input check", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1, UntouchedRounds: 1},
+		{ID: "F2", Unit: 0, Title: "typo", Severity: SeverityMinor, Status: FindingResolved, RoundOpened: 1},
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next: StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 3, ReviewFindings: findings, ReworkRounds: 2},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.ReworkRounds != 2 {
+		t.Fatalf("ReworkRounds = %d, want 2", m.ReworkRounds)
+	}
+	if len(m.ReviewFindings) != 2 || m.ReviewFindings[0] != findings[0] || m.ReviewFindings[1] != findings[1] {
+		t.Fatalf("ReviewFindings = %+v, want %+v", m.ReviewFindings, findings)
+	}
+}
+
 // TestPlanApprovalParkRoundTrip confirms D-087 (issue #456) is real DB
 // state, not in-memory only: a mission created with auto_approve_plan
 // false, parked on PauseApproval via ApplyTransition, survives a fresh

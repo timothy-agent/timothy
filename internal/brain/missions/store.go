@@ -51,7 +51,8 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
 	discover_notes, replan_used, schedule_id, session_id, harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
-	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow`
+	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
+	review_findings, rework_rounds`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -86,6 +87,16 @@ func scanPendingPermission(m *Mission, raw []byte) {
 	m.PendingPermissionParkedAt = p.ParkedAt
 }
 
+// scanReviewFindings unmarshals the review_findings jsonb column
+// (D-092); the empty ledger loads as an empty, non-nil slice so the
+// API always serializes an array.
+func scanReviewFindings(m *Mission, raw []byte) {
+	_ = json.Unmarshal(raw, &m.ReviewFindings)
+	if m.ReviewFindings == nil {
+		m.ReviewFindings = []Finding{}
+	}
+}
+
 // scanPendingInput unmarshals the pending_input jsonb column (nil when
 // there's no pending question) into Mission.PendingInput.
 func scanPendingInput(m *Mission, raw []byte) {
@@ -116,6 +127,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		permissionTimeoutSeconds                                     *int
 		pendingInputRaw                                              []byte
 		flow                                                         string
+		reviewFindingsRaw                                            []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &plan, &progress, &m.Iteration, &m.MaxIterations,
@@ -126,11 +138,12 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed, &flow,
+		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = Flow(flow)
+	scanReviewFindings(&m, reviewFindingsRaw)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
@@ -201,6 +214,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		permissionTimeoutSeconds                                     *int
 		pendingInputRaw                                              []byte
 		flow                                                         string
+		reviewFindingsRaw                                            []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &plan, &progress, &m.Iteration, &m.MaxIterations,
@@ -211,10 +225,11 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed, &flow); err != nil {
+		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = Flow(flow)
+	scanReviewFindings(&m, reviewFindingsRaw)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
@@ -1073,14 +1088,24 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	// reject it), so leaving the column populated only stales the
 	// Timeline's "Allow" banner for a mission that's no longer running.
 	clearPending := t.Next.Phase.Terminal()
+	findings := t.Next.ReviewFindings
+	if findings == nil {
+		findings = []Finding{}
+	}
+	findingsJSON, err := json.Marshal(findings)
+	if err != nil {
+		return fmt.Errorf("missions apply transition marshal findings: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
 			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, replan_used = $11, updated_at = now(),
-			pending_permission = CASE WHEN $10 THEN NULL ELSE pending_permission END
+			pending_permission = CASE WHEN $10 THEN NULL ELSE pending_permission END,
+			review_findings = $12, rework_rounds = $13
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
+		findingsJSON, t.Next.ReworkRounds,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

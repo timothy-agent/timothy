@@ -62,12 +62,18 @@ type Mission struct {
 	StallCount          int    `json:"stall_count"`
 	// ReplanUsed reports whether this mission already spent its one
 	// automatic replan-on-stall attempt (statemachine.go's
-	// stepWorkerRetry/stepReviewRework).
-	ReplanUsed     bool     `json:"replan_used"`
-	BudgetAmount   *float64 `json:"budget_amount,omitempty"`
-	BudgetCurrency string   `json:"budget_currency,omitempty"`
-	Route          string   `json:"route"`
-	ReviewRoute    string   `json:"review_route"`
+	// stepWorkerRetry).
+	ReplanUsed bool `json:"replan_used"`
+	// ReviewFindings is the findings ledger (D-092, issue #512): every
+	// reviewer finding ever opened, with harness-assigned id and status.
+	// ReworkRounds counts this review cycle's rejections; both written
+	// only through Store.ApplyTransition.
+	ReviewFindings []Finding `json:"review_findings"`
+	ReworkRounds   int       `json:"rework_rounds"`
+	BudgetAmount   *float64  `json:"budget_amount,omitempty"`
+	BudgetCurrency string    `json:"budget_currency,omitempty"`
+	Route          string    `json:"route"`
+	ReviewRoute    string    `json:"review_route"`
 	// PlanRoute, when non-empty, is the route oversight phases (discover,
 	// plan, replan) run on instead of Route — "GLM plans, local
 	// executes": the oversight phases can run on a strong model while

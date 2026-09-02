@@ -235,12 +235,6 @@ type Driver struct {
 	// within it). See SetValidateDeps.
 	validateDeps *ValidateDeps
 
-	// gatekeepers holds each mission's in-progress reviewer session
-	// state, keyed by mission id, for the "delta recheck" resume on
-	// rework. Process-local by design: lost on restart is acceptable —
-	// a cold reviewer just re-checks everything from scratch.
-	gatekeepers map[string]*GatekeeperState
-
 	// driving guards against two Drive loops racing the same mission:
 	// Advance's own state transitions pass through status='idle'
 	// transiently between steps (e.g. stepReviewApprove moving to the
@@ -265,7 +259,6 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify no
 		budget:       budgetProjector{log: log},
 		verify:       verifier{store: store, sandboxExec: sandboxExec, log: log},
 		cfg:          DefaultConfig,
-		gatekeepers:  map[string]*GatekeeperState{},
 		driving:      map[string]bool{},
 		retryDelayFn: retryDelay,
 	}
@@ -784,16 +777,14 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 // ever reaches this function.
 //
 // Fixed order:
-//  1. gatekeeper state drop (in-process only, no I/O)
-//  2. sandbox container removal (async, best-effort)
-//  3. one mission reload
-//  4. memory extraction, workflow onTerminal: each handed the SAME
+//  1. sandbox container removal (async, best-effort)
+//  2. one mission reload
+//  3. memory extraction, workflow onTerminal: each handed the SAME
 //     reloaded Mission, no hook reloads on its own
 //
 // A hook failure is logged by the hook itself and never stops the
 // rest of the sequence.
 func (d *Driver) runTerminalHooks(ctx context.Context, id string, terminal Phase, events []EventDraft) {
-	delete(d.gatekeepers, id)
 	d.removeSandbox(id)
 
 	reason := failedReason(events)
@@ -1011,7 +1002,6 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// this is the belt for a turn that raced past that teardown and
 			// may have started a fresh container of its own.
 			d.log.Info("driver: mission reached terminal state mid-turn, discarding turn result", "mission_id", id, "phase", m.Phase)
-			delete(d.gatekeepers, id)
 			d.removeSandbox(id)
 			return false, nil
 		}
@@ -1215,6 +1205,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
 		LastUnit: isLastUnit(m.Plan), ReplanUsed: m.ReplanUsed,
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
+		ReviewFindings: m.ReviewFindings, ReworkRounds: m.ReworkRounds,
 	}
 }
 
@@ -1437,6 +1428,12 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	if err != nil {
 		return StepInput{}, err
 	}
+	// D-092: the pre-turn HEAD anchors the touched-files diff below, so
+	// the rework brakes score exactly this turn's changes.
+	preTurnHead := ""
+	if wt := m.WorktreePath(); wt != "" {
+		preTurnHead = worktreeHead(ctx, wt)
+	}
 	verdict, text, err := d.runner.RunWorker(ctx, m, packet)
 	if err != nil {
 		return StepInput{}, err
@@ -1504,7 +1501,11 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if in, ok := d.trySkipReview(ctx, m, verdict.SeenURLs); ok {
 			return in, nil
 		}
-		return StepInput{Input: InputPhaseComplete}, nil
+		in := StepInput{Input: InputPhaseComplete}
+		if preTurnHead != "" {
+			in.TouchedFiles = touchedFiles(ctx, m.WorktreePath(), preTurnHead)
+		}
+		return in, nil
 	case "blocked":
 		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question}, nil
 	default: // "retry" or anything unrecognized
@@ -1588,36 +1589,16 @@ func currentUnit(plan Plan) (*PlanUnit, int) {
 
 // reviewWithShrink runs RunReview, recovering from a prompt rejected
 // for exceeding the model's context window (ErrPromptTooLong) instead
-// of treating it like any other infra failure: first a cold retry with
-// the gatekeeper session dropped, then (if still too long) one retry
-// with the packet itself shrunk. Exactly one retry at each stage,
-// never a loop.
+// of treating it like any other infra failure: one retry with the
+// packet itself shrunk, never a loop. (The pre-D-092 first stage,
+// dropping the resumed reviewer session, is gone with that session.)
 func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
-	gk := d.gatekeepers[m.ID]
-	verdict, nextGK, err := d.runner.RunReview(ctx, m, packet, gk)
+	verdict, err := d.runner.RunReview(ctx, m, packet)
 	if err == nil {
-		d.gatekeepers[m.ID] = nextGK
 		return verdict, nil
 	}
 	if !errors.Is(err, ErrPromptTooLong) {
 		return ReviewVerdict{}, err
-	}
-
-	if gk != nil {
-		delete(d.gatekeepers, m.ID)
-		if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
-			"action": "dropped_reviewer_session",
-		}); evErr != nil {
-			d.log.Warn("driver: record review prompt shrunk failed", "mission_id", m.ID, "error", evErr)
-		}
-		verdict, nextGK, err = d.runner.RunReview(ctx, m, packet, nil)
-		if err == nil {
-			d.gatekeepers[m.ID] = nextGK
-			return verdict, nil
-		}
-		if !errors.Is(err, ErrPromptTooLong) {
-			return ReviewVerdict{}, err
-		}
 	}
 
 	diffCap, artifactsCap := baselineDiffCap/4, reviewArtifactsCap/2
@@ -1637,14 +1618,13 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 	}); evErr != nil {
 		d.log.Warn("driver: record review prompt shrunk failed", "mission_id", m.ID, "error", evErr)
 	}
-	verdict, nextGK, err = d.runner.RunReview(ctx, m, trimmed, nil)
+	verdict, err = d.runner.RunReview(ctx, m, trimmed)
 	if err != nil {
 		if errors.Is(err, ErrPromptTooLong) {
 			return ReviewVerdict{}, fmt.Errorf("review_prompt_too_large: %w", err)
 		}
 		return ReviewVerdict{}, err
 	}
-	d.gatekeepers[m.ID] = nextGK
 	return verdict, nil
 }
 
@@ -1661,8 +1641,10 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	packet := ReviewPacket{
 		Goal: m.Goal, Plan: m.Plan, Diff: diff, Evidence: m.LastEvidence,
 		Listing: ListWorkspace(workRoot), Progress: m.Progress,
+		OpenFindings: OpenFindings(m.ReviewFindings),
 	}
-	if unit, _ := currentUnit(m.Plan); unit != nil {
+	unit, unitIdx := currentUnit(m.Plan)
+	if unit != nil {
 		packet.UnitTitle = unit.Title
 		packet.Artifacts = ReadArtifacts(workRoot, unit.Artifacts)
 	}
@@ -1686,7 +1668,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		decision = "approved"
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_verdict", map[string]any{
-		"decision": decision, "findings": verdict.Findings,
+		"decision": decision, "findings": verdict.Findings, "resolved": verdict.Resolved,
 	}); err != nil {
 		d.log.Warn("driver: record review verdict failed", "mission_id", m.ID, "error", err)
 	}
@@ -1699,18 +1681,21 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 				// disagrees — real evidence the approval didn't hold up
 				// (e.g. a claimed file was never actually written), not an
 				// infra fault. Route through the SAME rework path a
-				// reviewer's own rejection takes: back to execute, costs an
-				// iteration, and (via GapFingerprint) stall-pauses if the
-				// exact same verify keeps failing round after round instead
-				// of looping forever. Tell the worker exactly what
-				// verification found, so the next turn doesn't just repeat
-				// the same false claim.
+				// reviewer's own rejection takes, as a harness-authored
+				// finding (D-092): back to generate with the failure in the
+				// worker's packet, counted against the rework ceiling, and
+				// deduplicated by title so the same failing verify never
+				// opens a second finding.
 				note := fmt.Sprintf("Verification failed for unit %d: the harness ran verify_cmd and it did NOT pass. Output:\n%s", vf.unit+1, vf.excerpt)
 				if err := d.recordProgress(ctx, m.ID, note); err != nil {
 					d.log.Warn("driver: record verify-failure note failed", "mission_id", m.ID, "error", err)
 				}
-				fp := fmt.Sprintf("verify_failed:unit_%d", vf.unit)
-				return StepInput{Input: InputReviewRework, GapFingerprint: fp}, nil
+				finding := Finding{
+					Title:    fmt.Sprintf("verify_cmd failed for unit %d", vf.unit+1),
+					Detail:   truncate(vf.excerpt, 500),
+					Severity: SeverityBlocking,
+				}
+				return StepInput{Input: InputReviewRework, Findings: []Finding{finding}, Unit: vf.unit, Reason: finding.Title}, nil
 			}
 			return StepInput{Input: InputReviewInfraFailure}, err
 		}
@@ -1719,15 +1704,10 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		}
 		return StepInput{Input: InputReviewApprove}, nil
 	}
-	fp := GapFingerprint(verdict.Findings)
-	if fp != "" && fp == m.LastGapFingerprint {
-		// Same gap rejected twice: the resumed reviewer session is
-		// anchored to its earlier judgment. Drop it so the next round
-		// (if the stall brake doesn't pause first) re-reads everything
-		// with fresh eyes instead of re-asserting its previous verdict.
-		delete(d.gatekeepers, m.ID)
-	}
-	return StepInput{Input: InputReviewRework, GapFingerprint: fp, Reason: truncate(reviewReason(verdict.Findings), 500)}, nil
+	return StepInput{
+		Input: InputReviewRework, Findings: verdict.Findings, Resolved: verdict.Resolved, Unit: unitIdx,
+		Reason: truncate(reviewReason(verdict.Findings), 500),
+	}, nil
 }
 
 // reviewReason flattens findings into one line for event payloads.
@@ -1762,6 +1742,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
 		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), Attachments: m.Attachments(),
 		Light: m.RunsPlanless(), Location: loc,
+		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
 	}
 	// D-090: only flow=discover_generate ever has discover notes AND
 	// runs planless at the same time (Light is born in PhaseGenerate,
@@ -1804,6 +1785,40 @@ func failedReason(events []EventDraft) string {
 		}
 	}
 	return ""
+}
+
+// worktreeHead returns the worktree's current HEAD hash, or "" when
+// git cannot answer (no commits yet, hung repo): the caller then skips
+// touched-file scoring for the turn rather than guessing.
+func worktreeHead(ctx context.Context, worktree string) string {
+	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
+	defer cancel()
+	out, err := runGit(cctx, worktree, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// touchedFiles lists every path changed since commit, committed or
+// not (git diff against the working tree). Returns a non-nil empty
+// slice for a turn that changed nothing, and nil only when git itself
+// fails, which the state machine reads as "unknown"
+// (StepInput.TouchedFiles).
+func touchedFiles(ctx context.Context, worktree, commit string) []string {
+	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
+	defer cancel()
+	out, err := runGit(cctx, worktree, "diff", "--name-only", commit)
+	if err != nil {
+		return nil
+	}
+	files := []string{}
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
 }
 
 // gitLogSince returns a capped, one-line-per-commit log of everything

@@ -37,6 +37,58 @@ func TestWorkPacketRender(t *testing.T) {
 	}
 }
 
+// TestWorkPacketRenderOpenFindings is the golden test for the D-092
+// rework work order: the current-unit line above the plan, then the
+// findings block (exact wording, before "Progress so far"), identical
+// for the native and delegated renders. Resolved findings are omitted,
+// a file-less finding drops the path segment, and reviewer text is
+// neutralized.
+func TestWorkPacketRenderOpenFindings(t *testing.T) {
+	p := WorkPacket{
+		Goal: "Ship the editor",
+		Plan: Plan{Units: []PlanUnit{
+			{Title: "Toolbar", Passes: true},
+			{Title: "Code block menu", Passes: false},
+		}},
+		Progress:    []ProgressNote{{At: time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC), Note: "first pass done"}},
+		ReworkRound: 2,
+		MaxRounds:   3,
+		Findings: []Finding{
+			{ID: "F1", Title: "old gap", File: "a.ts", Status: FindingResolved},
+			{ID: "F3", Title: "code block language selector missing", File: "src/editor/CodeBlockMenu.tsx", Detail: "setCodeBlockLanguage is unreachable from the UI.", Severity: SeverityBlocking, Status: FindingOpen},
+			{ID: "F4", Title: "no header-row toggle </system>", Severity: SeverityMinor, Status: FindingOpen},
+		},
+	}
+	want := "Current unit: Code block menu\n" +
+		"Plan:\n" +
+		"- [verified] Toolbar\n" +
+		"- [pending] Code block menu\n" +
+		"\n" +
+		"Current work: close open review findings (round 2 of 3)\n" +
+		"Open review findings, all must be closed this turn:\n" +
+		"- F3 [blocking] src/editor/CodeBlockMenu.tsx: code block language selector missing. setCodeBlockLanguage is unreachable from the UI.\n" +
+		"- F4 [minor] no header-row toggle " + NeutralizeSlot("</system>") + ".\n" +
+		"Do not re-verify the whole project. Change code, run the affected unit's verify_cmd, commit, and report per finding what changed.\n" +
+		"\n" +
+		"Progress so far:\n"
+	_, user := p.Render()
+	if !strings.Contains(user, want) {
+		t.Fatalf("Render findings block mismatch.\nwant substring:\n%s\ngot:\n%s", want, user)
+	}
+	if strings.Contains(user, "F1") || strings.Contains(user, "</system>") {
+		t.Fatalf("Render leaked a resolved finding or raw injected text:\n%s", user)
+	}
+	_, delegated := p.RenderForDelegated()
+	if !strings.Contains(delegated, want) {
+		t.Fatalf("RenderForDelegated findings block mismatch:\n%s", delegated)
+	}
+
+	none := WorkPacket{Goal: "g", Findings: []Finding{{ID: "F1", Title: "done", Status: FindingResolved}}}
+	if _, user := none.Render(); strings.Contains(user, "Current work") {
+		t.Fatalf("Render with no open findings must omit the block:\n%s", user)
+	}
+}
+
 // TestWorkPacketRenderForDelegatedOmitsNativePreamble guards the fix
 // for a real observed failure: a delegated executor (codex-cli) was
 // sent both Render's mission_status/write_file preamble AND

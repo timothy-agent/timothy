@@ -306,78 +306,57 @@ func TestRunWorkerIgnoresRepeatSentinelCalls(t *testing.T) {
 	}
 }
 
-func TestRunReviewParsesVerdictAndCarriesGatekeeperState(t *testing.T) {
+func TestRunReviewParsesVerdict(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{textEvent("looks fine"), toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+		{textEvent("looks fine"), toolEndEvent(reviewVerdictToolName, `{"decision":"approve","resolved":["F1"]}`)},
 	}}
 	r := newTestRunner(agent)
-	v, state, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal", Diff: "diff content"}, nil)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal", Diff: "diff content"})
 	if err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
-	if !v.Approved {
-		t.Fatalf("RunReview verdict = %+v, want approved", v)
+	if !v.Approved || len(v.Resolved) != 1 || v.Resolved[0] != "F1" {
+		t.Fatalf("RunReview verdict = %+v, want approved with resolved [F1]", v)
 	}
-	if state == nil || len(state.Messages) == 0 {
-		t.Fatal("RunReview did not return gatekeeper state to resume from")
+	// D-092: every round is a cold session, exactly one user message
+	// carrying the packet, never a prior round's transcript.
+	if msgs := agent.requests[0].Messages; len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Fatalf("reviewer request messages = %+v, want exactly one user message", msgs)
 	}
 }
 
-// TestRunReviewNextStateOmitsFullPacket pins issue #505: the persisted
-// gatekeeper state must never carry the round's diff/artifact text
-// (reworded across rounds, it's what compounded into a multi-megabyte
-// prompt), only a compact summary naming the finding.
-func TestRunReviewNextStateOmitsFullPacket(t *testing.T) {
+// TestRunReviewPacketListsOpenFindings pins the D-092 reviewer packet
+// section: prior rounds' open findings reach the reviewer by id, with
+// severity and file, under a heading telling it to mark resolved ids;
+// resolved findings and an empty ledger render no section at all.
+func TestRunReviewPacketListsOpenFindings(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(reviewVerdictToolName, `{"decision":"rework","findings":[{"title":"missing citation","file":"report.md","detail":"claim on line 4 has no source"}]}`)},
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
 	}}
 	r := newTestRunner(agent)
-	packet := ReviewPacket{
-		Goal:      "goal text",
-		UnitTitle: "Write the report",
-		Diff:      "+this diff line must never survive into persisted state",
-		Artifacts: map[string]string{"report.md": "this artifact body must never survive into persisted state"},
-	}
-	_, state, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, packet, nil)
-	if err != nil {
+	packet := ReviewPacket{Goal: "goal", OpenFindings: []Finding{
+		{ID: "F1", Title: "missing validation", File: "x.go", Severity: SeverityBlocking, Status: FindingOpen},
+		{ID: "F2", Title: "typo in banner", Severity: SeverityMinor, Status: FindingOpen},
+		{ID: "F3", Title: "already fixed", Status: FindingResolved},
+	}}
+	if _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, packet); err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
-	if state == nil || len(state.Messages) != 2 {
-		t.Fatalf("state.Messages = %+v, want exactly 2 (summary + verdict)", state)
-	}
-	userMsg := state.Messages[0].Content
-	if strings.Contains(userMsg, "must never survive") {
-		t.Fatalf("persisted state leaked the full packet's diff/artifact content: %q", userMsg)
-	}
-	if !strings.Contains(userMsg, "missing citation") || !strings.Contains(userMsg, "Write the report") {
-		t.Fatalf("persisted state missing finding/unit summary: %q", userMsg)
-	}
-}
-
-// TestRunReviewCapsGatekeeperRounds pins the 4-round retention cap
-// (gatekeeperRoundsCap): a 6th consecutive rework round must still
-// leave only 4 rounds' worth of messages (8), oldest dropped first.
-func TestRunReviewCapsGatekeeperRounds(t *testing.T) {
-	r := newTestRunner(nil) // agent replaced per-round below
-	var gk *GatekeeperState
-	for i := 0; i < 6; i++ {
-		agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-			{toolEndEvent(reviewVerdictToolName, fmt.Sprintf(`{"decision":"rework","findings":[{"title":"gap round %d"}]}`, i))},
-		}}
-		r.agent = agent
-		_, next, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{UnitTitle: "unit"}, gk)
-		if err != nil {
-			t.Fatalf("round %d: RunReview: %v", i, err)
+	content := agent.requests[0].Messages[0].Content
+	for _, want := range []string{
+		"Open findings from prior rounds (mark resolved ids in your verdict):",
+		"- F1 [blocking] x.go: missing validation",
+		"- F2 [minor] typo in banner",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("reviewer message missing %q:\n%s", want, content)
 		}
-		gk = next
 	}
-	if len(gk.Messages) != gatekeeperRoundsCap*2 {
-		t.Fatalf("Messages length = %d, want %d (cap of %d rounds)", len(gk.Messages), gatekeeperRoundsCap*2, gatekeeperRoundsCap)
+	if strings.Contains(content, "F3") {
+		t.Fatalf("reviewer message lists a resolved finding:\n%s", content)
 	}
-	// The oldest retained round must be round 2 (0-indexed), not round 0:
-	// six rounds capped to the last four means rounds 2-5 survive.
-	if !strings.Contains(gk.Messages[0].Content, "gap round 2") {
-		t.Fatalf("oldest retained round = %q, want round 2's summary", gk.Messages[0].Content)
+	if strings.Contains(renderReviewContent(ReviewPacket{Goal: "goal"}), "Open findings") {
+		t.Fatal("empty ledger must render no findings section")
 	}
 }
 
@@ -399,7 +378,7 @@ func TestRunReviewRoutePrecedence(t *testing.T) {
 				{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
 			}}
 			r := newTestRunner(agent)
-			if _, _, err := r.RunReview(context.Background(), tc.m, ReviewPacket{Goal: "goal"}, nil); err != nil {
+			if _, err := r.RunReview(context.Background(), tc.m, ReviewPacket{Goal: "goal"}); err != nil {
 				t.Fatalf("RunReview: %v", err)
 			}
 			if got := agent.requests[0].Route; got != tc.want {
@@ -426,7 +405,7 @@ func TestRunReviewPacketRendersArtifactsGoalAndEvidence(t *testing.T) {
 		Artifacts: map[string]string{"summary.md": "429 means Too Many Requests, per RFC 6585."},
 		Evidence:  "Summary written to summary.md, sourced from RFC 6585.",
 	}
-	v, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, packet, nil)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, packet)
 	if err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
@@ -454,7 +433,7 @@ func TestRunReviewErrorsWhenVerdictMissing(t *testing.T) {
 		{textEvent("Still not calling it.")}, // recovery turn also missing
 	}}
 	r := newTestRunner(agent)
-	_, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"}, nil)
+	_, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"})
 	if err == nil {
 		t.Fatal("RunReview did not error when the reviewer never called review_verdict")
 	}
@@ -474,7 +453,7 @@ func TestRunReviewRecoversWhenVerdictMissingThenPresent(t *testing.T) {
 		{textEvent("Approved."), toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
 	}}
 	r := newTestRunner(agent)
-	v, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"}, nil)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"})
 	if err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
@@ -496,7 +475,7 @@ func TestRunReviewFallsBackToTextSentinel(t *testing.T) {
 		{textEvent(`Confirmed. <review_verdict decision="approve"/>`)}, // recovery: still text-only
 	}}
 	r := newTestRunner(agent)
-	v, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"}, nil)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"})
 	if err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
@@ -515,7 +494,7 @@ func TestRunReviewFallsBackToTokenJSONTextSentinel(t *testing.T) {
 		{textEvent("review_verdict\n{\"decision\": \"rework\"}")},
 	}}
 	r := newTestRunner(agent)
-	v, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"}, nil)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Diff: "diff"})
 	if err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
@@ -2178,7 +2157,7 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
 	}}
 	r = newTestRunner(agent)
-	if _, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}, nil); err != nil {
+	if _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}); err != nil {
 		t.Fatalf("RunReview: %v", err)
 	}
 	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
@@ -2815,7 +2794,7 @@ func TestRunReviewWiresSteeringFromProgressReader(t *testing.T) {
 		agent := &scriptedAgent{batches: batch}
 		r := newTestRunner(agent)
 		r.SetProgressReader(&fakeProgressReader{})
-		if _, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}, nil); err != nil {
+		if _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}); err != nil {
 			t.Fatalf("RunReview: %v", err)
 		}
 		if agent.requests[0].Steering == nil {
@@ -2826,7 +2805,7 @@ func TestRunReviewWiresSteeringFromProgressReader(t *testing.T) {
 	t.Run("unwired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: batch}
 		r := newTestRunner(agent)
-		if _, _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}, nil); err != nil {
+		if _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}); err != nil {
 			t.Fatalf("RunReview: %v", err)
 		}
 		if agent.requests[0].Steering != nil {

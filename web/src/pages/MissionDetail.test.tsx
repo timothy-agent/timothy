@@ -935,6 +935,29 @@ describe('MissionDetail', () => {
     expect(await screen.findByText('every provider attempt failed: GLM 429')).toBeTruthy()
   })
 
+  it('labels a review_exhausted pause readably alongside the event detail', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      status: 'paused',
+      pause_reason: 'review_exhausted',
+      rework_rounds: 3,
+    })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.paused',
+        payload: { reason: 'review_exhausted', detail: '3 rework rounds with findings still open: F1 missing validation' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('Paused: review rounds exhausted, findings still open')).toBeTruthy()
+    expect(screen.getByText('3 rework rounds with findings still open: F1 missing validation')).toBeTruthy()
+  })
+
   it('omits the pause detail once the mission has been resumed', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'idle', pause_reason: '' })
     vi.mocked(missionEvents).mockResolvedValue([

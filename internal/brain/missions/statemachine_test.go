@@ -2,6 +2,7 @@ package missions
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -224,44 +225,30 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseResult, Status: StatusIdle, LastUnit: true},
 		},
 		{
-			name:  "review_rework with a new fingerprint returns to generate, stall count resets to 1",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, StallCount: 0, LastGapFingerprint: ""},
-			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
+			name:  "review_rework with no findings returns to generate and counts the round",
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
+			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
+			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Iteration: 1, ReworkRounds: 1},
 		},
 		{
-			name:  "review_rework with the SAME fingerprint twice pauses no_progress once replan is already used",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc", ReplanUsed: true},
-			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
-			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "abc", ReplanUsed: true},
-		},
-		{
-			name:  "review_rework with a DIFFERENT fingerprint does not accumulate stall",
+			name:  "review_rework leaves the worker-retry stall fingerprint alone",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
-			input: StepInput{Input: InputReviewRework, GapFingerprint: "def"},
+			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "def"},
+			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc", ReworkRounds: 1},
 		},
 		{
-			name:  "review_rework hitting max_iterations hard-fails instead of pausing",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 1, Iteration: 0, StallCount: 0},
-			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc"},
-			cfg:   Config{BackoffFailures: 10, StallRounds: 10},
-			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
+			name:  "review_rework reaching max_iterations parks review_exhausted in generate instead of failing",
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 1},
+			input: StepInput{Input: InputReviewRework},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseReviewExhausted, MaxIterations: 1, ReworkRounds: 1},
 		},
 		{
 			name:  "worker_retry stall with replan unused replans instead of pausing",
 			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Reason: "same failure again"},
-			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
-		},
-		{
-			name:  "review_rework stall with replan unused replans instead of pausing",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
-			input: StepInput{Input: InputReviewRework, GapFingerprint: "abc", Reason: "reviewer keeps rejecting"},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
 		},
@@ -829,5 +816,261 @@ func TestStepAskUserParksInEveryLLMPhase(t *testing.T) {
 		if got.Next.Status != StatusWaitingForInput || got.Next.Phase != phase {
 			t.Fatalf("phase %s: Next = %+v, want same phase with status waiting_for_input", phase, got.Next)
 		}
+	}
+}
+
+// eventOfKind returns the first event of kind in events, or nil.
+func eventOfKind(events []EventDraft, kind string) *EventDraft {
+	for i := range events {
+		if events[i].Kind == kind {
+			return &events[i]
+		}
+	}
+	return nil
+}
+
+// TestStepReworkAssignsFindingIDsInOrder pins the D-092 ledger's
+// harness-owned fields: ids F1, F2 in order of appearance, the
+// reviewed unit and round stamped on, status open, severity defaulting
+// to blocking, and the model's own id/status ignored.
+func TestStepReworkAssignsFindingIDsInOrder(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
+		StepInput{Input: InputReviewRework, Unit: 2, Findings: []Finding{
+			{ID: "model-made-up", Status: "resolved", Title: "missing validation", File: "x.go", Detail: "no input check"},
+			{Title: "typo", Severity: SeverityMinor},
+		}},
+		DefaultConfig,
+	)
+	want := []Finding{
+		{ID: "F1", Unit: 2, Title: "missing validation", File: "x.go", Detail: "no input check", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1},
+		{ID: "F2", Unit: 2, Title: "typo", Severity: SeverityMinor, Status: FindingOpen, RoundOpened: 1},
+	}
+	if !reflect.DeepEqual(got.Next.ReviewFindings, want) {
+		t.Fatalf("ReviewFindings = %+v, want %+v", got.Next.ReviewFindings, want)
+	}
+	if got.Next.ReworkRounds != 1 || got.Next.Phase != PhaseGenerate || got.Next.Status != StatusIdle {
+		t.Fatalf("Next = %+v, want rework round 1 back in generate/idle", got.Next)
+	}
+	ev := eventOfKind(got.Events, "mission.review_verdict")
+	if ev == nil || !reflect.DeepEqual(ev.Payload["open"], []string{"F1", "F2"}) || ev.Payload["round"] != 1 {
+		t.Fatalf("review_verdict event = %+v, want open [F1 F2] round 1", got.Events)
+	}
+}
+
+// TestStepReworkMatchesDuplicateFindings confirms a reworded repeat of
+// an open finding (same file, same title words in another order and
+// case) reuses its id and only refreshes the detail, while a genuinely
+// new finding gets the next id; ids never recycle after a resolve.
+func TestStepReworkMatchesDuplicateFindings(t *testing.T) {
+	ledger := []Finding{
+		{ID: "F1", Title: "missing validation", File: "x.go", Detail: "old detail", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1},
+		{ID: "F2", Title: "typo", File: "y.go", Severity: SeverityMinor, Status: FindingResolved, RoundOpened: 1},
+	}
+	got := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 1, ReviewFindings: ledger},
+		StepInput{Input: InputReviewRework, Findings: []Finding{
+			{Title: "Validation, missing!", File: "./x.go", Detail: "new detail"},
+			{Title: "typo", File: "y.go"},
+			{Title: "missing validation", File: "z.go"},
+		}},
+		DefaultConfig,
+	)
+	fs := got.Next.ReviewFindings
+	if len(fs) != 4 {
+		t.Fatalf("ledger = %+v, want 4 findings (F1 matched, F2 stays resolved, F3/F4 new)", fs)
+	}
+	if fs[0].ID != "F1" || fs[0].Detail != "new detail" || fs[0].RoundOpened != 1 {
+		t.Fatalf("F1 = %+v, want matched with refreshed detail and original round", fs[0])
+	}
+	if fs[1].Status != FindingResolved {
+		t.Fatalf("resolved F2 was touched: %+v", fs[1])
+	}
+	if fs[2].ID != "F3" || fs[2].Title != "typo" || fs[2].RoundOpened != 2 {
+		t.Fatalf("re-reported resolved finding must reopen under a new id: %+v", fs[2])
+	}
+	if fs[3].ID != "F4" || fs[3].File != "z.go" {
+		t.Fatalf("different file must be a new finding: %+v", fs[3])
+	}
+	if ledger[0].Detail != "old detail" {
+		t.Fatal("Step mutated the caller's ledger in place")
+	}
+}
+
+// TestStepReworkResolvedFlipsStatus covers the reviewer's resolved
+// list: named open ids flip to resolved, unknown ids are ignored, and
+// a finding both re-reported and resolved in the same verdict ends
+// resolved.
+func TestStepReworkResolvedFlipsStatus(t *testing.T) {
+	ledger := []Finding{
+		{ID: "F1", Title: "a", File: "a.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1},
+		{ID: "F2", Title: "b", File: "b.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1},
+	}
+	got := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 1, ReviewFindings: ledger},
+		StepInput{Input: InputReviewRework, Resolved: []string{"F1", "F9"}, Findings: []Finding{{Title: "a", File: "a.go"}}},
+		DefaultConfig,
+	)
+	fs := got.Next.ReviewFindings
+	if len(fs) != 2 || fs[0].Status != FindingResolved || fs[1].Status != FindingOpen {
+		t.Fatalf("ledger = %+v, want F1 resolved (resolve wins over re-report), F2 open", fs)
+	}
+	if ledger[0].Status != FindingOpen {
+		t.Fatal("Step mutated the caller's ledger in place")
+	}
+}
+
+// TestStepApproveResolvesAllAndResetsRounds: approval closes the cycle.
+func TestStepApproveResolvesAllAndResetsRounds(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 2, ReviewFindings: []Finding{
+			{ID: "F1", Title: "a", Status: FindingOpen},
+			{ID: "F2", Title: "b", Status: FindingAccepted},
+		}},
+		StepInput{Input: InputReviewApprove},
+		DefaultConfig,
+	)
+	if got.Next.ReworkRounds != 0 {
+		t.Fatalf("ReworkRounds = %d, want 0", got.Next.ReworkRounds)
+	}
+	if fs := got.Next.ReviewFindings; fs[0].Status != FindingResolved || fs[1].Status != FindingAccepted {
+		t.Fatalf("ledger after approve = %+v, want F1 resolved and F2 left accepted", fs)
+	}
+}
+
+// TestStepPhaseCompleteKeepsReworkRounds is the regression test for the
+// dead max_iterations brake: the worker's phase_complete used to reset
+// Iteration, the only counter rework incremented, so a rework loop
+// never reached the ceiling. ReworkRounds must survive it.
+func TestStepPhaseCompleteKeepsReworkRounds(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 3, Iteration: 2, ReworkRounds: 2},
+		StepInput{Input: InputPhaseComplete},
+		DefaultConfig,
+	)
+	if got.Next.Phase != PhaseProve || got.Next.Iteration != 0 || got.Next.ReworkRounds != 2 {
+		t.Fatalf("Next = %+v, want prove with Iteration 0 and ReworkRounds still 2", got.Next)
+	}
+	final := Step(got.Next, StepInput{Input: InputReviewRework}, DefaultConfig)
+	if final.Next.PauseReason != PauseReviewExhausted {
+		t.Fatalf("third rework after a phase_complete = %+v, want review_exhausted park", final.Next)
+	}
+}
+
+// TestStepPhaseCompleteScoresUntouchedFindings covers the worker-turn
+// scoring: an open finding whose file the turn never touched counts a
+// round and (if blocking) is named in mission.rework_untouched; a
+// touched file resets the count; nil TouchedFiles (no worktree) leaves
+// everything alone; a finding without a file is never scored.
+func TestStepPhaseCompleteScoresUntouchedFindings(t *testing.T) {
+	ledger := []Finding{
+		{ID: "F1", Title: "a", File: "src/x.go", Severity: SeverityBlocking, Status: FindingOpen, UntouchedRounds: 1},
+		{ID: "F2", Title: "b", File: "y.go", Severity: SeverityMinor, Status: FindingOpen},
+		{ID: "F3", Title: "c", Severity: SeverityBlocking, Status: FindingOpen},
+		{ID: "F4", Title: "d", File: "src/x.go", Severity: SeverityBlocking, Status: FindingResolved},
+	}
+	state := StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ReviewFindings: ledger}
+
+	untouched := Step(state, StepInput{Input: InputPhaseComplete, TouchedFiles: []string{"README.md"}}, DefaultConfig)
+	fs := untouched.Next.ReviewFindings
+	if fs[0].UntouchedRounds != 2 || fs[1].UntouchedRounds != 1 || fs[2].UntouchedRounds != 0 || fs[3].UntouchedRounds != 0 {
+		t.Fatalf("untouched counts = %+v, want F1 2, F2 1, F3 0 (no file), F4 0 (resolved)", fs)
+	}
+	ev := eventOfKind(untouched.Events, "mission.rework_untouched")
+	if ev == nil || !reflect.DeepEqual(ev.Payload["findings"], []string{"F1"}) {
+		t.Fatalf("rework_untouched event = %+v, want only the blocking F1", untouched.Events)
+	}
+	if untouched.Events[len(untouched.Events)-1].Kind != "mission.phase_started" {
+		t.Fatalf("phase_started must still be emitted: %+v", untouched.Events)
+	}
+
+	touched := Step(state, StepInput{Input: InputPhaseComplete, TouchedFiles: []string{"./src/x.go", "y.go"}}, DefaultConfig)
+	if fs := touched.Next.ReviewFindings; fs[0].UntouchedRounds != 0 || fs[1].UntouchedRounds != 0 {
+		t.Fatalf("touched files must reset the counts: %+v", fs)
+	}
+	if eventOfKind(touched.Events, "mission.rework_untouched") != nil {
+		t.Fatal("no rework_untouched event when every finding's file was touched")
+	}
+
+	unknown := Step(state, StepInput{Input: InputPhaseComplete}, DefaultConfig)
+	if !reflect.DeepEqual(unknown.Next.ReviewFindings, ledger) || eventOfKind(unknown.Events, "mission.rework_untouched") != nil {
+		t.Fatalf("nil TouchedFiles must leave the ledger alone: %+v", unknown)
+	}
+	if ledger[0].UntouchedRounds != 1 {
+		t.Fatal("Step mutated the caller's ledger in place")
+	}
+}
+
+// TestStepReworkParksExhaustedWithIDsInDetail: the third rework at the
+// default ceiling parks (never fails), in generate, naming every open
+// finding by id and title.
+func TestStepReworkParksExhaustedWithIDsInDetail(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 3, ReworkRounds: 2, ReviewFindings: []Finding{
+			{ID: "F1", Title: "missing validation", File: "x.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1},
+		}},
+		StepInput{Input: InputReviewRework, Findings: []Finding{{Title: "no header toggle", File: "t.tsx"}}},
+		DefaultConfig,
+	)
+	if got.Next.Phase != PhaseGenerate || got.Next.Status != StatusPaused || got.Next.PauseReason != PauseReviewExhausted {
+		t.Fatalf("Next = %+v, want paused review_exhausted in generate", got.Next)
+	}
+	if got.Next.ReworkRounds != 3 {
+		t.Fatalf("ReworkRounds = %d, want 3", got.Next.ReworkRounds)
+	}
+	ev := eventOfKind(got.Events, "mission.paused")
+	if ev == nil || ev.Payload["reason"] != string(PauseReviewExhausted) {
+		t.Fatalf("events = %+v, want mission.paused review_exhausted", got.Events)
+	}
+	if !reflect.DeepEqual(ev.Payload["findings"], []string{"F1", "F2"}) {
+		t.Fatalf("paused findings = %v, want [F1 F2]", ev.Payload["findings"])
+	}
+	if detail, _ := ev.Payload["detail"].(string); !strings.Contains(detail, "F1 missing validation") || !strings.Contains(detail, "F2 no header toggle") {
+		t.Fatalf("paused detail = %q, want both open findings named", detail)
+	}
+}
+
+// TestStepReworkStallsOnUntouchedFile: a blocking finding untouched for
+// StallRounds worker turns parks no_progress on the next rework, well
+// below the rework ceiling; a finding resolved this round or a minor
+// one never stalls the mission.
+func TestStepReworkStallsOnUntouchedFile(t *testing.T) {
+	stale := []Finding{
+		{ID: "F1", Title: "missing validation", File: "x.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1, UntouchedRounds: 2},
+	}
+	stalled := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 2, ReviewFindings: stale},
+		StepInput{Input: InputReviewRework},
+		DefaultConfig,
+	)
+	if stalled.Next.Phase != PhaseGenerate || stalled.Next.PauseReason != PauseNoProgress {
+		t.Fatalf("Next = %+v, want paused no_progress in generate", stalled.Next)
+	}
+	ev := eventOfKind(stalled.Events, "mission.paused")
+	if ev == nil || !reflect.DeepEqual(ev.Payload["findings"], []string{"F1"}) {
+		t.Fatalf("events = %+v, want mission.paused naming F1", stalled.Events)
+	}
+	if detail, _ := ev.Payload["detail"].(string); !strings.Contains(detail, "F1 missing validation") {
+		t.Fatalf("paused detail = %q, want the stalled finding named", detail)
+	}
+
+	resolvedNow := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 2, ReviewFindings: stale},
+		StepInput{Input: InputReviewRework, Resolved: []string{"F1"}},
+		DefaultConfig,
+	)
+	if resolvedNow.Next.Status == StatusPaused {
+		t.Fatalf("a finding resolved this round must not stall: %+v", resolvedNow.Next)
+	}
+
+	minor := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 1, ReviewFindings: []Finding{
+			{ID: "F1", Title: "typo", File: "x.go", Severity: SeverityMinor, Status: FindingOpen, RoundOpened: 1, UntouchedRounds: 5},
+		}},
+		StepInput{Input: InputReviewRework},
+		DefaultConfig,
+	)
+	if minor.Next.Status == StatusPaused {
+		t.Fatalf("a minor finding must never stall the mission: %+v", minor.Next)
 	}
 }

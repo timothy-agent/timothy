@@ -189,8 +189,8 @@ func (r *delegatedRunner) PlanSession(ctx context.Context, m Mission, discoverNo
 	return r.native.PlanSession(ctx, m, discoverNotes)
 }
 
-func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gatekeeper *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
-	return r.native.RunReview(ctx, m, packet, gatekeeper)
+func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
+	return r.native.RunReview(ctx, m, packet)
 }
 
 // RunWorker dispatches on m.Harness (D-051 rework): "" defers straight

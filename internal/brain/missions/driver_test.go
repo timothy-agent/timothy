@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
-	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
 // fakeStore is an in-memory driverStore for scripting Driver scenarios
@@ -113,6 +112,7 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	m.Iteration, m.MaxIterations = t.Next.Iteration, t.Next.MaxIterations
 	m.ConsecutiveFailures, m.LastGapFingerprint, m.StallCount = t.Next.ConsecutiveFailures, t.Next.LastGapFingerprint, t.Next.StallCount
 	m.ReplanUsed = t.Next.ReplanUsed
+	m.ReviewFindings, m.ReworkRounds = t.Next.ReviewFindings, t.Next.ReworkRounds
 	f.missions[id] = m
 	for _, ev := range t.Events {
 		f.seq[id]++
@@ -269,9 +269,9 @@ type scriptedRunner struct {
 	// once exhausted every further call succeeds. Lets a test script an
 	// ErrPromptTooLong on the first N calls and a normal verdict after.
 	reviewErrs []error
-	// reviewCalls counts every RunReview invocation and records the
-	// gatekeeper state each one was called with, in call order.
-	reviewCalls []*GatekeeperState
+	// reviewCalls records the packet every RunReview invocation was
+	// called with, in call order.
+	reviewCalls []ReviewPacket
 	plans       []Plan
 	planIdx     int
 	// planDiscoverNotes records the discoverNotes argument PlanSession
@@ -305,17 +305,17 @@ func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPa
 	return v, text, nil
 }
 
-func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
+func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
 	call := len(r.reviewCalls)
-	r.reviewCalls = append(r.reviewCalls, gk)
+	r.reviewCalls = append(r.reviewCalls, packet)
 	if call < len(r.reviewErrs) && r.reviewErrs[call] != nil {
-		return ReviewVerdict{}, nil, r.reviewErrs[call]
+		return ReviewVerdict{}, r.reviewErrs[call]
 	}
 	v := r.reviewVerdicts[r.reviewIdx]
 	if r.reviewIdx < len(r.reviewVerdicts)-1 {
 		r.reviewIdx++
 	}
-	return v, &GatekeeperState{}, nil
+	return v, nil
 }
 
 func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
@@ -1350,58 +1350,214 @@ func TestDriverWorkerRetryDoesNotCountTowardBackoff(t *testing.T) {
 	}
 }
 
-func TestDriverStallPauseOnIdenticalFindingsTwice(t *testing.T) {
+// TestDriverReworkOpensFindingsAndParksWhenExhausted drives three
+// rework rounds against a reviewer that keeps rejecting the same gap in
+// different words (D-092): the finding keeps one id (F1) across the
+// rewordings, rework_rounds counts every round and survives the
+// worker's phase_complete in between (the pre-D-092 Iteration reset
+// made max_iterations dead for rework), and the round that reaches
+// max_iterations parks review_exhausted naming F1 instead of failing.
+func TestDriverReworkOpensFindingsAndParksWhenExhausted(t *testing.T) {
 	store := newFakeStore()
-	// ReplanUsed is pre-set true so the stall's first threshold hit
-	// pauses like it always did — the replan-on-first-stall behavior is
-	// covered separately by TestDriverReplanOnFirstStall.
 	store.put("m1", Mission{
-		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReplanUsed: true,
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 3,
 		Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
 	})
-	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
 	runner := &scriptedRunner{
-		reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: sameFindings}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done"}},
+		reviewVerdicts: []ReviewVerdict{
+			{Findings: []Finding{{Title: "missing validation", File: "x.go", Detail: "no input check"}}},
+			{Findings: []Finding{{Title: "Validation missing.", File: "./x.go"}}},
+			{Findings: []Finding{{Title: "MISSING validation", File: "x.go"}}},
+		},
 	}
 	d := testDriver(store, runner)
 
-	// review round 1: rework (stall=1) -> back to execute.
+	for round := 1; round <= 2; round++ {
+		if _, err := d.Advance(context.Background(), "m1"); err != nil {
+			t.Fatalf("review round %d: %v", round, err)
+		}
+		m, _ := store.Get(context.Background(), "m1")
+		if m.Phase != PhaseGenerate || m.Status != StatusIdle {
+			t.Fatalf("after rework %d: phase %q status %q, want generate/idle", round, m.Phase, m.Status)
+		}
+		if m.ReworkRounds != round {
+			t.Fatalf("after rework %d: ReworkRounds = %d", round, m.ReworkRounds)
+		}
+		if len(m.ReviewFindings) != 1 || m.ReviewFindings[0].ID != "F1" || !m.ReviewFindings[0].Open() {
+			t.Fatalf("after rework %d: findings = %+v, want exactly one open F1", round, m.ReviewFindings)
+		}
+		// The worker turn: its phase_complete must carry the counter over.
+		if _, err := d.Advance(context.Background(), "m1"); err != nil {
+			t.Fatalf("worker turn %d: %v", round, err)
+		}
+		m, _ = store.Get(context.Background(), "m1")
+		if m.Phase != PhaseProve {
+			t.Fatalf("after worker turn %d: phase = %q, want prove", round, m.Phase)
+		}
+		if m.ReworkRounds != round {
+			t.Fatalf("worker phase_complete reset ReworkRounds to %d, want %d", m.ReworkRounds, round)
+		}
+		if len(runner.workerPackets) != round {
+			t.Fatalf("worker packets = %d, want %d", len(runner.workerPackets), round)
+		}
+		_, user := runner.workerPackets[round-1].Render()
+		if !strings.Contains(user, fmt.Sprintf("Current work: close open review findings (round %d of 3)", round)) ||
+			!strings.Contains(user, "- F1 [blocking] x.go: missing validation.") {
+			t.Fatalf("worker packet %d missing the findings block:\n%s", round, user)
+		}
+	}
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
-		t.Fatalf("Advance 1: %v", err)
+		t.Fatalf("review round 3: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseGenerate {
-		t.Fatalf("after 1st rework, phase = %q, want execute", m.Phase)
+	if m.Status != StatusPaused || m.PauseReason != PauseReviewExhausted {
+		t.Fatalf("after 3 reworks = status %q pause_reason %q, want paused/review_exhausted", m.Status, m.PauseReason)
 	}
-	// Manually push back to review for round 2 (driver would get there
-	// via a worker DONE verdict; this test isolates the review-phase
-	// stall logic specifically).
-	m.Phase = PhaseProve
-	store.put("m1", m)
+	if m.Phase.Terminal() {
+		t.Fatal("review exhaustion must park, never fail")
+	}
+	if m.ReworkRounds != 3 {
+		t.Fatalf("ReworkRounds = %d, want 3", m.ReworkRounds)
+	}
+	if !strings.Contains(pausedDetail(t, store, "m1"), "F1 missing validation") {
+		t.Fatalf("mission.paused detail = %q, want the open finding id and title", pausedDetail(t, store, "m1"))
+	}
+	if len(runner.reviewCalls) != 3 || len(runner.reviewCalls[1].OpenFindings) != 1 || runner.reviewCalls[1].OpenFindings[0].ID != "F1" {
+		t.Fatalf("second review packet did not carry the open finding: %+v", runner.reviewCalls)
+	}
+}
+
+// pausedDetail returns the most recent mission.paused event's detail.
+func pausedDetail(t *testing.T, store *fakeStore, id string) string {
+	t.Helper()
+	detail := ""
+	for _, ev := range store.events[id] {
+		if ev.Kind != "mission.paused" {
+			continue
+		}
+		var payload struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal mission.paused payload: %v", err)
+		}
+		detail = payload.Detail
+	}
+	return detail
+}
+
+// TestDriverStallParksOnUntouchedFinding pins the driver's wiring of
+// the id-based stall (D-092): a blocking finding whose file the worker
+// left untouched for StallRounds turns, rejected once more, parks
+// no_progress naming the id, well short of max_iterations.
+func TestDriverStallParksOnUntouchedFinding(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 2,
+		Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
+		ReviewFindings: []Finding{{
+			ID: "F1", Title: "missing validation", File: "x.go", Severity: SeverityBlocking,
+			Status: FindingOpen, RoundOpened: 1, UntouchedRounds: DefaultConfig.StallRounds,
+		}},
+	})
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Findings: []Finding{{Title: "missing validation", File: "x.go"}}}}}
+	d := testDriver(store, runner)
+
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
-		t.Fatalf("Advance 2: %v", err)
+		t.Fatalf("Advance: %v", err)
 	}
-	m, _ = store.Get(context.Background(), "m1")
+	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusPaused || m.PauseReason != PauseNoProgress {
-		t.Fatalf("mission after 2 identical-fingerprint reworks = %+v, want paused/no_progress", m)
+		t.Fatalf("mission = status %q pause_reason %q, want paused/no_progress", m.Status, m.PauseReason)
+	}
+	if !strings.Contains(pausedDetail(t, store, "m1"), "F1") {
+		t.Fatalf("mission.paused detail = %q, want the stalled finding id", pausedDetail(t, store, "m1"))
+	}
+}
+
+// TestDriverReworkUntouchedEvent covers the zero-model-call signal a
+// rework turn leaves behind (D-092): with a real worktree, a worker
+// turn that changes some other file than the open finding's emits
+// mission.rework_untouched naming the finding and bumps its untouched
+// counter; a turn that does touch the file resets it and emits nothing.
+func TestDriverReworkUntouchedEvent(t *testing.T) {
+	requireGit(t)
+	finding := Finding{ID: "F1", Title: "missing validation", File: "x.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1}
+	cases := []struct {
+		name         string
+		touch        string
+		wantEvent    bool
+		wantUntouched int
+	}{
+		{"other file touched", "y.go", true, 1},
+		{"finding's file touched", "x.go", false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			wt := filepath.Join(root, "wt")
+			if err := os.MkdirAll(wt, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, wt, "init", "-q", "-b", "main")
+			gitRun(t, wt, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "base")
+			store := newFakeStore()
+			store.put("m1", Mission{
+				ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 1,
+				Workspace: root, Plan: Plan{Units: []PlanUnit{{Title: "u1"}}}, ReviewFindings: []Finding{finding},
+			})
+			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+			workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
+			// The "worker's" change lands before the turn ends; the driver
+			// diffs against the pre-turn HEAD, so this is what it sees.
+			if err := os.WriteFile(filepath.Join(wt, tc.touch), []byte("package x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := d.Advance(context.Background(), "m1"); err != nil {
+				t.Fatalf("Advance: %v", err)
+			}
+			m, _ := store.Get(context.Background(), "m1")
+			if m.Phase != PhaseProve {
+				t.Fatalf("phase = %q, want prove", m.Phase)
+			}
+			if got := m.ReviewFindings[0].UntouchedRounds; got != tc.wantUntouched {
+				t.Fatalf("F1.UntouchedRounds = %d, want %d", got, tc.wantUntouched)
+			}
+			var saw bool
+			for _, ev := range store.events["m1"] {
+				if ev.Kind == "mission.rework_untouched" {
+					saw = true
+					if !strings.Contains(string(ev.Payload), `"F1"`) {
+						t.Fatalf("rework_untouched payload = %s, want F1 named", ev.Payload)
+					}
+				}
+			}
+			if saw != tc.wantEvent {
+				t.Fatalf("mission.rework_untouched emitted = %v, want %v", saw, tc.wantEvent)
+			}
+		})
 	}
 }
 
 // TestDriverReplanOnFirstStall confirms a mission's FIRST stall (two
-// identical-fingerprint reworks, ReplanUsed still false) goes back to
-// planning instead of pausing — the driver-level counterpart of
+// identical-fingerprint worker retries, ReplanUsed still false) goes
+// back to planning instead of pausing — the driver-level counterpart of
 // statemachine_test.go's pure Step assertion, exercised through real
 // Advance calls so the plan phase's own re-run (via runPlan) is covered
-// too.
+// too. Review reworks no longer replan (D-092: they park on the
+// findings instead), so the worker's forced no_sentinel retry is the
+// fingerprint that stalls here.
 func TestDriverReplanOnFirstStall(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
+		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 		Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
 	})
-	sameFindings := []Finding{{Title: "missing validation", File: "x.go"}}
 	runner := &scriptedRunner{
-		reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: sameFindings}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "no status reported", Forced: true}},
 		plans:          []Plan{{Units: []PlanUnit{{Title: "u1 replanned"}}}},
 	}
 	d := testDriver(store, runner)
@@ -1409,13 +1565,10 @@ func TestDriverReplanOnFirstStall(t *testing.T) {
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance 1: %v", err)
 	}
-	m, _ := store.Get(context.Background(), "m1")
-	m.Phase = PhaseProve
-	store.put("m1", m)
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance 2: %v", err)
 	}
-	m, _ = store.Get(context.Background(), "m1")
+	m, _ := store.Get(context.Background(), "m1")
 	if m.Status == StatusPaused {
 		t.Fatalf("mission after the FIRST stall = %+v, want a replan, not a pause", m)
 	}
@@ -1550,39 +1703,11 @@ func TestDriverBudgetPauseMixedCurrencyWhenRateMissing(t *testing.T) {
 	}
 }
 
-// TestDriverGatekeeperCleanupOnTerminal confirms the driver forgets a
-// mission's in-progress reviewer session once the mission reaches a
-// terminal phase — Advance() itself doesn't accept an external cancel
-// input directly (that's Signal, wired in M4's API layer; the state
-// machine's cancel precedence is already exercised in
-// statemachine_test.go), so this drives a mission to done via review
-// approval and the result step instead, which is the natural path
-// that also needs cleanup.
-func TestDriverGatekeeperCleanupOnTerminal(t *testing.T) {
-	store := newFakeStore()
-	store.put("m1", Mission{
-		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
-		Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
-	})
-	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
-	d.gatekeepers["m1"] = &GatekeeperState{Messages: nil}
-
-	driveN(t, d, "m1", 2) // prove(approved) -> result -> done
-	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseDone {
-		t.Fatalf("mission phase = %q, want done", m.Phase)
-	}
-	if _, stillPresent := d.gatekeepers["m1"]; stillPresent {
-		t.Fatal("gatekeeper state was not cleaned up once the mission reached a terminal phase")
-	}
-}
-
-// TestDriverReviewPromptTooLongDropsGatekeeperAndRetries pins issue
-// #505's cold-retry path: a review round that fails with
-// ErrPromptTooLong while a gatekeeper session exists gets it dropped,
-// records mission.review_prompt_shrunk, and RunReview is retried once
-// with a nil gatekeeper.
-func TestDriverReviewPromptTooLongDropsGatekeeperAndRetries(t *testing.T) {
+// TestDriverReviewPromptTooLongRetriesTrimmedPacket pins the
+// ErrPromptTooLong recovery: with no reviewer session left to drop
+// (D-092), the first rejection goes straight to exactly one retry with
+// the packet shrunk, recorded as mission.review_prompt_shrunk.
+func TestDriverReviewPromptTooLongRetriesTrimmedPacket(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
@@ -1593,19 +1718,12 @@ func TestDriverReviewPromptTooLongDropsGatekeeperAndRetries(t *testing.T) {
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
 	d := testDriver(store, runner)
-	d.gatekeepers["m1"] = &GatekeeperState{Messages: []provider.Message{{Role: "user", Content: "prior round"}}}
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
 	if len(runner.reviewCalls) != 2 {
-		t.Fatalf("RunReview called %d times, want 2 (failed cold, then retried)", len(runner.reviewCalls))
-	}
-	if runner.reviewCalls[0] == nil {
-		t.Fatal("first RunReview call should have carried the existing gatekeeper state")
-	}
-	if runner.reviewCalls[1] != nil {
-		t.Fatal("retry after dropping the gatekeeper should pass nil state")
+		t.Fatalf("RunReview called %d times, want 2 (rejected, then retried trimmed)", len(runner.reviewCalls))
 	}
 	var found bool
 	for _, ev := range store.events["m1"] {
@@ -1617,8 +1735,8 @@ func TestDriverReviewPromptTooLongDropsGatekeeperAndRetries(t *testing.T) {
 			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
 				t.Fatalf("unmarshal event payload: %v", err)
 			}
-			if payload.Action != "dropped_reviewer_session" {
-				t.Fatalf("payload.Action = %q, want dropped_reviewer_session", payload.Action)
+			if payload.Action != "trimmed_packet" {
+				t.Fatalf("payload.Action = %q, want trimmed_packet", payload.Action)
 			}
 		}
 	}
@@ -1629,9 +1747,9 @@ func TestDriverReviewPromptTooLongDropsGatekeeperAndRetries(t *testing.T) {
 
 // TestDriverReviewPromptTooLongAlwaysFailsReturnsRecognisableError
 // pins the exhaustion path: a reviewer that ALWAYS rejects with
-// ErrPromptTooLong (cold retry included) gets exactly one more retry
-// with a trimmed packet, and the final error names
-// review_prompt_too_large so the infra-pause reason is diagnosable.
+// ErrPromptTooLong gets exactly one retry with a trimmed packet, and
+// the final error names review_prompt_too_large so the infra-pause
+// reason is diagnosable.
 func TestDriverReviewPromptTooLongAlwaysFailsReturnsRecognisableError(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
@@ -1639,38 +1757,22 @@ func TestDriverReviewPromptTooLongAlwaysFailsReturnsRecognisableError(t *testing
 		Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
 	})
 	runner := &scriptedRunner{
-		reviewErrs:     []error{ErrPromptTooLong, ErrPromptTooLong, ErrPromptTooLong},
+		reviewErrs:     []error{ErrPromptTooLong, ErrPromptTooLong},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}}, // never reached
 	}
 	d := testDriver(store, runner)
-	d.gatekeepers["m1"] = &GatekeeperState{Messages: []provider.Message{{Role: "user", Content: "prior round"}}}
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if len(runner.reviewCalls) != 3 {
-		t.Fatalf("RunReview called %d times, want exactly 3 (cold, dropped-session retry, trimmed-packet retry)", len(runner.reviewCalls))
+	if len(runner.reviewCalls) != 2 {
+		t.Fatalf("RunReview called %d times, want exactly 2 (cold, trimmed-packet retry)", len(runner.reviewCalls))
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
 		t.Fatalf("mission = status %q pause_reason %q, want paused/infra", m.Status, m.PauseReason)
 	}
-	var sawDetail bool
-	for _, ev := range store.events["m1"] {
-		if ev.Kind != "mission.paused" {
-			continue
-		}
-		var payload struct {
-			Detail string `json:"detail"`
-		}
-		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-			t.Fatalf("unmarshal mission.paused payload: %v", err)
-		}
-		if strings.Contains(payload.Detail, "review_prompt_too_large") {
-			sawDetail = true
-		}
-	}
-	if !sawDetail {
+	if !strings.Contains(pausedDetail(t, store, "m1"), "review_prompt_too_large") {
 		t.Fatal("expected a mission.paused event whose detail mentions review_prompt_too_large")
 	}
 }
@@ -1698,8 +1800,8 @@ func (r *blockingRunner) RunWorker(ctx context.Context, m Mission, packet WorkPa
 	return r.verdict, "worker output", nil
 }
 
-func (r *blockingRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
-	return r.reviewV, &GatekeeperState{}, nil
+func (r *blockingRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
+	return r.reviewV, nil
 }
 
 func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
@@ -2752,31 +2854,6 @@ func TestDriverCodingMissionsAlwaysReview(t *testing.T) {
 	}
 }
 
-// TestDriverEscalatesRepeatedRework: a second review rejection with
-// the IDENTICAL gap fingerprint drops the resumed gatekeeper session,
-// so any subsequent round starts with fresh eyes instead of the same
-// session re-asserting its anchored verdict.
-func TestDriverEscalatesRepeatedRework(t *testing.T) {
-	findings := []Finding{{Title: "missing depth", File: "summary.md"}}
-	fp := GapFingerprint(findings)
-	store := newFakeStore()
-	store.put("m1", Mission{
-		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking,
-		MaxIterations: 8, Workspace: t.TempDir(), LastGapFingerprint: fp, StallCount: 1,
-		Plan: Plan{Units: []PlanUnit{{Title: "write summary"}}},
-	})
-	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: false, Findings: findings}}}
-	d := testDriver(store, runner)
-	d.gatekeepers["m1"] = &GatekeeperState{}
-
-	if _, err := d.Advance(context.Background(), "m1"); err != nil {
-		t.Fatalf("Advance: %v", err)
-	}
-	if _, ok := d.gatekeepers["m1"]; ok {
-		t.Fatal("gatekeeper state survived a repeated identical rework — must be dropped for fresh-eyes review")
-	}
-}
-
 // TestDriverForcedRetriesStallInsteadOfBurningIterations reproduces the
 // real observed failure: a worker whose turns never yield a sentinel
 // (no tool call, no text-form fallback either) used to burn every
@@ -3030,7 +3107,6 @@ func TestDriverAdvanceDiscardsTurnOnConcurrentTerminal(t *testing.T) {
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 	remover := &fakeSandboxRemover{}
 	d := NewDriver(store, runner, nil, nil, nil, nil, fakeSandboxExec, remover, slog.Default())
-	d.gatekeepers["m1"] = &GatekeeperState{}
 
 	cont, err := d.Advance(context.Background(), "m1")
 	if err != nil {
@@ -3038,9 +3114,6 @@ func TestDriverAdvanceDiscardsTurnOnConcurrentTerminal(t *testing.T) {
 	}
 	if cont {
 		t.Fatal("Advance canContinue = true, want false (turn discarded on terminal race)")
-	}
-	if _, stillPresent := d.gatekeepers["m1"]; stillPresent {
-		t.Fatal("gatekeeper state was not cleaned up when the turn discarded on terminal race")
 	}
 	// removeSandbox fires the actual Remove call in a background
 	// goroutine (independent of the request's own ctx) — poll briefly

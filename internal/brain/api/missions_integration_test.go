@@ -42,8 +42,8 @@ func (errRunner) RunWorker(context.Context, missions.Mission, missions.WorkPacke
 	return missions.WorkerVerdict{}, "", errors.New("errRunner: not implemented")
 }
 
-func (errRunner) RunReview(context.Context, missions.Mission, missions.ReviewPacket, *missions.GatekeeperState) (missions.ReviewVerdict, *missions.GatekeeperState, error) {
-	return missions.ReviewVerdict{}, nil, errors.New("errRunner: not implemented")
+func (errRunner) RunReview(context.Context, missions.Mission, missions.ReviewPacket) (missions.ReviewVerdict, error) {
+	return missions.ReviewVerdict{}, errors.New("errRunner: not implemented")
 }
 
 func (errRunner) PlanSession(context.Context, missions.Mission, string) (missions.Plan, error) {

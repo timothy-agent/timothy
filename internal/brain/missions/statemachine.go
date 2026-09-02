@@ -1,5 +1,13 @@
 package missions
 
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"unicode"
+)
+
 // Phase is where a mission sits in its fixed pipeline.
 type Phase string
 
@@ -111,7 +119,7 @@ type PauseReason string
 
 const (
 	PauseBackoff    PauseReason = "backoff"     // consecutive worker failures
-	PauseNoProgress PauseReason = "no_progress" // stall: identical reviewer rejection twice
+	PauseNoProgress PauseReason = "no_progress" // stall: repeated worker-retry fingerprint, or a finding's file left untouched (D-092)
 	PauseInfra      PauseReason = "infra"       // harness/reviewer/driver error
 	PauseBudget     PauseReason = "budget"      // spend >= cap
 	// PauseMixedCurrency fires when the mission has recorded spend in a
@@ -132,6 +140,11 @@ const (
 	// or any future one) ever inspects this reason. It waits forever
 	// until a human acts.
 	PauseApproval PauseReason = "approval"
+	// PauseReviewExhausted parks a mission whose rework rounds reached
+	// max_iterations with findings still open (D-092, issue #512). A
+	// park, never a failure: the branch and findings must survive for
+	// the operator to resume, accept, or cancel.
+	PauseReviewExhausted PauseReason = "review_exhausted"
 )
 
 // Input is one event the driver feeds into Step.
@@ -231,6 +244,16 @@ type StepState struct {
 	// flag has no effect on them regardless of its value; neither does
 	// FlowDiscoverGenerate, which also never visits PhasePlan.
 	AutoApprovePlan bool
+	// ReviewFindings is the mission's whole findings ledger (D-092,
+	// issue #512): open ones drive rework, resolved ones stay for the
+	// record. Written only through Step (mergeFindings, markUntouched,
+	// resolveAll) and persisted by ApplyTransition.
+	ReviewFindings []Finding
+	// ReworkRounds counts review rejections in the current review
+	// cycle: incremented per rework, reset on approve, never touched by
+	// stepPhaseComplete (which resets Iteration and so made
+	// max_iterations dead for rework before D-092).
+	ReworkRounds int
 }
 
 // neverVisitsPlan reports whether s's mission can never be in
@@ -246,13 +269,25 @@ func (s StepState) neverVisitsPlan() bool {
 // carries (a reviewer's gap fingerprint, a blocked question, etc.)
 type StepInput struct {
 	Input          Input
-	GapFingerprint string // set on InputReviewRework
+	GapFingerprint string // set on InputWorkerRetry (verify/regression/no_sentinel stalls)
 	Message        string // set on InputWorkerBlocked / pause explanations
 	// Reason is WHY this input happened (a worker's retry analysis, an
 	// error string, flattened review findings) — carried into the
 	// transition's event payloads so a mission's failure cause is
 	// readable from its event log alone, never only from process logs.
 	Reason string
+	// Findings/Resolved carry a rework verdict's raw findings and the
+	// prior-round ids the reviewer closed (D-092); Unit is the plan
+	// index under review, stamped onto every finding opened this round.
+	Findings []Finding
+	Resolved []string
+	Unit     int
+	// TouchedFiles is every workspace-relative path the worker turn
+	// that just ended changed (git diff --name-only against the
+	// pre-turn HEAD), set on InputPhaseComplete from generate. nil means
+	// unknown (no worktree), and the untouched counters stay put; an
+	// empty non-nil slice means the turn changed nothing.
+	TouchedFiles []string
 }
 
 // EventDraft is one event Step decided must be appended; the Store
@@ -274,7 +309,10 @@ type Transition struct {
 // tests can vary thresholds without faking a whole mission.
 type Config struct {
 	BackoffFailures int // consecutive worker_failed inputs before a backoff pause
-	StallRounds     int // consecutive identical-fingerprint reworks before a no_progress pause
+	// StallRounds is the no_progress threshold: consecutive identical-
+	// fingerprint worker retries, or consecutive worker turns that left
+	// an open blocking finding's file untouched (D-092).
+	StallRounds int
 }
 
 // DefaultConfig matches the reference design's thresholds.
@@ -328,7 +366,7 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 	case InputResume:
 		return stepResume(s)
 	case InputPhaseComplete:
-		return stepPhaseComplete(s)
+		return stepPhaseComplete(s, in)
 	case InputWorkerRetry:
 		return stepWorkerRetry(s, in, cfg)
 	case InputWorkerBlocked:
@@ -430,7 +468,14 @@ func stepResume(s StepState) Transition {
 // FlowDiscoverGenerate never visits PhasePlan, so this check never
 // applies to it: discover's own completion routes straight to
 // generate via nextPhase's flow-aware pipeline.
-func stepPhaseComplete(s StepState) Transition {
+//
+// A generate completion with open findings (a rework turn, D-092) also
+// scores the turn against them: every open finding whose file the
+// worker never touched counts one more untouched round (the id-based
+// stall input stepReviewRework reads), and the blocking ones are named
+// in mission.rework_untouched. ReworkRounds is deliberately NOT reset
+// here: the review cycle is still running.
+func stepPhaseComplete(s StepState, in StepInput) Transition {
 	if s.Phase == PhasePlan && !s.AutoApprovePlan {
 		return Transition{
 			Next:   withPause(s, PauseApproval),
@@ -441,11 +486,22 @@ func stepPhaseComplete(s StepState) Transition {
 	if !ok {
 		return Transition{Next: s}
 	}
+	var events []EventDraft
+	if s.Phase == PhaseGenerate && in.TouchedFiles != nil {
+		var untouched []Finding
+		s.ReviewFindings, untouched = markUntouched(s.ReviewFindings, in.TouchedFiles)
+		if len(untouched) > 0 {
+			events = append(events, EventDraft{Kind: "mission.rework_untouched", Payload: map[string]any{
+				"findings": findingIDs(untouched), "detail": findingsSummary(untouched),
+			}})
+		}
+	}
 	s.Phase = next
 	s.Status = StatusIdle
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.phase_started", Payload: map[string]any{"phase": string(next)}}}}
+	events = append(events, EventDraft{Kind: "mission.phase_started", Payload: map[string]any{"phase": string(next)}})
+	return Transition{Next: s, Events: events}
 }
 
 // stepPlanApprove is the approve verb (D-087): valid only while parked
@@ -595,6 +651,10 @@ func replanTransition(s StepState, in StepInput) Transition {
 func stepReviewApprove(s StepState) Transition {
 	s.StallCount = 0
 	s.LastGapFingerprint = ""
+	// D-092: approval closes the review cycle, so every finding still
+	// open is resolved by it and the rework counter starts over.
+	s.ReviewFindings = resolveAll(s.ReviewFindings)
+	s.ReworkRounds = 0
 	if s.LastUnit {
 		return reviewSkippedOrProvePassTransition(s)
 	}
@@ -616,36 +676,211 @@ func reviewSkippedOrProvePassTransition(s StepState) Transition {
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.phase_started", Payload: map[string]any{"phase": string(PhaseResult)}}}}
 }
 
-// stepReviewRework sends the mission back to generate for another
-// attempt, tracking the stall brake: two consecutive rounds with an
-// IDENTICAL gap fingerprint mean the reviewer keeps rejecting for the
-// same reason, no real progress is happening.
+// stepReviewRework merges the round's findings into the ledger (D-092)
+// and sends the mission back to generate for another attempt, unless
+// one of two brakes fires first. Both park IN generate, so a resume
+// buys exactly one more worker turn against the open findings rather
+// than an immediate re-review of unchanged work:
+//  1. stall: an open blocking finding whose file the worker left
+//     untouched for cfg.StallRounds consecutive turns (counted by
+//     stepPhaseComplete) parks no_progress. Id-based: rewording the
+//     finding cannot hide the repeat.
+//  2. exhaustion: ReworkRounds reaching MaxIterations parks
+//     review_exhausted with the open ids in the detail. A park, never
+//     a failure: the work must survive for the operator.
 func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
-	if in.GapFingerprint != "" && in.GapFingerprint == s.LastGapFingerprint {
-		s.StallCount++
-	} else {
-		s.StallCount = 1
-	}
-	s.LastGapFingerprint = in.GapFingerprint
-	if s.StallCount >= cfg.StallRounds {
-		if !s.ReplanUsed {
-			return replanTransition(s, in)
-		}
-		return Transition{
-			Next:   withPause(s, PauseNoProgress),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},
-		}
-	}
+	s.ReworkRounds++
+	s.ReviewFindings = mergeFindings(s.ReviewFindings, in.Findings, in.Resolved, in.Unit, s.ReworkRounds)
+	open := OpenFindings(s.ReviewFindings)
 	s.Phase = PhaseGenerate
 	s.Status = StatusIdle
-	s.Iteration++
-	if s.Iteration >= s.MaxIterations {
+	if stalled := stalledFindings(open, cfg.StallRounds); len(stalled) > 0 {
 		return Transition{
-			Next:   withPhaseFailed(s),
-			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
+			Next: withPause(s, PauseNoProgress),
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
+				"reason": string(PauseNoProgress), "findings": findingIDs(stalled),
+				"detail": "worker left the named file untouched for " + fmt.Sprint(cfg.StallRounds) + " rounds: " + findingsSummary(stalled),
+			}}},
 		}
 	}
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.review_verdict", Payload: map[string]any{"decision": "rework", "reason": in.Reason}}}}
+	if s.ReworkRounds >= s.MaxIterations {
+		return Transition{
+			Next: withPause(s, PauseReviewExhausted),
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
+				"reason": string(PauseReviewExhausted), "findings": findingIDs(open),
+				"detail": fmt.Sprintf("%d rework rounds with findings still open: %s", s.ReworkRounds, findingsSummary(open)),
+			}}},
+		}
+	}
+	s.Iteration++
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.review_verdict", Payload: map[string]any{
+		"decision": "rework", "reason": in.Reason, "round": s.ReworkRounds, "open": findingIDs(open),
+	}}}}
+}
+
+// mergeFindings folds a rework round's findings into the ledger: an
+// incoming finding matching an open one (same normalized file and
+// title tokens, findingKey) reuses its id and refreshes its detail;
+// anything else opens under the next F<n> id, stamped with unit and
+// round. Ids named in resolved flip to resolved afterwards, so a
+// finding both re-reported and resolved ends resolved. Never mutates
+// existing: StepState shares its backing array with the Mission row.
+func mergeFindings(existing, incoming []Finding, resolved []string, unit, round int) []Finding {
+	if len(incoming) == 0 && len(resolved) == 0 {
+		return existing
+	}
+	out := make([]Finding, len(existing))
+	copy(out, existing)
+	for _, in := range incoming {
+		key := findingKey(in)
+		matched := false
+		for i := range out {
+			if out[i].Open() && findingKey(out[i]) == key {
+				if in.Detail != "" {
+					out[i].Detail = in.Detail
+				}
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		f := in
+		f.ID = fmt.Sprintf("F%d", len(out)+1)
+		f.Unit = unit
+		f.Status = FindingOpen
+		f.RoundOpened = round
+		f.UntouchedRounds = 0
+		if f.Severity != SeverityMinor {
+			f.Severity = SeverityBlocking
+		}
+		out = append(out, f)
+	}
+	for _, id := range resolved {
+		for i := range out {
+			if out[i].ID == id && out[i].Open() {
+				out[i].Status = FindingResolved
+			}
+		}
+	}
+	return out
+}
+
+// findingKey is the duplicate-detection key: normalized file path plus
+// the sorted set of lowercase alphanumeric title tokens, so a reworded
+// title with the same words in a different order still collides.
+func findingKey(f Finding) string {
+	tokens := strings.FieldsFunc(strings.ToLower(f.Title), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	sort.Strings(tokens)
+	uniq := tokens[:0]
+	for i, t := range tokens {
+		if i == 0 || t != tokens[i-1] {
+			uniq = append(uniq, t)
+		}
+	}
+	return normalizeFindingPath(f.File) + "|" + strings.Join(uniq, " ")
+}
+
+// normalizeFindingPath cleans a reviewer-supplied path for comparison:
+// trimmed, slash-separated, no leading ./ or /.
+func normalizeFindingPath(p string) string {
+	p = strings.TrimSpace(strings.ToLower(p))
+	if p == "" {
+		return ""
+	}
+	p = filepath.ToSlash(filepath.Clean(p))
+	return strings.TrimPrefix(strings.TrimPrefix(p, "./"), "/")
+}
+
+// markUntouched scores one worker turn against the open findings:
+// every open finding naming a file counts one more untouched round
+// when no touched path matches it, and resets to zero when one does.
+// Returns the updated ledger (copied) and the open blocking findings
+// left untouched this turn. A finding without a file is never scored.
+func markUntouched(findings []Finding, touched []string) ([]Finding, []Finding) {
+	if len(findings) == 0 {
+		return findings, nil
+	}
+	out := make([]Finding, len(findings))
+	copy(out, findings)
+	var untouched []Finding
+	for i := range out {
+		f := &out[i]
+		if !f.Open() || normalizeFindingPath(f.File) == "" {
+			continue
+		}
+		if fileTouched(f.File, touched) {
+			f.UntouchedRounds = 0
+			continue
+		}
+		f.UntouchedRounds++
+		if f.Blocking() {
+			untouched = append(untouched, *f)
+		}
+	}
+	return out, untouched
+}
+
+// fileTouched reports whether any touched path names file: an exact
+// match, a path under it (the finding named a directory), or a path
+// ending in it (the finding omitted a leading directory).
+func fileTouched(file string, touched []string) bool {
+	want := normalizeFindingPath(file)
+	for _, t := range touched {
+		got := normalizeFindingPath(t)
+		if got == want || strings.HasPrefix(got, want+"/") || strings.HasSuffix(got, "/"+want) {
+			return true
+		}
+	}
+	return false
+}
+
+// stalledFindings returns the open blocking findings whose untouched
+// count reached the stall threshold.
+func stalledFindings(open []Finding, stallRounds int) []Finding {
+	var out []Finding
+	for _, f := range open {
+		if f.Blocking() && f.UntouchedRounds >= stallRounds {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// resolveAll flips every open finding to resolved (copying first);
+// a ledger with nothing open is returned as is.
+func resolveAll(findings []Finding) []Finding {
+	if len(OpenFindings(findings)) == 0 {
+		return findings
+	}
+	out := make([]Finding, len(findings))
+	copy(out, findings)
+	for i := range out {
+		if out[i].Open() {
+			out[i].Status = FindingResolved
+		}
+	}
+	return out
+}
+
+func findingIDs(findings []Finding) []string {
+	ids := make([]string, 0, len(findings))
+	for _, f := range findings {
+		ids = append(ids, f.ID)
+	}
+	return ids
+}
+
+// findingsSummary renders "F1 title; F2 title" for pause details.
+func findingsSummary(findings []Finding) string {
+	parts := make([]string, 0, len(findings))
+	for _, f := range findings {
+		parts = append(parts, f.ID+" "+f.Title)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // stepResultComplete is the result phase's own success transition,
