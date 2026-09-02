@@ -894,8 +894,9 @@ export function MissionDetail() {
             </Badge>
           )}
           {usage && usage.requests > 0 && (
-            <Badge variant="secondary">
+            <Badge variant="secondary" title="input→output tokens; cached = input read from the provider's prompt cache">
               {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
+              {usage.cache_read_tokens ? ` · ${compact(usage.cache_read_tokens)} cached` : ''}
             </Badge>
           )}
           <Badge variant="secondary" title="Time spent actively processing">

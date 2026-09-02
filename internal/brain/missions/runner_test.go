@@ -360,6 +360,34 @@ func TestRunReviewPacketListsOpenFindings(t *testing.T) {
 	}
 }
 
+// TestRunReviewRequestCarriesLoopCaps pins D-093: the reviewer's
+// loop.Request caps its tool loop at reviewMaxSteps and every result at
+// reviewToolResultCap, while a worker turn leaves both at zero (agent
+// defaults).
+func TestRunReviewRequestCarriesLoopCaps(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+	}}
+	r := newTestRunner(agent)
+	if _, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"}); err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if req := agent.requests[0]; req.MaxSteps != 4 || req.ToolResultCap != 4096 {
+		t.Fatalf("reviewer request MaxSteps=%d ToolResultCap=%d, want 4 and 4096", req.MaxSteps, req.ToolResultCap)
+	}
+
+	worker := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r = newTestRunner(worker)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "goal"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if req := worker.requests[0]; req.MaxSteps != 0 || req.ToolResultCap != 0 {
+		t.Fatalf("worker request MaxSteps=%d ToolResultCap=%d, want agent defaults (0, 0)", req.MaxSteps, req.ToolResultCap)
+	}
+}
+
 // TestRunReviewRoutePrecedence pins review's route precedence at the
 // request level: ReviewRoute > PlanRoute > Route.
 func TestRunReviewRoutePrecedence(t *testing.T) {

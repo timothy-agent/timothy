@@ -471,6 +471,123 @@ func TestAgentStepCeilingForcesSynthesis(t *testing.T) {
 	}
 }
 
+// TestAgentRequestMaxStepsReplacesDefaultCeiling pins D-093: a
+// Request.MaxSteps of 4 caps the loop at four gateway calls (warning
+// on the third, schemas dropped on the fourth) for a model that keeps
+// calling tools with fresh arguments; 0 keeps the agent default.
+func TestAgentRequestMaxStepsReplacesDefaultCeiling(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		maxSteps int
+		wantReqs int
+	}{
+		{"request cap of 4", 4, 4},
+		{"zero keeps the default", 0, tools.DefaultMaxSteps},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var scripts [][]stream.StreamEvent
+			for i := range tools.DefaultMaxSteps + 5 {
+				scripts = append(scripts, toolCallStep([2]string{"echo", fmt.Sprintf(`{"text":"call %d"}`, i)}))
+			}
+			gw := &scriptedGateway{scripts: scripts}
+			a, _, _, _ := testAgent(t, gw)
+			ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", MaxSteps: tc.maxSteps})
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs := collect(t, ch)
+			if len(ofType(evs, stream.EventDone)) != 1 {
+				t.Fatal("no clean terminal event")
+			}
+			if len(gw.requests) != tc.wantReqs {
+				t.Fatalf("gateway calls = %d, want %d", len(gw.requests), tc.wantReqs)
+			}
+			if last := gw.requests[len(gw.requests)-1]; len(last.Tools) != 0 {
+				t.Fatalf("final step still offered %d tools", len(last.Tools))
+			}
+		})
+	}
+}
+
+// TestAgentRequestToolResultCapTruncatesTranscript pins D-093: a tool
+// result longer than Request.ToolResultCap enters the conversation cut
+// on a line boundary with a marker naming the full size; the model's
+// next request carries the capped text, never the 10 KB original. The
+// audit digest keeps the full result. 0 leaves results untouched.
+func TestAgentRequestToolResultCapTruncatesTranscript(t *testing.T) {
+	t.Parallel()
+	var big strings.Builder
+	for i := 0; big.Len() < 10<<10; i++ {
+		fmt.Fprintf(&big, "line %04d of the tool output\n", i)
+	}
+	bigTool := &tools.Tool{
+		Name: "big", Description: "returns 10 KB",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		Execute:     func(context.Context, json.RawMessage) (string, error) { return big.String(), nil },
+	}
+	cases := []struct {
+		name string
+		cap  int
+	}{
+		{"capped at 4096", 4096},
+		{"uncapped", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+				toolCallStep([2]string{"big", `{}`}),
+				finalStep("done"),
+			}}
+			// Offload threshold raised so the cap, not the offload, is what
+			// bounds the transcript here.
+			a, _, _, _ := testAgent(t, gw, bigTool)
+			a.offloadAt = 1 << 20
+			ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", ToolResultCap: tc.cap})
+			if err != nil {
+				t.Fatal(err)
+			}
+			collect(t, ch)
+			if len(gw.requests) != 2 {
+				t.Fatalf("gateway calls = %d, want 2", len(gw.requests))
+			}
+			msgs := gw.requests[1].Messages
+			result := msgs[len(msgs)-1].ToolResult
+			if result == nil {
+				t.Fatalf("last message is not a tool result: %+v", msgs[len(msgs)-1])
+			}
+			if tc.cap == 0 {
+				if result.Content != big.String() {
+					t.Fatal("uncapped result was altered")
+				}
+				return
+			}
+			marker := fmt.Sprintf("\n[truncated: %d bytes]", big.Len())
+			if !strings.HasSuffix(result.Content, marker) {
+				t.Fatalf("capped result lacks the marker %q:\n...%s", marker, result.Content[len(result.Content)-80:])
+			}
+			body := strings.TrimSuffix(result.Content, marker)
+			if len(body) > tc.cap || !strings.HasSuffix(body, "of the tool output") {
+				t.Fatalf("capped body is %d bytes (cap %d) or not cut on a line boundary: %q", len(body), tc.cap, body[len(body)-40:])
+			}
+		})
+	}
+}
+
+func TestCapToolResult(t *testing.T) {
+	t.Parallel()
+	if got := capToolResult("short", 10); got != "short" {
+		t.Fatalf("within cap = %q, want unchanged", got)
+	}
+	if got := capToolResult("abcdefghij", 4); got != "abcd\n[truncated: 10 bytes]" {
+		t.Fatalf("no newline before the cap = %q, want a hard cut with marker", got)
+	}
+	if got := capToolResult("ab\ncd\nef", 5); got != "ab\ncd\n[truncated: 8 bytes]" {
+		t.Fatalf("line-boundary cut = %q", got)
+	}
+}
+
 // TestAgentForcesSynthesisOnRepeatedIdenticalCalls reproduces a live
 // loop: a model retrying the exact same tool call (e.g. search_web
 // hoping a later attempt "books" something it structurally cannot)
@@ -1646,7 +1763,9 @@ func (p *countingAskPerms) Resolve(_ context.Context, _, tool string, _ json.Raw
 	p.resolveCalls++
 	return tools.Resolution{Decision: tools.DecisionAsk, Subject: tool, Rationale: "no standing grant"}, nil
 }
-func (p *countingAskPerms) Grant(context.Context, string, string, string, time.Duration) error { return nil }
+func (p *countingAskPerms) Grant(context.Context, string, string, string, time.Duration) error {
+	return nil
+}
 
 // TestAgentUnknownToolRejectedBeforePermissionChain is D-039's first
 // failure mode: a hallucinated tool name must never reach the
@@ -2359,4 +2478,3 @@ func TestAgentEndTurnToolsErrorContinues(t *testing.T) {
 		t.Fatalf("done events = %d, want exactly 1", len(got))
 	}
 }
-

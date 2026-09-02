@@ -96,6 +96,35 @@ type anthropicContentBlock struct {
 	Content   string                `json:"content,omitempty"`
 	IsError   bool                  `json:"is_error,omitempty"`
 	Source    *anthropicImageSource `json:"source,omitempty"`
+	// CacheControl marks the conversation breakpoint (D-093): set on the
+	// last block of the last message only.
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+}
+
+// anthropicCacheEphemeral is the one cache_control value the driver
+// ever sends.
+var anthropicCacheEphemeral = json.RawMessage(`{"type":"ephemeral"}`)
+
+// markLastBlockCached puts the conversation breakpoint on the last
+// content block of the last message (D-093): the system block is the
+// first breakpoint, this is the second, so every tool-loop iteration
+// reads the previous iteration's whole prefix from cache instead of
+// re-sending it. A plain-string message is lifted to one text block
+// to carry the marker. Anthropic allows four breakpoints; the driver
+// uses two.
+func markLastBlockCached(msgs []anthropicMessage) {
+	if len(msgs) == 0 {
+		return
+	}
+	last := &msgs[len(msgs)-1]
+	switch c := last.Content.(type) {
+	case string:
+		last.Content = []anthropicContentBlock{{Type: "text", Text: c, CacheControl: anthropicCacheEphemeral}}
+	case []anthropicContentBlock:
+		if len(c) > 0 {
+			c[len(c)-1].CacheControl = anthropicCacheEphemeral
+		}
+	}
 }
 
 // anthropicImageSource is a base64 image block's source (D-045).
@@ -144,9 +173,6 @@ func anthropicMessages(msgs []Message) []anthropicMessage {
 			}
 			out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
 		case len(m.Images) > 0:
-			// Text-only messages keep the plain-string shape (unchanged);
-			// only a message actually carrying images pays for the block
-			// array (D-045).
 			blocks := make([]anthropicContentBlock, 0, len(m.Images)+1)
 			if m.Content != "" {
 				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
@@ -160,6 +186,14 @@ func anthropicMessages(msgs []Message) []anthropicMessage {
 				})
 			}
 			out = append(out, anthropicMessage{Role: m.Role, Content: blocks})
+		case m.Content != "":
+			// Text messages always take the block shape (D-093): the
+			// cache breakpoint sits on the last block of the last message,
+			// and the same message must serialise byte-identically on the
+			// next step when it is no longer last, or the cached prefix
+			// misses. An empty message keeps the string form: an empty
+			// text block is a wire error.
+			out = append(out, anthropicMessage{Role: m.Role, Content: []anthropicContentBlock{{Type: "text", Text: m.Content}}})
 		default:
 			out = append(out, anthropicMessage{Role: m.Role, Content: m.Content})
 		}
@@ -239,15 +273,17 @@ func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
 		Stream:    true,
 		Messages:  anthropicMessages(req.Messages),
 	}
+	markLastBlockCached(out.Messages)
 	// req.Effort: no thinking control is wired for this driver yet, so
 	// the hint is ignored per D-020.
 	if req.System != "" {
 		// cache_control on the system block enables prompt caching for
-		// the stable prefix (D-018).
+		// the stable prefix (D-018); the conversation breakpoint above
+		// (D-093) extends that to the growing tool-loop transcript.
 		out.System = []anthropicTextBlock{{
 			Type:         "text",
 			Text:         req.System,
-			CacheControl: json.RawMessage(`{"type":"ephemeral"}`),
+			CacheControl: anthropicCacheEphemeral,
 		}}
 	}
 	for _, t := range req.Tools {

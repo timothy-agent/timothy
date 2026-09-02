@@ -177,6 +177,21 @@ describe('MissionDetail spend', () => {
     )
   })
 
+  it('shows cached input reads alongside the token counts when present', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      cache_read_tokens: 90_000,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    expect(await screen.findByText('120.0k→8.0k tok · 90.0k cached')).toBeTruthy()
+  })
+
   it('uses the converted figure for budget percent when spend is in another currency', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 2, budget_currency: 'BDT' })
     vi.mocked(missionUsage).mockResolvedValue({

@@ -388,6 +388,9 @@ export interface MissionUsage {
   rate_as_of?: string
   input_tokens: number
   output_tokens: number
+  // cache_read_tokens is input served from the provider's prompt cache
+  // (D-093), shown next to input_tokens on the cost card.
+  cache_read_tokens?: number
   requests: number
   unpriced_requests: number
   models: ModelUsed[]
